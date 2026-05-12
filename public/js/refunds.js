@@ -233,9 +233,14 @@ VIP.refunds = (function () {
             claimBtn.textContent = '⏳ Procesando...';
         }
         try {
+            const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
             const response = await fetch(`${VIP.config.API_URL}/api/refunds/claim/${type}`, {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
+                headers: {
+                    'Authorization': `Bearer ${VIP.state.currentToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ metaEventId })
             });
 
             const data = await response.json();
@@ -245,6 +250,13 @@ VIP.refunds = (function () {
                 VIP.ui.hideModal('refundModal');
                 loadRefundStatus();
                 VIP.chat.sendSystemMessage(`🎁 Reembolso ${type} reclamado: $${data.amount.toLocaleString()}`);
+
+                // Meta Pixel — RefundClaim (custom, deduplicado con CAPI).
+                if (VIP.pixel) VIP.pixel.trackWithId(metaEventId, 'RefundClaim', {
+                    value: data.amount,
+                    currency: 'ARS',
+                    content_name: `refund_${type}`
+                });
             } else {
                 VIP.ui.showToast(`ℹ️ ${data.message}`, 'info');
                 VIP.ui.hideModal('refundModal');

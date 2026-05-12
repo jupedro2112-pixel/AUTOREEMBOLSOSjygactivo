@@ -268,12 +268,14 @@ CBU activo: ${cbuNumber}`;
         VIP.state.lastCbuClickTime = now;
 
         try {
+            const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
             const response = await fetch(`${VIP.config.API_URL}/api/cbu/request`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${VIP.state.currentToken}`,
                     'Content-Type': 'application/json'
-                }
+                },
+                body: JSON.stringify({ metaEventId })
             });
 
             if (response.ok) {
@@ -286,6 +288,9 @@ CBU activo: ${cbuNumber}`;
                 showModal('cbuModal');
                 setTimeout(() => VIP.chat.loadMessages(), 500);
                 showToast('💳 Datos CBU enviados al chat', 'success');
+
+                // Meta Pixel — InitiateCheckout (usuario va a depositar).
+                if (VIP.pixel) VIP.pixel.trackWithId(metaEventId, 'InitiateCheckout', { content_name: 'cbu_request' });
             } else {
                 showToast('Error solicitando CBU', 'error');
             }

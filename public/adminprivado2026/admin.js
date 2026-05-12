@@ -3100,6 +3100,7 @@ function switchSection(section) {
     if (section === 'datos') loadDatos();
     if (section === 'notifications') loadNotificationsPanel();
     if (section === 'referrals') loadAdminReferralSummary();
+    if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
         if (currentAdmin?.role !== 'admin') {
             showToast('No tienes permiso para acceder a esta sección', 'error');
@@ -6158,4 +6159,321 @@ window.actualizarContadorSms = actualizarContadorSms;
 window.previewSmsMasivo = previewSmsMasivo;
 window.confirmarEnvioSmsMasivo = confirmarEnvioSmsMasivo;
 window.reiniciarSmsMasivo = reiniciarSmsMasivo;
+
+// ============================================================
+// PUBLICISTAS Y CAMPAÑAS
+// ============================================================
+
+let _campaignsCache = [];
+
+function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function formatARS(n) {
+    if (typeof n !== 'number' || isNaN(n)) return '$0';
+    return '$' + Math.round(n).toLocaleString('es-AR');
+}
+
+function buildCampaignLink(code) {
+    const origin = window.location.origin.replace('/adminprivado2026', '').replace(/\/$/, '');
+    return `${origin}/?p=${encodeURIComponent(code)}`;
+}
+
+async function loadCampaigns() {
+    const container = document.getElementById('campaignsList');
+    if (!container) return;
+    container.innerHTML = '<span style="color:#888;">Cargando…</span>';
+    try {
+        const response = await fetch(`${API_URL}/api/admin/campaigns`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!response.ok) throw new Error('Failed to load');
+        const data = await response.json();
+        _campaignsCache = data.campaigns || [];
+        renderCampaigns();
+    } catch (err) {
+        container.innerHTML = `<span style="color:#ff6666;">Error cargando campañas: ${escapeHtml(err.message)}</span>`;
+    }
+}
+
+function renderCampaigns() {
+    const container = document.getElementById('campaignsList');
+    if (!container) return;
+    if (_campaignsCache.length === 0) {
+        container.innerHTML = '<span style="color:#888;">No hay campañas creadas todavía. Hacé clic en "+ Nueva campaña" para empezar.</span>';
+        return;
+    }
+    container.innerHTML = _campaignsCache.map(c => `
+        <div style="background:#1a1a2e;border:1px solid ${c.isActive ? 'rgba(0,255,136,0.3)' : 'rgba(255,255,255,0.1)'};border-radius:10px;padding:14px;display:grid;gap:8px;${!c.isActive ? 'opacity:0.55;' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                <div>
+                    <strong style="color:#d4af37;font-size:14px;">${escapeHtml(c.publisher)}</strong>
+                    <span style="color:#888;font-size:12px;margin-left:6px;">${escapeHtml(c.name)}</span>
+                </div>
+                <span style="font-family:monospace;background:rgba(212,175,55,0.15);color:#d4af37;padding:3px 8px;border-radius:6px;font-size:12px;">${escapeHtml(c.code)}</span>
+            </div>
+            <div style="display:flex;gap:14px;font-size:12px;color:#aaa;flex-wrap:wrap;">
+                <span>👁️ ${c.clicks || 0} clics</span>
+                <span>📝 ${c.registrations || 0} registros</span>
+                <span>Comisión: ${c.commissionType === 'none' ? '—' : (c.commissionType === 'cpa' ? formatARS(c.commissionValue) + ' / FTD' : c.commissionValue + '% rev')}</span>
+                <span>${c.isActive ? '🟢 Activa' : '🔴 Inactiva'}</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button onclick="copyCampaignLink('${escapeHtml(c.code)}')" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.4);color:#00ff88;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">📋 Copiar link</button>
+                <button onclick="viewCampaignStats('${escapeHtml(c.code)}')" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">📊 Ver detalle</button>
+                <button onclick="editCampaign('${escapeHtml(c.code)}')" style="background:rgba(99,102,241,0.1);border:1px solid #6366f1;color:#a5b4fc;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">✏️ Editar</button>
+                ${c.isActive ? `<button onclick="deactivateCampaign('${escapeHtml(c.code)}')" style="background:rgba(255,80,80,0.1);border:1px solid #ff5050;color:#ff8888;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">🛑 Desactivar</button>` : `<button onclick="reactivateCampaign('${escapeHtml(c.code)}')" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.4);color:#00ff88;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">✅ Reactivar</button>`}
+            </div>
+        </div>
+    `).join('');
+}
+
+function copyCampaignLink(code) {
+    const link = buildCampaignLink(code);
+    navigator.clipboard.writeText(link).then(
+        () => showToast(`Link copiado: ${link}`, 'success'),
+        () => showToast('No se pudo copiar — copialo manualmente: ' + link, 'info')
+    );
+}
+
+function showCreateCampaignModal() {
+    document.getElementById('campaignFormTitle').textContent = 'Nueva campaña';
+    document.getElementById('campaignFormMode').value = 'create';
+    document.getElementById('campaignFormOriginalCode').value = '';
+    document.getElementById('campaignFormCode').value = '';
+    document.getElementById('campaignFormCode').disabled = false;
+    document.getElementById('campaignFormPublisher').value = '';
+    document.getElementById('campaignFormName').value = '';
+    document.getElementById('campaignFormCommissionType').value = 'none';
+    document.getElementById('campaignFormCommissionValue').value = '0';
+    document.getElementById('campaignFormNotes').value = '';
+    document.getElementById('campaignFormActiveRow').style.display = 'none';
+    document.getElementById('campaignFormError').style.display = 'none';
+    showModal('campaignFormModal');
+    document.getElementById('campaignFormModal').style.display = 'flex';
+}
+
+function editCampaign(code) {
+    const campaign = _campaignsCache.find(c => c.code === code);
+    if (!campaign) return showToast('Campaña no encontrada', 'error');
+    document.getElementById('campaignFormTitle').textContent = 'Editar campaña ' + code;
+    document.getElementById('campaignFormMode').value = 'edit';
+    document.getElementById('campaignFormOriginalCode').value = code;
+    document.getElementById('campaignFormCode').value = code;
+    document.getElementById('campaignFormCode').disabled = true;
+    document.getElementById('campaignFormPublisher').value = campaign.publisher || '';
+    document.getElementById('campaignFormName').value = campaign.name || '';
+    document.getElementById('campaignFormCommissionType').value = campaign.commissionType || 'none';
+    document.getElementById('campaignFormCommissionValue').value = campaign.commissionValue || 0;
+    document.getElementById('campaignFormNotes').value = campaign.notes || '';
+    document.getElementById('campaignFormActiveRow').style.display = '';
+    document.getElementById('campaignFormIsActive').checked = campaign.isActive !== false;
+    document.getElementById('campaignFormError').style.display = 'none';
+    showModal('campaignFormModal');
+    document.getElementById('campaignFormModal').style.display = 'flex';
+}
+
+function closeCampaignFormModal() {
+    hideModal('campaignFormModal');
+    document.getElementById('campaignFormModal').style.display = '';
+}
+
+async function submitCampaignForm() {
+    const mode = document.getElementById('campaignFormMode').value;
+    const code = document.getElementById('campaignFormCode').value.trim().toUpperCase();
+    const publisher = document.getElementById('campaignFormPublisher').value.trim();
+    const name = document.getElementById('campaignFormName').value.trim();
+    const commissionType = document.getElementById('campaignFormCommissionType').value;
+    const commissionValue = parseFloat(document.getElementById('campaignFormCommissionValue').value) || 0;
+    const notes = document.getElementById('campaignFormNotes').value.trim();
+    const errorDiv = document.getElementById('campaignFormError');
+
+    errorDiv.style.display = 'none';
+
+    if (!code || !publisher || !name) {
+        errorDiv.textContent = 'Código, publicista y nombre son obligatorios';
+        errorDiv.style.display = '';
+        return;
+    }
+    if (mode === 'create' && !/^[A-Z0-9_-]{3,40}$/.test(code)) {
+        errorDiv.textContent = 'Código inválido (3-40 caracteres, A-Z 0-9 _ -)';
+        errorDiv.style.display = '';
+        return;
+    }
+
+    const body = { publisher, name, commissionType, commissionValue, notes };
+
+    try {
+        let response;
+        if (mode === 'create') {
+            response = await fetch(`${API_URL}/api/admin/campaigns`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${currentToken}`
+                },
+                body: JSON.stringify({ code, ...body })
+            });
+        } else {
+            const originalCode = document.getElementById('campaignFormOriginalCode').value;
+            body.isActive = document.getElementById('campaignFormIsActive').checked;
+            response = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(originalCode)}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${currentToken}`
+                },
+                body: JSON.stringify(body)
+            });
+        }
+        const data = await response.json();
+        if (!response.ok) {
+            errorDiv.textContent = data.error || 'Error al guardar';
+            errorDiv.style.display = '';
+            return;
+        }
+        showToast('Campaña guardada', 'success');
+        closeCampaignFormModal();
+        loadCampaigns();
+    } catch (err) {
+        errorDiv.textContent = 'Error de conexión: ' + err.message;
+        errorDiv.style.display = '';
+    }
+}
+
+async function deactivateCampaign(code) {
+    if (!confirm(`¿Desactivar la campaña ${code}? Las atribuciones ya hechas se mantienen, pero ya no se aceptarán nuevos registros con este código.`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(code)}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            return showToast(data.error || 'Error al desactivar', 'error');
+        }
+        showToast('Campaña desactivada', 'success');
+        loadCampaigns();
+    } catch (err) {
+        showToast('Error de conexión', 'error');
+    }
+}
+
+async function reactivateCampaign(code) {
+    try {
+        const response = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(code)}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ isActive: true })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            return showToast(data.error || 'Error al reactivar', 'error');
+        }
+        showToast('Campaña reactivada', 'success');
+        loadCampaigns();
+    } catch (err) {
+        showToast('Error de conexión', 'error');
+    }
+}
+
+let _campaignStatsCurrentCode = null;
+
+async function viewCampaignStats(code) {
+    _campaignStatsCurrentCode = code;
+    document.getElementById('campaignStatsTitle').textContent = code;
+    document.getElementById('campaignStatsSubtitle').textContent = '';
+    document.getElementById('campaignStatsContent').innerHTML = 'Cargando…';
+    showModal('campaignStatsModal');
+    document.getElementById('campaignStatsModal').style.display = 'flex';
+
+    try {
+        const response = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(code)}/stats`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!response.ok) throw new Error('Failed to load stats');
+        const { campaign, stats, commission } = await response.json();
+
+        document.getElementById('campaignStatsTitle').textContent = `${campaign.publisher} — ${campaign.name}`;
+        document.getElementById('campaignStatsSubtitle').textContent = `Código: ${campaign.code} · ${campaign.isActive ? '🟢 Activa' : '🔴 Inactiva'}`;
+
+        const crClickReg = stats.crClickToRegister !== null ? (stats.crClickToRegister * 100).toFixed(1) + '%' : '—';
+        const crRegFtd = stats.crRegisterToFtd !== null ? (stats.crRegisterToFtd * 100).toFixed(1) + '%' : '—';
+        const commissionLabel = campaign.commissionType === 'none'
+            ? '—'
+            : (campaign.commissionType === 'cpa'
+                ? `${formatARS(campaign.commissionValue)} × ${stats.ftd} FTD = ${formatARS(commission)}`
+                : `${campaign.commissionValue}% × ${formatARS(stats.netRevenue)} = ${formatARS(commission)}`);
+
+        document.getElementById('campaignStatsContent').innerHTML = `
+            <div style="background:rgba(0,0,0,0.4);border:1px solid rgba(212,175,55,0.2);border-radius:8px;padding:12px;margin-bottom:12px;">
+                <div style="font-size:11px;color:#aaa;margin-bottom:4px;">Link para el publicista</div>
+                <code style="display:block;background:#0d0d1a;padding:8px;border-radius:6px;color:#00ff88;font-size:12px;word-break:break-all;">${escapeHtml(buildCampaignLink(campaign.code))}</code>
+                <button onclick="copyCampaignLink('${escapeHtml(campaign.code)}')" style="margin-top:8px;background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.4);color:#00ff88;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;">📋 Copiar</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+                <div style="background:rgba(0,0,0,0.4);padding:12px;border-radius:8px;">
+                    <div style="font-size:11px;color:#aaa;">Clics</div>
+                    <div style="font-size:24px;color:#d4af37;font-weight:bold;">${stats.clicks}</div>
+                </div>
+                <div style="background:rgba(0,0,0,0.4);padding:12px;border-radius:8px;">
+                    <div style="font-size:11px;color:#aaa;">Registros</div>
+                    <div style="font-size:24px;color:#d4af37;font-weight:bold;">${stats.registrations}</div>
+                    <div style="font-size:10px;color:#888;">CR: ${crClickReg}</div>
+                </div>
+                <div style="background:rgba(0,0,0,0.4);padding:12px;border-radius:8px;">
+                    <div style="font-size:11px;color:#aaa;">FTD</div>
+                    <div style="font-size:24px;color:#00ff88;font-weight:bold;">${stats.ftd}</div>
+                    <div style="font-size:10px;color:#888;">CR: ${crRegFtd}</div>
+                </div>
+                <div style="background:rgba(0,0,0,0.4);padding:12px;border-radius:8px;">
+                    <div style="font-size:11px;color:#aaa;">Revenue (depósitos)</div>
+                    <div style="font-size:20px;color:#00ff88;font-weight:bold;">${formatARS(stats.totalRevenue)}</div>
+                </div>
+                <div style="background:rgba(0,0,0,0.4);padding:12px;border-radius:8px;">
+                    <div style="font-size:11px;color:#aaa;">Retiros</div>
+                    <div style="font-size:20px;color:#ff8888;font-weight:bold;">${formatARS(stats.totalWithdrawals)}</div>
+                </div>
+                <div style="background:rgba(212,175,55,0.1);padding:12px;border-radius:8px;border:1px solid rgba(212,175,55,0.3);">
+                    <div style="font-size:11px;color:#aaa;">Ganancia neta</div>
+                    <div style="font-size:20px;color:#d4af37;font-weight:bold;">${formatARS(stats.netRevenue)}</div>
+                </div>
+            </div>
+            <div style="background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.3);padding:12px;border-radius:8px;margin-top:12px;">
+                <div style="font-size:11px;color:#aaa;margin-bottom:4px;">Comisión calculada</div>
+                <div style="font-size:14px;color:#fff;">${commissionLabel}</div>
+                <div style="font-size:11px;color:#888;margin-top:4px;">Esta cifra es informativa — los pagos se hacen manualmente.</div>
+            </div>
+        `;
+    } catch (err) {
+        document.getElementById('campaignStatsContent').innerHTML = `<span style="color:#ff6666;">Error: ${escapeHtml(err.message)}</span>`;
+    }
+}
+
+function closeCampaignStatsModal() {
+    hideModal('campaignStatsModal');
+    document.getElementById('campaignStatsModal').style.display = '';
+}
+
+function editCampaignFromStats() {
+    if (!_campaignStatsCurrentCode) return;
+    closeCampaignStatsModal();
+    editCampaign(_campaignStatsCurrentCode);
+}
+
+window.loadCampaigns = loadCampaigns;
+window.showCreateCampaignModal = showCreateCampaignModal;
+window.editCampaign = editCampaign;
+window.deactivateCampaign = deactivateCampaign;
+window.reactivateCampaign = reactivateCampaign;
+window.copyCampaignLink = copyCampaignLink;
+window.submitCampaignForm = submitCampaignForm;
+window.closeCampaignFormModal = closeCampaignFormModal;
+window.viewCampaignStats = viewCampaignStats;
+window.closeCampaignStatsModal = closeCampaignStatsModal;
+window.editCampaignFromStats = editCampaignFromStats;
 

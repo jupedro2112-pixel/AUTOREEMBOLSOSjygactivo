@@ -219,6 +219,45 @@ const userSchema = new mongoose.Schema({
   },
 
   // =============================================
+  // Atribución de campañas / publicistas
+  // =============================================
+  // Código de la campaña (Campaign.code) que trajo a este usuario.
+  // Se setea durante el signup si el cliente envió un campaignCode válido
+  // (vía link ?p=CODE). Una vez seteado no debería cambiar (atribución first-touch
+  // a nivel de registro, last-touch a nivel de clic).
+  acquisitionCampaign: {
+    type: String,
+    default: null,
+    uppercase: true,
+    trim: true,
+    index: true
+  },
+  // UTM parameters capturados del link de pauta (para reporting cross-campaña
+  // y para cruzar con datos de Meta Ads).
+  acquisitionUtm: {
+    source: { type: String, default: null },
+    medium: { type: String, default: null },
+    campaign: { type: String, default: null },
+    content: { type: String, default: null },
+    term: { type: String, default: null }
+  },
+  acquiredAt: {
+    type: Date,
+    default: null
+  },
+  // True cuando el usuario se registró por el flujo rápido sin OTP de teléfono.
+  // El authMiddleware NO bloquea (a diferencia de mustChangePassword): el
+  // usuario puede usar todo normalmente excepto retirar. Los endpoints de
+  // retiro (/api/movements/withdraw y /api/admin/withdrawal) devuelven 403
+  // con code:'PHONE_VERIFICATION_REQUIRED' hasta que /api/auth/verify-phone
+  // se complete con éxito.
+  phoneVerificationPending: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+
+  // =============================================
   // Bloqueo de cuenta (solo admin general puede bloquear/desbloquear)
   // =============================================
   isBlocked: {

@@ -82,9 +82,13 @@ function setupEventListeners() {
         const appInstallBtn = document.getElementById('appInstallBtn');
         if (appInstallBtn) appInstallBtn.addEventListener('click', VIP.ui.installApp);
 
-        // Register modal
+        // Register modal — antes de abrir, adaptar el form al modo "registro rápido"
+        // si hay una atribución de pauta activa (link ?p=CODE capturado).
         const registerBtn = document.getElementById('registerBtn');
-        if (registerBtn) registerBtn.addEventListener('click', () => VIP.ui.showModal('registerModal'));
+        if (registerBtn) registerBtn.addEventListener('click', () => {
+            if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
+            VIP.ui.showModal('registerModal');
+        });
         const closeRegisterModal = document.getElementById('closeRegisterModal');
         if (closeRegisterModal) closeRegisterModal.addEventListener('click', () => VIP.ui.hideModal('registerModal'));
         const registerForm = document.getElementById('registerForm');
@@ -172,9 +176,33 @@ function setupEventListeners() {
         const cbuChatBtn = document.getElementById('cbuChatBtn');
         if (cbuChatBtn) cbuChatBtn.addEventListener('click', VIP.ui.loadAndShowCBU);
 
-        // Settings
+        // Settings — antes de abrir mostramos/escondemos el bloque de
+        // "verificación pendiente" según el estado del user actual.
         const settingsBtn = document.getElementById('settingsBtn');
-        if (settingsBtn) settingsBtn.addEventListener('click', () => VIP.ui.showModal('settingsModal'));
+        if (settingsBtn) settingsBtn.addEventListener('click', () => {
+            const pendingBlock = document.getElementById('verifyPhonePendingBlock');
+            const isPending = VIP.state.currentUser && VIP.state.currentUser.phoneVerificationPending === true;
+            if (pendingBlock) pendingBlock.style.display = isPending ? '' : 'none';
+            VIP.ui.showModal('settingsModal');
+        });
+
+        // Botón "🔓 Verificar teléfono" dentro del modal de settings: abre el modal de verify-phone.
+        const openVerifyPhoneBtn = document.getElementById('openVerifyPhoneBtn');
+        if (openVerifyPhoneBtn) openVerifyPhoneBtn.addEventListener('click', () => {
+            VIP.ui.hideModal('settingsModal');
+            // Reset state cada vez que se abre
+            document.getElementById('verifyPhoneStep1').style.display = '';
+            document.getElementById('verifyPhoneStep2').style.display = 'none';
+            document.getElementById('verifyPhoneInput').value = '';
+            document.getElementById('verifyPhoneError').classList.remove('show');
+            VIP.ui.showModal('verifyPhoneModal');
+        });
+
+        // Submit handlers del modal verify-phone
+        const verifyPhoneSendBtn = document.getElementById('verifyPhoneSendBtn');
+        if (verifyPhoneSendBtn) verifyPhoneSendBtn.addEventListener('click', VIP.auth.handleVerifyPhoneSend);
+        const verifyPhoneConfirmBtn = document.getElementById('verifyPhoneConfirmBtn');
+        if (verifyPhoneConfirmBtn) verifyPhoneConfirmBtn.addEventListener('click', VIP.auth.handleVerifyPhoneConfirm);
         const closeSettingsModal = document.getElementById('closeSettingsModal');
         if (closeSettingsModal) closeSettingsModal.addEventListener('click', () => VIP.ui.hideModal('settingsModal'));
         const changePasswordSettingsBtn = document.getElementById('changePasswordSettingsBtn');

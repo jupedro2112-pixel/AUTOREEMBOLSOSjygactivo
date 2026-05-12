@@ -64,6 +64,8 @@ const {
 
 // Importar modelos de referidos (usados por el handler de registro inline)
 const ReferralEvent = require('./src/models/ReferralEvent');
+const Campaign = require('./src/models/Campaign');
+const CampaignClick = require('./src/models/CampaignClick');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -192,13 +194,13 @@ function securityHeaders(req, res, next) {
   // connect-src incluye wss: para Socket.IO WebSocket y dominios Firebase necesarios.
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com",
-    "script-src-elem 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com",
+    "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net",
+    "script-src-elem 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
-    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.google.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://fcm.googleapis.com https://firebaseinstallations.googleapis.com",
-    "frame-src 'self' https://*.firebaseapp.com https://*.google.com",
+    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.google.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://fcm.googleapis.com https://firebaseinstallations.googleapis.com https://www.facebook.com https://connect.facebook.net",
+    "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://www.facebook.com",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "media-src 'self' data: blob:"
@@ -254,6 +256,7 @@ const jugayganaService = require('./src/services/jugayganaService');
 const refunds = require('./models/refunds');
 const referralRevenueService = require('./src/services/referralRevenueService');
 const { resolveJugayganaUserId } = require('./src/services/jugayganaUserLinkService');
+const metaCapi = require('./src/services/metaCapiService');
 
 // ============================================
 // BLOQUEO DE REEMBOLSOS
@@ -457,7 +460,7 @@ app.use(xss());
 // Fields exposed to the authenticated user about their own profile.
 // Keep this list minimal – internal fields (jugaygana IDs, FCM tokens, etc.)
 // are excluded intentionally to reduce accidental data exposure.
-const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword';
+const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign';
 
 // Admin roles are internal VIPCARGAS accounts that have NO counterpart in
 // JUGAYGANA. They must never be routed through any JUGAYGANA sync, default-
@@ -599,6 +602,11 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Redirigir /index.html → / para que el HTML siempre pase por el handler
+// que inyecta META_PIXEL_ID (de lo contrario express.static lo serviría
+// con el placeholder sin reemplazar).
+app.get('/index.html', (req, res) => res.redirect(301, '/'));
 
 // ── Admin page routes ──────────────────────────────────────────────────────
 // These are registered BEFORE express.static so that:
@@ -1169,6 +1177,116 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
 });
 
 // Health check endpoint
+// Endpoint público para que el cliente reporte eventos del Meta Pixel del
+// navegador y el server los reenvíe a Conversions API con el mismo event_id
+// (deduplicación). Sólo eventos genéricos de funnel (PageView, ViewContent).
+// Las conversiones críticas (registro, depósito, retiro, refund) se disparan
+// directamente desde sus handlers — este endpoint no las admite para evitar
+// que un cliente falsifique conversiones.
+const PIXEL_TRACK_ALLOWED_EVENTS = new Set([
+  'PageView', 'ViewContent', 'Search', 'Contact'
+]);
+app.post('/api/pixel/track', async (req, res) => {
+  try {
+    const { event, eventId, customData } = req.body || {};
+    if (!event || typeof event !== 'string') {
+      return res.status(400).json({ error: 'event requerido' });
+    }
+    if (!PIXEL_TRACK_ALLOWED_EVENTS.has(event)) {
+      return res.status(400).json({ error: 'evento no permitido' });
+    }
+
+    // Si hay JWT válido, enriquecer con datos del usuario (hash de email/phone/id).
+    let userInfo = {};
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+        const u = await User.findOne({ id: decoded.userId }).lean();
+        if (u) {
+          userInfo = { email: u.email, phone: u.phone, externalId: u.id };
+        }
+      } catch (e) { /* token inválido: enviar evento anónimo */ }
+    }
+
+    metaCapi.track(event, userInfo, customData || {}, { eventId, req });
+    res.json({ ok: true });
+  } catch (err) {
+    logger.warn(`[pixel/track] error: ${err.message}`);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// ============================================
+// CAMPAÑAS PUBLICITARIAS — tracking de clicks
+// ============================================
+
+// Rate limit independiente: el endpoint es público y se llama una vez por visita.
+const campaignTrackLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes' }
+});
+
+// Registra un clic de campaña. Llamado por el frontend cuando detecta `?p=CODE`
+// en la URL. No requiere autenticación. Si el código no existe o está inactivo,
+// devuelve 200 igualmente para no leakear qué códigos son válidos.
+app.post('/api/campaigns/track-click', campaignTrackLimiter, async (req, res) => {
+  try {
+    const { code, visitorId, utm } = req.body || {};
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ error: 'code requerido' });
+    }
+    const normalizedCode = String(code).toUpperCase().trim();
+    if (!/^[A-Z0-9_-]{3,40}$/.test(normalizedCode)) {
+      return res.status(400).json({ error: 'code inválido' });
+    }
+
+    const campaign = await Campaign.findOne({ code: normalizedCode, isActive: true }).lean();
+    if (!campaign) {
+      // Silencioso: no leakeamos si el código existe o no.
+      return res.json({ ok: true });
+    }
+
+    const ip = req.ip || (req.headers['x-forwarded-for'] && String(req.headers['x-forwarded-for']).split(',')[0].trim()) || '';
+    const userAgent = String(req.headers['user-agent'] || '').slice(0, 500);
+    const fingerprint = crypto.createHash('sha256').update(`${ip}|${userAgent}|${normalizedCode}`).digest('hex');
+
+    // Deduplicar: si el mismo fingerprint ya hizo click en esta campaña en los
+    // últimos 30 minutos, no contar de nuevo (evita inflar clicks por F5).
+    const recentCutoff = new Date(Date.now() - 30 * 60 * 1000);
+    const existing = await CampaignClick.findOne({
+      campaignCode: normalizedCode,
+      fingerprint,
+      clickedAt: { $gte: recentCutoff }
+    }).lean();
+    if (existing) return res.json({ ok: true, deduped: true });
+
+    await CampaignClick.create({
+      id: crypto.randomUUID(),
+      campaignCode: normalizedCode,
+      fingerprint,
+      visitorId: visitorId && typeof visitorId === 'string' ? visitorId.slice(0, 100) : null,
+      userAgent,
+      referer: String(req.headers.referer || '').slice(0, 500) || null,
+      utm: {
+        source: utm && utm.source ? String(utm.source).slice(0, 100) : null,
+        medium: utm && utm.medium ? String(utm.medium).slice(0, 100) : null,
+        campaign: utm && utm.campaign ? String(utm.campaign).slice(0, 100) : null,
+        content: utm && utm.content ? String(utm.content).slice(0, 100) : null,
+        term: utm && utm.term ? String(utm.term).slice(0, 100) : null
+      },
+      clickedAt: new Date()
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    logger.warn(`[track-click] error: ${err.message}`);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 app.get('/api/health', async (req, res) => {
   const mongoOk = mongoose.connection.readyState === 1;
   res.json({
@@ -1211,7 +1329,7 @@ app.post('/api/upload/presigned-url', authMiddleware, async (req, res) => {
 // Registro de usuario
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
-    const { username, password, email, phone, referralCode, otpCode } = req.body;
+    const { username, password, email, phone, referralCode, otpCode, campaignCode, utm } = req.body;
     
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
@@ -1301,6 +1419,16 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       logger.warn(`[Register] No se pudo generar un referralCode único para ${username} después de 10 intentos. El usuario se creará sin código.`);
     }
     
+    // Si vino con un campaignCode válido, guardar atribución (no bloquea si no existe).
+    let attributedCampaign = null;
+    if (campaignCode && typeof campaignCode === 'string') {
+      const normalizedCampaignCode = String(campaignCode).toUpperCase().trim();
+      if (/^[A-Z0-9_-]{3,40}$/.test(normalizedCampaignCode)) {
+        const c = await Campaign.findOne({ code: normalizedCampaignCode, isActive: true }).lean();
+        if (c) attributedCampaign = normalizedCampaignCode;
+      }
+    }
+
     const newUser = await User.create({
       id: userId,
       username,
@@ -1322,7 +1450,17 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       referredByUserId: isValidReferral ? referrer.id : null,
       referredByCode: isValidReferral ? normalizedReferralCode : null,
       referredAt: isValidReferral ? new Date() : null,
-      referralStatus: isValidReferral ? 'referred' : 'none'
+      referralStatus: isValidReferral ? 'referred' : 'none',
+      // Atribución de campaña (si vino por link de pauta y eligió flujo OTP)
+      acquisitionCampaign: attributedCampaign,
+      acquisitionUtm: attributedCampaign ? {
+        source: utm && utm.source ? String(utm.source).slice(0, 100) : null,
+        medium: utm && utm.medium ? String(utm.medium).slice(0, 100) : null,
+        campaign: utm && utm.campaign ? String(utm.campaign).slice(0, 100) : null,
+        content: utm && utm.content ? String(utm.content).slice(0, 100) : null,
+        term: utm && utm.term ? String(utm.term).slice(0, 100) : null
+      } : undefined,
+      acquiredAt: attributedCampaign ? new Date() : null
     });
 
     // Registrar evento de referido para trazabilidad
@@ -1346,7 +1484,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     
     // CORREGIDO: El mensaje de bienvenida se envía desde el cliente (app.js) con el formato actualizado incluyendo CBU
     // No enviamos mensaje de bienvenida desde el servidor para evitar duplicados y usar el formato correcto
-    
+
     // Crear chat status
     await ChatStatus.create({
       userId: userId,
@@ -1355,14 +1493,29 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       category: 'cargas',
       lastMessageAt: new Date()
     });
-    
+
     // Generar token con expiración de 90 días
     const token = jwt.sign(
       { userId: newUser.id, username: newUser.username, role: newUser.role },
       JWT_SECRET,
       { expiresIn: '90d' }
     );
-    
+
+    // Meta CAPI — CompleteRegistration (conversión clave del funnel).
+    metaCapi.track(
+      'CompleteRegistration',
+      { email: newUser.email, phone: newUser.phone, externalId: newUser.id },
+      {
+        content_name: 'signup',
+        status: true,
+        referred: isValidReferral,
+        campaign_code: attributedCampaign || null,
+        utm_source: newUser.acquisitionUtm?.source || null,
+        utm_campaign: newUser.acquisitionUtm?.campaign || null
+      },
+      { eventId: req.body && req.body.metaEventId, req }
+    );
+
     res.status(201).json({
       message: 'Usuario creado exitosamente',
       token,
@@ -1382,6 +1535,144 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     });
   } catch (error) {
     logger.error(`Registration error: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Registro RÁPIDO — para usuarios que llegan por un link de pauta (?p=CODE).
+// No requiere teléfono ni OTP. Crea el usuario con phoneVerificationPending:true;
+// el primer retiro le exigirá verificar un teléfono real antes de procesarse.
+// Requiere campaignCode válido y activo para evitar abuso (un atacante no puede
+// crear cuentas sin OTP a discreción — necesita un código real de pauta).
+app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
+  try {
+    const { username, password, email, campaignCode, visitorId, utm, metaEventId } = req.body || {};
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
+    }
+    if (!validateUsername(username)) {
+      return res.status(400).json({ error: 'Usuario inválido (3-30 caracteres, letras/números/._-)' });
+    }
+    if (!validatePassword(password)) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 100 caracteres' });
+    }
+    if (!campaignCode || typeof campaignCode !== 'string') {
+      return res.status(400).json({ error: 'campaignCode requerido para registro rápido' });
+    }
+
+    const normalizedCode = String(campaignCode).toUpperCase().trim();
+    const campaign = await Campaign.findOne({ code: normalizedCode, isActive: true }).lean();
+    if (!campaign) {
+      return res.status(400).json({ error: 'Código de pauta inválido o inactivo' });
+    }
+
+    const existingUser = await User.findOne({
+      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
+    }).lean();
+    if (existingUser) {
+      return res.status(400).json({ error: 'El usuario ya existe' });
+    }
+
+    // Crear en JUGAYGANA primero (igual que el flujo normal).
+    let jgResult = null;
+    try {
+      jgResult = await jugaygana.syncUserToPlatform({ username, password });
+      if (!jgResult.success && !jgResult.alreadyExists) {
+        return res.status(400).json({ error: 'No se pudo crear el usuario en JUGAYGANA: ' + (jgResult.error || 'Error desconocido') });
+      }
+    } catch (jgError) {
+      logger.error(`[register-quick] Error JUGAYGANA: ${jgError.message}`);
+      return res.status(400).json({ error: 'Error al crear usuario en la plataforma. Intenta con otro nombre de usuario.' });
+    }
+
+    const userId = uuidv4();
+    let newReferralCode = null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const candidate = generateReferralCode();
+      const collision = await User.findOne({ referralCode: candidate }).lean();
+      if (!collision) { newReferralCode = candidate; break; }
+    }
+
+    const newUser = await User.create({
+      id: userId,
+      username,
+      password,
+      email: email || null,
+      phone: null,
+      phoneVerified: false,
+      phoneVerificationPending: true,
+      role: 'user',
+      accountNumber: generateAccountNumber(),
+      balance: jgResult.user?.balance || jgResult.user?.user_balance || 0,
+      createdAt: new Date(),
+      isActive: true,
+      jugayganaUserId: jgResult.jugayganaUserId || jgResult.user?.user_id,
+      jugayganaUsername: jgResult.jugayganaUsername || jgResult.user?.user_name,
+      jugayganaSyncStatus: jgResult.alreadyExists ? 'linked' : 'synced',
+      referralCode: newReferralCode,
+      // Atribución de campaña
+      acquisitionCampaign: normalizedCode,
+      acquisitionUtm: {
+        source: utm && utm.source ? String(utm.source).slice(0, 100) : null,
+        medium: utm && utm.medium ? String(utm.medium).slice(0, 100) : null,
+        campaign: utm && utm.campaign ? String(utm.campaign).slice(0, 100) : null,
+        content: utm && utm.content ? String(utm.content).slice(0, 100) : null,
+        term: utm && utm.term ? String(utm.term).slice(0, 100) : null
+      },
+      acquiredAt: new Date()
+    });
+
+    await ChatStatus.create({
+      userId,
+      username,
+      status: 'open',
+      category: 'cargas',
+      lastMessageAt: new Date()
+    });
+
+    const token = jwt.sign(
+      { userId: newUser.id, username: newUser.username, role: newUser.role },
+      JWT_SECRET,
+      { expiresIn: '90d' }
+    );
+
+    // Meta CAPI — CompleteRegistration con campaign_code en custom_data.
+    metaCapi.track(
+      'CompleteRegistration',
+      { email: newUser.email, externalId: newUser.id },
+      {
+        content_name: 'signup_quick',
+        status: true,
+        campaign_code: normalizedCode,
+        publisher: campaign.publisher,
+        utm_source: newUser.acquisitionUtm?.source || null,
+        utm_campaign: newUser.acquisitionUtm?.campaign || null
+      },
+      { eventId: metaEventId, req }
+    );
+
+    res.status(201).json({
+      message: 'Cuenta creada. Ya podes ingresar a jugar — para retirar tendrás que verificar un teléfono.',
+      token,
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        email: newUser.email,
+        phone: null,
+        phoneVerified: false,
+        phoneVerificationPending: true,
+        accountNumber: newUser.accountNumber,
+        role: newUser.role,
+        balance: newUser.balance,
+        jugayganaLinked: true,
+        needsPasswordChange: false,
+        referralCode: newUser.referralCode,
+        acquisitionCampaign: normalizedCode
+      }
+    });
+  } catch (error) {
+    logger.error(`register-quick error: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -1627,6 +1918,16 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         { expiresIn: '8h' }
       );
       res.setHeader('Set-Cookie', buildAdminSessionCookieHeaders(adminCookieToken));
+    }
+
+    // Meta CAPI — Login (custom event) sólo para usuarios finales, no admins.
+    if (!isAdminRole(userObj.role)) {
+      metaCapi.track(
+        'Login',
+        { email: userObj.email, phone: userObj.phone, externalId: userId },
+        { content_name: 'login' },
+        { eventId: req.body && req.body.metaEventId, req }
+      );
     }
 
     res.json({
@@ -2130,6 +2431,14 @@ app.post('/api/auth/send-register-otp', sensitiveLimiter, smsIpLimiter, async (r
 
     const maskedPhone = normalizedPhone.replace(/(\+\d{1,4})\d+(\d{4})$/, '$1****$2');
 
+    // Meta CAPI — Lead (intención de registro, OTP enviado).
+    metaCapi.track(
+      'Lead',
+      { phone: normalizedPhone },
+      { content_name: 'register_otp_sent' },
+      { eventId: req.body && req.body.metaEventId, req }
+    );
+
     res.json({
       success: true,
       pendingVerification: true,
@@ -2384,6 +2693,100 @@ const BULK_SMS_VALID_COUNTRY_CODES = [
 
 // Patrones de números claramente falsos (todos iguales, secuencias simples)
 const FAKE_NUMBER_PATTERNS = /^(\d)\1+$|^1234567890$|^0987654321$|^12345678$|^01234567$/;
+
+// ============================================
+// VERIFICACIÓN DE TELÉFONO POST-REGISTRO RÁPIDO
+// --------------------------------------------
+// Para usuarios que se registraron con register-quick (phoneVerificationPending: true).
+// Funciona en 2 pasos:
+//   1) send-otp con el teléfono → genera y envía OTP por SMS
+//   2) confirm con phone + otp → marca al usuario como verificado y destraba retiros
+// Una vez verificado phoneVerificationPending pasa a false definitivamente.
+// ============================================
+app.post('/api/auth/verify-phone/send-otp', authMiddleware, sensitiveLimiter, smsIpLimiter, async (req, res) => {
+  try {
+    const { phone } = req.body || {};
+    if (!phone || typeof phone !== 'string') {
+      return res.status(400).json({ error: 'Número de teléfono requerido' });
+    }
+    const normalizedPhone = phone.trim();
+    if (!validateInternationalPhone(normalizedPhone)) {
+      return res.status(400).json({ error: 'Número de teléfono inválido. Usá formato internacional (ej: +5491155551234)' });
+    }
+
+    // Si ese teléfono ya está verificado por otro usuario, rechazar.
+    const existingPhone = await User.findOne({
+      phone: normalizedPhone,
+      phoneVerified: true,
+      id: { $ne: req.user.userId }
+    }).lean();
+    if (existingPhone) {
+      return res.status(400).json({ error: 'Este número ya está vinculado a otra cuenta' });
+    }
+
+    const result = await generateAndSendOTP(normalizedPhone, 'verify-phone');
+    if (!result.success) {
+      return res.status(429).json({ error: result.error });
+    }
+
+    const maskedPhone = normalizedPhone.replace(/(\+\d{1,4})\d+(\d{4})$/, '$1****$2');
+    res.json({ success: true, phone: maskedPhone, message: 'Código SMS enviado' });
+  } catch (error) {
+    logger.error(`verify-phone/send-otp error: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/auth/verify-phone/confirm', authMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    const { phone, otpCode } = req.body || {};
+    if (!phone || !otpCode) {
+      return res.status(400).json({ error: 'Teléfono y código requeridos' });
+    }
+    const normalizedPhone = phone.trim();
+    if (!validateInternationalPhone(normalizedPhone)) {
+      return res.status(400).json({ error: 'Número de teléfono inválido' });
+    }
+
+    const otpResult = await verifyOTP(normalizedPhone, otpCode, 'verify-phone');
+    if (!otpResult.valid) {
+      return res.status(400).json({ error: otpResult.error || 'Código inválido o expirado' });
+    }
+
+    // Volver a chequear unicidad por si alguien más verificó ese número entre el send y el confirm.
+    const existingPhone = await User.findOne({
+      phone: normalizedPhone,
+      phoneVerified: true,
+      id: { $ne: req.user.userId }
+    }).lean();
+    if (existingPhone) {
+      return res.status(400).json({ error: 'Este número ya está vinculado a otra cuenta' });
+    }
+
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    user.phone = normalizedPhone;
+    user.phoneVerified = true;
+    user.phoneVerificationPending = false;
+    user.smsConsent = true;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Teléfono verificado. Ya podés retirar.',
+      user: {
+        phone: normalizedPhone,
+        phoneVerified: true,
+        phoneVerificationPending: false
+      }
+    });
+  } catch (error) {
+    logger.error(`verify-phone/confirm error: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 
 /**
  * Valida un número de teléfono para envío masivo y devuelve la razón si es inválido.
@@ -2712,8 +3115,19 @@ app.post('/api/cbu/request', authMiddleware, async (req, res) => {
       read: false
     });
     
-    res.json({ 
-      success: true, 
+    // Meta CAPI — InitiateCheckout (el usuario pidió el CBU, va a depositar).
+    try {
+      const u = await User.findOne({ id: req.user.userId }).lean();
+      metaCapi.track(
+        'InitiateCheckout',
+        { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
+        { content_name: 'cbu_request' },
+        { eventId: req.body && req.body.metaEventId, req }
+      );
+    } catch (e) { /* tracking nunca bloquea la respuesta */ }
+
+    res.json({
+      success: true,
       message: 'Solicitud enviada',
       cbu: {
         number: cbuConfig.number,
@@ -3847,7 +4261,18 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
         timestamp: new Date()
       });
-      
+
+      // Meta CAPI — RefundClaim (señal de fricción / usuario que pierde plata).
+      try {
+        const u = await User.findOne({ id: userId }).lean();
+        metaCapi.track(
+          'RefundClaim',
+          { email: u && u.email, phone: u && u.phone, externalId: userId },
+          { value: refundAmount, currency: 'ARS', content_name: 'refund_daily', period: dateStr },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
       res.json({
         success: true,
         message: `¡Reembolso diario de $${refundAmount} acreditado!`,
@@ -3976,7 +4401,18 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
         timestamp: new Date()
       });
-      
+
+      // Meta CAPI — RefundClaim semanal.
+      try {
+        const u = await User.findOne({ id: userId }).lean();
+        metaCapi.track(
+          'RefundClaim',
+          { email: u && u.email, phone: u && u.phone, externalId: userId },
+          { value: refundAmount, currency: 'ARS', content_name: 'refund_weekly', period: `${fromDateStr} a ${toDateStr}` },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
       res.json({
         success: true,
         message: `¡Reembolso semanal de $${refundAmount} acreditado!`,
@@ -4105,7 +4541,18 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
         timestamp: new Date()
       });
-      
+
+      // Meta CAPI — RefundClaim mensual.
+      try {
+        const u = await User.findOne({ id: userId }).lean();
+        metaCapi.track(
+          'RefundClaim',
+          { email: u && u.email, phone: u && u.phone, externalId: userId },
+          { value: refundAmount, currency: 'ARS', content_name: 'refund_monthly', period: `${fromDateStr} a ${toDateStr}` },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
       res.json({
         success: true,
         message: `¡Reembolso mensual de $${refundAmount} acreditado!`,
@@ -4410,7 +4857,22 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           timestamp: new Date()
         });
       }
-      
+
+      // Meta CAPI — Purchase (la conversión más valiosa: depósito confirmado por admin).
+      // Sólo server-side: este endpoint lo invocan admins, el navegador del jugador
+      // que recibe el depósito no participa, así que no hay browser pixel para deduplicar.
+      metaCapi.track(
+        'Purchase',
+        { email: user.email, phone: user.phone, externalId: user.id },
+        {
+          value: parseFloat(amount),
+          currency: 'ARS',
+          content_name: 'deposit_admin',
+          content_type: 'product'
+        },
+        { req }
+      );
+
       res.json({
         success: true,
         message: 'Depósito realizado correctamente',
@@ -4457,11 +4919,21 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
     if (!user) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
-    
+
     if (!amount || amount <= 0) {
       return res.status(400).json({ error: 'Monto inválido' });
     }
-    
+
+    // Si el usuario destino vino por flujo rápido y aún no verificó teléfono,
+    // el admin tampoco puede procesar el retiro: el usuario tiene que verificar
+    // primero (decisión de negocio: anti-fraude).
+    if (user.phoneVerificationPending === true) {
+      return res.status(403).json({
+        error: `${user.username} debe verificar un teléfono antes de poder retirar.`,
+        code: 'PHONE_VERIFICATION_REQUIRED'
+      });
+    }
+
     const result = await jugaygana.withdrawFromUser(user.username, amount, description);
     
     if (result.success) {
@@ -4542,7 +5014,15 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
         transactionId: result.data?.transfer_id || result.data?.transferId,
         timestamp: new Date()
       });
-      
+
+      // Meta CAPI — WithdrawRequest (procesado por admin).
+      metaCapi.track(
+        'WithdrawRequest',
+        { email: user.email, phone: user.phone, externalId: user.id },
+        { value: parseFloat(amount), currency: 'ARS', content_name: 'withdraw_admin' },
+        { req }
+      );
+
       res.json({
         success: true,
         message: 'Retiro realizado correctamente',
@@ -5148,11 +5628,15 @@ app.get('/', (req, res) => {
   const indexPath = path.join(__dirname, 'public', 'index.html');
   const content = readFileSafe(indexPath);
   if (content) {
+    // Inyectar Meta Pixel ID desde env var (vacío = pixel deshabilitado en runtime).
+    // El placeholder vive en index.html y se reemplaza siempre antes de servir.
+    const pixelId = (process.env.META_PIXEL_ID || '').trim();
+    const rendered = content.replace(/__META_PIXEL_ID_PLACEHOLDER__/g, pixelId);
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.send(content);
+    res.send(rendered);
   } else {
     res.status(500).send('Error loading page');
   }
@@ -5333,14 +5817,30 @@ app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
     }
     
     const result = await jugaygana.depositToUser(
-      username, 
-      amount, 
+      username,
+      amount,
       `Depósito desde Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
     );
-    
+
     if (result.success) {
       await recordUserActivity(req.user.userId, 'deposit', amount);
-      
+
+      // Meta CAPI — Purchase (depósito self-service desde la app del usuario).
+      try {
+        const u = await User.findOne({ id: req.user.userId }).lean();
+        metaCapi.track(
+          'Purchase',
+          { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
+          {
+            value: parseFloat(amount),
+            currency: 'ARS',
+            content_name: 'deposit_self_service',
+            content_type: 'product'
+          },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
       res.json({
         success: true,
         message: `Depósito de $${amount} realizado correctamente`,
@@ -5360,20 +5860,42 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
   try {
     const { amount } = req.body;
     const username = req.user.username;
-    
+
     if (!amount || amount < 100) {
       return res.status(400).json({ error: 'Monto mínimo $100' });
     }
-    
+
+    // Si el usuario se registró por flujo rápido (sin OTP), exigir verificación
+    // de teléfono antes de permitir el primer retiro. El frontend debe abrir el
+    // modal de verify-phone cuando recibe este code.
+    const userForCheck = await User.findOne({ id: req.user.userId }).lean();
+    if (userForCheck && userForCheck.phoneVerificationPending === true) {
+      return res.status(403).json({
+        error: 'Para retirar primero tenés que verificar un número de teléfono.',
+        code: 'PHONE_VERIFICATION_REQUIRED'
+      });
+    }
+
     const result = await jugaygana.withdrawFromUser(
-      username, 
-      amount, 
+      username,
+      amount,
       `Retiro desde Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
     );
-    
+
     if (result.success) {
       await recordUserActivity(req.user.userId, 'withdrawal', amount);
-      
+
+      // Meta CAPI — WithdrawRequest (custom). Señal de usuario activo / ganador.
+      try {
+        const u = await User.findOne({ id: req.user.userId }).lean();
+        metaCapi.track(
+          'WithdrawRequest',
+          { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
+          { value: parseFloat(amount), currency: 'ARS', content_name: 'withdraw_self_service' },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
       res.json({
         success: true,
         message: `Retiro de $${amount} realizado correctamente`,
@@ -5701,6 +6223,218 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     console.error('Error reclamando recompensa Fueguito:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// CAMPAÑAS PUBLICITARIAS — CRUD y stats (admin)
+// ============================================
+
+// Helper: calcula todas las métricas de una campaña a partir de su código.
+async function computeCampaignStats(code) {
+  const normalizedCode = String(code).toUpperCase().trim();
+  const [clicks, users] = await Promise.all([
+    CampaignClick.countDocuments({ campaignCode: normalizedCode }),
+    User.find({ acquisitionCampaign: normalizedCode }).select('id username createdAt').lean()
+  ]);
+  const usernames = users.map(u => u.username);
+
+  if (usernames.length === 0) {
+    return {
+      clicks,
+      registrations: 0,
+      ftd: 0,
+      totalRevenue: 0,
+      totalWithdrawals: 0,
+      netRevenue: 0,
+      crClickToRegister: clicks > 0 ? 0 : null,
+      crRegisterToFtd: null
+    };
+  }
+
+  const [depositsByUser, withdrawalsAgg] = await Promise.all([
+    Transaction.aggregate([
+      { $match: { type: 'deposit', username: { $in: usernames } } },
+      { $group: { _id: '$username', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]),
+    Transaction.aggregate([
+      { $match: { type: 'withdrawal', username: { $in: usernames } } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ])
+  ]);
+
+  const ftd = depositsByUser.length;
+  const totalRevenue = depositsByUser.reduce((s, x) => s + (x.total || 0), 0);
+  const totalWithdrawals = withdrawalsAgg[0]?.total || 0;
+  const netRevenue = totalRevenue - totalWithdrawals;
+
+  return {
+    clicks,
+    registrations: users.length,
+    ftd,
+    totalRevenue,
+    totalWithdrawals,
+    netRevenue,
+    crClickToRegister: clicks > 0 ? users.length / clicks : null,
+    crRegisterToFtd: users.length > 0 ? ftd / users.length : null
+  };
+}
+
+function calcCommission(campaign, stats) {
+  if (!campaign || campaign.commissionType === 'none') return 0;
+  if (campaign.commissionType === 'cpa') {
+    return (campaign.commissionValue || 0) * stats.ftd;
+  }
+  if (campaign.commissionType === 'revshare') {
+    const pct = (campaign.commissionValue || 0) / 100;
+    return Math.max(0, stats.netRevenue * pct);
+  }
+  return 0;
+}
+
+// Listar todas las campañas con stats resumidas (clicks + registrations).
+app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const campaigns = await Campaign.find().sort({ createdAt: -1 }).lean();
+    // Stats resumidas: clicks y registros (las pesadas se piden por campaña al abrir detalle).
+    const codes = campaigns.map(c => c.code);
+    const [clicksAgg, regsAgg] = await Promise.all([
+      CampaignClick.aggregate([
+        { $match: { campaignCode: { $in: codes } } },
+        { $group: { _id: '$campaignCode', count: { $sum: 1 } } }
+      ]),
+      User.aggregate([
+        { $match: { acquisitionCampaign: { $in: codes } } },
+        { $group: { _id: '$acquisitionCampaign', count: { $sum: 1 } } }
+      ])
+    ]);
+    const clicksByCode = Object.fromEntries(clicksAgg.map(x => [x._id, x.count]));
+    const regsByCode = Object.fromEntries(regsAgg.map(x => [x._id, x.count]));
+    const enriched = campaigns.map(c => ({
+      ...c,
+      clicks: clicksByCode[c.code] || 0,
+      registrations: regsByCode[c.code] || 0
+    }));
+    res.json({ campaigns: enriched });
+  } catch (err) {
+    logger.error(`[admin/campaigns GET] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Crear nueva campaña.
+app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { code, publisher, name, commissionType, commissionValue, notes } = req.body || {};
+    if (!code || !publisher || !name) {
+      return res.status(400).json({ error: 'code, publisher y name son requeridos' });
+    }
+    const normalizedCode = String(code).toUpperCase().trim();
+    if (!/^[A-Z0-9_-]{3,40}$/.test(normalizedCode)) {
+      return res.status(400).json({ error: 'code inválido (3-40 caracteres, A-Z 0-9 _ -)' });
+    }
+    const validTypes = ['cpa', 'revshare', 'none'];
+    const ct = validTypes.includes(commissionType) ? commissionType : 'none';
+    const cv = Number.isFinite(parseFloat(commissionValue)) ? parseFloat(commissionValue) : 0;
+
+    const existing = await Campaign.findOne({ code: normalizedCode }).lean();
+    if (existing) {
+      return res.status(409).json({ error: 'Ya existe una campaña con ese código' });
+    }
+
+    const created = await Campaign.create({
+      id: uuidv4(),
+      code: normalizedCode,
+      publisher: String(publisher).trim().slice(0, 100),
+      name: String(name).trim().slice(0, 200),
+      commissionType: ct,
+      commissionValue: cv,
+      notes: notes ? String(notes).slice(0, 2000) : '',
+      createdBy: req.user.username,
+      isActive: true
+    });
+
+    res.status(201).json({ campaign: created.toObject() });
+  } catch (err) {
+    logger.error(`[admin/campaigns POST] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Editar campaña existente. `code` es inmutable, los demás campos sí se pueden modificar.
+app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    const { publisher, name, commissionType, commissionValue, isActive, notes } = req.body || {};
+    const update = {};
+    if (typeof publisher === 'string') update.publisher = publisher.trim().slice(0, 100);
+    if (typeof name === 'string') update.name = name.trim().slice(0, 200);
+    if (['cpa', 'revshare', 'none'].includes(commissionType)) update.commissionType = commissionType;
+    if (Number.isFinite(parseFloat(commissionValue))) update.commissionValue = parseFloat(commissionValue);
+    if (typeof isActive === 'boolean') update.isActive = isActive;
+    if (typeof notes === 'string') update.notes = notes.slice(0, 2000);
+
+    const updated = await Campaign.findOneAndUpdate(
+      { code: normalizedCode },
+      { $set: update },
+      { new: true }
+    ).lean();
+
+    if (!updated) return res.status(404).json({ error: 'Campaña no encontrada' });
+    res.json({ campaign: updated });
+  } catch (err) {
+    logger.error(`[admin/campaigns PUT] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// "Eliminar" = soft delete: marca isActive=false. No borramos para preservar atribuciones.
+app.delete('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    const updated = await Campaign.findOneAndUpdate(
+      { code: normalizedCode },
+      { $set: { isActive: false } },
+      { new: true }
+    ).lean();
+    if (!updated) return res.status(404).json({ error: 'Campaña no encontrada' });
+    res.json({ ok: true, campaign: updated });
+  } catch (err) {
+    logger.error(`[admin/campaigns DELETE] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Stats detalladas de una campaña + comisión calculada.
+app.get('/api/admin/campaigns/:code/stats', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    const campaign = await Campaign.findOne({ code: normalizedCode }).lean();
+    if (!campaign) return res.status(404).json({ error: 'Campaña no encontrada' });
+
+    const stats = await computeCampaignStats(normalizedCode);
+    const commission = calcCommission(campaign, stats);
+    res.json({ campaign, stats, commission });
+  } catch (err) {
+    logger.error(`[admin/campaigns/:code/stats] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Lista los últimos N usuarios atribuidos a una campaña (para debugging / control).
+app.get('/api/admin/campaigns/:code/users', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+    const users = await User.find({ acquisitionCampaign: normalizedCode })
+      .select('id username email phone phoneVerified phoneVerificationPending balance createdAt acquiredAt')
+      .sort({ acquiredAt: -1 })
+      .limit(limit)
+      .lean();
+    res.json({ users });
+  } catch (err) {
+    logger.error(`[admin/campaigns/:code/users] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

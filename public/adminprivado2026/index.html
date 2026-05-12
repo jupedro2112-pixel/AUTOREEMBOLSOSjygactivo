@@ -92,6 +92,10 @@
                     <span class="icon icon-chart"></span>
                     <span>Referidos</span>
                 </a>
+                <a href="#" class="nav-item" data-section="campaigns">
+                    <span>🎯</span>
+                    <span>Publicistas</span>
+                </a>
                 <a href="#" class="nav-item nav-item-sms-masivo" data-section="sms" style="display:none">
                     <span>📱</span>
                     <span>SMS Masivo</span>
@@ -911,6 +915,90 @@
 
                 </div>
             </section>
+
+            <!-- Publicistas / Campañas Section -->
+            <section id="campaignsSection" class="section">
+                <div class="panel-header">
+                    <h2>🎯 PUBLICISTAS Y PAUTAS</h2>
+                    <button class="btn-primary btn-small" onclick="showCreateCampaignModal()">+ Nueva campaña</button>
+                </div>
+                <div style="padding:16px;display:grid;gap:16px;">
+                    <p style="color:#aaa;font-size:13px;margin:0;">
+                        Cada campaña genera un link único del tipo
+                        <code style="background:rgba(212,175,55,0.15);padding:2px 6px;border-radius:4px;color:#d4af37;">https://vipcargas.com/?p=CODIGO</code>
+                        que podés entregar a cada publicista. Los usuarios que entren por ese link se registran sin SMS y quedan vinculados a la campaña.
+                    </p>
+                    <div id="campaignsList" style="display:grid;gap:10px;">
+                        <span style="color:#888;">Cargando…</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Modal: crear/editar campaña -->
+            <div id="campaignFormModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:500px;width:90%;max-height:90vh;overflow-y:auto;">
+                    <h2 id="campaignFormTitle" style="margin:0 0 16px 0;color:#d4af37;">Nueva campaña</h2>
+                    <input type="hidden" id="campaignFormMode" value="create">
+                    <input type="hidden" id="campaignFormOriginalCode" value="">
+                    <div style="display:grid;gap:12px;">
+                        <div>
+                            <label style="color:#aaa;font-size:12px;">Código (inmutable) *</label>
+                            <input type="text" id="campaignFormCode" placeholder="META_JUAN_ENE26" maxlength="40" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;text-transform:uppercase;letter-spacing:1px;">
+                            <small style="color:#888;">3-40 caracteres, sólo letras, números, guion y guion bajo</small>
+                        </div>
+                        <div>
+                            <label style="color:#aaa;font-size:12px;">Publicista *</label>
+                            <input type="text" id="campaignFormPublisher" placeholder="Juan Pérez" maxlength="100" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                        </div>
+                        <div>
+                            <label style="color:#aaa;font-size:12px;">Nombre de la campaña *</label>
+                            <input type="text" id="campaignFormName" placeholder="Meta Ads — enero 2026" maxlength="200" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                            <div>
+                                <label style="color:#aaa;font-size:12px;">Tipo de comisión</label>
+                                <select id="campaignFormCommissionType" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                                    <option value="none">Ninguna</option>
+                                    <option value="cpa">CPA (fijo por FTD)</option>
+                                    <option value="revshare">RevShare (% sobre neto)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="color:#aaa;font-size:12px;">Valor</label>
+                                <input type="number" id="campaignFormCommissionValue" min="0" step="any" placeholder="0" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                                <small style="color:#888;">CPA: $ARS por FTD. RevShare: % de 0 a 100.</small>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="color:#aaa;font-size:12px;">Notas (opcional)</label>
+                            <textarea id="campaignFormNotes" rows="2" maxlength="2000" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;resize:vertical;"></textarea>
+                        </div>
+                        <div id="campaignFormActiveRow" style="display:none;">
+                            <label style="color:#aaa;font-size:12px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="campaignFormIsActive" checked> Campaña activa
+                            </label>
+                        </div>
+                        <div id="campaignFormError" style="color:#ff6666;font-size:13px;display:none;"></div>
+                    </div>
+                    <div style="display:flex;gap:10px;margin-top:18px;">
+                        <button onclick="closeCampaignFormModal()" style="flex:1;padding:10px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;">Cancelar</button>
+                        <button onclick="submitCampaignForm()" style="flex:1;padding:10px;background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Guardar</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal: detalle / stats de campaña -->
+            <div id="campaignStatsModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:640px;width:90%;max-height:90vh;overflow-y:auto;">
+                    <h2 id="campaignStatsTitle" style="margin:0 0 6px 0;color:#d4af37;">Campaña</h2>
+                    <p id="campaignStatsSubtitle" style="margin:0 0 16px 0;color:#888;font-size:13px;"></p>
+                    <div id="campaignStatsContent" style="color:#fff;">Cargando…</div>
+                    <div style="display:flex;gap:10px;margin-top:18px;">
+                        <button onclick="closeCampaignStatsModal()" style="flex:1;padding:10px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;">Cerrar</button>
+                        <button id="campaignStatsEditBtn" onclick="editCampaignFromStats()" style="flex:1;padding:10px;background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Editar</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- SMS Masivo Section -->
             <section id="smsSection" class="section">

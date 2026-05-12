@@ -631,12 +631,17 @@ app.get(['/adminprivado2026', '/adminprivado2026/'], adminHostCheck, (req, res) 
   const adminPath = path.join(__dirname, 'public', 'adminprivado2026', 'index.html');
   const content = readFileSafe(adminPath);
   if (!content) return res.status(500).send('Error loading admin page');
+  // Inyectar la URL pública canónica (vipcargas.com) para que el admin
+  // genere los links de pauta con el dominio correcto y no con el de AWS.
+  // El PUBLIC_BASE_URL viene de env var; ver constante más abajo en este archivo.
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://vipcargas.com').replace(/\/$/, '');
+  const rendered = content.replace(/__VIP_PUBLIC_BASE_URL_PLACEHOLDER__/g, publicBaseUrl);
   res.setHeader('Content-Type', 'text/html');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
-  res.send(content);
+  res.send(rendered);
 });
 
 // Admin CSS asset — host check only (cookie check intentionally omitted; see
@@ -665,6 +670,36 @@ app.get('/adminprivado2026/admin.js', adminHostCheck, (req, res) => {
 // This runs BEFORE express.static so static never serves these files.
 app.use('/adminprivado2026/', adminHostCheck, (req, res) => {
   res.status(404).send('Not found');
+});
+
+// Vanity URL para links de pauta: https://vipcargas.com/MI_CODIGO sirve la home
+// con la atribución a esa campaña ya activa (sin necesidad de ?p=). Si el path
+// no parece un código de campaña válido, llamamos next() para que express.static
+// lo intente servir como recurso estático y caigamos al 404 si no existe.
+app.get('/:code', async (req, res, next) => {
+  const candidate = req.params.code || '';
+  // Sólo procesar si parece un código de campaña: 3-40 chars, letras/números/_/-
+  if (!/^[A-Za-z0-9_-]{3,40}$/.test(candidate)) return next();
+  // Excluir extensiones de archivo (favicons, etc.) y nombres conocidos del SW
+  if (/\.(html|css|js|png|jpg|jpeg|ico|svg|json|webp|woff2?|map|txt|xml)$/i.test(candidate)) return next();
+  if (['robots', 'sitemap', 'favicon', 'manifest'].includes(candidate.toLowerCase())) return next();
+
+  try {
+    const normalizedCode = candidate.toUpperCase();
+    const campaign = await Campaign.findOne({ code: normalizedCode, isActive: true }).lean();
+    if (!campaign) return next();
+
+    const rendered = renderIndexHtml({ campaignCode: normalizedCode });
+    if (!rendered) return res.status(500).send('Error loading page');
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.send(rendered);
+  } catch (err) {
+    logger.warn(`[vanity /:code] error: ${err.message}`);
+    return next();
+  }
 });
 
 app.use(express.static(path.join(__dirname, 'public'), {
@@ -5624,22 +5659,32 @@ app.post('/api/admin/send-notification', authMiddleware, adminMiddleware, async 
 // ============================================
 // NOTE: readFileSafe() is defined above, in the ADMIN PAGE SECURITY section.
 
-app.get('/', (req, res) => {
+// Dominio público canónico (el que ven los clientes). Se usa para generar
+// los links de pauta en el admin y para cualquier referencia absoluta a la
+// home. Default: vipcargas.com (configurable por env var).
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://vipcargas.com').replace(/\/$/, '');
+
+// Renderiza index.html reemplazando los placeholders del server (pixel id,
+// base url pública, y opcionalmente un campaignCode capturado por vanity URL).
+function renderIndexHtml(extras = {}) {
   const indexPath = path.join(__dirname, 'public', 'index.html');
   const content = readFileSafe(indexPath);
-  if (content) {
-    // Inyectar Meta Pixel ID desde env var (vacío = pixel deshabilitado en runtime).
-    // El placeholder vive en index.html y se reemplaza siempre antes de servir.
-    const pixelId = (process.env.META_PIXEL_ID || '').trim();
-    const rendered = content.replace(/__META_PIXEL_ID_PLACEHOLDER__/g, pixelId);
-    res.setHeader('Content-Type', 'text/html');
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    res.send(rendered);
-  } else {
-    res.status(500).send('Error loading page');
-  }
+  if (!content) return null;
+  const pixelId = (process.env.META_PIXEL_ID || '').trim();
+  return content
+    .replace(/__META_PIXEL_ID_PLACEHOLDER__/g, pixelId)
+    .replace(/__VIP_PUBLIC_BASE_URL_PLACEHOLDER__/g, PUBLIC_BASE_URL)
+    .replace(/__VIP_CAMPAIGN_CODE_PLACEHOLDER__/g, extras.campaignCode || '');
+}
+
+app.get('/', (req, res) => {
+  const rendered = renderIndexHtml();
+  if (!rendered) return res.status(500).send('Error loading page');
+  res.setHeader('Content-Type', 'text/html');
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.send(rendered);
 });
 
 // NOTE: /adminprivado2026 routes are now registered early, BEFORE the

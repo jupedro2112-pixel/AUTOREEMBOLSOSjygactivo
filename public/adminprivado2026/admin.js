@@ -6176,8 +6176,18 @@ function formatARS(n) {
 }
 
 function buildCampaignLink(code) {
-    const origin = window.location.origin.replace('/adminprivado2026', '').replace(/\/$/, '');
-    return `${origin}/?p=${encodeURIComponent(code)}`;
+    // Usar la URL pública canónica (inyectada por el server desde
+    // PUBLIC_BASE_URL env var, default https://vipcargas.com) en vez de
+    // window.location.origin — el admin suele cargarse desde el dominio
+    // interno de AWS y eso ensucia los links que se le pasan al publicista.
+    let baseUrl = (window.__VIP_PUBLIC_BASE_URL__ || '').trim();
+    // Si el placeholder no fue reemplazado (dev local sin server render),
+    // fallback al dominio público hardcodeado.
+    if (!baseUrl || baseUrl.indexOf('PLACEHOLDER') !== -1) {
+        baseUrl = 'https://vipcargas.com';
+    }
+    baseUrl = baseUrl.replace(/\/$/, '');
+    return `${baseUrl}/${encodeURIComponent(code)}`;
 }
 
 async function loadCampaigns() {

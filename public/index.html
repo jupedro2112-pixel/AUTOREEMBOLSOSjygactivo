@@ -171,9 +171,17 @@
         })();
     </script>
 
-    <!-- Meta Pixel (Facebook). El server inyecta META_PIXEL_ID en
-         __META_PIXEL_ID_PLACEHOLDER__. Si la variable está vacía el snippet
-         queda inactivo (no carga fbevents.js ni emite eventos). -->
+    <!-- Variables inyectadas por el server al renderizar esta página:
+           __META_PIXEL_ID_PLACEHOLDER__         → ID del pixel de Meta (o vacío)
+           __VIP_PUBLIC_BASE_URL_PLACEHOLDER__   → URL pública canónica (vipcargas.com)
+           __VIP_CAMPAIGN_CODE_PLACEHOLDER__     → código de campaña cuando se entra por
+                                                   una vanity URL tipo /CODIGO (o vacío) -->
+    <script>
+        window.__VIP_PUBLIC_BASE_URL__ = '__VIP_PUBLIC_BASE_URL_PLACEHOLDER__';
+        window.__VIP_CAMPAIGN_CODE__ = '__VIP_CAMPAIGN_CODE_PLACEHOLDER__';
+    </script>
+    <!-- Meta Pixel (Facebook). Si la variable está vacía el snippet queda
+         inactivo (no carga fbevents.js ni emite eventos). -->
     <script>
         window.__META_PIXEL_ID__ = '__META_PIXEL_ID_PLACEHOLDER__';
         (function () {

@@ -21,6 +21,12 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180x180.png">
     
     <link rel="stylesheet" href="/adminprivado2026/admin.css">
+    <!-- URL pública canónica (vipcargas.com) inyectada por el server.
+         Se usa para generar los links de pauta con el dominio correcto en lugar
+         de window.location.origin (que devuelve el dominio AWS directo). -->
+    <script>
+        window.__VIP_PUBLIC_BASE_URL__ = '__VIP_PUBLIC_BASE_URL_PLACEHOLDER__';
+    </script>
     <!-- Socket.IO desde el servidor local -->
     <script src="/socket.io/socket.io.js"></script>
     

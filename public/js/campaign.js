@@ -72,9 +72,33 @@ VIP.campaign = (function () {
         try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
     }
 
-    // Extrae el código y los UTM de la URL actual. Acepta tanto `?p=` como
-    // `?campaign=` por compatibilidad con sistemas que ya usen ese nombre.
+    // Extrae el código de la URL actual. Prioridades:
+    //   1. window.__VIP_CAMPAIGN_CODE__: inyectado por el server cuando el
+    //      visitante entra por una vanity URL tipo /CODIGO (formato moderno).
+    //   2. ?p=CODE o ?campaign=CODE: formato legacy compatible con links
+    //      antiguos que ya estén en circulación.
     function readFromUrl() {
+        // Modo 1: vanity URL (path), inyectado server-side.
+        const fromServer = window.__VIP_CAMPAIGN_CODE__;
+        if (fromServer && typeof fromServer === 'string' && fromServer.indexOf('PLACEHOLDER') === -1) {
+            const code = String(fromServer).toUpperCase().trim();
+            if (/^[A-Z0-9_-]{3,40}$/.test(code)) {
+                // En el modo vanity no hay UTMs en la URL — el publicista los
+                // puede agregar igual con ?utm_source=... si querés (los leemos abajo).
+                const params = new URLSearchParams(window.location.search);
+                return {
+                    code,
+                    utm: {
+                        source: params.get('utm_source') || null,
+                        medium: params.get('utm_medium') || null,
+                        campaign: params.get('utm_campaign') || null,
+                        content: params.get('utm_content') || null,
+                        term: params.get('utm_term') || null
+                    }
+                };
+            }
+        }
+        // Modo 2: legacy query param.
         const params = new URLSearchParams(window.location.search);
         const rawCode = params.get('p') || params.get('campaign');
         if (!rawCode) return null;
@@ -92,15 +116,27 @@ VIP.campaign = (function () {
         };
     }
 
-    // Limpia los query params relacionados con campaña/utm de la URL visible.
+    // Limpia los query params relacionados con campaña/utm de la URL visible
+    // y, si el path era una vanity URL (/CODIGO), lo reemplaza por /.
     // Usa history.replaceState para no recargar y no afectar al routing del SPA.
     function cleanUrl() {
         try {
             const url = new URL(window.location.href);
             ['p', 'campaign', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term']
                 .forEach(k => url.searchParams.delete(k));
+            // Si el path es una vanity URL (no es la home), normalizar a '/'.
+            // Detectamos vanity por el hecho de que window.__VIP_CAMPAIGN_CODE__
+            // viene seteado y el path coincide en mayúsculas con ese código.
+            const injected = window.__VIP_CAMPAIGN_CODE__;
+            let newPathname = url.pathname;
+            if (injected && typeof injected === 'string' && injected.indexOf('PLACEHOLDER') === -1) {
+                const pathSegment = url.pathname.replace(/^\//, '').toUpperCase();
+                if (pathSegment === injected.toUpperCase()) {
+                    newPathname = '/';
+                }
+            }
             const newQs = url.searchParams.toString();
-            const newPath = url.pathname + (newQs ? '?' + newQs : '') + url.hash;
+            const newPath = newPathname + (newQs ? '?' + newQs : '') + url.hash;
             window.history.replaceState({}, '', newPath);
         } catch (e) { /* ignore */ }
     }

@@ -123,6 +123,12 @@ VIP.campaign = (function () {
         }
     }
 
+    // True sólo en la carga en la que se capturó el código directamente
+    // desde la URL (no se persiste entre páginas/reloads). Sirve para que
+    // app.js decida si abrir el modal de registro automáticamente al
+    // visitante que viene de un anuncio.
+    let _wasFreshlyCaptured = false;
+
     // Ejecutado al cargar la página: detecta el código en la URL (si lo hay),
     // guarda atribución, dispara track-click y limpia la URL.
     function bootstrap() {
@@ -131,7 +137,12 @@ VIP.campaign = (function () {
             saveAttribution(fromUrl);
             trackClick(fromUrl);
             cleanUrl();
+            _wasFreshlyCaptured = true;
         }
+    }
+
+    function wasFreshlyCaptured() {
+        return _wasFreshlyCaptured;
     }
 
     return {
@@ -139,6 +150,7 @@ VIP.campaign = (function () {
         getActive,
         getVisitorId,
         clearAttribution,
+        wasFreshlyCaptured,
         // Útil para Meta Pixel custom_data:
         getActiveCustomData: function () {
             const a = getActive();

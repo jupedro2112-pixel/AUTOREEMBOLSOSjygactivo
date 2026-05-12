@@ -589,10 +589,12 @@
                 <p>Regístrate para acceder a la Sala de Juegos</p>
             </div>
             <!-- Banner de pauta: visible sólo cuando VIP.campaign.getActive() devuelve algo.
-                 auth.js lo muestra/oculta y adapta el form al modo "registro rápido sin SMS". -->
-            <div id="campaignAttributionBanner" style="display:none; background: linear-gradient(135deg, rgba(0,255,136,0.15) 0%, rgba(212,175,55,0.15) 100%); border: 1px solid rgba(0,255,136,0.4); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; text-align: center;">
-                <p style="color: #00ff88; font-weight: bold; margin: 0 0 4px 0; font-size: 14px;">🎁 Bienvenido de la pauta</p>
-                <p style="color: #ccc; margin: 0; font-size: 12px;">Registro rápido sin SMS. Para retirar tu primer premio te pediremos verificar un teléfono.</p>
+                 auth.js lo muestra/oculta y adapta el form al modo "registro rápido sin SMS".
+                 IMPORTANTE: el copy es neutral a propósito — no mencionamos SMS ni la
+                 verificación posterior para no agregar fricción percibida en la conversión. -->
+            <div id="campaignAttributionBanner" style="display:none; background: linear-gradient(135deg, rgba(212,175,55,0.18) 0%, rgba(212,175,55,0.06) 100%); border: 1px solid rgba(212,175,55,0.45); border-radius: 10px; padding: 14px 16px; margin-bottom: 18px; text-align: center;">
+                <p style="color: #d4af37; font-weight: 700; margin: 0 0 4px 0; font-size: 16px; letter-spacing: 0.5px;">✨ Bienvenido a VIPCARGAS</p>
+                <p style="color: #ccc; margin: 0; font-size: 12px;">Creá tu cuenta y empezá a jugar en segundos.</p>
             </div>
             <!-- Paso 1: Datos del registro -->
             <div id="registerStep1">
@@ -642,7 +644,7 @@
                     <label>Email (opcional)</label>
                     <input type="email" id="registerEmail" name="email" placeholder="tu@email.com" autocomplete="email">
                 </div>
-                <div class="input-group">
+                <div class="input-group" id="registerReferralGroup">
                     <label>Código de Referido (opcional)</label>
                     <input type="text" id="registerReferralCode" name="referralCode" placeholder="Ej: VIP3X7" autocomplete="off" maxlength="12" style="text-transform:uppercase;letter-spacing:2px;">
                     <span style="font-size: 11px; color: #888;">Si te invitó alguien, ingresá su código para vincularte.</span>

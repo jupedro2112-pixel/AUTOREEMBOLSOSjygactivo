@@ -1039,6 +1039,8 @@ VIP.auth = (function () {
         const banner = document.getElementById('campaignAttributionBanner');
         const phoneGroup = document.getElementById('registerPhoneGroup');
         const phoneInput = document.getElementById('registerPhone');
+        const referralGroup = document.getElementById('registerReferralGroup');
+        const referralInput = document.getElementById('registerReferralCode');
         const sendOtpBtn = document.getElementById('registerSendOtpBtn');
         if (!sendOtpBtn) return;
 
@@ -1048,12 +1050,17 @@ VIP.auth = (function () {
             if (banner) banner.style.display = '';
             if (phoneGroup) phoneGroup.style.display = 'none';
             if (phoneInput) phoneInput.required = false;
+            // En el flujo de pauta no mostramos el código de referido — la
+            // atribución a la campaña es el "referido" relevante.
+            if (referralGroup) referralGroup.style.display = 'none';
+            if (referralInput) referralInput.value = '';
             sendOtpBtn.textContent = '📝 Crear Cuenta';
             sendOtpBtn.onclick = handleRegisterQuick;
         } else {
             if (banner) banner.style.display = 'none';
             if (phoneGroup) phoneGroup.style.display = '';
             if (phoneInput) phoneInput.required = true;
+            if (referralGroup) referralGroup.style.display = '';
             sendOtpBtn.textContent = '📱 Enviar código SMS';
             sendOtpBtn.onclick = handleRegisterSendOtp;
         }

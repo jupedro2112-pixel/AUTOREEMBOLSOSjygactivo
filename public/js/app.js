@@ -25,6 +25,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Auto-abrir el modal de registro cuando el visitante llega por un link
+    // de publicista (?p=CODE) y no tiene sesión iniciada. La idea es bajar
+    // al máximo la fricción entre el clic del anuncio y el signup.
+    if (VIP.campaign && VIP.campaign.wasFreshlyCaptured() && !VIP.state.currentToken) {
+        // Pequeño defer para que el DOM termine de pintar y la animación del
+        // modal se vea fluida en mobile.
+        setTimeout(() => {
+            try {
+                if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
+                VIP.ui.showModal('registerModal');
+            } catch (e) {
+                console.warn('[campaign] no se pudo auto-abrir el modal de registro:', e && e.message);
+            }
+        }, 250);
+    }
+
     VIP.notifications.registerUserServiceWorker();
 
     VIP.ui.adjustLayout();

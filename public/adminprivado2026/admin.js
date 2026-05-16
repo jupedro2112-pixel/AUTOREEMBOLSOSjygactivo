@@ -2865,6 +2865,16 @@ function renderUsers(users) {
             }
         }
 
+        // Verificar / desverificar teléfono: habilita el retiro sin SMS.
+        let verifyBtn = '';
+        if (adminRole === 'admin' && !isAdminUser) {
+            if (user.phoneVerified) {
+                verifyBtn = `<button class="action-btn-small" style="color:#28a745" title="Teléfono verificado — clic para marcar como NO verificado" onclick='handleToggleVerifyPhone(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, false)'><span class="icon icon-check"></span></button>`;
+            } else {
+                verifyBtn = `<button class="action-btn-small" title="Verificar teléfono (habilita retiro sin SMS)" onclick='handleToggleVerifyPhone(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, true)'><span class="icon icon-check"></span></button>`;
+            }
+        }
+
         return `
         <tr class="${isAdminUser ? 'admin-row' : ''}">
             <td>${escapeHtml(user.username)}</td>
@@ -2883,6 +2893,7 @@ function renderUsers(users) {
                     <span class="icon icon-comment"></span>
                 </button>
                 ${pwdBtn}
+                ${verifyBtn}
                 ${blockBtn}
             </td>
         </tr>
@@ -2987,10 +2998,35 @@ async function handleUnblockUser(userId, username) {
     }
 }
 
+// Verifica o desverifica el teléfono de un usuario (habilita retiro sin SMS).
+async function handleToggleVerifyPhone(userId, username, verified) {
+    const msg = verified
+        ? `¿Verificar el teléfono de ${username}? Va a poder retirar sin pasar por el SMS.`
+        : `¿Marcar el teléfono de ${username} como NO verificado? Le va a volver a pedir SMS al retirar.`;
+    if (!confirm(msg)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/verify-phone`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ verified })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Error al actualizar la verificación');
+        showToast(data.message || 'Verificación actualizada', 'success');
+        loadUsers();
+    } catch (error) {
+        showToast(error.message || 'Error al actualizar la verificación', 'error');
+    }
+}
+
 window.openUserPasswordModal = openUserPasswordModal;
 window.openBlockModal = openBlockModal;
 window.handleBlockUser = handleBlockUser;
 window.handleUnblockUser = handleUnblockUser;
+window.handleToggleVerifyPhone = handleToggleVerifyPhone;
 
 // Pinta el banner BLOQUEADO + alterna botones Bloquear/Desbloquear según el estado del user.
 // El banner muestra motivo y QUIÉN lo bloqueó — esta info es solo para admins

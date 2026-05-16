@@ -7332,6 +7332,36 @@ app.post('/api/admin/users/:id/unblock', authMiddleware, adminMiddleware, async 
   }
 });
 
+// Marca/desmarca el teléfono de un usuario como verificado. Permite habilitar
+// retiros sin pasar por el SMS (cuentas de prueba, soporte manual). Body:
+// { verified: boolean } — por defecto true.
+app.post('/api/admin/users/:id/verify-phone', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const verified = req.body.verified !== false; // default: true
+
+    const user = await User.findOne({ id });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+    user.phoneVerified = verified;
+    if (verified) {
+      user.phoneVerificationPending = false;
+      user.smsConsent = true;
+    }
+    await user.save();
+
+    logger.info(`Admin ${req.user.username} ${verified ? 'verificó' : 'desverificó'} el teléfono de ${user.username}`);
+    res.json({
+      success: true,
+      message: `Teléfono de ${user.username} ${verified ? 'verificado' : 'marcado como NO verificado'}.`,
+      phoneVerified: user.phoneVerified
+    });
+  } catch (e) {
+    logger.error(`Error en verify-phone admin: ${e.message}`);
+    res.status(500).json({ error: 'Error del servidor.' });
+  }
+});
+
 // Enviar chat a cargas (antes "pagos")
 app.post('/api/admin/send-to-payments', authMiddleware, adminMiddleware, async (req, res) => {
   try {

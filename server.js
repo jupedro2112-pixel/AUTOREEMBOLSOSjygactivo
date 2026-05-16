@@ -479,6 +479,7 @@ const MAX_BLOCK_REASON_LENGTH = 500;
 const MUST_CHANGE_PASSWORD_ALLOWED_PATHS = [
   '/api/auth/change-password',
   '/api/auth/change-password/send-otp',
+  '/api/auth/change-password/pending',
   '/api/users/me',
   '/api/auth/logout',
   '/api/auth/admin-logout',
@@ -2386,6 +2387,77 @@ app.post('/api/auth/change-password/send-otp', authMiddleware, sensitiveLimiter,
     });
   } catch (error) {
     logger.error(`Error en change-password/send-otp: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Cambio de contraseña en "modo temporal": cuando al usuario no le llega el SMS
+// o el OTP le da error repetido, puede entrar igual. Cambia la contraseña SIN
+// verificar el teléfono, lo guarda como NO verificado y deja al usuario en
+// estado `phoneVerificationPending: true`. Genera un `pendingAccessCode` al azar
+// (6 dígitos). El usuario puede usar la app pero NO puede retirar hasta verificar
+// el teléfono por SMS (lo exige /api/withdrawal/request).
+app.post('/api/auth/change-password/pending', authMiddleware, authLimiter, async (req, res) => {
+  try {
+    const { newPassword, whatsapp, phone, closeAllSessions } = req.body;
+
+    let user = await User.findOne({ id: req.user.userId });
+    if (!user) {
+      try { user = await User.findById(req.user.userId); } catch (e) { /* _id inválido */ }
+    }
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+    }
+
+    const requestedPhoneRaw = (typeof phone === 'string' && phone.trim())
+      || (typeof whatsapp === 'string' && whatsapp.trim())
+      || null;
+    const requestedPhone = requestedPhoneRaw ? requestedPhoneRaw.trim() : null;
+
+    if (requestedPhone && !validateInternationalPhone(requestedPhone)) {
+      return res.status(400).json({
+        error: 'Número de teléfono inválido. Usá formato internacional con código de país (ej: +5491155551234)'
+      });
+    }
+
+    // Código de acceso temporal al azar (6 dígitos).
+    const pendingCode = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+
+    user.password = newPassword;
+    user.passwordChangedAt = new Date();
+    user.mustChangePassword = false;
+    user.pendingAccessCode = pendingCode;
+    // El usuario entra, pero queda con verificación de teléfono pendiente:
+    // no podrá retirar hasta verificar por SMS.
+    user.phoneVerificationPending = true;
+    user.phoneVerified = false;
+    if (requestedPhone) {
+      // Guardar el teléfono como NO verificado.
+      user.phone = requestedPhone;
+      user.whatsapp = requestedPhone;
+    }
+
+    if (closeAllSessions) {
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
+    }
+
+    await user.save();
+
+    await syncPasswordToJugaygana(user, newPassword, 'change-password');
+
+    res.json({
+      message: 'Contraseña cambiada. Entraste en modo temporal.',
+      temporaryAccess: true,
+      pendingAccessCode: pendingCode,
+      phoneVerificationPending: true,
+      sessionsClosed: closeAllSessions || false
+    });
+  } catch (error) {
+    logger.error(`Error en change-password/pending: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -5960,13 +6032,166 @@ app.get('/api/movements/balance', authMiddleware, async (req, res) => {
   try {
     const username = req.user.username;
     const result = await jugayganaMovements.getUserBalance(username);
-    
+
     if (result.success) {
       res.json({ balance: result.balance });
     } else {
       res.status(400).json({ error: result.error });
     }
   } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// RETIRO AUTOGESTIONADO POR EL USUARIO
+// ============================================
+
+// Devuelve los datos bancarios guardados del usuario (para autocompletar el
+// modal de retiro) junto con el estado de verificación de su teléfono.
+app.get('/api/withdrawal/account', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ id: req.user.userId }).lean();
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const acc = user.withdrawalAccount || {};
+    res.json({
+      account: {
+        titular: acc.titular || '',
+        cbu: acc.cbu || '',
+        alias: acc.alias || '',
+        savedAt: acc.savedAt || null
+      },
+      phoneVerified: user.phoneVerified === true,
+      phone: user.phone || user.whatsapp || null
+    });
+  } catch (error) {
+    logger.error(`Error en withdrawal/account: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Solicitud de retiro autogestionada. Requiere teléfono verificado por SMS.
+// Verifica el saldo real en JugaYGana, ejecuta el retiro, guarda los datos
+// bancarios (opcional) y manda un mensaje automático al chat para que el agente
+// procese la transferencia bancaria.
+app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
+  try {
+    const { titular, cbu, alias, amount, saveData } = req.body || {};
+    const username = req.user.username;
+
+    const amountNum = Number(amount);
+    if (!amountNum || amountNum < 100) {
+      return res.status(400).json({ error: 'El monto mínimo de retiro es $100' });
+    }
+
+    const titularT = (typeof titular === 'string' ? titular : '').trim();
+    const cbuT = (typeof cbu === 'string' ? cbu : '').trim();
+    const aliasT = (typeof alias === 'string' ? alias : '').trim();
+    if (!titularT || !cbuT || !aliasT) {
+      return res.status(400).json({ error: 'Completá titular, CVU/CBU y alias' });
+    }
+
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // Verificación de teléfono OBLIGATORIA para retirar.
+    if (user.phoneVerified !== true) {
+      return res.status(403).json({
+        error: 'Para retirar primero tenés que verificar tu teléfono por SMS.',
+        code: 'PHONE_VERIFICATION_REQUIRED'
+      });
+    }
+
+    // Chequear saldo real en JugaYGana ANTES de intentar el retiro.
+    const balanceResult = await jugayganaMovements.getUserBalance(username);
+    if (!balanceResult.success) {
+      return res.status(400).json({ error: 'No se pudo verificar tu saldo. Intentá de nuevo en unos minutos.' });
+    }
+    const available = Number(balanceResult.balance) || 0;
+    if (available < amountNum) {
+      return res.status(400).json({
+        error: available <= 0
+          ? 'No tenés saldo disponible para retirar.'
+          : `Saldo insuficiente. Tu saldo disponible es $${available.toLocaleString('es-AR')}.`,
+        code: 'INSUFFICIENT_BALANCE',
+        balance: available
+      });
+    }
+
+    // Ejecutar el retiro real en JugaYGana.
+    const result = await jugaygana.withdrawFromUser(
+      username,
+      amountNum,
+      `Retiro Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
+    );
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'No se pudo procesar el retiro' });
+    }
+
+    await recordUserActivity(req.user.userId, 'withdrawal', amountNum);
+
+    // Guardar datos bancarios para la próxima vez (si el usuario lo pidió).
+    if (saveData) {
+      user.withdrawalAccount = { titular: titularT, cbu: cbuT, alias: aliasT, savedAt: new Date() };
+      await user.save();
+    }
+
+    const amountFmt = '$' + amountNum.toLocaleString('es-AR');
+
+    // 1. Mensaje del usuario hacia el agente con los datos del retiro.
+    await Message.create({
+      id: uuidv4(),
+      senderId: req.user.userId,
+      senderUsername: req.user.username,
+      senderRole: 'user',
+      receiverId: 'admin',
+      receiverRole: 'admin',
+      content:
+        `💸 *SOLICITUD DE RETIRO*\n\n` +
+        `👤 Titular: ${titularT}\n` +
+        `🔢 CVU/CBU: ${cbuT}\n` +
+        `📱 Alias: ${aliasT}\n` +
+        `💵 Monto: ${amountFmt}`,
+      type: 'text',
+      timestamp: new Date(),
+      read: false
+    });
+
+    // 2. Confirmación automática del sistema hacia el usuario.
+    await Message.create({
+      id: uuidv4(),
+      senderId: 'system',
+      senderUsername: 'Sistema',
+      senderRole: 'admin',
+      receiverId: req.user.userId,
+      receiverRole: 'user',
+      content:
+        `⏳ Recibimos tu solicitud de retiro de ${amountFmt}.\n` +
+        `Un agente la está procesando y te confirma la transferencia en breve. ¡Gracias!`,
+      type: 'text',
+      timestamp: new Date(),
+      read: false
+    });
+
+    // Meta CAPI — WithdrawRequest (señal de usuario activo / ganador).
+    try {
+      metaCapi.track(
+        'WithdrawRequest',
+        { email: user.email, phone: user.phone, externalId: req.user.userId },
+        { value: amountNum, currency: 'ARS', content_name: 'withdraw_self_service' },
+        { eventId: req.body && req.body.metaEventId, req }
+      );
+    } catch (e) { /* tracking nunca bloquea la respuesta */ }
+
+    res.json({
+      success: true,
+      message: `Retiro de ${amountFmt} solicitado correctamente`,
+      newBalance: result.data?.user_balance_after,
+      transactionId: result.data?.transfer_id || result.data?.transferId
+    });
+  } catch (error) {
+    logger.error(`Error en withdrawal/request: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

@@ -527,6 +527,7 @@
             <div class="chat-input">
                 <button class="action-btn attach-btn" id="attachBtn" title="Adjuntar imagen">📸</button>
                 <button class="action-btn cbu-chat-btn" id="cbuChatBtn" title="Ver datos CBU para transferir">💳 CBU</button>
+                <button class="action-btn withdraw-chat-btn" id="withdrawChatBtn" title="Retirar premio">💸 Retirar</button>
                 <input type="file" id="fileInput" accept="image/*,video/*" style="display: none;">
                 <textarea id="messageInput" placeholder="Escribe un mensaje..." rows="1"></textarea>
                 <button class="send-btn" id="sendBtn">📤</button>
@@ -753,6 +754,22 @@
                     <button type="button" id="changePasswordOtpResendBtn" style="background:none;border:none;color:#d4af37;cursor:pointer;text-decoration:underline;padding:0;font-size:11px;">Reenviar SMS</button>
                     <span id="changePasswordOtpResendCooldown" style="color:#888;display:none;"></span>
                 </p>
+                <!-- Fallback: si el SMS no llega o el código falla, el usuario puede entrar igual
+                     en "modo temporal". Queda con verificación de teléfono pendiente y deberá
+                     verificar por SMS antes de poder retirar. -->
+                <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(212,175,55,0.2); text-align: center;">
+                    <p style="font-size: 11px; color: #888; margin-bottom: 8px;">¿El SMS no te llega? Podés entrar igual y verificar tu teléfono más tarde.</p>
+                    <button type="button" id="changePasswordTemporalBtn" class="btn btn-secondary" style="font-size: 13px;">📲 Entrar de forma temporal</button>
+                </div>
+            </div>
+            <!-- Paso 3: resultado de la entrada temporal (muestra el código pendiente) -->
+            <div id="changePasswordTemporalResult" style="display:none; text-align: center;">
+                <div style="font-size: 42px; margin-bottom: 6px;">⏳</div>
+                <h3 style="color: #d4af37; margin-bottom: 8px;">Entraste en modo temporal</h3>
+                <p style="color: #b0b0b0; font-size: 13px; margin-bottom: 14px;">Tu contraseña se cambió. Tu código temporal es:</p>
+                <div id="changePasswordTemporalCode" style="font-size: 30px; font-weight: 900; letter-spacing: 8px; color: #00ff88; font-family: monospace; background: rgba(0,0,0,0.4); border: 1px solid rgba(0,255,136,0.4); border-radius: 12px; padding: 12px;">——————</div>
+                <p style="color: #ff6b6b; font-size: 12px; margin: 14px 0;">⚠️ Para poder <strong>retirar</strong> vas a tener que verificar tu teléfono por SMS.</p>
+                <button type="button" id="changePasswordTemporalOkBtn" class="btn btn-primary">Entendido, continuar</button>
             </div>
         </div>
     </div>
@@ -780,22 +797,103 @@
 
     <!-- Modal Retirar -->
     <div id="withdrawModal" class="modal hidden">
-        <div class="modal-content">
+        <div class="modal-content" style="max-width: 420px; position: relative;">
+            <button id="withdrawCloseBtn" type="button" style="position: absolute; top: 15px; right: 15px; background: none; border: none; color: #888; font-size: 24px; cursor: pointer; z-index: 10;">✕</button>
             <div class="modal-header">
-                <h2>💸 Retirar</h2>
-                <p>Ingresa el monto a retirar de tu cuenta</p>
+                <h2>💸 Retirar Premio</h2>
+                <p>Saldo disponible: <strong id="withdrawBalanceAmount" style="color: #00ff88;">—</strong></p>
             </div>
+
+            <!-- Aviso: sin saldo suficiente -->
+            <div id="withdrawNoBalance" style="display:none; background: rgba(255,68,68,0.12); border: 1px solid rgba(255,68,68,0.5); border-radius: 10px; padding: 16px; text-align: center;">
+                <div style="font-size: 34px; margin-bottom: 6px;">⚠️</div>
+                <p style="margin: 0; color: #ff6b6b; font-weight: 700; font-size: 14px;">No tenés saldo disponible para retirar.</p>
+                <p style="margin: 8px 0 0; color: #b0b0b0; font-size: 12px;">Cuando tengas saldo vas a poder solicitar tu retiro desde acá.</p>
+            </div>
+
+            <!-- PASO 1: Datos bancarios + monto -->
             <form id="withdrawForm">
                 <div class="input-group">
-                    <label>Monto ($)</label>
-                    <input type="number" id="withdrawAmount" placeholder="Ej: 5000" required min="100">
+                    <label>👤 Titular de la cuenta</label>
+                    <input type="text" id="withdrawTitular" placeholder="Nombre y apellido del titular" autocomplete="name">
+                </div>
+                <div class="input-group">
+                    <label>🔢 CVU / CBU</label>
+                    <input type="text" inputmode="numeric" id="withdrawCbu" placeholder="22 dígitos">
+                </div>
+                <div class="input-group">
+                    <label>📱 Alias</label>
+                    <input type="text" id="withdrawAlias" placeholder="alias.de.tu.cuenta">
+                </div>
+                <div class="input-group" style="display: flex; align-items: center; gap: 10px;">
+                    <input type="checkbox" id="withdrawSaveData" checked style="width: auto;">
+                    <label for="withdrawSaveData" style="margin: 0; font-size: 13px;">Guardar mis datos para la próxima vez</label>
+                </div>
+                <div class="input-group">
+                    <label>💵 Monto a retirar ($)</label>
+                    <input type="number" id="withdrawAmount" placeholder="Ej: 5000" min="100">
                 </div>
                 <div id="withdrawError" class="error-message"></div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" id="closeWithdrawModal">Cancelar</button>
-                    <button type="submit" class="btn btn-primary" style="background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);">💸 Retirar</button>
+                    <button type="button" class="btn btn-secondary" id="withdrawCancelBtn">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" id="withdrawSubmitBtn" style="background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%); color: #fff;">💸 Continuar</button>
                 </div>
             </form>
+
+            <!-- PASO 2: Verificación de teléfono por SMS (solo si no está verificado) -->
+            <div id="withdrawOtpStep" style="display:none;">
+                <!-- 2a: ingresar teléfono -->
+                <div id="withdrawOtpPhoneSub">
+                    <div style="background: rgba(212,175,55,0.1); border: 1px solid rgba(212,175,55,0.4); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;">
+                        <p style="margin: 0; color: #d4af37; font-size: 13px;">🔒 Por seguridad, para retirar tenés que verificar tu teléfono por SMS. Es por única vez.</p>
+                    </div>
+                    <div class="input-group">
+                        <label>Número de teléfono *</label>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <select id="withdrawOtpPrefix" style="flex-shrink:0; width: 110px; padding: 8px 6px; border-radius: 8px; border: 1px solid rgba(212,175,55,0.3); background: rgba(0,0,0,0.4); color: #fff; font-size: 14px;">
+                                <option value="+54">🇦🇷 +54</option>
+                                <option value="+55">🇧🇷 +55</option>
+                                <option value="+56">🇨🇱 +56</option>
+                                <option value="+57">🇨🇴 +57</option>
+                                <option value="+51">🇵🇪 +51</option>
+                                <option value="+58">🇻🇪 +58</option>
+                                <option value="+598">🇺🇾 +598</option>
+                                <option value="+595">🇵🇾 +595</option>
+                                <option value="+591">🇧🇴 +591</option>
+                                <option value="+593">🇪🇨 +593</option>
+                                <option value="+52">🇲🇽 +52</option>
+                                <option value="+502">🇬🇹 +502</option>
+                                <option value="+503">🇸🇻 +503</option>
+                                <option value="+504">🇭🇳 +504</option>
+                                <option value="+505">🇳🇮 +505</option>
+                                <option value="+506">🇨🇷 +506</option>
+                                <option value="+507">🇵🇦 +507</option>
+                                <option value="+53">🇨🇺 +53</option>
+                                <option value="+1">🇩🇴 +1</option>
+                            </select>
+                            <input type="tel" id="withdrawOtpPhone" placeholder="9 11 1234-5678" autocomplete="tel" style="flex: 1;">
+                        </div>
+                    </div>
+                    <div id="withdrawOtpPhoneError" class="error-message"></div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" id="withdrawOtpBackBtn">Volver</button>
+                        <button type="button" class="btn btn-primary" id="withdrawOtpSendBtn">📱 Enviar código SMS</button>
+                    </div>
+                </div>
+                <!-- 2b: ingresar código -->
+                <div id="withdrawOtpCodeSub" style="display:none;">
+                    <p id="withdrawOtpMsg" style="color: #00ff88; text-align: center; margin-bottom: 16px;"></p>
+                    <div class="input-group">
+                        <label>Código de verificación *</label>
+                        <input type="text" inputmode="numeric" pattern="[0-9]{6}" id="withdrawOtpCode" placeholder="Código de 6 dígitos" maxlength="6" style="font-size: 22px; text-align: center; letter-spacing: 8px;">
+                    </div>
+                    <div id="withdrawOtpCodeError" class="error-message"></div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" id="withdrawOtpCodeBackBtn">Volver</button>
+                        <button type="button" class="btn btn-primary" id="withdrawOtpVerifyBtn" style="background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%); color: #fff;">✅ Verificar y retirar</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1194,6 +1292,7 @@
     <script src="/js/fire.js"></script>
     <script src="/js/notifications.js"></script>
     <script src="/js/ui.js"></script>
+    <script src="/js/withdraw.js"></script>
     <script src="/js/app.js"></script>
     
     <!-- ============================================

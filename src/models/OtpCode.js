@@ -13,7 +13,8 @@ const otpSchema = new mongoose.Schema({
   // 'reset'           -> reset de contraseña por SMS (olvidé mi contraseña)
   // 'login'           -> login por SMS / OTP
   // 'change-password' -> verificación del nuevo número al cambiar contraseña (forzado o desde perfil)
-  purpose: { type: String, enum: ['register', 'reset', 'login', 'change-password'], required: true },
+  // 'verify-phone'    -> verificación de teléfono post-registro (flujo rápido) y antes de retirar
+  purpose: { type: String, enum: ['register', 'reset', 'login', 'change-password', 'verify-phone'], required: true },
   attempts: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now, expires: 300 } // TTL: 5 minutos auto-delete
 });

@@ -524,8 +524,10 @@ VIP.auth = (function () {
         // Reset del paso OTP: siempre arranca en paso 1 al abrir el modal.
         const otpStep = document.getElementById('changePasswordOtpStep');
         const form = document.getElementById('changePasswordForm');
+        const temporalResult = document.getElementById('changePasswordTemporalResult');
         if (otpStep) otpStep.style.display = 'none';
         if (form) form.style.display = '';
+        if (temporalResult) temporalResult.style.display = 'none';
         const otpCodeInput = document.getElementById('changePasswordOtpCode');
         if (otpCodeInput) otpCodeInput.value = '';
         const otpErr = document.getElementById('changePasswordOtpError');
@@ -553,6 +555,9 @@ VIP.auth = (function () {
     // la nueva contraseña ni el teléfono mientras el usuario espera el SMS.
     let _vipChangePwdPending = null;
     let _vipChangePwdResendTimer = null;
+    // Recuerda si la entrada temporal pidió cerrar todas las sesiones, para
+    // forzar un re-login al cerrar el panel de resultado.
+    let _temporalCloseAllSessions = false;
 
     function _stopChangePwdResendCooldown() {
         if (_vipChangePwdResendTimer) {
@@ -668,12 +673,9 @@ VIP.auth = (function () {
                 body: JSON.stringify({ phone: whatsappFull })
             });
             const data = await response.json();
-            if (!response.ok) {
-                errorDiv.textContent = data.error || 'No se pudo enviar el código SMS';
-                errorDiv.classList.add('show');
-                return;
-            }
-            // Guardar contexto pendiente y mostrar paso 2.
+
+            // Guardar contexto pendiente SIEMPRE: aunque el envío del SMS falle,
+            // necesitamos newPassword + phone para que la "entrada temporal" funcione.
             _vipChangePwdPending = {
                 newPassword,
                 phone: whatsappFull,
@@ -684,12 +686,28 @@ VIP.auth = (function () {
             const otpMsg = document.getElementById('changePasswordOtpMsg');
             if (form) form.style.display = 'none';
             if (otpStep) otpStep.style.display = '';
-            if (otpMsg) otpMsg.textContent = `Te enviamos un código SMS al ${data.phone || whatsappFull}. Ingresálo para confirmar el cambio.`;
             const otpErr = document.getElementById('changePasswordOtpError');
             if (otpErr) { otpErr.textContent = ''; otpErr.classList.remove('show'); }
             const otpCodeInput = document.getElementById('changePasswordOtpCode');
-            if (otpCodeInput) { otpCodeInput.value = ''; setTimeout(() => otpCodeInput.focus(), 50); }
-            _startChangePwdResendCooldown(60);
+            if (otpCodeInput) { otpCodeInput.value = ''; }
+
+            if (!response.ok) {
+                // El SMS no se pudo enviar. Mostramos el paso OTP igual: el usuario
+                // puede reintentar el envío o entrar de forma temporal.
+                if (otpMsg) {
+                    otpMsg.style.color = '#ff6b6b';
+                    otpMsg.textContent = (data.error || 'No pudimos enviar el SMS.') +
+                        ' Reintentá el envío o entrá de forma temporal abajo.';
+                }
+                _stopChangePwdResendCooldown();
+            } else {
+                if (otpMsg) {
+                    otpMsg.style.color = '#00ff88';
+                    otpMsg.textContent = `Te enviamos un código SMS al ${data.phone || whatsappFull}. Ingresálo para confirmar el cambio.`;
+                }
+                if (otpCodeInput) setTimeout(() => otpCodeInput.focus(), 50);
+                _startChangePwdResendCooldown(60);
+            }
         } catch (err) {
             errorDiv.textContent = 'Error de conexión';
             errorDiv.classList.add('show');
@@ -849,6 +867,105 @@ VIP.auth = (function () {
         if (form) form.style.display = '';
         const otpErr = document.getElementById('changePasswordOtpError');
         if (otpErr) { otpErr.textContent = ''; otpErr.classList.remove('show'); }
+    }
+
+    // Entrada temporal: cuando el SMS no llega o el OTP falla, el usuario cambia
+    // la contraseña SIN verificar el teléfono. Queda con verificación pendiente
+    // y deberá verificar por SMS antes de poder retirar.
+    async function handleChangePasswordTemporalEntry() {
+        const otpErr = document.getElementById('changePasswordOtpError');
+        if (otpErr) { otpErr.textContent = ''; otpErr.classList.remove('show'); }
+
+        if (!_vipChangePwdPending) {
+            if (otpErr) {
+                otpErr.textContent = 'Sesión de cambio expirada. Volvé a iniciar el cambio.';
+                otpErr.classList.add('show');
+            }
+            return;
+        }
+
+        const btn = document.getElementById('changePasswordTemporalBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
+        try {
+            const response = await fetch(`${VIP.config.API_URL}/api/auth/change-password/pending`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${VIP.state.currentToken}`
+                },
+                body: JSON.stringify({
+                    newPassword: _vipChangePwdPending.newPassword,
+                    phone: _vipChangePwdPending.phone,
+                    whatsapp: _vipChangePwdPending.phone,
+                    closeAllSessions: _vipChangePwdPending.closeAllSessions
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+
+            if (!response.ok) {
+                if (otpErr) {
+                    otpErr.textContent = (data && data.error) || 'No se pudo completar la entrada temporal';
+                    otpErr.classList.add('show');
+                }
+                return;
+            }
+
+            // Éxito: el usuario sale del modo obligatorio pero queda con
+            // verificación de teléfono pendiente.
+            VIP.state.passwordChangePending = false;
+            if (typeof window.setPasswordChangePending === 'function') {
+                window.setPasswordChangePending(false);
+            }
+            VIP.state.sessionPassword = _vipChangePwdPending.newPassword;
+            if (VIP.state.currentUser) {
+                VIP.state.currentUser.phone = _vipChangePwdPending.phone;
+                VIP.state.currentUser.phoneVerified = false;
+                VIP.state.currentUser.phoneVerificationPending = true;
+            }
+            _temporalCloseAllSessions = !!_vipChangePwdPending.closeAllSessions;
+            _vipChangePwdPending = null;
+            _stopChangePwdResendCooldown();
+
+            // Mostrar el panel de resultado con el código temporal.
+            const form = document.getElementById('changePasswordForm');
+            const otpStep = document.getElementById('changePasswordOtpStep');
+            const result = document.getElementById('changePasswordTemporalResult');
+            const codeEl = document.getElementById('changePasswordTemporalCode');
+            if (form) form.style.display = 'none';
+            if (otpStep) otpStep.style.display = 'none';
+            if (codeEl) codeEl.textContent = data.pendingAccessCode || '——————';
+            if (result) result.style.display = '';
+
+            const np = document.getElementById('newPasswordInput');
+            if (np) np.value = '';
+            const cp = document.getElementById('confirmPasswordInput');
+            if (cp) cp.value = '';
+        } catch (err) {
+            if (otpErr) {
+                otpErr.textContent = 'Error de conexión';
+                otpErr.classList.add('show');
+            }
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = '📲 Entrar de forma temporal'; }
+        }
+    }
+
+    // Cierra el panel de resultado de la entrada temporal.
+    function finishTemporalEntry() {
+        const result = document.getElementById('changePasswordTemporalResult');
+        if (result) result.style.display = 'none';
+        VIP.state.passwordChangePending = false;
+        VIP.ui.hideModal('changePasswordModal');
+        if (_temporalCloseAllSessions) {
+            _temporalCloseAllSessions = false;
+            VIP.ui.showToast('🔒 Sesiones cerradas. Volvé a iniciar sesión.', 'info');
+            setTimeout(() => {
+                localStorage.removeItem('userToken');
+                location.reload();
+            }, 1800);
+        } else {
+            VIP.ui.showToast('⏳ Modo temporal activo. Verificá tu teléfono para poder retirar.', 'info');
+        }
     }
 
     // Estado temporal del reset OTP
@@ -1279,6 +1396,8 @@ VIP.auth = (function () {
         handleChangePasswordOtpVerify,
         handleChangePasswordOtpResend,
         handleChangePasswordOtpBack,
+        handleChangePasswordTemporalEntry,
+        finishTemporalEntry,
         handleFindUserByPhone,
         handleResetPasswordByPhone,
         handleRequestPasswordReset,

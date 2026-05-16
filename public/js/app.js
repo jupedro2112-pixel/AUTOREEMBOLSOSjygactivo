@@ -192,6 +192,30 @@ function setupEventListeners() {
         const cbuChatBtn = document.getElementById('cbuChatBtn');
         if (cbuChatBtn) cbuChatBtn.addEventListener('click', VIP.ui.loadAndShowCBU);
 
+        // Retiro autogestionado
+        const withdrawChatBtn = document.getElementById('withdrawChatBtn');
+        if (withdrawChatBtn) withdrawChatBtn.addEventListener('click', VIP.withdraw.openWithdrawModal);
+        const withdrawForm = document.getElementById('withdrawForm');
+        if (withdrawForm) withdrawForm.addEventListener('submit', VIP.withdraw.handleWithdrawSubmit);
+        const withdrawCancelBtn = document.getElementById('withdrawCancelBtn');
+        if (withdrawCancelBtn) withdrawCancelBtn.addEventListener('click', () => VIP.ui.hideModal('withdrawModal'));
+        const withdrawCloseBtn = document.getElementById('withdrawCloseBtn');
+        if (withdrawCloseBtn) withdrawCloseBtn.addEventListener('click', () => VIP.ui.hideModal('withdrawModal'));
+        const withdrawOtpSendBtn = document.getElementById('withdrawOtpSendBtn');
+        if (withdrawOtpSendBtn) withdrawOtpSendBtn.addEventListener('click', VIP.withdraw.sendWithdrawOtp);
+        const withdrawOtpVerifyBtn = document.getElementById('withdrawOtpVerifyBtn');
+        if (withdrawOtpVerifyBtn) withdrawOtpVerifyBtn.addEventListener('click', VIP.withdraw.verifyWithdrawOtp);
+        const withdrawOtpBackBtn = document.getElementById('withdrawOtpBackBtn');
+        if (withdrawOtpBackBtn) withdrawOtpBackBtn.addEventListener('click', VIP.withdraw.backToForm);
+        const withdrawOtpCodeBackBtn = document.getElementById('withdrawOtpCodeBackBtn');
+        if (withdrawOtpCodeBackBtn) withdrawOtpCodeBackBtn.addEventListener('click', VIP.withdraw.backToPhone);
+
+        // Cambio de contraseña — entrada temporal (fallback cuando el SMS no llega)
+        const cpTemporalBtn = document.getElementById('changePasswordTemporalBtn');
+        if (cpTemporalBtn) cpTemporalBtn.addEventListener('click', VIP.auth.handleChangePasswordTemporalEntry);
+        const cpTemporalOkBtn = document.getElementById('changePasswordTemporalOkBtn');
+        if (cpTemporalOkBtn) cpTemporalOkBtn.addEventListener('click', VIP.auth.finishTemporalEntry);
+
         // Settings — antes de abrir mostramos/escondemos el bloque de
         // "verificación pendiente" según el estado del user actual.
         const settingsBtn = document.getElementById('settingsBtn');

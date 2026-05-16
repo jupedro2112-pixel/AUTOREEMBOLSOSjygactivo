@@ -276,6 +276,27 @@ const userSchema = new mongoose.Schema({
   blockedBy: {
     type: String,
     default: null
+  },
+
+  // =============================================
+  // Datos bancarios guardados para retiros
+  // =============================================
+  // Se completan/actualizan cuando el usuario marca "Guardar mis datos" en el
+  // modal de retiro, para autocompletar el formulario la próxima vez.
+  withdrawalAccount: {
+    titular: { type: String, default: null, trim: true },
+    cbu: { type: String, default: null, trim: true },
+    alias: { type: String, default: null, trim: true },
+    savedAt: { type: Date, default: null }
+  },
+
+  // Código temporal de 6 dígitos generado cuando el usuario no pudo verificar
+  // el SMS al cambiar la contraseña y eligió "entrar de forma temporal".
+  // El acceso real queda condicionado por `phoneVerificationPending`: el usuario
+  // puede usar la app pero NO puede retirar hasta verificar su teléfono por SMS.
+  pendingAccessCode: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true,

@@ -204,6 +204,10 @@ VIP.auth = (function () {
         const phoneNumber = loginMode === 'phone' ? document.getElementById('loginPhone')?.value?.trim() : null;
         const phone = loginMode === 'phone' ? (phonePrefix + (phoneNumber || '').replace(/\D/g, '')) : null;
         const password = document.getElementById('password').value;
+        const usernameLoginMode = window._usernameLoginMode || 'password';
+        const temporaryCode = (loginMode === 'username' && usernameLoginMode === 'temporal')
+            ? (document.getElementById('temporalCode')?.value || '').trim()
+            : null;
         const errorDiv = document.getElementById('errorMessage');
         const loginBtn = document.querySelector('#loginForm button[type="submit"]');
 
@@ -215,6 +219,12 @@ VIP.auth = (function () {
 
         if (loginMode === 'username' && !username) {
             errorDiv.textContent = 'Ingresá tu usuario';
+            errorDiv.classList.add('show');
+            return;
+        }
+
+        if (loginMode === 'username' && usernameLoginMode === 'temporal' && (!temporaryCode || temporaryCode.length < 6)) {
+            errorDiv.textContent = 'Ingresá el código temporal de 6 dígitos';
             errorDiv.classList.add('show');
             return;
         }
@@ -256,9 +266,14 @@ VIP.auth = (function () {
             const timeoutId = setTimeout(() => controller.abort(), 10000);
 
             const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
-            const loginPayload = loginMode === 'phone'
-                ? { phone, password, metaEventId }
-                : { username, password, metaEventId };
+            let loginPayload;
+            if (loginMode === 'phone') {
+                loginPayload = { phone, password, metaEventId };
+            } else if (usernameLoginMode === 'temporal') {
+                loginPayload = { username, temporaryCode, metaEventId };
+            } else {
+                loginPayload = { username, password, metaEventId };
+            }
 
             const response = await fetch(`${VIP.config.API_URL}/api/auth/login`, {
                 method: 'POST',
@@ -1122,6 +1137,8 @@ VIP.auth = (function () {
         const passwordInputEl = document.getElementById('password');
         const passwordGroup = passwordInputEl ? passwordInputEl.closest('.input-group') : null;
         const submitBtn = document.querySelector('#loginForm button[type="submit"]');
+        const usernameLoginModeToggle = document.getElementById('usernameLoginModeToggle');
+        const temporalCodeGroup = document.getElementById('temporalCodeGroup');
 
         if (mode === 'phone') {
             if (usernameGroup) usernameGroup.classList.add('hidden');
@@ -1130,6 +1147,12 @@ VIP.auth = (function () {
             if (usernameBtn) { usernameBtn.style.background = 'transparent'; usernameBtn.style.color = '#888'; usernameBtn.style.fontWeight = 'normal'; }
             if (phoneBtn) { phoneBtn.style.background = 'rgba(212,175,55,0.2)'; phoneBtn.style.color = '#d4af37'; phoneBtn.style.fontWeight = '600'; }
             if (phoneLoginModeToggle) phoneLoginModeToggle.classList.remove('hidden');
+            // Modo celular: ocultar el sub-toggle de código temporal (es solo del modo usuario).
+            if (usernameLoginModeToggle) usernameLoginModeToggle.classList.add('hidden');
+            if (temporalCodeGroup) temporalCodeGroup.classList.add('hidden');
+            window._usernameLoginMode = 'password';
+            if (passwordGroup) passwordGroup.style.display = '';
+            if (passwordInputEl) passwordInputEl.setAttribute('required', '');
         } else {
             if (usernameGroup) usernameGroup.classList.remove('hidden');
             if (phoneGroup) phoneGroup.classList.add('hidden');
@@ -1143,6 +1166,15 @@ VIP.auth = (function () {
             if (passwordGroup) passwordGroup.style.display = '';
             if (submitBtn) submitBtn.textContent = 'Ingresar a la Sala';
             if (submitBtn) submitBtn.style.display = '';
+            // Modo usuario: mostrar el sub-toggle y resetearlo a "Contraseña".
+            if (usernameLoginModeToggle) usernameLoginModeToggle.classList.remove('hidden');
+            if (temporalCodeGroup) temporalCodeGroup.classList.add('hidden');
+            window._usernameLoginMode = 'password';
+            if (passwordInputEl) passwordInputEl.setAttribute('required', '');
+            const upwBtn = document.getElementById('usernameLoginByPassword');
+            const utmpBtn = document.getElementById('usernameLoginByTemporal');
+            if (upwBtn) { upwBtn.style.background = 'rgba(212,175,55,0.2)'; upwBtn.style.color = '#d4af37'; upwBtn.style.fontWeight = '600'; }
+            if (utmpBtn) { utmpBtn.style.background = 'transparent'; utmpBtn.style.color = '#888'; utmpBtn.style.fontWeight = 'normal'; }
         }
     }
 
@@ -1421,6 +1453,32 @@ window.switchLoginMode = VIP.auth.switchLoginMode;
 // Phone login OTP mode functions (global scope for onclick handlers)
 window._phoneLoginMode = 'password';
 window._phoneOtpFullPhone = null;
+
+// Sub-modo del login por usuario: 'password' o 'temporal' (código de acceso temporal).
+window._usernameLoginMode = 'password';
+
+window.switchUsernameLoginMode = function(mode) {
+    window._usernameLoginMode = mode;
+    var passwordInputEl = document.getElementById('password');
+    var passwordGroup = passwordInputEl ? passwordInputEl.closest('.input-group') : null;
+    var temporalGroup = document.getElementById('temporalCodeGroup');
+    var passwordBtn = document.getElementById('usernameLoginByPassword');
+    var temporalBtn = document.getElementById('usernameLoginByTemporal');
+
+    if (mode === 'temporal') {
+        if (passwordGroup) passwordGroup.style.display = 'none';
+        if (passwordInputEl) passwordInputEl.removeAttribute('required');
+        if (temporalGroup) temporalGroup.classList.remove('hidden');
+        if (passwordBtn) { passwordBtn.style.background = 'transparent'; passwordBtn.style.color = '#888'; passwordBtn.style.fontWeight = 'normal'; }
+        if (temporalBtn) { temporalBtn.style.background = 'rgba(212,175,55,0.2)'; temporalBtn.style.color = '#d4af37'; temporalBtn.style.fontWeight = '600'; }
+    } else {
+        if (passwordGroup) passwordGroup.style.display = '';
+        if (passwordInputEl) passwordInputEl.setAttribute('required', '');
+        if (temporalGroup) temporalGroup.classList.add('hidden');
+        if (passwordBtn) { passwordBtn.style.background = 'rgba(212,175,55,0.2)'; passwordBtn.style.color = '#d4af37'; passwordBtn.style.fontWeight = '600'; }
+        if (temporalBtn) { temporalBtn.style.background = 'transparent'; temporalBtn.style.color = '#888'; temporalBtn.style.fontWeight = 'normal'; }
+    }
+};
 
 window.switchPhoneLoginMode = function(mode) {
     window._phoneLoginMode = mode;

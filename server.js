@@ -1716,10 +1716,10 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
 // Login
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
-    const { username, phone, password } = req.body;
-    
-    if ((!username && !phone) || !password) {
-      return res.status(400).json({ error: 'Usuario o teléfono, y contraseña requeridos' });
+    const { username, phone, password, temporaryCode } = req.body;
+
+    if ((!username && !phone) || (!password && !temporaryCode)) {
+      return res.status(400).json({ error: 'Usuario o teléfono, y contraseña (o código temporal) requeridos' });
     }
     
     logger.debug(`Login attempt for: ${username || phone}`);
@@ -1870,24 +1870,40 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       : ((!userObj.passwordChangedAt && userObj.source === 'jugaygana') || isDefaultPassword);
     
     let isValidPassword = false;
-    
-    try {
-      isValidPassword = await bcrypt.compare(password, userObj.password);
-    } catch (bcryptError) {
-      logger.error(`Error comparing password for ${loginIdentifier}: ${bcryptError.message}`);
-    }
-    
-    // Fallback SOLO para usuarios auto-importados desde JUGAYGANA que aún no cambiaron
-    // su contraseña real (la inicial real es "asd123"). Para evitar backdoor:
-    //  - Sólo aplica si source === 'jugaygana' Y nunca cambió contraseña.
-    //  - Sólo aplica para role=user (admins nunca tienen contraparte en JUGAYGANA).
-    //  - Valida que el hash almacenado realmente corresponda a "asd123";
-    //    si la DB guarda otro hash, NO se acepta "asd123" como atajo.
-    if (!isValidPassword && password === 'asd123' && !userObj.passwordChangedAt && userObj.source === 'jugaygana' && !isAdminRole(userObj.role)) {
+
+    if (temporaryCode && !password) {
+      // Login con código temporal de acceso: fallback para usuarios que entraron
+      // en "modo temporal" al cambiar la contraseña y todavía no verificaron su
+      // teléfono. El código vale mientras phoneVerificationPending siga en true
+      // (al verificar el teléfono por SMS el código deja de funcionar).
+      const code = String(temporaryCode).trim();
+      const codeOk = userObj.pendingAccessCode
+        && userObj.phoneVerificationPending === true
+        && safeCompare(code, String(userObj.pendingAccessCode));
+      if (!codeOk) {
+        logger.debug(`Invalid temporary code for ${loginIdentifier}`);
+        return res.status(401).json({ error: 'Código temporal inválido o vencido' });
+      }
+      isValidPassword = true;
+    } else {
       try {
-        isValidPassword = await bcrypt.compare('asd123', userObj.password);
+        isValidPassword = await bcrypt.compare(password, userObj.password);
       } catch (bcryptError) {
-        logger.error(`Error verifying JUGAYGANA default password: ${bcryptError.message}`);
+        logger.error(`Error comparing password for ${loginIdentifier}: ${bcryptError.message}`);
+      }
+
+      // Fallback SOLO para usuarios auto-importados desde JUGAYGANA que aún no cambiaron
+      // su contraseña real (la inicial real es "asd123"). Para evitar backdoor:
+      //  - Sólo aplica si source === 'jugaygana' Y nunca cambió contraseña.
+      //  - Sólo aplica para role=user (admins nunca tienen contraparte en JUGAYGANA).
+      //  - Valida que el hash almacenado realmente corresponda a "asd123";
+      //    si la DB guarda otro hash, NO se acepta "asd123" como atajo.
+      if (!isValidPassword && password === 'asd123' && !userObj.passwordChangedAt && userObj.source === 'jugaygana' && !isAdminRole(userObj.role)) {
+        try {
+          isValidPassword = await bcrypt.compare('asd123', userObj.password);
+        } catch (bcryptError) {
+          logger.error(`Error verifying JUGAYGANA default password: ${bcryptError.message}`);
+        }
       }
     }
     
@@ -1976,6 +1992,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         email: userObj.email,
         phone: userObj.phone || null,
         phoneVerified: userObj.phoneVerified || false,
+        phoneVerificationPending: userObj.phoneVerificationPending === true,
         whatsapp: userObj.whatsapp || null,
         accountNumber: userObj.accountNumber,
         role: userObj.role,

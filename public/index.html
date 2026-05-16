@@ -308,6 +308,10 @@
                     <label>Usuario</label>
                     <input type="text" id="username" name="username" placeholder="Ingresa tu usuario" required autocomplete="username">
                 </div>
+                <div id="usernameLoginModeToggle" style="display:flex;gap:8px;margin:8px 0;">
+                    <button type="button" id="usernameLoginByPassword" onclick="switchUsernameLoginMode('password')" style="flex:1;padding:6px;font-size:11px;background:rgba(212,175,55,0.2);color:#d4af37;border:1px solid rgba(212,175,55,0.3);border-radius:6px;cursor:pointer;font-weight:600;-webkit-tap-highlight-color:rgba(212,175,55,0.3);touch-action:manipulation;-webkit-appearance:none;appearance:none;">🔑 Contraseña</button>
+                    <button type="button" id="usernameLoginByTemporal" onclick="switchUsernameLoginMode('temporal')" style="flex:1;padding:6px;font-size:11px;background:transparent;color:#888;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:rgba(212,175,55,0.3);touch-action:manipulation;-webkit-appearance:none;appearance:none;">⏳ Código temporal</button>
+                </div>
                 <div class="input-group hidden" id="loginPhoneGroup">
                     <label>Número de celular</label>
                     <div style="display:flex;gap:6px;align-items:center;">
@@ -351,9 +355,19 @@
                     <label>Contraseña</label>
                     <input type="password" id="password" name="password" placeholder="Ingresa tu contraseña" required autocomplete="current-password">
                 </div>
+                <div class="input-group hidden" id="temporalCodeGroup">
+                    <label>Código temporal</label>
+                    <input type="text" id="temporalCode" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="Código de 6 dígitos" autocomplete="off" style="text-align:center;font-size:18px;letter-spacing:8px;">
+                    <span style="font-size:11px;color:#888;">Es el código que te dimos al entrar de forma temporal.</span>
+                </div>
                 <button type="submit" class="btn btn-primary">Ingresar a la Sala</button>
             </form>
-            
+
+            <div style="background: rgba(212,175,55,0.08); border: 1px solid rgba(212,175,55,0.3); border-radius: 10px; padding: 11px 13px; margin: 14px 0; text-align: left;">
+                <p style="color: #d4af37; font-size: 12px; font-weight: 700; margin: 0 0 4px;">🔒 Verificá tu teléfono — 100% recomendado</p>
+                <p style="color: #b0b0b0; font-size: 11px; margin: 0; line-height: 1.45;">Te permite recuperar tu cuenta si olvidás la clave, y es obligatorio para retirar. Es un paso para tu seguridad.</p>
+            </div>
+
             <div style="margin: 15px 0; text-align: center;">
                 <span style="color: #888; font-size: 14px;">¿No tienes cuenta?</span>
                 <button id="registerBtn" class="btn btn-secondary" style="margin-top: 8px; width: 100%;">📝 Registrarse</button>
@@ -1152,6 +1166,13 @@
             <div class="modal-header">
                 <h2>📱 Verificá tu teléfono</h2>
                 <p>Te enviaremos un SMS para confirmar tu número.</p>
+            </div>
+
+            <div style="background: rgba(212,175,55,0.08); border: 1px solid rgba(212,175,55,0.3); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px;">
+                <p style="color: #d4af37; font-size: 12px; font-weight: 700; margin: 0 0 6px;">🔒 ¿Por qué verificar? — 100% recomendado</p>
+                <p style="color: #b0b0b0; font-size: 11px; margin: 0 0 3px; line-height: 1.45;">✅ Recuperás tu cuenta si olvidás la contraseña.</p>
+                <p style="color: #b0b0b0; font-size: 11px; margin: 0 0 3px; line-height: 1.45;">✅ Es obligatorio para poder retirar.</p>
+                <p style="color: #b0b0b0; font-size: 11px; margin: 0; line-height: 1.45;">✅ Es un paso para la seguridad de tu cuenta.</p>
             </div>
 
             <!-- Paso 1: ingresar teléfono -->

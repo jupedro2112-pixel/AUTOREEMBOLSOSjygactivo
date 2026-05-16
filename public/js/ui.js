@@ -98,6 +98,11 @@ VIP.ui = (function () {
         syncBalance();
         startBalancePolling();
         sendWelcomeMessages();
+
+        // Cartel del bono por instalar la app (se muestra si no lo reclamó aún).
+        if (VIP.installBonus && typeof VIP.installBonus.init === 'function') {
+            VIP.installBonus.init();
+        }
     }
 
     // ---- Layout ----

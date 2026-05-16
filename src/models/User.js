@@ -297,6 +297,18 @@ const userSchema = new mongoose.Schema({
   pendingAccessCode: {
     type: String,
     default: null
+  },
+
+  // Bono one-time por instalar la app (PWA). Se acredita una sola vez cuando el
+  // usuario toca "Reclamar" estando dentro de la app instalada (standalone).
+  installBonusClaimed: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  installBonusClaimedAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true,

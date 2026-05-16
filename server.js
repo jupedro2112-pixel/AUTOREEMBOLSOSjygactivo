@@ -4930,7 +4930,46 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       io.to(`user_${user.id}`).emit('new_message', reminderData);
       io.to(`chat_${user.id}`).emit('new_message', reminderData);
       notifyAdmins('new_message', { message: reminderData, userId: user.id, username: user.username });
-      
+
+      // Cartel "instalá la app" — solo si el usuario TODAVÍA NO la tiene instalada.
+      // Detección: tener un token FCM de contexto 'standalone' = PWA instalada.
+      const hasAppInstalled = user.fcmTokenContext === 'standalone'
+        || (Array.isArray(user.fcmTokens) && user.fcmTokens.some(t => t && t.context === 'standalone'));
+
+      if (!hasAppInstalled) {
+        const installCmd = await Command.findOne({ name: '/sys_install_app', isActive: true });
+        const installContent = (installCmd && installCmd.response)
+          ? installCmd.response.replace(/\{amount\}/g, amount).replace(/\{balance\}/g, newBalance)
+          : `🎁━━━━━━━━━━━━━━━🎁\n📲 INSTALÁ LA APP\n   Y GANÁ $5.000 🎁\n🎁━━━━━━━━━━━━━━━🎁\n\n¿Todavía no instalaste la app? ¡Hacelo ahora y reclamá tu BONO DE $5.000! 🤑\n\n✅ Te avisamos al toque de tus bonos y reembolsos\n✅ Entrás más rápido y no perdés tu cuenta\n\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, elegí "Agregar a pantalla de inicio".\n\n🎁 Una vez instalada, abrí la app y tocá el botón "🎁 Reclamar $5.000" que vas a ver arriba del chat. ¡El bono se acredita al instante!`;
+
+        const installMessage = await Message.create({
+          id: uuidv4(),
+          senderId: 'admin',
+          senderUsername: req.user.username,
+          senderRole: 'admin',
+          receiverId: user.id,
+          receiverRole: 'user',
+          content: installContent,
+          type: 'system',
+          timestamp: new Date(),
+          read: false
+        });
+        const installData = {
+          id: installMessage.id,
+          senderId: 'admin',
+          senderUsername: req.user.username,
+          senderRole: 'admin',
+          receiverId: user.id,
+          receiverRole: 'user',
+          content: installContent,
+          timestamp: new Date(),
+          type: 'system'
+        };
+        io.to(`user_${user.id}`).emit('new_message', installData);
+        io.to(`chat_${user.id}`).emit('new_message', installData);
+        notifyAdmins('new_message', { message: installData, userId: user.id, username: user.username });
+      }
+
       // Notificar al usuario específico si está conectado
       const userSocket = connectedUsers.get(user.id);
       if (userSocket) {
@@ -6209,6 +6248,89 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     logger.error(`Error en withdrawal/request: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// BONO POR INSTALAR LA APP (one-time)
+// ============================================
+const INSTALL_BONUS_AMOUNT = 5000;
+
+// Estado del bono: si ya lo reclamó (para mostrar/ocultar el cartel del chat).
+app.get('/api/install-bonus/status', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ id: req.user.userId }).lean();
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({
+      claimed: user.installBonusClaimed === true,
+      amount: INSTALL_BONUS_AMOUNT
+    });
+  } catch (error) {
+    logger.error(`Error en install-bonus/status: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Reclamo del bono. Solo desde la app instalada (standalone) y una vez por cuenta.
+app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
+  try {
+    const standalone = req.body && req.body.standalone === true;
+    if (!standalone) {
+      return res.status(400).json({
+        error: 'El bono se reclama desde la app instalada.',
+        code: 'NOT_STANDALONE'
+      });
+    }
+
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    if (user.installBonusClaimed === true) {
+      return res.status(400).json({
+        error: 'Ya reclamaste el bono por instalar la app.',
+        code: 'ALREADY_CLAIMED'
+      });
+    }
+
+    // Acreditar el bono en JUGAYGANA.
+    const creditResult = await jugaygana.creditUserBalance(user.username, INSTALL_BONUS_AMOUNT);
+    if (!creditResult || !creditResult.success) {
+      logger.error(`install-bonus: fallo al acreditar a ${user.username}: ${creditResult && creditResult.error}`);
+      return res.status(400).json({ error: 'No se pudo acreditar el bono. Intentá de nuevo en unos minutos.' });
+    }
+
+    user.installBonusClaimed = true;
+    user.installBonusClaimedAt = new Date();
+    await user.save();
+
+    const amountFmt = '$' + INSTALL_BONUS_AMOUNT.toLocaleString('es-AR');
+
+    // Mensaje de confirmación en el chat.
+    await Message.create({
+      id: uuidv4(),
+      senderId: 'system',
+      senderUsername: 'Sistema',
+      senderRole: 'admin',
+      receiverId: user.id,
+      receiverRole: 'user',
+      content: `🎁 ¡Felicitaciones ${user.username}! Te acreditamos tu BONO DE ${amountFmt} por instalar la app. ¡Gracias por sumarte! 🥳`,
+      type: 'system',
+      timestamp: new Date(),
+      read: false
+    });
+
+    const balanceResult = await jugayganaMovements.getUserBalance(user.username);
+    const newBalance = balanceResult.success ? balanceResult.balance : null;
+
+    res.json({
+      success: true,
+      message: `Bono de ${amountFmt} acreditado`,
+      amount: INSTALL_BONUS_AMOUNT,
+      newBalance
+    });
+  } catch (error) {
+    logger.error(`Error en install-bonus/claim: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

@@ -210,6 +210,10 @@ function setupEventListeners() {
         const withdrawOtpCodeBackBtn = document.getElementById('withdrawOtpCodeBackBtn');
         if (withdrawOtpCodeBackBtn) withdrawOtpCodeBackBtn.addEventListener('click', VIP.withdraw.backToPhone);
 
+        // Bono por instalar la app
+        const installBonusClaimBtn = document.getElementById('installBonusClaimBtn');
+        if (installBonusClaimBtn) installBonusClaimBtn.addEventListener('click', VIP.installBonus.claim);
+
         // Cambio de contraseña — entrada temporal (fallback cuando el SMS no llega)
         const cpTemporalBtn = document.getElementById('changePasswordTemporalBtn');
         if (cpTemporalBtn) cpTemporalBtn.addEventListener('click', VIP.auth.handleChangePasswordTemporalEntry);

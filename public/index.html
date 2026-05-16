@@ -523,6 +523,17 @@
 
         <!-- Chat Section -->
         <section class="chat-section">
+            <!-- Cartel del bono por instalar la app: visible hasta que se reclama -->
+            <div id="installBonusBanner" style="display:none; background: linear-gradient(135deg, #d4af37 0%, #ffd700 50%, #d4af37 100%); color: #000; padding: 11px 14px; border-radius: 12px; margin: 8px 8px 0; box-shadow: 0 4px 18px rgba(212,175,55,0.55); border: 2px solid #ffd700;">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <span style="font-size: 26px;">🎁</span>
+                    <div style="flex: 1; min-width: 110px;">
+                        <strong style="font-size: 14px; display: block;">¡Bono de $5.000 por instalar la app!</strong>
+                        <span style="font-size: 11px; opacity: 0.8;">Reclamalo desde la app instalada.</span>
+                    </div>
+                    <button id="installBonusClaimBtn" style="background: #000; color: #ffd700; border: none; border-radius: 9px; padding: 9px 15px; font-weight: 800; font-size: 13px; cursor: pointer; flex-shrink: 0;">🎁 Reclamar $5.000</button>
+                </div>
+            </div>
             <div class="chat-container">
                 <div class="chat-messages" id="chatMessages">
                     <!-- Messages will be loaded here -->
@@ -1314,6 +1325,7 @@
     <script src="/js/notifications.js"></script>
     <script src="/js/ui.js"></script>
     <script src="/js/withdraw.js"></script>
+    <script src="/js/installbonus.js"></script>
     <script src="/js/app.js"></script>
     
     <!-- ============================================

@@ -4529,9 +4529,134 @@ async function loadNotificationsPanel() {
     const filter = document.getElementById('notifUserFilter')?.value || 'all';
     await Promise.all([
         loadNotifStats(),
-        loadNotifUsers(1, filter)
+        loadNotifUsers(1, filter),
+        loadNotifStrategy()
     ]);
 }
+
+// ===== Estrategia de Notificaciones (plantillas editables) =====
+async function loadNotifStrategy() {
+    const container = document.getElementById('notifStrategyContainer');
+    if (!container) return;
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/templates`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await res.json();
+        if (!res.ok || !data.templates) throw new Error(data.error || 'Error');
+        renderNotifStrategy(data.templates);
+    } catch (e) {
+        container.innerHTML = '<p style="color:#dc3545;font-size:.85rem;">No se pudieron cargar las plantillas.</p>';
+    }
+}
+
+function renderNotifStrategy(templates) {
+    const container = document.getElementById('notifStrategyContainer');
+    container.innerHTML = templates.map(t => {
+        const titleAttr = escapeHtml(t.title).replace(/"/g, '&quot;');
+        const durationRow = t.hasDuration ? `
+            <div style="margin-top:.5rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
+                <label style="font-size:.8rem;color:#aaa;">Tiempo limitado (horas):</label>
+                <input type="number" class="form-input tpl-duration" value="${t.durationHours}" min="1" style="width:90px;">
+                <span style="font-size:.74rem;color:#888;">Podés usar {horas} en el texto.</span>
+            </div>` : '';
+        return `
+        <div class="notif-tpl-card" data-type="${t.type}" style="border:1px solid #333;border-radius:10px;padding:1rem;margin-bottom:1rem;">
+            <div style="font-weight:700;color:#fff;margin-bottom:.6rem;">${escapeHtml(t.label)}</div>
+            <input type="text" class="form-input tpl-title" placeholder="Título" maxlength="100" value="${titleAttr}">
+            <textarea class="form-input tpl-body" rows="2" placeholder="Texto de la notificación" maxlength="500" style="margin-top:.5rem;resize:vertical;">${escapeHtml(t.body)}</textarea>
+            ${durationRow}
+            <div style="display:flex;gap:.5rem;margin-top:.7rem;flex-wrap:wrap;align-items:center;">
+                <button class="btn btn-sm btn-secondary" onclick="saveNotifTemplate('${t.type}')">💾 Guardar</button>
+                <button class="btn btn-sm btn-secondary" onclick="testNotifTemplate('${t.type}')">🧪 Probar</button>
+                <select class="tpl-plan form-input" style="min-width:150px;">
+                    <option value="suave">Plan Suave</option>
+                    <option value="normal">Plan Normal</option>
+                    <option value="activo">Plan Activo</option>
+                    <option value="solo_reembolsos">Solo reembolsos</option>
+                    <option value="todos">Todos</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="launchNotifTemplate('${t.type}')">🚀 Lanzar</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function _notifCardData(type) {
+    const card = document.querySelector(`.notif-tpl-card[data-type="${type}"]`);
+    if (!card) return null;
+    const durEl = card.querySelector('.tpl-duration');
+    return {
+        title: card.querySelector('.tpl-title').value.trim(),
+        body: card.querySelector('.tpl-body').value.trim(),
+        durationHours: durEl ? parseInt(durEl.value, 10) : undefined,
+        plan: card.querySelector('.tpl-plan').value
+    };
+}
+
+async function saveNotifTemplate(type, silent) {
+    const d = _notifCardData(type);
+    if (!d) return false;
+    if (!d.title || !d.body) {
+        showToast('Completá el título y el texto', 'error');
+        return false;
+    }
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/templates/${type}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ title: d.title, body: d.body, durationHours: d.durationHours })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        if (!silent) showToast('Plantilla guardada', 'success');
+        return true;
+    } catch (e) {
+        showToast(e.message || 'Error guardando la plantilla', 'error');
+        return false;
+    }
+}
+
+async function testNotifTemplate(type) {
+    const username = (document.getElementById('notifTestUser')?.value || '').trim();
+    if (!username) { showToast('Escribí el usuario de prueba arriba', 'error'); return; }
+    if (!(await saveNotifTemplate(type, true))) return;
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/strategy/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ type, username })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        showToast(data.message || 'Prueba enviada', data.successCount > 0 ? 'success' : 'error');
+    } catch (e) {
+        showToast(e.message || 'Error enviando la prueba', 'error');
+    }
+}
+
+async function launchNotifTemplate(type) {
+    const d = _notifCardData(type);
+    if (!d) return;
+    if (!confirm(`¿Lanzar esta notificación al plan "${d.plan}"?\n\nSe envía a todos los usuarios de ese plan que tengan la app instalada.`)) return;
+    if (!(await saveNotifTemplate(type, true))) return;
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/strategy/launch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ type, plan: d.plan })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        showToast(`${data.message} — enviadas ${data.successCount}/${data.totalUsers}`, 'success');
+    } catch (e) {
+        showToast(e.message || 'Error lanzando la notificación', 'error');
+    }
+}
+
+window.saveNotifTemplate = saveNotifTemplate;
+window.testNotifTemplate = testNotifTemplate;
+window.launchNotifTemplate = launchNotifTemplate;
 
 async function loadNotifStats() {
     try {

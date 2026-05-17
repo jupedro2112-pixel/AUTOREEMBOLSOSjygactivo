@@ -17,6 +17,7 @@ const {
 
 // Importar modelo de usuario
 const { User } = require('../../config/database');
+const NotifTemplate = require('../models/NotifTemplate');
 
 // Lazy getter for JWT_SECRET — must be read at runtime (not module load) because
 // in AWS Elastic Beanstalk, SSM Parameter Store secrets load AFTER all modules
@@ -573,6 +574,149 @@ router.post('/send-to-usernames', requireAdmin, async (req, res) => {
   } catch (error) {
     console.error('[FCM] Error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// ESTRATEGIA DE NOTIFICACIONES (plantillas editables)
+// ============================================
+const NOTIF_TEMPLATE_DEFAULTS = {
+  bono_50:    { label: 'Bono 50%',             title: '🎁 ¡Bono del 50%!',        body: 'Cargá ahora y te damos un 50% extra. ¡Solo por {horas} horas!',        durationHours: 24, hasDuration: true },
+  bono_100:   { label: 'Bono 100%',            title: '🔥 ¡Bono del 100%!',       body: 'Duplicá tu carga: 100% de bono. ¡Aprovechá, vence en {horas} horas!',   durationHours: 12, hasDuration: true },
+  invitacion: { label: 'Invitación a jugar',   title: '🎰 ¡Te estamos esperando!', body: 'Entrá ahora y probá tu suerte. ¡Hoy puede ser tu día!',                 durationHours: 0,  hasDuration: false },
+  regalo:     { label: 'Regalo',               title: '🎉 ¡Tenés un regalo!',      body: 'Te dejamos un regalo en tu cuenta. Ingresá para reclamarlo.',           durationHours: 0,  hasDuration: false },
+  reembolso:  { label: 'Reembolso disponible', title: '💸 Reembolso disponible',   body: 'Tenés un reembolso para reclamar. ¡No lo dejes pasar!',                 durationHours: 0,  hasDuration: false }
+};
+const NOTIF_TEMPLATE_TYPES = Object.keys(NOTIF_TEMPLATE_DEFAULTS);
+const NOTIF_LAUNCH_PLANS = ['suave', 'normal', 'activo', 'solo_reembolsos', 'todos'];
+
+// Construye el {title, body} final de una plantilla, reemplazando {horas}.
+function _buildNotifContent(tplDoc, type) {
+  const def = NOTIF_TEMPLATE_DEFAULTS[type];
+  const title = (tplDoc && tplDoc.title) || def.title;
+  let body = (tplDoc && tplDoc.body) || def.body;
+  const hours = (tplDoc && tplDoc.durationHours != null) ? tplDoc.durationHours : def.durationHours;
+  body = String(body).replace(/\{horas\}/g, String(hours));
+  return { title, body };
+}
+
+// Listar las plantillas (mezcla lo guardado con los valores por defecto).
+router.get('/templates', requireAdmin, async (req, res) => {
+  try {
+    const saved = await NotifTemplate.find({}).lean();
+    const byType = {};
+    saved.forEach(t => { byType[t.type] = t; });
+    const templates = NOTIF_TEMPLATE_TYPES.map(type => {
+      const def = NOTIF_TEMPLATE_DEFAULTS[type];
+      const s = byType[type];
+      return {
+        type,
+        label: def.label,
+        hasDuration: def.hasDuration,
+        title: s ? s.title : def.title,
+        body: s ? s.body : def.body,
+        durationHours: (s && s.durationHours != null) ? s.durationHours : def.durationHours
+      };
+    });
+    res.json({ success: true, templates });
+  } catch (error) {
+    console.error('[NOTIF-STRATEGY] templates error:', error);
+    res.status(500).json({ error: 'Error obteniendo las plantillas' });
+  }
+});
+
+// Guardar / actualizar una plantilla.
+router.put('/templates/:type', requireAdmin, async (req, res) => {
+  try {
+    const { type } = req.params;
+    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
+    }
+    const { title, body, durationHours } = req.body || {};
+    if (!title || !body) {
+      return res.status(400).json({ error: 'Título y texto son obligatorios' });
+    }
+    const update = {
+      title: String(title).slice(0, 100),
+      body: String(body).slice(0, 500),
+      updatedAt: new Date(),
+      updatedBy: req.user && req.user.username
+    };
+    if (NOTIF_TEMPLATE_DEFAULTS[type].hasDuration) {
+      const h = parseInt(durationHours, 10);
+      update.durationHours = (isNaN(h) || h < 0) ? NOTIF_TEMPLATE_DEFAULTS[type].durationHours : h;
+    }
+    await NotifTemplate.findOneAndUpdate({ type }, { $set: update }, { upsert: true, new: true });
+    res.json({ success: true, message: 'Plantilla guardada' });
+  } catch (error) {
+    console.error('[NOTIF-STRATEGY] save template error:', error);
+    res.status(500).json({ error: 'Error guardando la plantilla' });
+  }
+});
+
+// Probar: enviar la notificación de una plantilla al usuario de prueba.
+router.post('/strategy/test', requireAdmin, async (req, res) => {
+  try {
+    const { type, username } = req.body || {};
+    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
+    }
+    if (!username || typeof username !== 'string' || !username.trim()) {
+      return res.status(400).json({ error: 'Indicá el usuario de prueba' });
+    }
+    const tpl = await NotifTemplate.findOne({ type }).lean();
+    const { title, body } = _buildNotifContent(tpl, type);
+    const result = await sendNotificationToUsernames(
+      User, [username.trim()], title, body, { kind: 'strategy', type }
+    );
+    if (result.success) {
+      res.json({
+        success: true,
+        message: (result.successCount > 0)
+          ? `Notificación de prueba enviada a ${username.trim()}`
+          : `No se pudo entregar a ${username.trim()} (sin app/token activo)`,
+        successCount: result.successCount || 0,
+        failureCount: result.failureCount || 0
+      });
+    } else {
+      res.status(400).json({ error: result.error || 'No se pudo enviar la prueba' });
+    }
+  } catch (error) {
+    console.error('[NOTIF-STRATEGY] test error:', error);
+    res.status(500).json({ error: 'Error enviando la prueba' });
+  }
+});
+
+// Lanzar: enviar la notificación de una plantilla a los usuarios de un plan.
+router.post('/strategy/launch', requireAdmin, async (req, res) => {
+  try {
+    const { type, plan } = req.body || {};
+    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
+    }
+    if (!NOTIF_LAUNCH_PLANS.includes(plan)) {
+      return res.status(400).json({ error: 'Plan inválido' });
+    }
+    const tpl = await NotifTemplate.findOne({ type }).lean();
+    const { title, body } = _buildNotifContent(tpl, type);
+    const filter = (plan === 'todos') ? {} : { notificationPlan: plan };
+    const result = await sendNotificationToAllUsers(
+      User, title, body, { kind: 'strategy', type }, filter
+    );
+    if (result.success) {
+      res.json({
+        success: true,
+        message: `Notificación lanzada al plan: ${plan}`,
+        totalUsers: result.totalUsers || 0,
+        successCount: result.successCount || 0,
+        failureCount: result.failureCount || 0
+      });
+    } else {
+      res.status(400).json({ error: result.error || 'No se pudo lanzar la notificación' });
+    }
+  } catch (error) {
+    console.error('[NOTIF-STRATEGY] launch error:', error);
+    res.status(500).json({ error: 'Error lanzando la notificación' });
   }
 });
 

@@ -327,6 +327,16 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
     index: true
+  },
+
+  // Conteo mensual de notificaciones de estrategia recibidas, para respetar
+  // los topes del plan de notificaciones del usuario. period = 'YYYY-MM';
+  // cuando cambia el mes, los contadores se resetean.
+  notifMonthlyCounts: {
+    period: { type: String, default: null },
+    bonos: { type: Number, default: 0 },
+    invitaciones: { type: Number, default: 0 },
+    regalos: { type: Number, default: 0 }
   }
 }, {
   timestamps: true,

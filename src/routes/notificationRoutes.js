@@ -590,6 +590,29 @@ const NOTIF_TEMPLATE_DEFAULTS = {
 const NOTIF_TEMPLATE_TYPES = Object.keys(NOTIF_TEMPLATE_DEFAULTS);
 const NOTIF_LAUNCH_PLANS = ['suave', 'normal', 'activo', 'solo_reembolsos', 'todos'];
 
+// Categoría de tope de cada tipo. El reembolso no tiene tope mensual.
+const NOTIF_TYPE_CATEGORY = {
+  bono_50: 'bonos',
+  bono_100: 'bonos',
+  invitacion: 'invitaciones',
+  regalo: 'regalos',
+  reembolso: null
+};
+
+// Topes mensuales por plan (coinciden con la encuesta que ve el usuario).
+const NOTIF_PLAN_LIMITS = {
+  suave:           { bonos: 2, invitaciones: 5,  regalos: 2 },
+  normal:          { bonos: 4, invitaciones: 5,  regalos: 2 },
+  activo:          { bonos: 6, invitaciones: 10, regalos: 3 },
+  solo_reembolsos: { bonos: 0, invitaciones: 0,  regalos: 0 }
+};
+
+// Período mensual actual ('YYYY-MM') para los contadores de tope.
+function _currentNotifPeriod() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 // Construye el {title, body} final de una plantilla, reemplazando {horas}.
 function _buildNotifContent(tplDoc, type) {
   const def = NOTIF_TEMPLATE_DEFAULTS[type];
@@ -609,13 +632,20 @@ router.get('/templates', requireAdmin, async (req, res) => {
     const templates = NOTIF_TEMPLATE_TYPES.map(type => {
       const def = NOTIF_TEMPLATE_DEFAULTS[type];
       const s = byType[type];
+      const category = NOTIF_TYPE_CATEGORY[type];
       return {
         type,
         label: def.label,
         hasDuration: def.hasDuration,
         title: s ? s.title : def.title,
         body: s ? s.body : def.body,
-        durationHours: (s && s.durationHours != null) ? s.durationHours : def.durationHours
+        durationHours: (s && s.durationHours != null) ? s.durationHours : def.durationHours,
+        category,
+        limits: category ? {
+          suave: NOTIF_PLAN_LIMITS.suave[category],
+          normal: NOTIF_PLAN_LIMITS.normal[category],
+          activo: NOTIF_PLAN_LIMITS.activo[category]
+        } : null
       };
     });
     res.json({ success: true, templates });
@@ -687,7 +717,8 @@ router.post('/strategy/test', requireAdmin, async (req, res) => {
   }
 });
 
-// Lanzar: enviar la notificación de una plantilla a los usuarios de un plan.
+// Lanzar: enviar la notificación de una plantilla a los usuarios de un plan,
+// respetando el tope mensual de cada plan (los reembolsos no tienen tope).
 router.post('/strategy/launch', requireAdmin, async (req, res) => {
   try {
     const { type, plan } = req.body || {};
@@ -699,21 +730,89 @@ router.post('/strategy/launch', requireAdmin, async (req, res) => {
     }
     const tpl = await NotifTemplate.findOne({ type }).lean();
     const { title, body } = _buildNotifContent(tpl, type);
-    const filter = (plan === 'todos') ? {} : { notificationPlan: plan };
-    const result = await sendNotificationToAllUsers(
-      User, title, body, { kind: 'strategy', type }, filter
-    );
-    if (result.success) {
-      res.json({
+    const data = { kind: 'strategy', type };
+    const category = NOTIF_TYPE_CATEGORY[type];
+
+    // Reembolso: sin tope mensual. Se envía a todo el plan elegido.
+    if (!category) {
+      const filter = (plan === 'todos') ? {} : { notificationPlan: plan };
+      const result = await sendNotificationToAllUsers(User, title, body, data, filter);
+      if (!result.success) {
+        return res.status(400).json({ error: result.error || 'No se pudo lanzar la notificación' });
+      }
+      return res.json({
         success: true,
         message: `Notificación lanzada al plan: ${plan}`,
         totalUsers: result.totalUsers || 0,
         successCount: result.successCount || 0,
-        failureCount: result.failureCount || 0
+        failureCount: result.failureCount || 0,
+        skippedCap: 0
       });
-    } else {
-      res.status(400).json({ error: result.error || 'No se pudo lanzar la notificación' });
     }
+
+    // Categoría con tope: filtrar a los usuarios que no llegaron a su límite.
+    const userQuery = { role: 'user' };
+    if (plan !== 'todos') userQuery.notificationPlan = plan;
+    const candidates = await User.find(userQuery)
+      .select('username notificationPlan notifMonthlyCounts fcmToken fcmTokens')
+      .lean();
+
+    const period = _currentNotifPeriod();
+    const eligible = [];
+    let skippedCap = 0;
+    let skippedOther = 0;
+    for (const u of candidates) {
+      const limits = NOTIF_PLAN_LIMITS[u.notificationPlan];
+      if (!limits) { skippedOther++; continue; } // sin plan asignado
+      const hasToken = !!(u.fcmToken || (Array.isArray(u.fcmTokens) && u.fcmTokens.length > 0));
+      if (!hasToken) { skippedOther++; continue; } // sin app instalada
+      const cap = limits[category];
+      let count = 0;
+      if (u.notifMonthlyCounts && u.notifMonthlyCounts.period === period) {
+        count = u.notifMonthlyCounts[category] || 0;
+      }
+      if (count >= cap) { skippedCap++; continue; } // llegó al tope del mes
+      eligible.push(u.username);
+    }
+
+    if (eligible.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Ningún usuario quedó habilitado (llegaron al tope del mes, sin plan o sin app).',
+        totalUsers: 0,
+        successCount: 0,
+        failureCount: 0,
+        skippedCap,
+        skippedOther
+      });
+    }
+
+    const result = await sendNotificationToUsernames(User, eligible, title, body, data);
+
+    // Sumar 1 al contador mensual de los usuarios a los que se les lanzó.
+    // 1) Resetear el contador de quienes están en un período viejo.
+    await User.updateMany(
+      { username: { $in: eligible }, 'notifMonthlyCounts.period': { $ne: period } },
+      { $set: { notifMonthlyCounts: { period, bonos: 0, invitaciones: 0, regalos: 0 } } }
+    );
+    // 2) Incrementar la categoría correspondiente (category es interno, no del request).
+    await User.updateMany(
+      { username: { $in: eligible } },
+      { $inc: { ['notifMonthlyCounts.' + category]: 1 } }
+    );
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'No se pudo lanzar la notificación' });
+    }
+    res.json({
+      success: true,
+      message: `Notificación lanzada al plan: ${plan}`,
+      totalUsers: eligible.length,
+      successCount: result.successCount || 0,
+      failureCount: result.failureCount || 0,
+      skippedCap,
+      skippedOther
+    });
   } catch (error) {
     console.error('[NOTIF-STRATEGY] launch error:', error);
     res.status(500).json({ error: 'Error lanzando la notificación' });

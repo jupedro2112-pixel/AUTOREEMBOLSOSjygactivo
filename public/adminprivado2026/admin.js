@@ -4560,12 +4560,16 @@ function renderNotifStrategy(templates) {
                 <input type="number" class="form-input tpl-duration" value="${t.durationHours}" min="1" style="width:90px;">
                 <span style="font-size:.74rem;color:#888;">Podés usar {horas} en el texto.</span>
             </div>` : '';
+        const limitsNote = (t.category && t.limits)
+            ? `<div style="font-size:.74rem;color:#888;margin-top:.45rem;">Tope mensual — Suave: ${t.limits.suave} · Normal: ${t.limits.normal} · Activo: ${t.limits.activo}</div>`
+            : `<div style="font-size:.74rem;color:#888;margin-top:.45rem;">Sin tope mensual (se envía a todo el plan).</div>`;
         return `
         <div class="notif-tpl-card" data-type="${t.type}" style="border:1px solid #333;border-radius:10px;padding:1rem;margin-bottom:1rem;">
             <div style="font-weight:700;color:#fff;margin-bottom:.6rem;">${escapeHtml(t.label)}</div>
             <input type="text" class="form-input tpl-title" placeholder="Título" maxlength="100" value="${titleAttr}">
             <textarea class="form-input tpl-body" rows="2" placeholder="Texto de la notificación" maxlength="500" style="margin-top:.5rem;resize:vertical;">${escapeHtml(t.body)}</textarea>
             ${durationRow}
+            ${limitsNote}
             <div style="display:flex;gap:.5rem;margin-top:.7rem;flex-wrap:wrap;align-items:center;">
                 <button class="btn btn-sm btn-secondary" onclick="saveNotifTemplate('${t.type}')">💾 Guardar</button>
                 <button class="btn btn-sm btn-secondary" onclick="testNotifTemplate('${t.type}')">🧪 Probar</button>
@@ -4648,7 +4652,9 @@ async function launchNotifTemplate(type) {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Error');
-        showToast(`${data.message} — enviadas ${data.successCount}/${data.totalUsers}`, 'success');
+        let msg = `${data.message} — enviadas: ${data.successCount}`;
+        if (data.skippedCap > 0) msg += ` · ${data.skippedCap} omitidos por tope del mes`;
+        showToast(msg, 'success');
     } catch (e) {
         showToast(e.message || 'Error lanzando la notificación', 'error');
     }

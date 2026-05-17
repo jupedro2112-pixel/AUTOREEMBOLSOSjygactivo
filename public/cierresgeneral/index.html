@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>CIERRES GENERAL — Detalle Final</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background:
+        radial-gradient(1200px 600px at 50% -100px, rgba(255,215,0,0.10), transparent 70%),
+        radial-gradient(900px 600px at 80% 120%, rgba(102,255,102,0.06), transparent 60%),
+        linear-gradient(180deg, #0a0a16 0%, #14142a 100%);
+      color: #fff;
+      font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+      min-height: 100vh;
+    }
+    .wrap {
+      max-width: 460px;
+      margin: 0 auto;
+      padding: 32px 22px;
+      display: flex; flex-direction: column; align-items: center;
+      min-height: 100vh; justify-content: center;
+    }
+    .logo {
+      width: 124px; height: 124px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 35% 30%, rgba(255,255,255,0.45), rgba(255,255,255,0) 55%),
+        radial-gradient(circle at 50% 60%, #b8860b 0%, #8b5a00 80%);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow:
+        0 18px 40px rgba(255,215,0,0.30),
+        inset 0 -8px 18px rgba(0,0,0,0.50),
+        inset 0 6px 14px rgba(255,255,255,0.20);
+      margin-bottom: 16px;
+      position: relative;
+    }
+    .logo:before {
+      content: ""; position: absolute; inset: 8px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 50% 45%, #ffe066 0%, #ffd700 30%, #c79100 75%, #8b5a00 100%);
+      box-shadow: inset 0 4px 10px rgba(255,255,255,0.30), inset 0 -6px 14px rgba(0,0,0,0.30);
+    }
+    .logo .sign {
+      position: relative; z-index: 2;
+      font-size: 64px; font-weight: 900;
+      color: #4a3000;
+      text-shadow:
+        0 2px 0 #ffd700,
+        0 -2px 0 rgba(0,0,0,0.30),
+        2px 2px 4px rgba(0,0,0,0.45);
+      letter-spacing: -2px;
+    }
+    h1.title {
+      font-size: 22px; font-weight: 900; letter-spacing: 1.4px;
+      margin: 0 0 4px; text-align: center;
+      background: linear-gradient(180deg, #ffe066 0%, #ffd700 60%, #b8860b 100%);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      text-shadow: 0 1px 0 rgba(0,0,0,0.20);
+    }
+    .subtitle {
+      color: #aaa; font-size: 11.5px; letter-spacing: 3px;
+      margin: 0 0 28px; text-transform: uppercase; font-weight: 700;
+    }
+    .card {
+      width: 100%;
+      background: rgba(0,0,0,0.38);
+      border: 1px solid rgba(255,215,0,0.30);
+      border-radius: 14px;
+      padding: 22px 20px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.50);
+    }
+    label.row-label {
+      display: block; color: #aaa; font-size: 10.5px; font-weight: 700;
+      letter-spacing: 1.2px; text-transform: uppercase; margin: 0 0 6px;
+    }
+    input[type=text], input[type=password] {
+      width: 100%;
+      background: rgba(0,0,0,0.40);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: #fff;
+      padding: 11px 12px;
+      border-radius: 8px;
+      font-size: 14px; font-weight: 600;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input[type=text]:focus, input[type=password]:focus {
+      border-color: rgba(255,215,0,0.60);
+      box-shadow: 0 0 0 3px rgba(255,215,0,0.12);
+    }
+    .field { margin-bottom: 14px; }
+    button.submit {
+      width: 100%;
+      background: linear-gradient(135deg, #ffd700 0%, #ff8800 100%);
+      color: #000;
+      border: none;
+      padding: 13px;
+      border-radius: 9px;
+      font-size: 14px; font-weight: 900; letter-spacing: 1px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: transform 0.08s, box-shadow 0.15s;
+      box-shadow: 0 8px 22px rgba(255,170,0,0.25);
+    }
+    button.submit:hover { transform: translateY(-1px); box-shadow: 0 12px 28px rgba(255,170,0,0.32); }
+    button.submit:active { transform: translateY(0); }
+    button.submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .err {
+      color: #ff8080;
+      font-size: 12px; font-weight: 700;
+      margin-top: 10px; text-align: center;
+      min-height: 16px;
+    }
+    .footer {
+      margin-top: 18px; color: #666; font-size: 10.5px;
+      letter-spacing: 1px; text-transform: uppercase; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo" aria-hidden="true"><span class="sign">$</span></div>
+    <h1 class="title">CIERRES GENERAL</h1>
+    <div class="subtitle">Detalle Final</div>
+
+    <form class="card" id="loginForm" autocomplete="on">
+      <div class="field">
+        <label class="row-label" for="user">Usuario</label>
+        <input type="text" id="user" name="username" required autocomplete="username" placeholder="cierresgeneral">
+      </div>
+      <div class="field">
+        <label class="row-label" for="pass">Contraseña</label>
+        <input type="password" id="pass" name="password" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <button type="submit" class="submit" id="submitBtn">Ingresar</button>
+      <div class="err" id="errBox"></div>
+    </form>
+
+    <div class="footer">PRIVADO · ACCESO RESTRINGIDO</div>
+  </div>
+
+  <script>
+    (function() {
+      const form = document.getElementById('loginForm');
+      const errBox = document.getElementById('errBox');
+      const btn = document.getElementById('submitBtn');
+
+      form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        errBox.textContent = '';
+        const username = document.getElementById('user').value.trim();
+        const password = document.getElementById('pass').value;
+        if (!username || !password) {
+          errBox.textContent = 'Completá usuario y contraseña';
+          return;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Ingresando…';
+        try {
+          const r = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ username, password })
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok || !d.token) {
+            errBox.textContent = d.error || 'Usuario o contraseña incorrectos';
+            btn.disabled = false;
+            btn.textContent = 'Ingresar';
+            return;
+          }
+          // Persistir el token en una key separada (closingsToken) para
+          // que no pise la sesión del admin general (adminToken). El admin
+          // panel detecta ?only=closings y carga el closingsToken.
+          try {
+            localStorage.setItem('closingsToken', d.token);
+            if (d.user) localStorage.setItem('closingsUser', JSON.stringify(d.user));
+          } catch (_) {}
+          // Redirigir al panel admin en modo "only=closings" — sidebar oculto,
+          // sólo se ve la sección de cierres.
+          location.href = '/adminprivado2026/?only=closings';
+        } catch (err) {
+          errBox.textContent = 'Error de conexión';
+          btn.disabled = false;
+          btn.textContent = 'Ingresar';
+        }
+      });
+
+      // Si ya tiene un token específico de cierres válido, saltar directo.
+      try {
+        const t = localStorage.getItem('closingsToken');
+        if (t) {
+          fetch('/api/auth/verify', { headers: { Authorization: 'Bearer ' + t } })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d && d.success && d.user && ['admin','closings_viewer'].includes(d.user.role)) {
+              location.href = '/adminprivado2026/?only=closings';
+            }})
+            .catch(() => {});
+        }
+      } catch (_) {}
+    })();
+  </script>
+</body>
+</html>

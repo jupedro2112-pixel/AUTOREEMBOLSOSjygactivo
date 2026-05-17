@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v13';
+const CACHE_VERSION = 'v100-no-logout';
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
@@ -45,10 +45,18 @@ const PRECACHE_URLS = [
 // Determina si un asset (no navegación) debe usar network-first.
 // NOTA: Las navigation requests (modo 'navigate') se excluyen antes de
 // llegar aquí, por lo que NO es necesario listar '/' ni '/index.html'.
+// Los .js de la app van por network-first para que los deploys sean inmediatos
+// (y no haya que esperar a que expire el caché tras cada cambio).
 function isNetworkFirst(url) {
   return (
+    url.includes('/js/') ||
     url.includes('/app.js') ||
-    url.includes('/manifest.json')
+    url.includes('/manifest.json') ||
+    // Panel admin: ANTES iba por cache-first, lo que hacia que cambios al
+    // panel (nuevas secciones, botones, fixes) no aparezcan hasta que la
+    // cache expire. Forzamos network-first para que cada deploy sea
+    // visible inmediatamente.
+    url.includes('/adminprivado2026/')
   );
 }
 
@@ -94,11 +102,11 @@ messaging.onBackgroundMessage(function(payload) {
   const notif = payload.notification || {};
   const webNotif = (payload.webpush && payload.webpush.notification) || {};
 
-  const title = notif.title || webNotif.title || 'Sala de Juegos';
-  const body  = notif.body  || webNotif.body  || 'Tienes un mensaje del soporte';
-  const icon  = notif.icon  || webNotif.icon  || '/icons/icon-192x192.png';
-  const badge = notif.badge || webNotif.badge || '/icons/icon-72x72.png';
-  const tag   = (payload.data && payload.data.tag) || 'chat-message';
+  const title = notif.title || webNotif.title || 'Reembolsos';
+  const body  = notif.body  || webNotif.body  || 'Tenés una notificación nueva';
+  const icon  = notif.icon  || webNotif.icon  || '/icons/bag-silver-v2.svg';
+  const badge = notif.badge || webNotif.badge || '/icons/bag-silver-v2.svg';
+  const tag   = (payload.data && payload.data.tag) || 'vipcargasantino';
 
   // Confirmación de entrega: si el envío vino con batchId+userId, avisar al
   // backend que el push llegó realmente (cubre el falso "enviado" cuando
@@ -123,11 +131,53 @@ messaging.onBackgroundMessage(function(payload) {
     requireInteraction: false,
     data: _data,
     actions: [
-      { action: 'open',  title: 'Abrir chat' },
-      { action: 'close', title: 'Cerrar'     }
+      { action: 'open',  title: 'Abrir' },
+      { action: 'close', title: 'Cerrar' }
     ],
     vibrate: [200, 100, 200]
   };
+
+  // Si la push es de sorteos (win/lose/test) o de giveaway (push de plata),
+  // avisamos a la(s) ventana(s) abierta(s) para que refresquen sus banners
+  // sin esperar a que el user cierre y abra la app. Mismo patrón que ya
+  // usamos en notificationclick para regalos.
+  const _src = String(_data.source || '');
+  if (_src.startsWith('raffle-win') || _src.startsWith('raffle-lose')) {
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(function (cls) {
+        for (const c of cls) {
+          try {
+            c.postMessage({
+              type: 'raffle-update',
+              source: _src,
+              raffleId: _data.raffleId || null,
+              isWinner: _data.isWinner === 'true',
+              autoCredited: _data.autoCredited === 'true',
+              winningTicketNumber: _data.winningTicketNumber || null
+            });
+          } catch (_) { /* ignore */ }
+        }
+      })
+      .catch(function (e) { console.warn('[FCM-SW] postMessage raffle-update falló:', e && e.message); });
+  }
+  // Push de plata (money-giveaway broadcast / test): refrescar el card
+  // del home así el user ve el botón "RECLAMAR" inmediatamente.
+  if (_src.startsWith('money-giveaway')) {
+    clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then(function (cls) {
+        for (const c of cls) {
+          try {
+            c.postMessage({
+              type: 'giveaway-update',
+              source: _src,
+              giveawayId: _data.giveawayId || null,
+              amount: _data.amount || null
+            });
+          } catch (_) {}
+        }
+      })
+      .catch(function (e) { console.warn('[FCM-SW] postMessage giveaway-update falló:', e && e.message); });
+  }
 
   return self.registration.showNotification(title, options);
 });
@@ -135,26 +185,75 @@ messaging.onBackgroundMessage(function(payload) {
 // ============================================
 // CLICK EN NOTIFICACIÓN
 // ============================================
+// FIX: antes el handler hacia openWindow('/') si no encontraba ventana
+// abierta, lo que dejaba al SO decidir y muchas veces abría Chrome
+// (no la PWA instalada). Ahora:
+//   - Filtramos clients para preferir las ventanas PWA standalone
+//     (frameType==='top-level' + visibilityState).
+//   - Usamos URL absoluta con start_url del manifest para que Android
+//     enrute al WebAPK instalado.
+//   - Pasamos el payload.data al cliente via postMessage para que las
+//     ventanas temporales (regalo, promo) se rendericen al instante
+//     sin esperar el polling de 60s.
 self.addEventListener('notificationclick', function(event) {
-  console.log('[FCM-SW] Click en notificación:', event.action);
+  console.log('[FCM-SW] Click en notificación:', event.action, event.notification.data);
 
   event.notification.close();
 
   if (event.action === 'close') return;
 
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then(function(clientList) {
-        for (const client of clientList) {
-          if (client.url.includes(self.location.origin) && 'focus' in client) {
-            return client.focus();
-          }
-        }
-        if (clients.openWindow) {
-          return clients.openWindow('/');
-        }
-      })
-  );
+  // Datos del push para reenviarlos al cliente.
+  const notifData = event.notification.data || {};
+  // CRITICO: la URL debe coincidir EXACTAMENTE con start_url del manifest
+  // (/?source=pwa) para que Android enrute al WebAPK instalado en lugar de
+  // abrir Chrome. Si usamos otro query string (?source=push), Android no
+  // reconoce la PWA y abre el navegador. El "source=push" lo distinguimos
+  // via el postMessage que mandamos al cliente con notifData.
+  const targetUrl = self.location.origin + '/?source=pwa';
+
+  event.waitUntil((async () => {
+    const allClients = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+
+    // Preferir un cliente PWA (top-level y mismo origen) que esté visible
+    // o haya estado activo recientemente. Si no hay, tomamos cualquiera.
+    let target = null;
+    for (const c of allClients) {
+      if (!c.url || !c.url.startsWith(self.location.origin)) continue;
+      if (c.frameType !== 'top-level') continue;
+      target = c;
+      break;
+    }
+    if (!target && allClients.length) target = allClients[0];
+
+    if (target) {
+      try {
+        // Push de la data al cliente para render inmediato del cartel
+        // de promo/regalo aunque el polling todavia no haya corrido.
+        target.postMessage({
+          type: 'PUSH_NOTIFICATION_CLICK',
+          data: notifData
+        });
+      } catch (_) {}
+      try { await target.focus(); } catch (_) {}
+      return;
+    }
+
+    // Sin cliente abierto: abrir nueva ventana en la URL del start_url.
+    // Esto es lo que Android enruta al WebAPK (PWA instalada). Si no hay
+    // WebAPK, abre el navegador — eso es comportamiento de Apple/Google.
+    if (clients.openWindow) {
+      const newClient = await clients.openWindow(targetUrl);
+      if (newClient) {
+        // Best-effort: postear la data por si el cliente ya esta listo.
+        try {
+          newClient.postMessage({
+            type: 'PUSH_NOTIFICATION_CLICK',
+            data: notifData
+          });
+        } catch (_) {}
+      }
+    }
+  })());
 });
 
 // ============================================

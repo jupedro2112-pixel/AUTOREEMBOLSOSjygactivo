@@ -58,9 +58,9 @@ const userSchema = new mongoose.Schema({
     default: false,
     index: true
   },
-  role: { 
-    type: String, 
-    enum: ['user', 'admin', 'depositor', 'withdrawer'], 
+  role: {
+    type: String,
+    enum: ['user', 'admin', 'depositor', 'withdrawer', 'closings_viewer'],
     default: 'user',
     index: true
   },
@@ -160,14 +160,25 @@ const userSchema = new mongoose.Schema({
     default: null
   },
   // Lista de todos los tokens FCM activos del usuario (uno por contexto/dispositivo).
-  // Cada entrada: { token, context, updatedAt, notifPermission }
+  // Cada entrada: { token, context, updatedAt, notifPermission, platform }
   // Permite enviar notificaciones a Chrome Y a la PWA instalada al mismo tiempo.
+  // platform: 'android' | 'ios' | 'desktop' | null (legacy/desconocido) — se
+  // detecta del user-agent en el endpoint /register-token.
   fcmTokens: [{
     token: { type: String, required: true },
     context: { type: String, default: 'browser' },
     updatedAt: { type: Date, default: Date.now },
-    notifPermission: { type: String, default: null }
+    notifPermission: { type: String, default: null },
+    platform: { type: String, default: null }
   }],
+
+  // Marca temporal de la PRIMERA vez que el user instala la app (PWA
+  // standalone) con notificaciones granted. Se setea una sola vez en el
+  // endpoint /register-token cuando el flag de "channel" pasa de false
+  // a true. Sirve para detectar "clientes recuperados" en la sección
+  // de Activos sin app: si pasamos del estado sin-app → con-app+notif,
+  // este timestamp marca cuándo. NO se reescribe en re-installs.
+  appFirstInstalledAt: { type: Date, default: null, index: true },
 
   // =============================================
   // Campos de sistema de referidos
@@ -201,6 +212,21 @@ const userSchema = new mongoose.Schema({
     default: 'none',
     index: true
   },
+  // Codigo de campaña de marketing por la que vino el user (ej: 'promo2k').
+  // Se setea al registrarse cuando el front detecta ?c=<code> en la URL y lo
+  // tiene en localStorage. Permite hacer attribution para medir conversion
+  // por campaña: cuanta gente entro al link, cuantos crearon cuenta, cuantos
+  // reclamaron el bono, cuantos cargaron despues. Una vez seteado no se cambia
+  // (first-touch attribution). null si vinieron por trafico directo.
+  campaignCode: {
+    type: String,
+    default: null,
+    lowercase: true,
+    trim: true,
+    maxlength: 60,
+    index: true
+  },
+  campaignCodeAt: { type: Date, default: null },
   excludedFromReferral: {
     type: Boolean,
     default: false,
@@ -219,42 +245,51 @@ const userSchema = new mongoose.Schema({
   },
 
   // =============================================
-  // Atribución de campañas / publicistas
+  // Asignación explícita de línea (Drive import)
+  // Cuando estos campos están seteados, ganan sobre el matcher por prefijo
+  // (userLinesByPrefix). Permite que dos usuarios con el mismo prefijo (ej:
+  // "ato") caigan en líneas distintas (Atomic Línea 1 vs Atomic Línea 2),
+  // según lo que indique el .xlsx importado por el admin.
+  // Si ambos campos están vacíos, el sistema cae al matcher por prefijo.
   // =============================================
-  // Código de la campaña (Campaign.code) que trajo a este usuario.
-  // Se setea durante el signup si el cliente envió un campaignCode válido
-  // (vía link ?p=CODE). Una vez seteado no debería cambiar (atribución first-touch
-  // a nivel de registro, last-touch a nivel de clic).
-  acquisitionCampaign: {
+  linePhone: {
     type: String,
     default: null,
-    uppercase: true,
-    trim: true,
-    index: true
+    index: true,
+    trim: true
   },
-  // UTM parameters capturados del link de pauta (para reporting cross-campaña
-  // y para cruzar con datos de Meta Ads).
-  acquisitionUtm: {
-    source: { type: String, default: null },
-    medium: { type: String, default: null },
-    campaign: { type: String, default: null },
-    content: { type: String, default: null },
-    term: { type: String, default: null }
+  lineTeamName: {
+    type: String,
+    default: null,
+    trim: true
   },
-  acquiredAt: {
+  lineAssignedAt: {
     type: Date,
     default: null
   },
-  // True cuando el usuario se registró por el flujo rápido sin OTP de teléfono.
-  // El authMiddleware NO bloquea (a diferencia de mustChangePassword): el
-  // usuario puede usar todo normalmente excepto retirar. Los endpoints de
-  // retiro (/api/movements/withdraw y /api/admin/withdrawal) devuelven 403
-  // con code:'PHONE_VERIFICATION_REQUIRED' hasta que /api/auth/verify-phone
-  // se complete con éxito.
-  phoneVerificationPending: {
-    type: Boolean,
-    default: false,
+  lineAssignedBy: {
+    type: String,
+    default: null
+  },
+  // Cómo se asignó la línea actual:
+  //   'drive-import' = por import .xlsx de Drive (admin o auto)
+  //   'lookup'       = match en UserLineLookup (pre-asignación)
+  //   'prefix-fallback' = matcheo por prefijo del username (longest-match)
+  //   'general-default' = no matcheó nada → línea genérica del config
+  //   'admin-manual' = admin lo seteó a mano
+  //   null = sin asignación
+  lineAssignmentSource: {
+    type: String,
+    enum: ['drive-import', 'lookup', 'prefix-fallback', 'general-default', 'admin-manual', null],
+    default: null,
     index: true
+  },
+  // Nota human-readable de cómo se asignó: "argen → Argen 1 (+5491...)"
+  // Útil en el panel admin para ver de un vistazo qué pasó con cada user.
+  lineAssignmentNote: {
+    type: String,
+    default: null,
+    trim: true
   },
 
   // =============================================
@@ -278,66 +313,78 @@ const userSchema = new mongoose.Schema({
     default: null
   },
 
-  // =============================================
-  // Datos bancarios guardados para retiros
-  // =============================================
-  // Se completan/actualizan cuando el usuario marca "Guardar mis datos" en el
-  // modal de retiro, para autocompletar el formulario la próxima vez.
-  withdrawalAccount: {
-    titular: { type: String, default: null, trim: true },
-    cbu: { type: String, default: null, trim: true },
-    alias: { type: String, default: null, trim: true },
-    savedAt: { type: Date, default: null }
-  },
-
-  // Código temporal de 6 dígitos generado cuando el usuario no pudo verificar
-  // el SMS al cambiar la contraseña y eligió "entrar de forma temporal".
-  // El acceso real queda condicionado por `phoneVerificationPending`: el usuario
-  // puede usar la app pero NO puede retirar hasta verificar su teléfono por SMS.
-  pendingAccessCode: {
+  // Encuesta de preferencia de notificaciones (Fase 1).
+  // El user elige al primer login post-survey. La estrategia mensual de
+  // notifs (Fase 2) usa este campo + el tier de comportamiento del user
+  // (VIP/Standard/Casual segun realDeposits30d) para decidir cuantos
+  // bonos / invitaciones / regalos enviarle al mes.
+  //   suave    = 2 bonos · 5 invitaciones · 2 regalos/mes
+  //   normal   = 4 bonos · 5 invitaciones · 2 regalos/mes (default)
+  //   activo   = 6 bonos · 10 invitaciones · 3 regalos/mes
+  //   opt_out  = 0 (respetamos la decision)
+  notifPreference: {
     type: String,
-    default: null
-  },
-
-  // Bono one-time por instalar la app (PWA). Se acredita una sola vez cuando el
-  // usuario toca "Reclamar" estando dentro de la app instalada (standalone).
-  installBonusClaimed: {
-    type: Boolean,
-    default: false,
-    index: true
-  },
-  installBonusClaimedAt: {
-    type: Date,
-    default: null
-  },
-
-  // Plan de notificaciones elegido en la encuesta inicial (app instalada).
-  // Define el volumen de notificaciones push que el usuario quiere recibir.
-  // null = todavía no respondió la encuesta.
-  notificationPlan: {
-    type: String,
-    enum: ['suave', 'normal', 'activo', 'solo_reembolsos', null],
+    // 'opt_out' queda en el enum por compatibilidad con users que ya
+    // contestaron antes del cambio. 'solo_reembolsos' es el reemplazo
+    // semantico (recibe notifs SOLO si hay un reembolso disponible).
+    enum: ['suave', 'normal', 'activo', 'opt_out', 'solo_reembolsos'],
     default: null,
     index: true
   },
+  notifPreferenceAt: { type: Date, default: null },
 
-  // Cuando un admin lo activa, el cliente puede iniciar sesión solo con su
-  // usuario, sin contraseña ni SMS. Se controla por cliente desde el panel.
-  loginWithoutPassword: {
-    type: Boolean,
-    default: false,
-    index: true
-  },
+  // Fraud block: cuenta bloqueada por intento de estafa de bono.
+  // Se setea cuando intentan reclamar el welcome bonus desde una IP que
+  // ya cobró bajo otra cuenta. Cualquier login subsiguiente queda
+  // rechazado con `fraudReason` como motivo. Cualquier claim queda
+  // rechazado igual aunque tengan token viejo válido.
+  fraudBlocked: { type: Boolean, default: false, index: true },
+  fraudReason: { type: String, default: null },
+  fraudBlockedAt: { type: Date, default: null },
+  fraudBlockedIp: { type: String, default: null },
+  // Bloqueo "soft" — el user puede LOGUEARSE y usar la app, pero NO
+  // puede reclamar bono de bienvenida ni códigos canjeables. Se usa
+  // cuando el admin levanta el fraudBlocked pero sospecha que hay
+  // duplicación de IP/cuenta — le deja jugar pero sin regalos.
+  bonusBlocked: { type: Boolean, default: false, index: true },
+  bonusBlockedAt: { type: Date, default: null },
+  bonusBlockedReason: { type: String, default: null },
+  // Cuando admin desbloquea o restringe a un user, le activamos un cartel
+  // grande en la home avisándole que NO cambie de sesión en la app
+  // (porque notifs, bono y códigos van por user). El user lo dismissea
+  // y se apaga. Auto-vence a los 7 días por si no entra en mucho tiempo.
+  unblockNoticePending: { type: Boolean, default: false },
+  unblockNoticeAt: { type: Date, default: null },
+  // Confirmación de que el user se sumó al canal de Telegram. Lo seteamos
+  // a true cuando reclama un código canjeable (los códigos solo viven en
+  // Telegram; reclamarlo prueba que el user vio el canal). Sirve para que
+  // las campañas de "Unite a Telegram" / "Activá comunidad 24h" no le
+  // sigan apareciendo a quien ya está adentro.
+  joinedTelegram: { type: Boolean, default: false },
+  joinedTelegramAt: { type: Date, default: null },
+  // Huella del dispositivo del último login del usuario (hash SHA-256 de
+  // userAgent + pantalla + idioma + timezone + canvas hash). Permite
+  // detectar el mismo dispositivo aunque el user borre caché/cookies y
+  // cree cuenta nueva. Si dos users con huella idéntica intentan reclamar
+  // el welcome bonus → fraudBlocked en el segundo.
+  deviceFingerprint: { type: String, default: null, index: true },
+  deviceFingerprintAt: { type: Date, default: null },
 
-  // Conteo mensual de notificaciones de estrategia recibidas, para respetar
-  // los topes del plan de notificaciones del usuario. period = 'YYYY-MM';
-  // cuando cambia el mes, los contadores se resetean.
-  notifMonthlyCounts: {
-    period: { type: String, default: null },
-    bonos: { type: Number, default: 0 },
-    invitaciones: { type: Number, default: 0 },
-    regalos: { type: Number, default: 0 }
-  }
+  // Win-back automático (estrategia de recuperación). Tier actual:
+  //   0 = activo / nunca disparado
+  //   1 = recibió tier1 (te extrañamos)
+  //   2 = recibió tier2 (regalo cash)
+  //   3 = recibió tier3 (cod100)
+  //   4 = cooldown (no mandar más)
+  // Si el user carga, vuelve a 0.
+  winbackTier: { type: Number, default: 0, min: 0, max: 4, index: true },
+  winbackLastSentAt: { type: Date, default: null, index: true },
+
+  // Número de contacto de respaldo: lo deja el user en el chip "📞 Tu N°"
+  // de la home. Sirve para tener una vía paralela si la página falla y
+  // queremos avisarle. NO se valida con OTP — el user lo escribe libre.
+  backupContactPhone: { type: String, default: null, trim: true },
+  backupContactPhoneAt: { type: Date, default: null }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

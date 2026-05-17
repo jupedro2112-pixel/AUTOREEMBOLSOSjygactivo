@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1a1c22"/>
+      <stop offset="100%" stop-color="#0a0c10"/>
+    </linearGradient>
+    <linearGradient id="bagSilver" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#f4f4f4"/>
+      <stop offset="40%" stop-color="#c8c8c8"/>
+      <stop offset="70%" stop-color="#7a7a7a"/>
+      <stop offset="100%" stop-color="#4a4a4a"/>
+    </linearGradient>
+    <linearGradient id="bagTie" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#5a5a5a"/>
+      <stop offset="100%" stop-color="#2a2a2a"/>
+    </linearGradient>
+    <radialGradient id="bagShine" cx="35%" cy="40%" r="40%">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.55)"/>
+      <stop offset="100%" stop-color="rgba(255,255,255,0)"/>
+    </radialGradient>
+    <linearGradient id="silverText" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e0e0e0"/>
+      <stop offset="50%" stop-color="#b0b0b0"/>
+      <stop offset="100%" stop-color="#808080"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)" rx="80"/>
+  <!-- Bolsa de plata grande, centrada en el lienzo -->
+  <g transform="translate(256, 256) scale(3.2) translate(-50, -58)">
+    <path d="M 28 38 Q 22 50 22 64 Q 22 86 50 86 Q 78 86 78 64 Q 78 50 72 38 Z"
+          fill="url(#bagSilver)" stroke="#3a3a3a" stroke-width="1.2"/>
+    <ellipse cx="40" cy="55" rx="14" ry="20" fill="url(#bagShine)"/>
+    <path d="M 30 38 L 70 38 L 66 30 L 34 30 Z" fill="url(#bagTie)"/>
+    <path d="M 32 30 Q 50 22 68 30" fill="none" stroke="#1a1a1a" stroke-width="2" stroke-linecap="round"/>
+    <text x="50" y="64" text-anchor="middle" dominant-baseline="central"
+          font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif"
+          font-size="28" font-weight="900" fill="#2a2a2a"
+          style="letter-spacing:-1px;">$</text>
+  </g>
+</svg>

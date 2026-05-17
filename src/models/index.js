@@ -18,8 +18,46 @@ const ReferralCommission = require('./ReferralCommission');
 const ReferralPayout = require('./ReferralPayout');
 const ReferralEvent = require('./ReferralEvent');
 const OtpCode = require('./OtpCode');
-const Campaign = require('./Campaign');
-const CampaignClick = require('./CampaignClick');
+const NotificationHistory = require('./NotificationHistory');
+const MoneyGiveaway = require('./MoneyGiveaway');
+const MoneyGiveawayClaim = require('./MoneyGiveawayClaim');
+const ScheduledNotification = require('./ScheduledNotification');
+const WaClickLog = require('./WaClickLog');
+const PlayerStats = require('./PlayerStats');
+const RecoveryPush = require('./RecoveryPush');
+const TeamCampaign = require('./TeamCampaign');
+const JugayganaImport = require('./JugayganaImport');
+const DailyPlayerStats = require('./DailyPlayerStats');
+const DailyAppOpen = require('./DailyAppOpen');
+const QuinielaResult = require('./QuinielaResult');
+const UserNotification = require('./UserNotification');
+const UserLineLookup = require('./UserLineLookup');
+const UserCommunityLookup = require('./UserCommunityLookup');
+const AppNotifSnapshot = require('./AppNotifSnapshot');
+const NotificationRule = require('./NotificationRule');
+const NotificationRuleSuggestion = require('./NotificationRuleSuggestion');
+const WeeklyStrategyConfig = require('./WeeklyStrategyConfig');
+const WeeklyNotifBudget = require('./WeeklyNotifBudget');
+const WeeklyStrategyReport = require('./WeeklyStrategyReport');
+const ActivePlayersSnapshot = require('./ActivePlayersSnapshot');
+const RefundReminderConfig = require('./RefundReminderConfig');
+const AutomationLaunch = require('./AutomationLaunch');
+const EngagementCopyPool = require('./EngagementCopyPool');
+const Raffle = require('./Raffle');
+const RaffleParticipation = require('./RaffleParticipation');
+const RaffleSpend = require('./RaffleSpend');
+const WeeklyCalendarPlan = require('./WeeklyCalendarPlan');
+const LandingVisit = require('./LandingVisit');
+const Segment = require('./Segment');
+const MasterAnalysisSnapshot = require('./MasterAnalysisSnapshot');
+const NotifStrategyConfig = require('./NotifStrategyConfig');
+const Review = require('./Review');
+const WinbackStrategyConfig = require('./WinbackStrategyConfig');
+const RecontactAnalysis = require('./RecontactAnalysis');
+const RecontactHistory = require('./RecontactHistory');
+const AppUsersDailySnapshot = require('./AppUsersDailySnapshot');
+const CallbellTag = require('./CallbellTag');
+const Complaint = require('./Complaint');
 
 
 /**
@@ -410,8 +448,46 @@ module.exports = {
   ReferralPayout,
   ReferralEvent,
   OtpCode,
-  Campaign,
-  CampaignClick,
+  NotificationHistory,
+  MoneyGiveaway,
+  MoneyGiveawayClaim,
+  ScheduledNotification,
+  WaClickLog,
+  PlayerStats,
+  RecoveryPush,
+  TeamCampaign,
+  JugayganaImport,
+  DailyPlayerStats,
+  DailyAppOpen,
+  QuinielaResult,
+  UserNotification,
+  UserLineLookup,
+  UserCommunityLookup,
+  AppNotifSnapshot,
+  NotificationRule,
+  NotificationRuleSuggestion,
+  WeeklyStrategyConfig,
+  WeeklyNotifBudget,
+  WeeklyStrategyReport,
+  ActivePlayersSnapshot,
+  RefundReminderConfig,
+  AutomationLaunch,
+  EngagementCopyPool,
+  Raffle,
+  RaffleParticipation,
+  RaffleSpend,
+  WeeklyCalendarPlan,
+  LandingVisit,
+  Segment,
+  MasterAnalysisSnapshot,
+  NotifStrategyConfig,
+  Review,
+  WinbackStrategyConfig,
+  RecontactAnalysis,
+  RecontactHistory,
+  AppUsersDailySnapshot,
+  CallbellTag,
+  Complaint,
 
   // Funciones de conexión
   connectDB,

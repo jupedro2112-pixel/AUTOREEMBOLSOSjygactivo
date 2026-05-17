@@ -17,8 +17,6 @@ const {
 
 // Importar modelo de usuario
 const { User } = require('../../config/database');
-const NotifTemplate = require('../models/NotifTemplate');
-const ScheduledNotif = require('../models/ScheduledNotif');
 
 // Lazy getter for JWT_SECRET — must be read at runtime (not module load) because
 // in AWS Elastic Beanstalk, SSM Parameter Store secrets load AFTER all modules
@@ -206,6 +204,39 @@ router.post('/register-token', async (req, res) => {
     // Garantizar que el token se trate siempre como string para evitar inyección NoSQL
     const tokenStr = String(fcmToken);
 
+    // CRITICAL: si este token estaba registrado bajo OTRO usuario (porque
+    // el dueño del device cambió de cuenta sin hacer logout), sacarlo de
+    // ahí para que no le sigan llegando push notifications del usuario
+    // anterior. Cubre el caso "instalé con atojuan, ahora entro como
+    // royaltomas y me llegan notifs de ato".
+    try {
+      const stripFromOthers = await User.updateMany(
+        { id: { $ne: user.id }, 'fcmTokens.token': tokenStr },
+        { $pull: { fcmTokens: { token: tokenStr } } }
+      );
+      if (stripFromOthers.modifiedCount > 0) {
+        console.log(`[FCM] Token reasignado: removido de ${stripFromOthers.modifiedCount} usuario(s) anteriores`);
+      }
+      // También limpiar los campos legacy (single fcmToken) en otros users
+      await User.updateMany(
+        { id: { $ne: user.id }, fcmToken: tokenStr },
+        { $unset: { fcmToken: 1, fcmTokenContext: 1, fcmTokenUpdatedAt: 1 } }
+      );
+    } catch (e) {
+      console.warn('[FCM] No se pudo limpiar el token en otros usuarios:', e.message);
+    }
+
+    // Detectar plataforma del user-agent para que el panel admin pueda
+    // mostrar si el cliente esta en Android, iPhone o Desktop. Heuristica
+    // simple basada en sustrings; cubre la gran mayoria de casos. iPad
+    // moderno reporta MacIntel + 'Mobile' a veces — incluimos el caso.
+    const ua = (req.headers['user-agent'] || '').toLowerCase();
+    let platform = null;
+    if (ua.includes('android')) platform = 'android';
+    else if (ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod')) platform = 'ios';
+    else if (ua.includes('macintosh') && ua.includes('mobile')) platform = 'ios'; // iPad moderno
+    else if (ua.includes('windows') || ua.includes('macintosh') || ua.includes('linux')) platform = 'desktop';
+
     // Actualizar el array fcmTokens: upsert por token string.
     // Si el token ya existe, actualizamos contexto/fecha/permiso.
     // Si es nuevo, lo añadimos SIN borrar los tokens anteriores.
@@ -214,7 +245,8 @@ router.post('/register-token', async (req, res) => {
       token: tokenStr,
       context: normalizedCtx,
       updatedAt: new Date(),
-      notifPermission: normalizedPerm || null
+      notifPermission: normalizedPerm || null,
+      platform: platform
     };
     if (!user.fcmTokens) user.fcmTokens = [];
     const existingIdx = user.fcmTokens.findIndex(t => t.token === tokenStr);
@@ -233,6 +265,16 @@ router.post('/register-token', async (req, res) => {
     if (normalizedPerm) {
       user.notifPermission = normalizedPerm;
     }
+
+    // Marca de "primera instalación PWA con notifs": se setea una sola vez
+    // cuando el user pasa a tener BOTH context='standalone' AND
+    // notifPermission='granted'. Permite detectar "clientes recuperados"
+    // (users que estaban en la lista de "sin app" y ahora aparecen).
+    if (normalizedCtx === 'standalone' && normalizedPerm === 'granted' && !user.appFirstInstalledAt) {
+      user.appFirstInstalledAt = new Date();
+      console.log('[FCM] 🎉 Cliente RECUPERADO (primera instalación PWA + notifs):', user.username);
+    }
+
     await user.save();
     
     console.log('[FCM] ✅ Token registrado exitosamente para usuario:', user.username, '(contexto:', normalizedCtx, ', permiso:', normalizedPerm + ')');
@@ -491,38 +533,82 @@ router.post('/test', requireAdmin, async (req, res) => {
 // ============================================
 router.post('/send-all', requireAdmin, async (req, res) => {
   try {
-    const { title, body, data, filter } = req.body;
-    
+    const { title, body, data, filter, prefix, historyMeta } = req.body;
+
     if (!title || !body) {
-      return res.status(400).json({ 
-        error: 'Título y cuerpo son requeridos' 
+      return res.status(400).json({
+        error: 'Título y cuerpo son requeridos'
       });
     }
 
-    console.log('[FCM] Iniciando envío masivo...');
-    
+    // Combinar el filtro Mongoose raw con el filtro por prefijo de usuario.
+    // El prefijo se escapea para evitar regex injection.
+    const finalFilter = Object.assign({}, filter || {});
+    if (prefix && typeof prefix === 'string' && prefix.trim()) {
+      const safe = prefix.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      finalFilter.username = { $regex: '^' + safe, $options: 'i' };
+    }
+
+    console.log('[FCM] Iniciando envío masivo...', prefix ? `(prefijo: ${prefix})` : '(todos)');
+
     const result = await sendNotificationToAllUsers(
-      User, 
-      title, 
-      body, 
-      data || {}, 
-      filter || {}
+      User,
+      title,
+      body,
+      data || {},
+      finalFilter
     );
-    
+
+    // Registrar en el historial de notificaciones (best-effort, no bloquea
+    // la respuesta si falla). historyMeta lo manda el caller del admin con
+    // info adicional (tipo de notif, datos de promo o giveaway).
+    let historyId = null;
+    try {
+      const NotificationHistory = require('../models/NotificationHistory');
+      const { v4: uuidv4 } = require('uuid');
+      const meta = historyMeta || {};
+      const entry = await NotificationHistory.create({
+        id: uuidv4(),
+        sentAt: new Date(),
+        scheduledFor: meta.scheduledFor ? new Date(meta.scheduledFor) : null,
+        audienceType: prefix ? 'prefix' : 'all',
+        audiencePrefix: prefix || null,
+        title,
+        body,
+        type: meta.type || 'plain',
+        promoMessage: meta.promoMessage || null,
+        promoCode: meta.promoCode || null,
+        promoExpiresAt: meta.promoExpiresAt ? new Date(meta.promoExpiresAt) : null,
+        giveawayAmount: meta.giveawayAmount || null,
+        giveawayDurationMins: meta.giveawayDurationMins || null,
+        giveawayExpiresAt: meta.giveawayExpiresAt ? new Date(meta.giveawayExpiresAt) : null,
+        totalUsers: result.totalUsers || 0,
+        successCount: result.successCount || 0,
+        failureCount: result.failureCount || 0,
+        cleanedTokens: result.cleanedTokens || 0,
+        sentBy: meta.sentBy || null
+      });
+      historyId = entry.id;
+    } catch (histErr) {
+      console.warn('[FCM] No se pudo guardar en NotificationHistory:', histErr.message);
+    }
+
     if (result.success) {
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         message: 'Notificaciones enviadas',
+        prefix: prefix || null,
         totalUsers: result.totalUsers,
         successCount: result.successCount,
         failureCount: result.failureCount,
         cleanedTokens: result.cleanedTokens || 0,
-        failedTokens: result.failedTokens
+        failedTokens: result.failedTokens,
+        historyId
       });
     } else {
-      res.status(500).json({ 
-        success: false, 
-        error: result.error 
+      res.status(500).json({
+        success: false,
+        error: result.error
       });
     }
   } catch (error) {
@@ -577,396 +663,6 @@ router.post('/send-to-usernames', requireAdmin, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// ============================================
-// ESTRATEGIA DE NOTIFICACIONES (plantillas editables)
-// ============================================
-const NOTIF_TEMPLATE_DEFAULTS = {
-  bono_50:    { label: 'Bono 50%',             title: '🎁 ¡Bono del 50%!',        body: 'Cargá ahora y te damos un 50% extra. ¡Solo por {horas} horas!',        durationHours: 24, hasDuration: true },
-  bono_100:   { label: 'Bono 100%',            title: '🔥 ¡Bono del 100%!',       body: 'Duplicá tu carga: 100% de bono. ¡Aprovechá, vence en {horas} horas!',   durationHours: 12, hasDuration: true },
-  invitacion: { label: 'Invitación a jugar',   title: '🎰 ¡Te estamos esperando!', body: 'Entrá ahora y probá tu suerte. ¡Hoy puede ser tu día!',                 durationHours: 0,  hasDuration: false },
-  regalo:     { label: 'Regalo',               title: '🎉 ¡Tenés un regalo!',      body: 'Te dejamos un regalo en tu cuenta. Ingresá para reclamarlo.',           durationHours: 0,  hasDuration: false },
-  reembolso:  { label: 'Reembolso disponible', title: '💸 Reembolso disponible',   body: 'Tenés un reembolso para reclamar. ¡No lo dejes pasar!',                 durationHours: 0,  hasDuration: false }
-};
-const NOTIF_TEMPLATE_TYPES = Object.keys(NOTIF_TEMPLATE_DEFAULTS);
-const NOTIF_LAUNCH_PLANS = ['suave', 'normal', 'activo', 'solo_reembolsos', 'todos'];
-
-// Categoría de tope de cada tipo. El reembolso no tiene tope mensual.
-const NOTIF_TYPE_CATEGORY = {
-  bono_50: 'bonos',
-  bono_100: 'bonos',
-  invitacion: 'invitaciones',
-  regalo: 'regalos',
-  reembolso: null
-};
-
-// Topes mensuales por plan (coinciden con la encuesta que ve el usuario).
-const NOTIF_PLAN_LIMITS = {
-  suave:           { bonos: 2, invitaciones: 5,  regalos: 2 },
-  normal:          { bonos: 4, invitaciones: 5,  regalos: 2 },
-  activo:          { bonos: 6, invitaciones: 10, regalos: 3 },
-  solo_reembolsos: { bonos: 0, invitaciones: 0,  regalos: 0 }
-};
-
-// Período mensual actual ('YYYY-MM') para los contadores de tope.
-function _currentNotifPeriod() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-// Construye el {title, body} final de una plantilla, reemplazando {horas}.
-function _buildNotifContent(tplDoc, type) {
-  const def = NOTIF_TEMPLATE_DEFAULTS[type];
-  const title = (tplDoc && tplDoc.title) || def.title;
-  let body = (tplDoc && tplDoc.body) || def.body;
-  const hours = (tplDoc && tplDoc.durationHours != null) ? tplDoc.durationHours : def.durationHours;
-  body = String(body).replace(/\{horas\}/g, String(hours));
-  return { title, body };
-}
-
-// Listar las plantillas (mezcla lo guardado con los valores por defecto).
-router.get('/templates', requireAdmin, async (req, res) => {
-  try {
-    const saved = await NotifTemplate.find({}).lean();
-    const byType = {};
-    saved.forEach(t => { byType[t.type] = t; });
-    const templates = NOTIF_TEMPLATE_TYPES.map(type => {
-      const def = NOTIF_TEMPLATE_DEFAULTS[type];
-      const s = byType[type];
-      const category = NOTIF_TYPE_CATEGORY[type];
-      return {
-        type,
-        label: def.label,
-        hasDuration: def.hasDuration,
-        title: s ? s.title : def.title,
-        body: s ? s.body : def.body,
-        durationHours: (s && s.durationHours != null) ? s.durationHours : def.durationHours,
-        category,
-        limits: category ? {
-          suave: NOTIF_PLAN_LIMITS.suave[category],
-          normal: NOTIF_PLAN_LIMITS.normal[category],
-          activo: NOTIF_PLAN_LIMITS.activo[category]
-        } : null
-      };
-    });
-    res.json({ success: true, templates });
-  } catch (error) {
-    console.error('[NOTIF-STRATEGY] templates error:', error);
-    res.status(500).json({ error: 'Error obteniendo las plantillas' });
-  }
-});
-
-// Guardar / actualizar una plantilla.
-router.put('/templates/:type', requireAdmin, async (req, res) => {
-  try {
-    const { type } = req.params;
-    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
-      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
-    }
-    const { title, body, durationHours } = req.body || {};
-    if (!title || !body) {
-      return res.status(400).json({ error: 'Título y texto son obligatorios' });
-    }
-    const update = {
-      title: String(title).slice(0, 100),
-      body: String(body).slice(0, 500),
-      updatedAt: new Date(),
-      updatedBy: req.user && req.user.username
-    };
-    if (NOTIF_TEMPLATE_DEFAULTS[type].hasDuration) {
-      const h = parseInt(durationHours, 10);
-      update.durationHours = (isNaN(h) || h < 0) ? NOTIF_TEMPLATE_DEFAULTS[type].durationHours : h;
-    }
-    await NotifTemplate.findOneAndUpdate({ type }, { $set: update }, { upsert: true, new: true });
-    res.json({ success: true, message: 'Plantilla guardada' });
-  } catch (error) {
-    console.error('[NOTIF-STRATEGY] save template error:', error);
-    res.status(500).json({ error: 'Error guardando la plantilla' });
-  }
-});
-
-// Probar: enviar la notificación de una plantilla al usuario de prueba.
-router.post('/strategy/test', requireAdmin, async (req, res) => {
-  try {
-    const { type, username } = req.body || {};
-    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
-      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
-    }
-    if (!username || typeof username !== 'string' || !username.trim()) {
-      return res.status(400).json({ error: 'Indicá el usuario de prueba' });
-    }
-    const tpl = await NotifTemplate.findOne({ type }).lean();
-    const { title, body } = _buildNotifContent(tpl, type);
-    const result = await sendNotificationToUsernames(
-      User, [username.trim()], title, body, { kind: 'strategy', type }
-    );
-    if (result.success) {
-      res.json({
-        success: true,
-        message: (result.successCount > 0)
-          ? `Notificación de prueba enviada a ${username.trim()}`
-          : `No se pudo entregar a ${username.trim()} (sin app/token activo)`,
-        successCount: result.successCount || 0,
-        failureCount: result.failureCount || 0
-      });
-    } else {
-      res.status(400).json({ error: result.error || 'No se pudo enviar la prueba' });
-    }
-  } catch (error) {
-    console.error('[NOTIF-STRATEGY] test error:', error);
-    res.status(500).json({ error: 'Error enviando la prueba' });
-  }
-});
-
-// Ejecuta el lanzamiento de una plantilla a un plan, respetando el tope mensual
-// (los reembolsos no tienen tope). Reutilizado por la ruta y por el worker de
-// notificaciones programadas. Devuelve un objeto con el resultado.
-async function _runStrategyLaunch(type, plan) {
-  const tpl = await NotifTemplate.findOne({ type }).lean();
-  const { title, body } = _buildNotifContent(tpl, type);
-  const data = { kind: 'strategy', type };
-  const category = NOTIF_TYPE_CATEGORY[type];
-
-  // Reembolso: sin tope mensual. Se envía a todo el plan elegido.
-  if (!category) {
-    const filter = (plan === 'todos') ? {} : { notificationPlan: plan };
-    const result = await sendNotificationToAllUsers(User, title, body, data, filter);
-    if (!result.success) return { success: false, error: result.error || 'No se pudo lanzar' };
-    return {
-      success: true,
-      totalUsers: result.totalUsers || 0,
-      successCount: result.successCount || 0,
-      failureCount: result.failureCount || 0,
-      skippedCap: 0,
-      skippedOther: 0
-    };
-  }
-
-  // Categoría con tope: filtrar a los usuarios que no llegaron a su límite.
-  const userQuery = { role: 'user' };
-  if (plan !== 'todos') userQuery.notificationPlan = plan;
-  const candidates = await User.find(userQuery)
-    .select('username notificationPlan notifMonthlyCounts fcmToken fcmTokens')
-    .lean();
-
-  const period = _currentNotifPeriod();
-  const eligible = [];
-  let skippedCap = 0;
-  let skippedOther = 0;
-  for (const u of candidates) {
-    const limits = NOTIF_PLAN_LIMITS[u.notificationPlan];
-    if (!limits) { skippedOther++; continue; } // sin plan asignado
-    const hasToken = !!(u.fcmToken || (Array.isArray(u.fcmTokens) && u.fcmTokens.length > 0));
-    if (!hasToken) { skippedOther++; continue; } // sin app instalada
-    const cap = limits[category];
-    let count = 0;
-    if (u.notifMonthlyCounts && u.notifMonthlyCounts.period === period) {
-      count = u.notifMonthlyCounts[category] || 0;
-    }
-    if (count >= cap) { skippedCap++; continue; } // llegó al tope del mes
-    eligible.push(u.username);
-  }
-
-  if (eligible.length === 0) {
-    return { success: true, empty: true, totalUsers: 0, successCount: 0, failureCount: 0, skippedCap, skippedOther };
-  }
-
-  const result = await sendNotificationToUsernames(User, eligible, title, body, data);
-
-  // Sumar 1 al contador mensual de los usuarios a los que se les lanzó.
-  await User.updateMany(
-    { username: { $in: eligible }, 'notifMonthlyCounts.period': { $ne: period } },
-    { $set: { notifMonthlyCounts: { period, bonos: 0, invitaciones: 0, regalos: 0 } } }
-  );
-  await User.updateMany(
-    { username: { $in: eligible } },
-    { $inc: { ['notifMonthlyCounts.' + category]: 1 } }
-  );
-
-  if (!result.success) return { success: false, error: result.error || 'No se pudo lanzar' };
-  return {
-    success: true,
-    totalUsers: eligible.length,
-    successCount: result.successCount || 0,
-    failureCount: result.failureCount || 0,
-    skippedCap,
-    skippedOther
-  };
-}
-
-// Lanzar: enviar la notificación de una plantilla a los usuarios de un plan.
-router.post('/strategy/launch', requireAdmin, async (req, res) => {
-  try {
-    const { type, plan } = req.body || {};
-    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
-      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
-    }
-    if (!NOTIF_LAUNCH_PLANS.includes(plan)) {
-      return res.status(400).json({ error: 'Plan inválido' });
-    }
-    const r = await _runStrategyLaunch(type, plan);
-    if (!r.success) {
-      return res.status(400).json({ error: r.error || 'No se pudo lanzar la notificación' });
-    }
-    res.json({
-      success: true,
-      message: r.empty
-        ? 'Ningún usuario quedó habilitado (llegaron al tope del mes, sin plan o sin app).'
-        : `Notificación lanzada al plan: ${plan}`,
-      totalUsers: r.totalUsers,
-      successCount: r.successCount,
-      failureCount: r.failureCount,
-      skippedCap: r.skippedCap,
-      skippedOther: r.skippedOther
-    });
-  } catch (error) {
-    console.error('[NOTIF-STRATEGY] launch error:', error);
-    res.status(500).json({ error: 'Error lanzando la notificación' });
-  }
-});
-
-// ============================================
-// NOTIFICACIONES PROGRAMADAS
-// ============================================
-
-// Devuelve la hora Argentina actual como { hhmm, ymd, dow }.
-function _argParts(dateObj) {
-  const tz = 'America/Argentina/Buenos_Aires';
-  const d = dateObj || new Date();
-  const hhmm = d.toLocaleTimeString('es-AR', { timeZone: tz, hour12: false, hour: '2-digit', minute: '2-digit' });
-  const ymd = d.toLocaleDateString('en-CA', { timeZone: tz });
-  const dowName = d.toLocaleDateString('en-US', { timeZone: tz, weekday: 'short' });
-  const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return { hhmm, ymd, dow: dowMap[dowName] };
-}
-
-// Listar las notificaciones programadas.
-router.get('/strategy/schedules', requireAdmin, async (req, res) => {
-  try {
-    const schedules = await ScheduledNotif.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, schedules });
-  } catch (error) {
-    console.error('[NOTIF-SCHED] list error:', error);
-    res.status(500).json({ error: 'Error obteniendo las programaciones' });
-  }
-});
-
-// Crear una notificación programada.
-router.post('/strategy/schedules', requireAdmin, async (req, res) => {
-  try {
-    const { type, plan, mode, runAt, time, dayOfWeek } = req.body || {};
-    if (!NOTIF_TEMPLATE_TYPES.includes(type)) {
-      return res.status(400).json({ error: 'Tipo de plantilla inválido' });
-    }
-    if (!NOTIF_LAUNCH_PLANS.includes(plan)) {
-      return res.status(400).json({ error: 'Plan inválido' });
-    }
-    if (!['once', 'daily', 'weekly'].includes(mode)) {
-      return res.status(400).json({ error: 'Modo inválido' });
-    }
-
-    const doc = { type, plan, mode, enabled: true, createdBy: req.user && req.user.username };
-
-    if (mode === 'once') {
-      // runAt llega como 'YYYY-MM-DDTHH:MM' (hora Argentina). Argentina es UTC-3.
-      if (!runAt || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(runAt)) {
-        return res.status(400).json({ error: 'Indicá la fecha y hora' });
-      }
-      const when = new Date(runAt.slice(0, 16) + ':00-03:00');
-      if (isNaN(when.getTime())) {
-        return res.status(400).json({ error: 'Fecha y hora inválidas' });
-      }
-      doc.runAt = when;
-    } else {
-      if (!time || !/^\d{2}:\d{2}$/.test(time)) {
-        return res.status(400).json({ error: 'Indicá la hora (HH:MM)' });
-      }
-      doc.time = time;
-      if (mode === 'weekly') {
-        const dow = parseInt(dayOfWeek, 10);
-        if (isNaN(dow) || dow < 0 || dow > 6) {
-          return res.status(400).json({ error: 'Indicá el día de la semana' });
-        }
-        doc.dayOfWeek = dow;
-      }
-    }
-
-    const created = await ScheduledNotif.create(doc);
-    res.json({ success: true, schedule: created });
-  } catch (error) {
-    console.error('[NOTIF-SCHED] create error:', error);
-    res.status(500).json({ error: 'Error creando la programación' });
-  }
-});
-
-// Activar / desactivar una programación.
-router.patch('/strategy/schedules/:id', requireAdmin, async (req, res) => {
-  try {
-    const enabled = req.body && req.body.enabled === true;
-    const updated = await ScheduledNotif.findByIdAndUpdate(
-      req.params.id, { $set: { enabled } }, { new: true }
-    );
-    if (!updated) return res.status(404).json({ error: 'Programación no encontrada' });
-    res.json({ success: true, schedule: updated });
-  } catch (error) {
-    console.error('[NOTIF-SCHED] patch error:', error);
-    res.status(500).json({ error: 'Error actualizando la programación' });
-  }
-});
-
-// Eliminar una programación.
-router.delete('/strategy/schedules/:id', requireAdmin, async (req, res) => {
-  try {
-    const deleted = await ScheduledNotif.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ error: 'Programación no encontrada' });
-    res.json({ success: true });
-  } catch (error) {
-    console.error('[NOTIF-SCHED] delete error:', error);
-    res.status(500).json({ error: 'Error eliminando la programación' });
-  }
-});
-
-// Worker: cada minuto revisa las programaciones y dispara las que corresponden.
-async function _runDueSchedules() {
-  try {
-    const { hhmm, ymd, dow } = _argParts();
-    const now = new Date();
-    const schedules = await ScheduledNotif.find({ enabled: true }).lean();
-    for (const s of schedules) {
-      let shouldRun = false;
-      if (s.mode === 'once') {
-        if (s.runAt && new Date(s.runAt) <= now && !s.lastRunAt) shouldRun = true;
-      } else if (s.mode === 'daily' || s.mode === 'weekly') {
-        const dayMatches = (s.mode === 'daily') || (s.dayOfWeek === dow);
-        if (s.time === hhmm && dayMatches) {
-          const lastYmd = s.lastRunAt ? _argParts(new Date(s.lastRunAt)).ymd : null;
-          if (lastYmd !== ymd) shouldRun = true;
-        }
-      }
-      if (!shouldRun) continue;
-
-      try {
-        const r = await _runStrategyLaunch(s.type, s.plan);
-        const resultStr = r.success
-          ? `OK — enviadas:${r.successCount || 0} omitidas-tope:${r.skippedCap || 0}`
-          : `Error: ${r.error}`;
-        const update = { lastRunAt: new Date(), lastResult: resultStr };
-        if (s.mode === 'once') update.enabled = false;
-        await ScheduledNotif.updateOne({ _id: s._id }, { $set: update });
-        console.log(`[NOTIF-SCHED] Ejecutada ${s._id} (${s.type}/${s.plan}): ${resultStr}`);
-      } catch (err) {
-        console.error(`[NOTIF-SCHED] Error ejecutando ${s._id}:`, err.message);
-        await ScheduledNotif.updateOne(
-          { _id: s._id },
-          { $set: { lastRunAt: new Date(), lastResult: 'Error: ' + err.message } }
-        );
-      }
-    }
-  } catch (e) {
-    console.error('[NOTIF-SCHED] worker error:', e.message);
-  }
-}
-setInterval(_runDueSchedules, 60 * 1000).unref?.();
 
 // ============================================
 // OBTENER ESTADÍSTICAS DE TOKENS FCM

@@ -23,9 +23,9 @@ const refundClaimSchema = new mongoose.Schema({
     index: true,
     trim: true
   },
-  type: { 
-    type: String, 
-    enum: ['daily', 'weekly', 'monthly'], 
+  type: {
+    type: String,
+    enum: ['daily', 'weekly', 'monthly', 'welcome_install'],
     required: true,
     index: true
   },
@@ -69,12 +69,54 @@ const refundClaimSchema = new mongoose.Schema({
     default: null,
     index: true
   },
-  claimedAt: { 
-    type: Date, 
-    default: Date.now, 
+  claimedAt: {
+    type: Date,
+    default: Date.now,
     index: true,
     immutable: true
-  }
+  },
+  // Estado del reclamo. 'completed' = credito en JUGAYGANA confirmado.
+  // 'pending_credit_failed' = el RefundClaim fue insertado pero el credito
+  // a JUGAYGANA fallo o no pudo confirmarse (puede haber sido aplicado y
+  // perdido en el cable). NO se reemite credito hasta que un admin reconcilie
+  // contra JUGAYGANA y resuelva (eliminar el row si el credito no aplico, o
+  // marcar 'completed' si si aplico).
+  status: {
+    type: String,
+    // 'pending'              → claim creado, credit a JUGAYGANA en vuelo
+    //                          (estado intermedio del welcome bonus claim).
+    // 'completed'            → credit aplicado y confirmado.
+    // 'pending_credit_failed'→ credit fallo o no se pudo confirmar; el admin
+    //                          debe reconciliar manualmente contra JUGAYGANA.
+    enum: ['pending', 'completed', 'pending_credit_failed'],
+    default: 'completed',
+    index: true
+  },
+  // Texto del error reportado por JUGAYGANA si status === 'pending_credit_failed'.
+  creditError: {
+    type: String,
+    default: null
+  },
+  // Snapshot post-claim: cantidad de cargas reales (depósitos en JUGAYGANA,
+  // excluyendo bonos nuestros) que el usuario hizo DESPUÉS de claimedAt.
+  // Se popula cuando el admin toca "Refrescar cargas" (endpoint
+  // /api/admin/reports/welcome-bonus/refresh-charges) consultando los
+  // movimientos de JUGAYGANA. Persiste por claim para que el reporte sea
+  // estable y rápido (no requiere consulta a JUGAYGANA por render).
+  chargesAfterClaim: { type: Number, default: 0, min: 0 },
+  chargesAfterClaimAmount: { type: Number, default: 0, min: 0 },
+  lastChargeAfterClaimAt: { type: Date, default: null },
+  chargesAfterClaimCheckedAt: { type: Date, default: null },
+
+  // IP del cliente al momento del claim. Se usa para anti-fraude del welcome
+  // bonus: bloqueamos múltiples claims desde la misma IP (uninstall +
+  // reinstall + cuenta JUGAYGANA nueva → mismo router/red).
+  clientIp: { type: String, default: null, index: true },
+  // Huella del dispositivo (hash SHA-256 del UA + pantalla + idioma + tz +
+  // canvas hash) al momento del claim. Permite detectar el mismo dispositivo
+  // aunque el user borre caché/cookies y cree cuenta nueva. Si otro usuario
+  // intenta reclamar con la misma huella → fraudBlocked.
+  deviceFingerprint: { type: String, default: null, index: true }
 }, {
   timestamps: true
 });
@@ -84,8 +126,31 @@ refundClaimSchema.index({ userId: 1, type: 1 });
 refundClaimSchema.index({ userId: 1, claimedAt: -1 });
 refundClaimSchema.index({ claimedAt: -1 });
 refundClaimSchema.index({ type: 1, claimedAt: -1 });
-// Índice único por período para prevenir doble reclamo (sparse permite valores null para registros históricos)
-refundClaimSchema.index({ userId: 1, type: 1, periodKey: 1 }, { unique: true, sparse: true });
+// Indice unique por periodo para prevenir doble reclamo. Usamos
+// partialFilterExpression en lugar de sparse: en un indice compuesto, sparse
+// solo excluye documentos donde TODOS los campos estan ausentes, lo cual no
+// se cumple aca porque userId/username/type son required. partialFilterExpression
+// es el mecanismo correcto: indexa SOLO los rows con periodKey string (los
+// rows viejos con periodKey null quedan fuera del indice y no rompen su build).
+refundClaimSchema.index(
+  { userId: 1, type: 1, periodKey: 1 },
+  {
+    name: 'unique_userId_type_periodKey_v2',
+    unique: true,
+    partialFilterExpression: { periodKey: { $exists: true, $type: 'string' } }
+  }
+);
+// Indice unique adicional sobre username + type + periodKey. Defensa en
+// profundidad: aunque el userId varie por algun bug futuro (login que crea
+// nuevo record local, etc.), el username sigue siendo barrera atomica.
+refundClaimSchema.index(
+  { username: 1, type: 1, periodKey: 1 },
+  {
+    name: 'unique_username_type_periodKey_v2',
+    unique: true,
+    partialFilterExpression: { periodKey: { $exists: true, $type: 'string' } }
+  }
+);
 
 // Método estático para verificar si puede reclamar
 refundClaimSchema.statics.canClaim = async function(userId, type) {

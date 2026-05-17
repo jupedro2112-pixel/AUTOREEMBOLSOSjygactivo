@@ -33,7 +33,10 @@ VIP.state = {
     fireStatus: null,
     fireCountdownInterval: null,
     referralData: null,
-    sessionPassword: ''
+    sessionPassword: '',
+    linePhone: null,
+    communityLink: null,
+    teamName: null
 };
 
 // ---- Argentina timezone helpers (used across modules) ----

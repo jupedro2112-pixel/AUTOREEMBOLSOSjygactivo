@@ -20,7 +20,43 @@ const {
   RefundClaim,
   FireStreak,
   ChatStatus,
-  Transaction
+  Transaction,
+  NotificationHistory,
+  MoneyGiveaway,
+  MoneyGiveawayClaim,
+  ScheduledNotification,
+  WaClickLog,
+  PlayerStats,
+  RecoveryPush,
+  TeamCampaign,
+  JugayganaImport,
+  DailyPlayerStats,
+  DailyAppOpen,
+  QuinielaResult,
+  UserNotification,
+  UserLineLookup,
+  AppNotifSnapshot,
+  NotificationRule,
+  NotificationRuleSuggestion,
+  WeeklyStrategyConfig,
+  WeeklyNotifBudget,
+  WeeklyStrategyReport,
+  ActivePlayersSnapshot,
+  RefundReminderConfig,
+  Raffle,
+  RaffleParticipation,
+  RaffleSpend,
+  WeeklyCalendarPlan,
+  Segment,
+  MasterAnalysisSnapshot,
+  NotifStrategyConfig,
+  Review,
+  WinbackStrategyConfig,
+  RecontactAnalysis,
+  RecontactHistory,
+  AppUsersDailySnapshot,
+  CallbellTag,
+  Complaint
 } = require('../src/models');
 
 // ============================================
@@ -64,6 +100,43 @@ const UserActivity = mongoose.models['UserActivity'] || mongoose.model('UserActi
 // ============================================
 // CONEXIÓN A MONGODB
 // ============================================
+// Listeners globales de la conexión: nos ayudan a debuggear
+// reconexiones espontáneas y deja log de cualquier error de driver.
+mongoose.connection.on('connected',     () => console.log('🟢 [Mongo] connected'));
+mongoose.connection.on('disconnected',  () => console.warn('🟡 [Mongo] disconnected — driver intentará reconectar'));
+mongoose.connection.on('reconnected',   () => console.log('🟢 [Mongo] reconnected'));
+mongoose.connection.on('error',         (err) => console.error('🔴 [Mongo] error:', err.message));
+
+// Asegura que la conexión esté lista antes de una query. Si está caída,
+// dispara una reconexión y espera hasta `timeoutMs`. Si no se recupera,
+// tira un error que el caller puede mapear a 503. Esto cubre el caso en
+// que Mongoose se desconectó por un blip de Atlas y se quedó "stuck"
+// (a veces el reconnect automático no se dispara).
+async function ensureMongoReady(timeoutMs = 4000) {
+  // 1=connected. 2=connecting. 0=disconnected. 3=disconnecting.
+  if (mongoose.connection.readyState === 1) return true;
+  if (mongoose.connection.readyState === 0) {
+    try {
+      await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sala-de-juegos', {
+        maxPoolSize: 20,
+        serverSelectionTimeoutMS: 4000,
+        socketTimeoutMS: 30000,
+      });
+    } catch (e) {
+      throw new Error(`Mongo reconnect failed: ${e.message}`);
+    }
+  }
+  // Esperar hasta que readyState===1 o se acabe el tiempo.
+  const deadline = Date.now() + timeoutMs;
+  while (mongoose.connection.readyState !== 1 && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  if (mongoose.connection.readyState !== 1) {
+    throw new Error(`Mongo not ready after ${timeoutMs}ms (state=${mongoose.connection.readyState})`);
+  }
+  return true;
+}
+
 async function connectDB() {
   try {
     await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sala-de-juegos', {
@@ -266,6 +339,7 @@ async function incrementCommandUsage(name) {
 module.exports = {
   connectDB,
   disconnectDB,
+  ensureMongoReady,
   User,
   Message,
   Command,
@@ -276,6 +350,42 @@ module.exports = {
   Transaction,
   ExternalUser,
   UserActivity,
+  NotificationHistory,
+  MoneyGiveaway,
+  MoneyGiveawayClaim,
+  ScheduledNotification,
+  WaClickLog,
+  PlayerStats,
+  RecoveryPush,
+  TeamCampaign,
+  JugayganaImport,
+  DailyPlayerStats,
+  DailyAppOpen,
+  QuinielaResult,
+  UserNotification,
+  UserLineLookup,
+  AppNotifSnapshot,
+  NotificationRule,
+  NotificationRuleSuggestion,
+  WeeklyStrategyConfig,
+  WeeklyNotifBudget,
+  WeeklyStrategyReport,
+  ActivePlayersSnapshot,
+  RefundReminderConfig,
+  Raffle,
+  RaffleParticipation,
+  RaffleSpend,
+  WeeklyCalendarPlan,
+  Segment,
+  MasterAnalysisSnapshot,
+  NotifStrategyConfig,
+  Review,
+  WinbackStrategyConfig,
+  RecontactAnalysis,
+  RecontactHistory,
+  AppUsersDailySnapshot,
+  CallbellTag,
+  Complaint,
   // Helpers
   getConfig,
   setConfig,

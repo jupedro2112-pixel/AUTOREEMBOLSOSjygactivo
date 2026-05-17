@@ -271,16 +271,51 @@ body {
     overflow-y: auto;
 }
 
+/* Espaciadores entre grupos del sidebar.
+   nav-spacer-md = doble espacio (separa grupo "datos usuarios" de "notifs").
+   nav-spacer-lg = 4 espacios + linea sutil (separa "notifs" de "estadisticas").
+   La altura es relativa al gap:5px del sidebar-nav. */
+.nav-spacer {
+    width: 100%;
+    pointer-events: none;
+}
+.nav-spacer-md {
+    height: 18px;
+}
+.nav-spacer-lg {
+    height: 36px;
+    border-top: 1px dashed rgba(255,255,255,0.08);
+    margin-top: 8px;
+}
+
+.nav-section-title {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: rgba(255, 255, 255, 0.45);
+    padding: 10px 15px 4px;
+    margin-top: 6px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.06);
+}
+.nav-section-title:first-child,
+.sidebar-nav > .nav-section-title:first-of-type {
+    border-top: none;
+    margin-top: 0;
+}
+
 .nav-item {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 12px 15px;
+    gap: 10px;
+    padding: 7px 14px;
     border-radius: var(--radius);
     color: var(--gray-light);
     text-decoration: none;
     transition: all 0.3s ease;
     position: relative;
+    font-size: 13px;
+    line-height: 1.25;
 }
 
 .nav-item:hover {
@@ -294,15 +329,15 @@ body {
 }
 
 .nav-item .icon {
-    font-size: 18px;
+    font-size: 15px;
 }
 
 .nav-item .badge {
     margin-left: auto;
     background: var(--danger);
     color: white;
-    font-size: 11px;
-    padding: 2px 8px;
+    font-size: 10px;
+    padding: 2px 7px;
     border-radius: 10px;
     font-weight: 600;
 }

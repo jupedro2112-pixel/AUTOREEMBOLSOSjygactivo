@@ -25,22 +25,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Auto-abrir el modal de registro cuando el visitante llega por un link
-    // de publicista (?p=CODE) y no tiene sesión iniciada. La idea es bajar
-    // al máximo la fricción entre el clic del anuncio y el signup.
-    if (VIP.campaign && VIP.campaign.wasFreshlyCaptured() && !VIP.state.currentToken) {
-        // Pequeño defer para que el DOM termine de pintar y la animación del
-        // modal se vea fluida en mobile.
-        setTimeout(() => {
-            try {
-                if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
-                VIP.ui.showModal('registerModal');
-            } catch (e) {
-                console.warn('[campaign] no se pudo auto-abrir el modal de registro:', e && e.message);
-            }
-        }, 250);
-    }
-
     VIP.notifications.registerUserServiceWorker();
 
     VIP.ui.adjustLayout();
@@ -98,60 +82,13 @@ function setupEventListeners() {
         const appInstallBtn = document.getElementById('appInstallBtn');
         if (appInstallBtn) appInstallBtn.addEventListener('click', VIP.ui.installApp);
 
-        // Register modal — antes de abrir, adaptar el form al modo "registro rápido"
-        // si hay una atribución de pauta activa (link ?p=CODE capturado).
+        // Register modal
         const registerBtn = document.getElementById('registerBtn');
-        if (registerBtn) registerBtn.addEventListener('click', () => {
-            if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
-            VIP.ui.showModal('registerModal');
-        });
+        if (registerBtn) registerBtn.addEventListener('click', () => VIP.ui.showModal('registerModal'));
         const closeRegisterModal = document.getElementById('closeRegisterModal');
         if (closeRegisterModal) closeRegisterModal.addEventListener('click', () => VIP.ui.hideModal('registerModal'));
         const registerForm = document.getElementById('registerForm');
         if (registerForm) registerForm.addEventListener('submit', VIP.auth.handleRegister);
-
-        // Chat send
-        const sendBtn = document.getElementById('sendBtn');
-        if (sendBtn) sendBtn.addEventListener('click', VIP.chat.sendMessage);
-
-        const messageInput = document.getElementById('messageInput');
-        if (messageInput) {
-            messageInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    VIP.chat.sendMessage();
-                }
-            });
-
-            // Typing indicator
-            let typingTimeout;
-            messageInput.addEventListener('input', function () {
-                if (VIP.state.socket) {
-                    VIP.state.socket.emit('typing', { isTyping: true });
-                    clearTimeout(typingTimeout);
-                    typingTimeout = setTimeout(() => {
-                        VIP.state.socket.emit('stop_typing', {});
-                    }, 2000);
-                }
-            });
-
-            messageInput.addEventListener('paste', VIP.chat.handlePaste);
-
-            // Auto-resize textarea
-            messageInput.addEventListener('input', function () {
-                this.style.height = 'auto';
-                this.style.height = Math.min(this.scrollHeight, 100) + 'px';
-            });
-        }
-
-        // File attach & paste
-        const attachBtn = document.getElementById('attachBtn');
-        if (attachBtn) attachBtn.addEventListener('click', () => {
-            const fi = document.getElementById('fileInput');
-            if (fi) fi.click();
-        });
-        const fileInput = document.getElementById('fileInput');
-        if (fileInput) fileInput.addEventListener('change', VIP.chat.handleFileSelect);
 
         // Refund buttons
         const dailyRefundBtn = document.getElementById('dailyRefundBtn');
@@ -163,99 +100,13 @@ function setupEventListeners() {
         const closeRefundModal = document.getElementById('closeRefundModal');
         if (closeRefundModal) closeRefundModal.addEventListener('click', () => VIP.ui.hideModal('refundModal'));
 
-        // Fire (Fueguito)
-        const fireBtn = document.getElementById('fireBtn');
-        if (fireBtn) {
-            fireBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                console.log('🔥 Fueguito clickeado');
-                VIP.fire.showFireModal();
-            });
-        }
-        const closeFireModal = document.getElementById('closeFireModal');
-        if (closeFireModal) closeFireModal.addEventListener('click', () => VIP.ui.hideModal('fireModal'));
-        const claimFireBtn = document.getElementById('claimFireBtn');
-        if (claimFireBtn) claimFireBtn.addEventListener('click', VIP.fire.claimFire);
-
         // Referrals
         const referralBtn = document.getElementById('referralBtn');
         if (referralBtn) referralBtn.addEventListener('click', () => VIP.ui.openReferralModal());
 
-        // Info modal
-        const infoBtn = document.getElementById('infoBtn');
-        if (infoBtn) infoBtn.addEventListener('click', () => VIP.ui.showModal('infoModal'));
-        const closeInfoModal = document.getElementById('closeInfoModal');
-        if (closeInfoModal) closeInfoModal.addEventListener('click', () => VIP.ui.hideModal('infoModal'));
-
-        // CBU
-        const cbuChatBtn = document.getElementById('cbuChatBtn');
-        if (cbuChatBtn) cbuChatBtn.addEventListener('click', VIP.ui.loadAndShowCBU);
-
-        // Retiro autogestionado
-        const withdrawChatBtn = document.getElementById('withdrawChatBtn');
-        if (withdrawChatBtn) withdrawChatBtn.addEventListener('click', VIP.withdraw.openWithdrawModal);
-        const withdrawForm = document.getElementById('withdrawForm');
-        if (withdrawForm) withdrawForm.addEventListener('submit', VIP.withdraw.handleWithdrawSubmit);
-        const withdrawCancelBtn = document.getElementById('withdrawCancelBtn');
-        if (withdrawCancelBtn) withdrawCancelBtn.addEventListener('click', () => VIP.ui.hideModal('withdrawModal'));
-        const withdrawCloseBtn = document.getElementById('withdrawCloseBtn');
-        if (withdrawCloseBtn) withdrawCloseBtn.addEventListener('click', () => VIP.ui.hideModal('withdrawModal'));
-        const withdrawOtpSendBtn = document.getElementById('withdrawOtpSendBtn');
-        if (withdrawOtpSendBtn) withdrawOtpSendBtn.addEventListener('click', VIP.withdraw.sendWithdrawOtp);
-        const withdrawOtpVerifyBtn = document.getElementById('withdrawOtpVerifyBtn');
-        if (withdrawOtpVerifyBtn) withdrawOtpVerifyBtn.addEventListener('click', VIP.withdraw.verifyWithdrawOtp);
-        const withdrawOtpBackBtn = document.getElementById('withdrawOtpBackBtn');
-        if (withdrawOtpBackBtn) withdrawOtpBackBtn.addEventListener('click', VIP.withdraw.backToForm);
-        const withdrawOtpCodeBackBtn = document.getElementById('withdrawOtpCodeBackBtn');
-        if (withdrawOtpCodeBackBtn) withdrawOtpCodeBackBtn.addEventListener('click', VIP.withdraw.backToPhone);
-
-        // Bono por instalar la app
-        const installBonusClaimBtn = document.getElementById('installBonusClaimBtn');
-        if (installBonusClaimBtn) installBonusClaimBtn.addEventListener('click', VIP.installBonus.claim);
-
-        // Encuesta de plan de notificaciones
-        document.querySelectorAll('.notif-plan-card').forEach(card => {
-            card.addEventListener('click', () => VIP.notifSurvey.select(card.dataset.plan));
-        });
-        const notifSurveyCloseBtn = document.getElementById('notifSurveyCloseBtn');
-        if (notifSurveyCloseBtn) notifSurveyCloseBtn.addEventListener('click', VIP.notifSurvey.close);
-        const openNotifPlanBtn = document.getElementById('openNotifPlanBtn');
-        if (openNotifPlanBtn) openNotifPlanBtn.addEventListener('click', VIP.notifSurvey.openEditable);
-
-        // Cambio de contraseña — entrada temporal (fallback cuando el SMS no llega)
-        const cpTemporalBtn = document.getElementById('changePasswordTemporalBtn');
-        if (cpTemporalBtn) cpTemporalBtn.addEventListener('click', VIP.auth.handleChangePasswordTemporalEntry);
-        const cpTemporalOkBtn = document.getElementById('changePasswordTemporalOkBtn');
-        if (cpTemporalOkBtn) cpTemporalOkBtn.addEventListener('click', VIP.auth.finishTemporalEntry);
-
-        // Settings — antes de abrir mostramos/escondemos el bloque de
-        // "verificación pendiente" según el estado del user actual.
+        // Settings
         const settingsBtn = document.getElementById('settingsBtn');
-        if (settingsBtn) settingsBtn.addEventListener('click', () => {
-            const pendingBlock = document.getElementById('verifyPhonePendingBlock');
-            const isPending = VIP.state.currentUser && VIP.state.currentUser.phoneVerificationPending === true;
-            if (pendingBlock) pendingBlock.style.display = isPending ? '' : 'none';
-            VIP.ui.showModal('settingsModal');
-        });
-
-        // Botón "🔓 Verificar teléfono" dentro del modal de settings: abre el modal de verify-phone.
-        const openVerifyPhoneBtn = document.getElementById('openVerifyPhoneBtn');
-        if (openVerifyPhoneBtn) openVerifyPhoneBtn.addEventListener('click', () => {
-            VIP.ui.hideModal('settingsModal');
-            // Reset state cada vez que se abre
-            document.getElementById('verifyPhoneStep1').style.display = '';
-            document.getElementById('verifyPhoneStep2').style.display = 'none';
-            document.getElementById('verifyPhoneInput').value = '';
-            document.getElementById('verifyPhoneError').classList.remove('show');
-            VIP.ui.showModal('verifyPhoneModal');
-        });
-
-        // Submit handlers del modal verify-phone
-        const verifyPhoneSendBtn = document.getElementById('verifyPhoneSendBtn');
-        if (verifyPhoneSendBtn) verifyPhoneSendBtn.addEventListener('click', VIP.auth.handleVerifyPhoneSend);
-        const verifyPhoneConfirmBtn = document.getElementById('verifyPhoneConfirmBtn');
-        if (verifyPhoneConfirmBtn) verifyPhoneConfirmBtn.addEventListener('click', VIP.auth.handleVerifyPhoneConfirm);
+        if (settingsBtn) settingsBtn.addEventListener('click', () => VIP.ui.showModal('settingsModal'));
         const closeSettingsModal = document.getElementById('closeSettingsModal');
         if (closeSettingsModal) closeSettingsModal.addEventListener('click', () => VIP.ui.hideModal('settingsModal'));
         const changePasswordSettingsBtn = document.getElementById('changePasswordSettingsBtn');

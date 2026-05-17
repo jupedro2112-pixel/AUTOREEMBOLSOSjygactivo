@@ -466,6 +466,23 @@
     font-size: 11px;
 }
 
+/* Mismo tamaño que .user-name pero color para distinguirlo. Aparece solo
+   cuando el admin configuro un nombre de equipo para el prefijo del usuario. */
+.team-name {
+    background: linear-gradient(135deg, rgba(155,48,255,0.18), rgba(106,13,173,0.10));
+    color: #d6b3ff;
+    padding: 5px 10px;
+    border-radius: 12px;
+    font-weight: bold;
+    font-size: 11px;
+    border: 1px solid rgba(155,48,255,0.35);
+    white-space: nowrap;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 6px;
+}
+
 .logout-btn {
     background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
     color: #fff;
@@ -640,7 +657,9 @@
 
 @media (max-width: 768px) {
     .mobile-menu-btn { display: flex; align-items: center; justify-content: center; font-size: 22px; padding: 8px 12px; }
-    /* Hide everything in header-right except plataforma button and hamburger */
+    /* Hide everything in header-right except plataforma button + hamburger.
+       (El libro de quejas se movio al fondo de la home, despues del numero
+       opcional — ya no esta en el header.) */
     .header-right > *:not(#plataformaBtn):not(.mobile-menu-btn) { display: none !important; }
     /* Show plataforma button prominently on mobile */
     #plataformaBtn { display: inline-flex !important; font-size: 12px; padding: 8px 14px; font-weight: 900; }
@@ -713,4 +732,146 @@
 
 .drawer-logout:hover {
     background: rgba(255, 68, 68, 0.2);
+}
+
+/* Backup phone chip — vive en header-right en la misma línea que el username.
+   Por default está minimizado (sólo el botón "📞 Tu N°"). Al hacer click se
+   despliega un popover absoluto con el input y el botón de guardar. */
+.backup-phone-chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Mismo tamaño/proporciones que .user-name (5px 10px / 11px / radius 12px)
+   para que quede alineado con el username del header-right. */
+.backup-phone-toggle {
+    background: linear-gradient(135deg, #1f8cff 0%, #0d47a1 100%);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    padding: 5px 10px;
+    font-weight: bold;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.backup-phone-toggle:hover {
+    transform: scale(1.03);
+    box-shadow: 0 0 10px rgba(31, 140, 255, 0.45);
+}
+
+.backup-phone-toggle.saved {
+    background: linear-gradient(135deg, #25d366 0%, #128c4f 100%);
+    cursor: default;
+}
+
+.backup-phone-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 280px;
+    background: rgba(15, 18, 30, 0.98);
+    border: 1px solid rgba(31, 140, 255, 0.45);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    padding: 12px;
+    z-index: 9999;
+    color: #eee;
+}
+
+.backup-phone-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1f8cff;
+    margin-bottom: 4px;
+}
+
+.backup-phone-sub {
+    font-size: 11px;
+    color: #bbb;
+    line-height: 1.4;
+    margin-bottom: 10px;
+}
+
+.backup-phone-sub strong {
+    color: #ffd700;
+}
+
+.backup-phone-input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    box-sizing: border-box;
+    margin-bottom: 8px;
+}
+
+.backup-phone-input:focus {
+    outline: none;
+    border-color: #1f8cff;
+    box-shadow: 0 0 0 2px rgba(31, 140, 255, 0.25);
+}
+
+.backup-phone-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.backup-phone-cancel,
+.backup-phone-save {
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.backup-phone-cancel {
+    background: rgba(255, 255, 255, 0.08);
+    color: #ddd;
+}
+
+.backup-phone-save {
+    background: linear-gradient(135deg, #25d366 0%, #128c4f 100%);
+    color: #fff;
+}
+
+.backup-phone-save:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.backup-phone-msg {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    padding: 6px 8px;
+    border-radius: 6px;
+}
+
+.backup-phone-msg.error {
+    background: rgba(255, 68, 68, 0.12);
+    color: #ff8a8a;
+    border: 1px solid rgba(255, 68, 68, 0.35);
+}
+
+.backup-phone-msg.ok {
+    background: rgba(37, 211, 102, 0.12);
+    color: #66e69b;
+    border: 1px solid rgba(37, 211, 102, 0.35);
+}
+
+@media (max-width: 600px) {
+    .backup-phone-popover {
+        left: -8px;
+        width: min(86vw, 300px);
+    }
 }

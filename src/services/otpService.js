@@ -6,6 +6,7 @@
  * - Reset de contraseña por SMS ('reset')
  */
 
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const OtpCode = require('../models/OtpCode');
 const { sendSMS } = require('./smsService');
@@ -20,7 +21,9 @@ const MAX_OTPS_PER_HOUR = 3;      // Máximo 3 OTPs por número por hora
  * @returns {string} código de 6 dígitos como string
  */
 function generateCode() {
-  const num = Math.floor(Math.random() * 1000000);
+  // CSPRNG: Math.random (xorshift128+) es predecible si el atacante observa
+  // varios outputs consecutivos, lo que permitiria predecir el OTP de la victima.
+  const num = crypto.randomInt(0, 1000000);
   return String(num).padStart(OTP_LENGTH, '0');
 }
 

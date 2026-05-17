@@ -112,12 +112,9 @@ self.addEventListener('fetch', (event) => {
     }
 
     if (isNetworkFirst(url)) {
-        // Network-first con `cache: 'no-store'`: ignora el caché HTTP del
-        // navegador para que admin.js / index.html / admin.css siempre lleguen
-        // frescos del servidor tras un deploy (el caché del SW queda solo como
-        // respaldo offline).
+        // Network-first: always try network so deploys are immediately visible.
         event.respondWith(
-            fetch(event.request, { cache: 'no-store' })
+            fetch(event.request)
                 .then((response) => {
                     if (response && response.status === 200 && response.type === 'basic') {
                         // Only cache same-origin ('basic') responses.

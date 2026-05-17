@@ -6368,6 +6368,18 @@ app.post('/api/notification-plan', authMiddleware, async (req, res) => {
     user.notificationPlan = plan;
     await user.save();
 
+    // Historial de votos: guarda cada voto con su fecha para poder
+    // analizar después qué fue eligiendo la gente.
+    try {
+      await EncuestaVote.create({
+        username: String(user.username || '').toLowerCase(),
+        plan: plan,
+        votedAt: new Date()
+      });
+    } catch (voteErr) {
+      logger.warn(`[encuesta] no se pudo registrar el voto: ${voteErr.message}`);
+    }
+
     // Inscribir en la estrategia de bonos por encuesta. solo_reembolsos no
     // entra. La inscripción guarda CUÁNDO votó — el reloj de la estrategia.
     if (plan !== 'solo_reembolsos') {
@@ -8734,6 +8746,7 @@ setInterval(function () { _runNotifRulesEvaluator(); }, 5 * 60 * 1000);
 // ============================================================
 const encuestaService = require('./src/services/encuestaService');
 const EncuestaFire = require('./src/models/EncuestaFire');
+const EncuestaVote = require('./src/models/EncuestaVote');
 
 async function _runEncuestaTick() {
   try {
@@ -9796,7 +9809,33 @@ app.get('/api/admin/encuesta/stats', authMiddleware, adminMiddleware, async (req
       if (r._id && Object.prototype.hasOwnProperty.call(stats, r._id)) stats[r._id] = c;
       else stats.sinVotar += c;
     });
-    res.json({ success: true, total: total, stats: stats });
+
+    // Historial de votos: últimos votos + análisis por día (14 días).
+    const TZ = 'America/Argentina/Buenos_Aires';
+    const since = new Date(Date.now() - 14 * 86400000);
+    const ultimosVotos = await EncuestaVote.find({}).sort({ votedAt: -1 }).limit(25).lean();
+    const porDiaRaw = await EncuestaVote.aggregate([
+      { $match: { votedAt: { $gte: since } } },
+      { $group: {
+          _id: { dia: { $dateToString: { date: '$votedAt', format: '%Y-%m-%d', timezone: TZ } }, plan: '$plan' },
+          count: { $sum: 1 }
+      } }
+    ]);
+    const byDay = {};
+    porDiaRaw.forEach(function (r) {
+      const d = r._id.dia;
+      if (!byDay[d]) byDay[d] = { fecha: d, suave: 0, normal: 0, activo: 0, solo_reembolsos: 0, total: 0 };
+      if (byDay[d][r._id.plan] !== undefined) byDay[d][r._id.plan] += r.count;
+      byDay[d].total += r.count;
+    });
+    const votosPorDia = [];
+    for (let i = 0; i < 14; i++) {
+      const dt = new Date(Date.now() - i * 86400000 - 3 * 3600 * 1000);
+      const key = dt.toISOString().slice(0, 10);
+      votosPorDia.push(byDay[key] || { fecha: key, suave: 0, normal: 0, activo: 0, solo_reembolsos: 0, total: 0 });
+    }
+
+    res.json({ success: true, total: total, stats: stats, ultimosVotos: ultimosVotos, votosPorDia: votosPorDia });
   } catch (err) {
     logger.error(`GET /api/admin/encuesta/stats: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });

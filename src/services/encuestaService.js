@@ -46,8 +46,18 @@ function bonusDays(n) {
   return [1, 2, 3, 4, 5, 6, 0];
 }
 
-// Calendario semanal de UN grupo: lista de slots {dow,dia,hora,type,percent,title,body}.
-// Máximo 1 slot por día (los incentivos no pisan a los bonos).
+// Ventana de envío: 18:00 a 21:30 (ART), en pasos de media hora. Los
+// pushes de la semana se reparten dentro de esta franja.
+const VENTANA_HORARIA = [
+  { hora: 18, minuto: 0 }, { hora: 18, minuto: 30 },
+  { hora: 19, minuto: 0 }, { hora: 19, minuto: 30 },
+  { hora: 20, minuto: 0 }, { hora: 20, minuto: 30 },
+  { hora: 21, minuto: 0 }, { hora: 21, minuto: 30 }
+];
+
+// Calendario semanal de UN grupo: lista de slots
+// {dow,dia,hora,minuto,horaTxt,type,percent,title,body}.
+// Máximo 1 slot por día; los horarios se reparten en la ventana 18:00–21:30.
 function cohortWeek(cohortCfg, cfg) {
   const slots = [];
   const bonoN = Math.max(0, Number(cohortCfg && cohortCfg.bonosPorSemana) || 0);
@@ -60,7 +70,7 @@ function cohortWeek(cohortCfg, cfg) {
   bDays.forEach(function (dow, i) {
     const pct = Number(percents[i % percents.length]) || 50;
     const m = bonoMsg(pct);
-    slots.push({ dow: dow, dia: DOW_NAME[dow], hora: 18, type: 'bono', percent: pct, title: m.title, body: m.body });
+    slots.push({ dow: dow, dia: DOW_NAME[dow], type: 'bono', percent: pct, title: m.title, body: m.body });
   });
 
   // Días de incentivo: en orden de preferencia, salteando los días con bono.
@@ -70,14 +80,24 @@ function cohortWeek(cohortCfg, cfg) {
     const d = incOrder[i];
     if (bSet[d]) continue;
     const m = INCENTIVO_MSGS[mi % INCENTIVO_MSGS.length];
-    slots.push({ dow: d, dia: DOW_NAME[d], hora: 13, type: 'incentivo', percent: 0, title: m.title, body: m.body });
+    slots.push({ dow: d, dia: DOW_NAME[d], type: 'incentivo', percent: 0, title: m.title, body: m.body });
     placed++; mi++;
   }
 
   slots.sort(function (a, b) {
     const oa = a.dow === 0 ? 7 : a.dow;
     const ob = b.dow === 0 ? 7 : b.dow;
-    return (oa - ob) || (a.hora - b.hora);
+    return oa - ob;
+  });
+
+  // Reparte los horarios en la ventana 18:00–21:30.
+  const n = slots.length;
+  slots.forEach(function (s, i) {
+    const idx = n <= 1 ? 0 : Math.round(i * (VENTANA_HORARIA.length - 1) / (n - 1));
+    const t = VENTANA_HORARIA[idx];
+    s.hora = t.hora;
+    s.minuto = t.minuto;
+    s.horaTxt = (t.hora < 10 ? '0' + t.hora : t.hora) + ':' + (t.minuto < 10 ? '0' + t.minuto : t.minuto);
   });
   return slots;
 }
@@ -97,7 +117,12 @@ function weeklyCalendar(cfg) {
 // Hora de Argentina (UTC-3, sin DST).
 function artParts(now) {
   const art = new Date((now || new Date()).getTime() - 3 * 3600 * 1000);
-  return { dow: art.getUTCDay(), hora: art.getUTCHours(), fecha: art.toISOString().slice(0, 10) };
+  return {
+    dow: art.getUTCDay(),
+    hora: art.getUTCHours(),
+    minuto: art.getUTCMinutes(),
+    fecha: art.toISOString().slice(0, 10)
+  };
 }
 
 // Clave de semana ISO (para que el slotKey arranque limpio cada semana).
@@ -131,6 +156,10 @@ async function tick(deps) {
     const slots = cal[cohort] || [];
     for (const slot of slots) {
       if (slot.dow !== t.dow || slot.hora !== t.hora) continue;
+      // Ventana de media hora: el cron corre cada 5 min, el dedup por
+      // slotKey garantiza que el slot se dispare una sola vez.
+      const _sm = slot.minuto || 0;
+      if (t.minuto < _sm || t.minuto >= _sm + 30) continue;
       const slotKey = weekKey + '-' + cohort + '-' + slot.dia + '-' + slot.type
         + (slot.percent ? '-' + slot.percent : '');
 

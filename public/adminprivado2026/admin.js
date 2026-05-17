@@ -7962,6 +7962,37 @@ function _encuestaRender(cfg, stats, cal, rep) {
     });
     h += '</div>';
 
+    // --- Historial de votos ---
+    const ultVotos = (stats && stats.ultimosVotos) || [];
+    const votosDia = (stats && stats.votosPorDia) || [];
+    const planEmoji = { suave: '🌙', normal: '⚖️', activo: '🔥', solo_reembolsos: '💰' };
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">🗳️ Qué fue votando la gente</h3>';
+    h += '<div style="overflow-x:auto;margin-bottom:10px;"><table style="width:100%;border-collapse:collapse;min-width:380px;">';
+    h += '<tr style="color:#888;font-size:9px;text-transform:uppercase;"><th style="text-align:left;padding:5px;">Día</th><th style="padding:5px;">🌙</th><th style="padding:5px;">⚖️</th><th style="padding:5px;">🔥</th><th style="padding:5px;">💰</th><th style="padding:5px;">Total</th></tr>';
+    votosDia.forEach(function (d) {
+        h += '<tr style="border-top:1px solid rgba(255,255,255,0.05);font-size:11px;">'
+            + '<td style="padding:5px;color:#ddd;">' + d.fecha + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#bbb;">' + d.suave + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#bbb;">' + d.normal + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#bbb;">' + d.activo + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#bbb;">' + d.solo_reembolsos + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#ffd700;font-weight:800;">' + d.total + '</td></tr>';
+    });
+    h += '</table></div>';
+    h += '<div style="color:#888;font-size:10px;margin-bottom:4px;">Últimos votos:</div>';
+    if (ultVotos.length) {
+        h += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:18px;">';
+        ultVotos.forEach(function (v) {
+            h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.07);border-radius:7px;padding:6px 9px;font-size:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+                + '<span style="color:#fff;font-weight:700;">' + _escInac(v.username) + '</span>'
+                + '<span style="color:#c9a0ff;">' + (planEmoji[v.plan] || '') + ' ' + _escInac(v.plan) + '</span>'
+                + '<span style="color:#777;margin-left:auto;">' + (v.votedAt ? new Date(v.votedAt).toLocaleString('es-AR') : '') + '</span></div>';
+        });
+        h += '</div>';
+    } else {
+        h += '<div style="color:#777;font-size:11px;margin-bottom:18px;">Todavía no hay votos registrados.</div>';
+    }
+
     // --- Matriz de grupos ---
     h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">⚙️ Matriz de grupos (por semana)</h3>';
     h += '<div style="background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:18px;">';
@@ -8010,7 +8041,7 @@ function _encuestaRender(cfg, stats, cal, rep) {
                 const bono = slot.type === 'bono';
                 h += '<div style="background:' + (bono ? 'rgba(0,255,136,0.12)' : 'rgba(157,78,221,0.15)') + ';border-radius:5px;padding:3px 4px;">'
                     + '<div style="font-weight:900;font-size:9.5px;color:' + (bono ? '#00ff88' : '#c9a0ff') + ';">' + (bono ? '🎁 Bono ' + slot.percent + '%' : '📣 Incentivo') + '</div>'
-                    + '<div style="color:#999;font-size:8.5px;">' + slot.hora + ':00 hs</div></div>';
+                    + '<div style="color:#999;font-size:8.5px;">' + (slot.horaTxt || (slot.hora + ':00')) + ' hs</div></div>';
             }
             h += '</td>';
         });
@@ -8029,7 +8060,7 @@ function _encuestaRender(cfg, stats, cal, rep) {
         h += '<span style="color:#fff;font-weight:800;font-size:12px;min-width:80px;">' + g.label + '</span>';
         if (today) {
             const bono = today.type === 'bono';
-            h += '<span style="color:' + (bono ? '#00ff88' : '#c9a0ff') + ';font-weight:800;font-size:11px;">' + (bono ? '🎁 Bono ' + today.percent + '%' : '📣 Incentivo') + ' · ' + today.hora + ':00</span>';
+            h += '<span style="color:' + (bono ? '#00ff88' : '#c9a0ff') + ';font-weight:800;font-size:11px;">' + (bono ? '🎁 Bono ' + today.percent + '%' : '📣 Incentivo') + ' · ' + (today.horaTxt || (today.hora + ':00')) + '</span>';
             h += '<span style="color:#bbb;font-size:11px;flex:1;min-width:140px;">' + today.title + '</span>';
         } else {
             h += '<span style="color:#666;font-size:11px;">— sin push hoy —</span>';

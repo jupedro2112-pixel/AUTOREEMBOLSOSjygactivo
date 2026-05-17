@@ -8656,12 +8656,14 @@ const notificationRulesService = require('./src/services/notificationRulesServic
 const NotificationRule = require('./src/models/NotificationRule');
 const NotificationRuleSuggestion = require('./src/models/NotificationRuleSuggestion');
 const NotificationHistory = require('./src/models/NotificationHistory');
+const PromoBonus = require('./src/models/PromoBonus');
 const _notifRulesModels = {
   User,
   RefundClaim,
   NotificationRule,
   NotificationRuleSuggestion,
-  NotificationHistory
+  NotificationHistory,
+  PromoBonus
 };
 const _notifRulesSendFn = sendNotificationToAllUsers;
 
@@ -8903,7 +8905,7 @@ app.get('/api/admin/notification-rules', authMiddleware, adminMiddleware, async 
 app.patch('/api/admin/notification-rules/:id', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const allowed = ['enabled', 'title', 'body', 'cooldownMinutes', 'requiresAdminApproval', 'cronSchedule', 'bonus'];
+    const allowed = ['enabled', 'title', 'body', 'cooldownMinutes', 'requiresAdminApproval', 'cronSchedule', 'bonus', 'chargeBonus'];
     const update = {};
     for (const k of allowed) {
       if (req.body[k] !== undefined) update[k] = req.body[k];
@@ -9065,6 +9067,18 @@ app.post('/api/admin/notification-rules/suggestions/:id/approve', authMiddleware
         }
       });
     } catch (_) {}
+
+    // 3.5) Bono de carga: si la regla origen lleva chargeBonus, activar la
+    // bonificación vigente para cada usuario de la audiencia.
+    try {
+      const srcRule = await NotificationRule.findOne({ id: sug.ruleId }).lean();
+      if (srcRule && srcRule.chargeBonus && Number(srcRule.chargeBonus.percent) > 0) {
+        const n = await notificationRulesService.activateChargeBonuses(srcRule, sug.audienceUsernames, _notifRulesModels, logger);
+        logger.info(`[suggestion/approve] ${sug.ruleCode} activó ${n} bono(s) de ${srcRule.chargeBonus.percent}%`);
+      }
+    } catch (cbErr) {
+      logger.warn(`[suggestion/approve] activar chargeBonus falló: ${cbErr.message}`);
+    }
 
     // 4) Marcar suggestion como aprobada.
     await NotificationRuleSuggestion.updateOne(
@@ -9280,6 +9294,84 @@ app.delete('/api/admin/reviews/:id', authMiddleware, adminMiddleware, async (req
     res.json({ success: true });
   } catch (err) {
     logger.error(`DELETE /api/admin/reviews/:id: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+
+// ============================================================================
+// BONO DE CARGA (PromoBonus) — bonificación vigente activada por notificación.
+// ============================================================================
+
+// Devuelve el bono de carga vigente de un usuario (o null). Vigente =
+// status 'active' y no vencido. De paso vence los que pasaron su ventana.
+async function _getActivePromoBonus(username) {
+  const u = String(username || '').toLowerCase();
+  if (!u) return null;
+  const now = new Date();
+  await PromoBonus.updateMany(
+    { username: u, status: 'active', expiresAt: { $lte: now } },
+    { $set: { status: 'expired' } }
+  ).catch(() => {});
+  const b = await PromoBonus.findOne({ username: u, status: 'active', expiresAt: { $gt: now } })
+    .sort({ activatedAt: -1 })
+    .lean();
+  return b || null;
+}
+
+// GET /api/promo-bonus/mine — el usuario ve su bonificación vigente.
+app.get('/api/promo-bonus/mine', authMiddleware, async (req, res) => {
+  try {
+    const b = await _getActivePromoBonus(req.user.username);
+    if (!b) return res.json({ bonus: null });
+    res.json({
+      bonus: { percent: b.percent, activatedAt: b.activatedAt, expiresAt: b.expiresAt }
+    });
+  } catch (err) {
+    logger.error(`/api/promo-bonus/mine: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/promo-bonus?username=X — el agente ve el bono vigente del
+// cliente con el que está hablando en el chat.
+app.get('/api/admin/promo-bonus', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const username = String(req.query.username || '').trim();
+    if (!username) return res.status(400).json({ error: 'Falta username' });
+    const b = await _getActivePromoBonus(username);
+    if (!b) return res.json({ bonus: null });
+    res.json({
+      bonus: {
+        id: b.id,
+        percent: b.percent,
+        activatedAt: b.activatedAt,
+        expiresAt: b.expiresAt,
+        sourceRuleCode: b.sourceRuleCode,
+        sourceRuleName: b.sourceRuleName
+      }
+    });
+  } catch (err) {
+    logger.error(`/api/admin/promo-bonus: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/promo-bonus/:id/use — el agente marca el bono como usado
+// (se aplicó en una carga). Vale por 1 sola carga: queda consumido.
+app.post('/api/admin/promo-bonus/:id/use', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const b = await PromoBonus.findOneAndUpdate(
+      { id, status: 'active' },
+      { $set: { status: 'used', usedBy: req.user.username || null, usedAt: new Date() } },
+      { new: true }
+    );
+    if (!b) return res.status(404).json({ error: 'Bono no encontrado o ya consumido' });
+    logger.info(`[promo-bonus] ${b.username} bono ${b.percent}% marcado usado por ${req.user.username}`);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`/api/admin/promo-bonus/:id/use: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

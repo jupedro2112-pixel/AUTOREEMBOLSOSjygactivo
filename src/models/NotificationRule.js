@@ -142,6 +142,16 @@ const notificationRuleSchema = new mongoose.Schema({
     promoCode: { type: String, default: null }
   },
 
+  // ============= BONO DE CARGA (PROMO) =============
+  // Si percent > 0, cada usuario que recibe el push de esta regla queda
+  // con una "bonificación vigente": un % extra sobre su próxima carga,
+  // que el agente aplica a mano. Vigente durante durationMinutes desde
+  // el envío. El cliente la ve en la app y el agente en el chat.
+  chargeBonus: {
+    percent: { type: Number, default: 0, min: 0, max: 1000 },
+    durationMinutes: { type: Number, default: 120 }
+  },
+
   // ============= COMPORTAMIENTO =============
   // Si true → no se manda directo, crea una NotificationRuleSuggestion
   // que el admin tiene que aprobar con un botón. Forzado a true para

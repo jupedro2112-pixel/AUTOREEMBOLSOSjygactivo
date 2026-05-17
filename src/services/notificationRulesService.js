@@ -343,6 +343,48 @@ function _lastMonthInArt() {
 }
 
 // ============================================================
+// BONO DE CARGA — activar PromoBonus para una audiencia
+// ============================================================
+// Cuando una regla con chargeBonus dispara, cada usuario que recibió el
+// push queda con una bonificación vigente (un % extra sobre su próxima
+// carga, válido por 1 sola carga). Reemplaza cualquier bono activo previo.
+async function activateChargeBonuses(rule, usernames, models, logger) {
+  const PromoBonus = models && models.PromoBonus;
+  if (!PromoBonus) return 0;
+  const cb = rule.chargeBonus || {};
+  const percent = Number(cb.percent) || 0;
+  if (percent <= 0 || !usernames || usernames.length === 0) return 0;
+  const durationMin = Math.max(5, Number(cb.durationMinutes) || 120);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + durationMin * 60 * 1000);
+  const normUsers = [...new Set(usernames.map(u => String(u || '').toLowerCase()).filter(Boolean))];
+  if (normUsers.length === 0) return 0;
+  try {
+    // Un bono nuevo reemplaza al anterior: los activos previos quedan 'expired'.
+    await PromoBonus.updateMany(
+      { username: { $in: normUsers }, status: 'active' },
+      { $set: { status: 'expired' } }
+    );
+    const docs = normUsers.map(u => ({
+      id: uuidv4(),
+      username: u,
+      percent,
+      sourceRuleId: rule.id,
+      sourceRuleCode: rule.code,
+      sourceRuleName: rule.name,
+      activatedAt: now,
+      expiresAt,
+      status: 'active'
+    }));
+    await PromoBonus.insertMany(docs, { ordered: false });
+    return docs.length;
+  } catch (e) {
+    if (logger) logger.warn(`[notif-rules] activar chargeBonus falló: ${e.message}`);
+    return 0;
+  }
+}
+
+// ============================================================
 // EVALUACIÓN DE TODAS LAS REGLAS
 // ============================================================
 async function evaluateAllRules({ models, sendPushFn, logger }) {
@@ -432,6 +474,13 @@ async function evaluateAllRules({ models, sendPushFn, logger }) {
         });
       } catch (histErr) {
         if (logger) logger.warn(`[notif-rules] history create error: ${histErr.message}`);
+      }
+
+      // Bono de carga: si la regla lleva chargeBonus, cada user que recibió
+      // el push queda con una bonificación vigente.
+      if (rule.chargeBonus && Number(rule.chargeBonus.percent) > 0) {
+        const n = await activateChargeBonuses(rule, audienceUsernames, models, logger);
+        if (logger && n > 0) logger.info(`[notif-rules] regla ${rule.code} activó ${n} bono(s) de ${rule.chargeBonus.percent}%`);
       }
 
       await NotificationRule.updateOne(
@@ -715,6 +764,7 @@ async function seedDefaultRulesIfMissing(NotificationRule) {
 module.exports = {
   evaluateAllRules,
   seedDefaultRulesIfMissing,
+  activateChargeBonuses,
   // Exportados para tests / uso desde admin endpoints.
   _resolveAudience,
   _cronMatchesNow

@@ -3221,6 +3221,7 @@ function switchSection(section) {
     if (section === 'roulette') loadRouletteAdmin();
     if (section === 'automations') loadAutomations();
     if (section === 'bonusStrategy') loadBonusStrategy();
+    if (section === 'encuesta') loadEncuesta();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
@@ -7840,5 +7841,212 @@ async function saveBonusStrategy() {
         } else {
             showToast(j.error || 'Error', 'error');
         }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ============================================================
+// ENCUESTA — estrategia de notificaciones por grupo (Fase 3)
+// ============================================================
+const ENC_GROUPS = [
+    { key: 'suave',  label: '🌙 Suave' },
+    { key: 'normal', label: '⚖️ Normal' },
+    { key: 'activo', label: '🔥 Activo' }
+];
+const ENC_DOW = [
+    { dow: 1, n: 'Lun' }, { dow: 2, n: 'Mar' }, { dow: 3, n: 'Mié' },
+    { dow: 4, n: 'Jue' }, { dow: 5, n: 'Vie' }, { dow: 6, n: 'Sáb' }, { dow: 0, n: 'Dom' }
+];
+
+function _encArtDow() {
+    const art = new Date(Date.now() - 3 * 3600 * 1000);
+    return art.getUTCDay();
+}
+
+function _encInput(id, value, min, max) {
+    return '<input type="number" id="' + id + '" value="' + value + '" min="' + min + '" max="' + max + '" '
+        + 'style="width:58px;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:6px;font-size:12px;font-weight:800;text-align:center;">';
+}
+
+async function loadEncuesta() {
+    const body = document.getElementById('encuestaBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const headers = { 'Authorization': `Bearer ${currentToken}` };
+        const [cfgR, statsR, calR] = await Promise.all([
+            fetch(`${API_URL}/api/admin/encuesta/config`, { headers }),
+            fetch(`${API_URL}/api/admin/encuesta/stats`, { headers }),
+            fetch(`${API_URL}/api/admin/encuesta/calendar`, { headers })
+        ]);
+        const cfg = (await cfgR.json()).config || {};
+        const stats = await statsR.json();
+        const cal = (await calR.json()).calendar || {};
+        _encuestaRender(cfg, stats, cal);
+    } catch (e) {
+        body.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px;">Error cargando la encuesta.</div>';
+    }
+}
+
+function _encuestaRender(cfg, stats, cal) {
+    const body = document.getElementById('encuestaBody');
+    if (!body) return;
+    const active = cfg.isActive === true;
+    const st = (stats && stats.stats) || {};
+    const todayDow = _encArtDow();
+    let h = '';
+
+    // --- Activación ---
+    h += '<div style="background:' + (active ? 'rgba(102,255,102,0.10)' : 'rgba(255,255,255,0.04)')
+        + ';border:1.5px solid ' + (active ? '#66ff66' : 'rgba(255,255,255,0.15)')
+        + ';border-radius:12px;padding:14px;margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
+    h += '<div style="flex:1;min-width:160px;">'
+        + '<div style="font-weight:900;font-size:14px;color:' + (active ? '#66ff66' : '#fff') + ';">'
+        + (active ? '🟢 Estrategia ACTIVA' : '⚪ Estrategia en pausa') + '</div>'
+        + '<div style="color:#aaa;font-size:11px;margin-top:2px;">'
+        + (active ? 'El motor está disparando los pushes según el calendario.'
+                  : 'El motor está dormido: no se manda ningún push hasta lanzarla.') + '</div></div>';
+    h += active
+        ? '<button onclick="encuestaToggleActive(false)" style="background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;border:none;border-radius:9px;padding:10px 18px;font-weight:900;font-size:13px;cursor:pointer;">⏸ Pausar</button>'
+        : '<button onclick="encuestaToggleActive(true)" style="background:linear-gradient(135deg,#00cc6a,#00ff88);color:#000;border:none;border-radius:9px;padding:10px 18px;font-weight:900;font-size:13px;cursor:pointer;">🚀 Lanzar estrategia</button>';
+    h += '</div>';
+
+    // --- Distribución de votos ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">👥 Cómo votó la gente</h3>';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin-bottom:18px;">';
+    [['suave', '🌙 Suave'], ['normal', '⚖️ Normal'], ['activo', '🔥 Activo'], ['solo_reembolsos', '💰 Solo reemb.'], ['sinVotar', '❔ Sin votar']].forEach(function (g) {
+        h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:10px;text-align:center;">'
+            + '<div style="font-size:20px;font-weight:900;color:#ffd700;">' + (st[g[0]] || 0) + '</div>'
+            + '<div style="font-size:10px;color:#bbb;">' + g[1] + '</div></div>';
+    });
+    h += '</div>';
+
+    // --- Matriz de grupos ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">⚙️ Matriz de grupos (por semana)</h3>';
+    h += '<div style="background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:18px;">';
+    h += '<table style="width:100%;border-collapse:collapse;">';
+    h += '<tr style="color:#888;font-size:9.5px;text-transform:uppercase;">'
+        + '<th style="text-align:left;padding:4px;">Grupo</th>'
+        + '<th style="padding:4px;">Bonos / sem</th>'
+        + '<th style="padding:4px;">Incentivos / sem</th></tr>';
+    ENC_GROUPS.forEach(function (g) {
+        const cc = (cfg.cohorts && cfg.cohorts[g.key]) || { bonosPorSemana: 0, incentivosPorSemana: 0 };
+        h += '<tr>'
+            + '<td style="padding:6px 4px;color:#fff;font-weight:700;font-size:12px;">' + g.label + '</td>'
+            + '<td style="padding:6px 4px;text-align:center;">' + _encInput('encInp_' + g.key + '_bonos', cc.bonosPorSemana, 0, 14) + '</td>'
+            + '<td style="padding:6px 4px;text-align:center;">' + _encInput('encInp_' + g.key + '_inc', cc.incentivosPorSemana, 0, 21) + '</td>'
+            + '</tr>';
+    });
+    h += '</table>';
+    h += '<div style="color:#777;font-size:10px;margin-top:6px;">💰 Solo reembolsos: nunca recibe marketing (solo recordatorios de reembolso).</div>';
+    h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">';
+    h += '<div style="flex:1;min-width:130px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">% de bonos (separá con coma)</label>'
+        + '<input type="text" id="encInp_percents" value="' + ((cfg.bonoPercents || [50, 100]).join(',')) + '" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
+    h += '<div style="flex:1;min-width:130px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Vigencia del bono (horas)</label>'
+        + '<input type="number" id="encInp_vigencia" value="' + (cfg.bonoVigenciaHoras || 48) + '" min="1" max="720" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
+    h += '</div>';
+    h += '<button onclick="encuestaSaveConfig()" style="margin-top:12px;width:100%;background:linear-gradient(135deg,#d4af37,#ffd700);color:#000;border:none;border-radius:9px;padding:11px;font-weight:900;font-size:13px;cursor:pointer;">💾 Guardar matriz</button>';
+    h += '</div>';
+
+    // --- Calendario semanal ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">📅 Calendario semanal</h3>';
+    h += '<div style="overflow-x:auto;margin-bottom:18px;"><table style="width:100%;border-collapse:collapse;min-width:600px;">';
+    h += '<tr><th style="padding:5px;"></th>';
+    ENC_DOW.forEach(function (d) {
+        const isToday = d.dow === todayDow;
+        h += '<th style="padding:5px;font-size:10px;color:' + (isToday ? '#ffd700' : '#888') + ';">' + d.n + (isToday ? ' •' : '') + '</th>';
+    });
+    h += '</tr>';
+    ENC_GROUPS.forEach(function (g) {
+        const slots = (cal && cal[g.key]) || [];
+        h += '<tr><td style="padding:5px;color:#fff;font-weight:700;font-size:11px;white-space:nowrap;">' + g.label + '</td>';
+        ENC_DOW.forEach(function (d) {
+            let slot = null;
+            for (let i = 0; i < slots.length; i++) { if (slots[i].dow === d.dow) { slot = slots[i]; break; } }
+            const isToday = d.dow === todayDow;
+            h += '<td style="padding:3px;border:1px solid rgba(255,255,255,0.06);vertical-align:top;' + (isToday ? 'background:rgba(255,215,0,0.07);' : '') + '">';
+            if (slot) {
+                const bono = slot.type === 'bono';
+                h += '<div style="background:' + (bono ? 'rgba(0,255,136,0.12)' : 'rgba(157,78,221,0.15)') + ';border-radius:5px;padding:3px 4px;">'
+                    + '<div style="font-weight:900;font-size:9.5px;color:' + (bono ? '#00ff88' : '#c9a0ff') + ';">' + (bono ? '🎁 Bono ' + slot.percent + '%' : '📣 Incentivo') + '</div>'
+                    + '<div style="color:#999;font-size:8.5px;">' + slot.hora + ':00 hs</div></div>';
+            }
+            h += '</td>';
+        });
+        h += '</tr>';
+    });
+    h += '</table></div>';
+
+    // --- Push de HOY (verificación) ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">🔎 Push de HOY (para verificar)</h3>';
+    h += '<div style="display:flex;flex-direction:column;gap:6px;">';
+    ENC_GROUPS.forEach(function (g) {
+        const slots = (cal && cal[g.key]) || [];
+        let today = null;
+        for (let i = 0; i < slots.length; i++) { if (slots[i].dow === todayDow) { today = slots[i]; break; } }
+        h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:9px 11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+        h += '<span style="color:#fff;font-weight:800;font-size:12px;min-width:80px;">' + g.label + '</span>';
+        if (today) {
+            const bono = today.type === 'bono';
+            h += '<span style="color:' + (bono ? '#00ff88' : '#c9a0ff') + ';font-weight:800;font-size:11px;">' + (bono ? '🎁 Bono ' + today.percent + '%' : '📣 Incentivo') + ' · ' + today.hora + ':00</span>';
+            h += '<span style="color:#bbb;font-size:11px;flex:1;min-width:140px;">' + today.title + '</span>';
+        } else {
+            h += '<span style="color:#666;font-size:11px;">— sin push hoy —</span>';
+        }
+        h += '</div>';
+    });
+    h += '</div>';
+
+    body.innerHTML = h;
+}
+
+async function encuestaToggleActive(activate) {
+    try {
+        const headers = { 'Authorization': `Bearer ${currentToken}` };
+        const r0 = await fetch(`${API_URL}/api/admin/encuesta/config`, { headers });
+        const cfg = (await r0.json()).config || {};
+        cfg.isActive = !!activate;
+        const r = await fetch(`${API_URL}/api/admin/encuesta/config`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${currentToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg)
+        });
+        const j = await r.json();
+        if (j.success) {
+            showToast(activate ? '🚀 Estrategia lanzada' : '⏸ Estrategia pausada', 'success');
+            loadEncuesta();
+        } else { showToast(j.error || 'Error', 'error'); }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function encuestaSaveConfig() {
+    try {
+        const headers = { 'Authorization': `Bearer ${currentToken}` };
+        const r0 = await fetch(`${API_URL}/api/admin/encuesta/config`, { headers });
+        const cfg = (await r0.json()).config || {};
+        if (!cfg.cohorts) cfg.cohorts = {};
+        ['suave', 'normal', 'activo'].forEach(function (k) {
+            const be = document.getElementById('encInp_' + k + '_bonos');
+            const ie = document.getElementById('encInp_' + k + '_inc');
+            const b = parseInt(be && be.value, 10);
+            const i = parseInt(ie && ie.value, 10);
+            cfg.cohorts[k] = {
+                bonosPorSemana: isFinite(b) ? b : 0,
+                incentivosPorSemana: isFinite(i) ? i : 0
+            };
+        });
+        const pctEl = document.getElementById('encInp_percents');
+        const pct = ((pctEl && pctEl.value) || '').split(',').map(function (x) { return parseInt(x.trim(), 10); }).filter(function (x) { return isFinite(x) && x > 0; });
+        if (pct.length) cfg.bonoPercents = pct;
+        const vigEl = document.getElementById('encInp_vigencia');
+        const vig = parseInt(vigEl && vigEl.value, 10);
+        if (isFinite(vig)) cfg.bonoVigenciaHoras = vig;
+        const r = await fetch(`${API_URL}/api/admin/encuesta/config`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${currentToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg)
+        });
+        const j = await r.json();
+        if (j.success) { showToast('✅ Matriz guardada', 'success'); loadEncuesta(); }
+        else { showToast(j.error || 'Error', 'error'); }
     } catch (e) { showToast('Error de conexión', 'error'); }
 }

@@ -107,6 +107,10 @@
                     <span>🚀</span>
                     <span>Estrategia de bonos</span>
                 </a>
+                <a href="#" class="nav-item" data-section="encuesta">
+                    <span>📊</span>
+                    <span>Encuesta</span>
+                </a>
                 <a href="#" class="nav-item" data-section="reviews">
                     <span>⭐</span>
                     <span>Reseñas</span>
@@ -1030,6 +1034,23 @@
                     <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Secuencia escalonada de bonos por encuesta. Cada usuario que vota entra solo: recibe el <strong style="color:#ffd700;">paso 1 (bono 50%)</strong> y después el <strong style="color:#ffd700;">paso 2 (bono 100%)</strong>, según los retrasos del plan que votó. Cada push activa la bonificación vigente (cartel del usuario + banner del agente). Editá el copy y los retrasos, después tocá <strong>Lanzar</strong>.</p>
                 </div>
                 <div id="bonusStrategyBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
+            <!-- ============================================
+                 SECCIÓN: ENCUESTA — estrategia de notificaciones
+                 por grupo (suave/normal/activo/solo_reembolsos).
+                 ============================================ -->
+            <section id="encuestaSection" class="section">
+                <div class="panel-header">
+                    <h2>📊 Encuesta</h2>
+                    <button class="refresh-btn" onclick="loadEncuesta()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Cada usuario vota cómo quiere recibir notificaciones y entra a un grupo. La estrategia le manda los bonos e incentivos del grupo que eligió, con tope de 1 push por día. Configurá la matriz, mirá el calendario y lanzá la estrategia.</p>
+                </div>
+                <div id="encuestaBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>

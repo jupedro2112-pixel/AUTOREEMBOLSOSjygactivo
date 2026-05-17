@@ -184,7 +184,10 @@ function setupEventListeners() {
 
         // Info modal
         const infoBtn = document.getElementById('infoBtn');
-        if (infoBtn) infoBtn.addEventListener('click', () => VIP.ui.showModal('infoModal'));
+        if (infoBtn) infoBtn.addEventListener('click', () => {
+            VIP.ui.showModal('infoModal');
+            if (VIP.reviews && typeof VIP.reviews.renderInfoSection === 'function') VIP.reviews.renderInfoSection();
+        });
         const closeInfoModal = document.getElementById('closeInfoModal');
         if (closeInfoModal) closeInfoModal.addEventListener('click', () => VIP.ui.hideModal('infoModal'));
 

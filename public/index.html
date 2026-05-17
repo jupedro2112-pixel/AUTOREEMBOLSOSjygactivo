@@ -391,73 +391,19 @@
     <!-- Chat Screen -->
     <div id="chatScreen" class="chat-screen hidden">
         <!-- Header -->
-        <header class="header">
-            <!-- Sección izquierda: Fueguito + Configuración/Cerrar sesión -->
-            <div class="header-left">
-                <button id="fireBtn" class="fire-btn" title="Racha diaria - Reclama cada día!">
-                    🔥
-                    <span class="fire-streak" id="fireStreak">0</span>
-                </button>
-                <div class="user-action-btns">
-                    <button class="settings-btn" id="settingsBtn" title="Configuración">⚙️</button>
-                    <button class="referral-btn" id="referralBtn" title="Mis Referidos">🤝</button>
-                    <button class="logout-btn" id="logoutBtn" style="display:none;">🚪</button>
-                </div>
-            </div>
-            
-            <!-- Sección centro: Reembolsos -->
-            <div class="header-center">
-                <button id="dailyRefundBtn" class="refund-btn daily" title="Reembolso Diario 20%">
-                    <span class="refund-label-full">📅 Reembolso<br>Diario</span>
-                    <span class="refund-label-short">📅</span>
-                    <span class="refund-amount" id="dailyRefundAmount">$0</span>
-                    <span class="refund-timer" id="dailyRefundTimer"></span>
-                </button>
-                <button id="weeklyRefundBtn" class="refund-btn weekly" title="Reembolso Semanal 10% (Lun-Mar)">
-                    <span class="refund-label-full">📆 Reembolso<br>Semanal</span>
-                    <span class="refund-label-short">📆</span>
-                    <span class="refund-amount" id="weeklyRefundAmount">$0</span>
-                    <span class="refund-timer" id="weeklyRefundTimer"></span>
-                </button>
-                <button id="monthlyRefundBtn" class="refund-btn monthly" title="Reembolso Mensual 5% (Desde día 7)">
-                    <span class="refund-label-full">🗓️ Reembolso<br>Mensual</span>
-                    <span class="refund-label-short">🗓️</span>
-                    <span class="refund-amount" id="monthlyRefundAmount">$0</span>
-                    <span class="refund-timer" id="monthlyRefundTimer"></span>
-                </button>
-                <!-- Botón unificado de reembolsos solo en móvil (reemplaza los 3 botones separados) -->
-                <button id="unifiedRefundBtn" class="refund-btn unified-refund-btn" title="Reembolsos" onclick="VIP.refunds.showUnifiedRefundModal()" style="display:none;">
-                    🎁 Reembolsos
-                </button>
-            </div>
-            
-            <!-- Sección derecha: Usuario y acciones -->
-            <div class="header-right">
-                <!-- BOTÓN PLATAFORMA - Solo usuario -->
-                <button id="plataformaBtn" class="plataforma-btn" title="Ir al Casino" onclick="VIP.ui.openPlatformModal()">
-                    🎰 CASINO
-                </button>
-                <!-- BOTÓN CANAL INFORMATIVO - URL configurable desde admin -->
-                <a id="canalInformativoBtn" href="#" target="_blank" rel="noopener noreferrer" class="plataforma-btn" title="Canal Informativo" style="display:none;background:linear-gradient(135deg,#1a73e8 0%,#0d47a1 100%);">
-                    📢 CANAL INFORMATIVO
-                </a>
-                <!-- BOTÓN APP - Instalar PWA (siempre visible; se oculta cuando la app ya está instalada) -->
-                <button class="app-install-btn" id="appInstallBtn" title="Instalar App">
-                    📱 APP
-                </button>
-                <!-- BOTÓN NOTIFICACIONES - Solo visible en modo standalone/PWA instalada -->
-                <button class="notification-btn" id="notificationBtn" title="Activar Notificaciones">
-                    🔔 NOTIS
-                </button>
-                <a href="https://wa.link/metawin2026" target="_blank" class="support-btn" style="display: flex; align-items: center; gap: 5px;">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink: 0;">
-                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-                    </svg>
-                    SOPORTE
-                </a>
-                <button class="info-btn" id="infoBtn" title="Información del servicio">ℹ️ INFO</button>
+        <header class="header header-slim">
+            <div class="header-brand">
+                <span class="brand-logo">🎰</span>
                 <span class="user-name" id="currentUser">Usuario</span>
-                <button class="mobile-menu-btn" onclick="VIP.ui.toggleDrawer()" aria-label="Menú">☰</button>
+            </div>
+            <div class="header-tools">
+                <button class="app-install-btn header-tool" id="appInstallBtn" title="Instalar App">📱</button>
+                <button class="notification-btn header-tool" id="notificationBtn" title="Activar Notificaciones">🔔</button>
+                <a id="canalInformativoBtn" href="#" target="_blank" rel="noopener noreferrer" class="header-tool" title="Canal Informativo" style="display:none;">📢</a>
+                <a href="https://wa.link/metawin2026" target="_blank" class="header-tool" title="Soporte">💬</a>
+                <button class="settings-btn header-tool" id="settingsBtn" title="Configuración">⚙️</button>
+                <button class="referral-btn header-tool" id="referralBtn" title="Mis Referidos">🤝</button>
+                <button class="logout-btn header-tool" id="logoutBtn" title="Cerrar sesión" style="display:none;">🚪</button>
             </div>
         </header>
 
@@ -527,6 +473,147 @@
 
         <!-- Chat Section -->
         <section class="chat-section">
+            <!-- ===== DASHBOARD PRINCIPAL ===== -->
+            <style>
+                .header-slim { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 12px; flex-wrap:wrap; }
+                .header-brand { display:flex; align-items:center; gap:8px; }
+                .header-brand .brand-logo { font-size:22px; }
+                .header-tools { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+                .header-tools .header-tool,
+                .header-tools .app-install-btn,
+                .header-tools .notification-btn {
+                    font-size:15px !important; line-height:1 !important;
+                    padding:7px 9px !important; min-width:0 !important; width:auto !important;
+                    border-radius:9px !important; text-decoration:none; display:inline-flex;
+                    align-items:center; justify-content:center;
+                }
+                .home-dash { max-width:680px; margin:10px auto 4px; padding:0 8px; display:flex; flex-direction:column; gap:10px; }
+                .dash-top { display:flex; gap:8px; align-items:stretch; }
+                .dash-cell {
+                    flex:0 0 86px; display:flex; flex-direction:column; align-items:center;
+                    justify-content:center; gap:4px; cursor:pointer; color:#fff;
+                    background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #d4af37;
+                    border-radius:13px; padding:10px 6px;
+                }
+                .dash-cell-emoji { font-size:25px; line-height:1; }
+                .dash-cell-label { font-size:11px; font-weight:800; color:#d4af37; letter-spacing:.3px; }
+                .dash-fire .fire-streak { background:#ff4500; color:#fff; border-radius:10px; font-size:11px; font-weight:900; padding:1px 8px; }
+                .dash-refunds {
+                    flex:1; min-width:0; background:linear-gradient(135deg,#1a0033,#0a0015);
+                    border:1.5px solid #d4af37; border-radius:13px; padding:9px 9px 10px;
+                }
+                .dash-refunds-title { text-align:center; color:#d4af37; font-weight:900; font-size:12px; letter-spacing:.5px; margin-bottom:7px; }
+                .dash-refunds-row { display:flex; gap:5px; }
+                .dash-refunds-row .refund-btn { flex:1; min-width:0; }
+                .dash-community { }
+                .dash-community-btn {
+                    display:flex; align-items:center; gap:11px; text-decoration:none; color:#fff;
+                    background:linear-gradient(135deg,#229ED9,#1a7fb0); border:1px solid #6fd0f5;
+                    border-radius:13px; padding:11px 14px;
+                }
+                .dash-community-text { flex:1; display:flex; flex-direction:column; min-width:0; }
+                .dash-community-text strong { font-size:13.5px; font-weight:900; }
+                .dash-community-text span { font-size:11px; opacity:.92; }
+                .dash-play { display:flex; gap:8px; }
+                .dash-play-btn {
+                    flex:1; background:linear-gradient(135deg,#6a0dad,#9b30ff); color:#fff;
+                    border:none; border-radius:13px; padding:15px 10px; font-weight:900;
+                    font-size:16px; cursor:pointer; box-shadow:0 4px 14px rgba(106,13,173,.45);
+                }
+                .dash-balance {
+                    flex:0 0 132px; display:flex; flex-direction:column; align-items:center;
+                    justify-content:center; gap:2px; background:linear-gradient(135deg,#0f4c00,#1a8200);
+                    border:1px solid #00ff88; border-radius:13px; padding:8px;
+                }
+                .dash-balance-label { font-size:10px; color:#aaffcc; font-weight:800; }
+                .dash-balance-amount { font-size:19px; font-weight:900; color:#00ff88; }
+                .chat-section .chat-messages { max-height:300px; }
+            </style>
+            <div class="home-dash">
+                <div class="dash-top">
+                    <button id="fireBtn" class="dash-cell dash-fire" title="Racha diaria — reclamá cada día">
+                        <span class="dash-cell-emoji">🔥</span>
+                        <span class="dash-cell-label">Fueguito</span>
+                        <span class="fire-streak" id="fireStreak">0</span>
+                    </button>
+                    <div class="dash-refunds">
+                        <div class="dash-refunds-title">🎁 REEMBOLSOS</div>
+                        <div class="dash-refunds-row">
+                            <button id="dailyRefundBtn" class="refund-btn daily" title="Reembolso Diario 20%">
+                                <span class="refund-label-full">📅 Reembolso<br>Diario</span>
+                                <span class="refund-label-short">📅</span>
+                                <span class="refund-amount" id="dailyRefundAmount">$0</span>
+                                <span class="refund-timer" id="dailyRefundTimer"></span>
+                            </button>
+                            <button id="weeklyRefundBtn" class="refund-btn weekly" title="Reembolso Semanal 10% (Lun-Mar)">
+                                <span class="refund-label-full">📆 Reembolso<br>Semanal</span>
+                                <span class="refund-label-short">📆</span>
+                                <span class="refund-amount" id="weeklyRefundAmount">$0</span>
+                                <span class="refund-timer" id="weeklyRefundTimer"></span>
+                            </button>
+                            <button id="monthlyRefundBtn" class="refund-btn monthly" title="Reembolso Mensual 5% (Desde día 7)">
+                                <span class="refund-label-full">🗓️ Reembolso<br>Mensual</span>
+                                <span class="refund-label-short">🗓️</span>
+                                <span class="refund-amount" id="monthlyRefundAmount">$0</span>
+                                <span class="refund-timer" id="monthlyRefundTimer"></span>
+                            </button>
+                        </div>
+                        <button id="unifiedRefundBtn" class="refund-btn unified-refund-btn" title="Reembolsos" onclick="VIP.refunds.showUnifiedRefundModal()" style="display:none;">🎁 Reembolsos</button>
+                    </div>
+                    <button class="dash-cell dash-info" id="infoBtn" title="Información del servicio">
+                        <span class="dash-cell-emoji">ℹ️</span>
+                        <span class="dash-cell-label">Info</span>
+                    </button>
+                </div>
+
+                <!-- Comunidad / Canal de Telegram -->
+                <div class="dash-community" id="communitySection" style="display:none;">
+                    <a id="communityLink" href="#" target="_blank" rel="noopener" class="dash-community-btn">
+                        <span style="font-size:24px;">📢</span>
+                        <span class="dash-community-text">
+                            <strong id="communityName">Nuestra comunidad</strong>
+                            <span>Sumate al canal de Telegram</span>
+                        </span>
+                        <span style="font-size:18px;opacity:.8;">›</span>
+                    </a>
+                </div>
+
+                <!-- Jugá Aquí + saldo del jugador -->
+                <div class="dash-play">
+                    <button id="plataformaBtn" class="dash-play-btn" title="Ir al Casino" onclick="VIP.ui.openPlatformModal()">🎰 JUGÁ AQUÍ</button>
+                    <div class="dash-balance">
+                        <span class="dash-balance-label">💰 TU SALDO</span>
+                        <span class="dash-balance-amount" id="userBalance">$0</span>
+                    </div>
+                </div>
+            </div>
+            <script>
+            (function () {
+                function loadCommunity() {
+                    if (!window.VIP || !VIP.state || !VIP.state.currentToken || !VIP.config) return;
+                    fetch(VIP.config.API_URL + '/api/config/community', {
+                        headers: { 'Authorization': 'Bearer ' + VIP.state.currentToken }
+                    }).then(function (r) { return r.ok ? r.json() : null; })
+                      .then(function (d) {
+                          if (!d || !d.url) return;
+                          var sec = document.getElementById('communitySection');
+                          var link = document.getElementById('communityLink');
+                          var nm = document.getElementById('communityName');
+                          if (link) link.href = d.url;
+                          if (nm && d.name) nm.textContent = d.name;
+                          if (sec) sec.style.display = '';
+                      }).catch(function () {});
+                }
+                document.addEventListener('DOMContentLoaded', function () {
+                    var t = 0;
+                    var iv = setInterval(function () {
+                        if (window.VIP && VIP.state && VIP.state.currentToken) { clearInterval(iv); loadCommunity(); }
+                        else if (++t > 25) { clearInterval(iv); }
+                    }, 1000);
+                });
+            })();
+            </script>
+            <!-- ===== /DASHBOARD ===== -->
             <!-- Cartel del bono por instalar la app: visible hasta que se reclama -->
             <div id="installBonusBanner" style="display:none; background: linear-gradient(135deg, #d4af37 0%, #ffd700 50%, #d4af37 100%); color: #000; padding: 11px 14px; border-radius: 12px; margin: 8px 8px 0; box-shadow: 0 4px 18px rgba(212,175,55,0.55); border: 2px solid #ffd700;">
                 <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
@@ -640,13 +727,7 @@
             </div>
         </div>
 
-      <div class="drawer-overlay" id="drawerOverlay" onclick="VIP.ui.toggleDrawer()"></div>
-      <div class="mobile-drawer" id="mobileDrawer">
-        <button class="drawer-close-btn" onclick="VIP.ui.toggleDrawer()">✕</button>
-        <div class="drawer-content" id="drawerContent">
-          <!-- Los botones se clonan aquí dinámicamente desde el header -->
-        </div>
-      </div>
+      <!-- menu deslizante eliminado: todo va en una sola pagina -->
     </div>
 
     <!-- Modal Plataforma -->

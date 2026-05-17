@@ -666,9 +666,9 @@
                  una notificación). Render dinámico desde js/promobonus.js. -->
             <div id="promoBonusCard" style="display:none;"></div>
 
-            <!-- Card para que el usuario deje su opinión. Render dinámico
-                 desde js/reviews.js; oculto por default. -->
-            <div id="reviewHomeCard" style="display:none;"></div>
+            <!-- Botón Retirar mi premio (reemplaza el viejo card de reseña;
+                 las reseñas viven ahora dentro del modal de Información). -->
+            <button class="withdraw-row-btn" id="withdrawChatBtn" title="Retirar premio">💸 RETIRAR MI PREMIO</button>
 
             <!-- Ruleta diaria: la celda vive ahora dentro del panel dorado
                  (.dash-top), al lado de reembolsos. -->
@@ -759,7 +759,6 @@
                 <textarea id="messageInput" placeholder="Escribe un mensaje..." rows="1"></textarea>
                 <button class="send-btn" id="sendBtn">📤</button>
             </div>
-            <button class="withdraw-row-btn" id="withdrawChatBtn" title="Retirar premio">💸 RETIRAR MI PREMIO</button>
         </div>
 
       <!-- menu deslizante eliminado: todo va en una sola pagina -->

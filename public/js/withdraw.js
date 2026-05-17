@@ -145,12 +145,9 @@ VIP.withdraw = (function () {
 
         _pendingWithdraw = { titular, cbu, alias, amount, saveData };
 
-        // Si el teléfono ya está verificado, se saltea el SMS y se retira directo.
-        if (VIP.state.currentUser && VIP.state.currentUser.phoneVerified === true) {
-            await _doWithdraw();
-        } else {
-            _showStep('otp-phone');
-        }
+        // El retiro ya no exige SMS: se procesa directo. La verificación
+        // por SMS se va a pedir en el registro de inicio.
+        await _doWithdraw();
     }
 
     async function sendWithdrawOtp() {

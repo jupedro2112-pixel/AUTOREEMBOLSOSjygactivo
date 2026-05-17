@@ -261,18 +261,19 @@
 }
 
 .withdraw-row-btn {
-    width: 100%;
-    margin-top: 7px;
+    display: block;
+    width: auto;
+    margin: 10px 8px;
     background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
     color: #fff;
     border: none;
     border-radius: 12px;
-    padding: 9px;
-    font-size: 13px;
+    padding: 13px;
+    font-size: 14px;
     font-weight: 800;
     letter-spacing: 0.5px;
     cursor: pointer;
-    box-shadow: 0 3px 10px rgba(255, 68, 68, 0.4);
+    box-shadow: 0 3px 12px rgba(255, 68, 68, 0.45);
 }
 
 .withdraw-row-btn:active {

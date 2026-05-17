@@ -6171,13 +6171,8 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     const user = await User.findOne({ id: req.user.userId });
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    // Verificación de teléfono OBLIGATORIA para retirar.
-    if (user.phoneVerified !== true) {
-      return res.status(403).json({
-        error: 'Para retirar primero tenés que verificar tu teléfono por SMS.',
-        code: 'PHONE_VERIFICATION_REQUIRED'
-      });
-    }
+    // El retiro ya no exige verificación por SMS: la verificación se va a
+    // pedir en el registro de inicio.
 
     // Chequear saldo real en JugaYGana ANTES de intentar el retiro.
     const balanceResult = await jugayganaMovements.getUserBalance(username);

@@ -214,6 +214,15 @@ function setupEventListeners() {
         const installBonusClaimBtn = document.getElementById('installBonusClaimBtn');
         if (installBonusClaimBtn) installBonusClaimBtn.addEventListener('click', VIP.installBonus.claim);
 
+        // Encuesta de plan de notificaciones
+        document.querySelectorAll('.notif-plan-card').forEach(card => {
+            card.addEventListener('click', () => VIP.notifSurvey.select(card.dataset.plan));
+        });
+        const notifSurveyCloseBtn = document.getElementById('notifSurveyCloseBtn');
+        if (notifSurveyCloseBtn) notifSurveyCloseBtn.addEventListener('click', VIP.notifSurvey.close);
+        const openNotifPlanBtn = document.getElementById('openNotifPlanBtn');
+        if (openNotifPlanBtn) openNotifPlanBtn.addEventListener('click', VIP.notifSurvey.openEditable);
+
         // Cambio de contraseña — entrada temporal (fallback cuando el SMS no llega)
         const cpTemporalBtn = document.getElementById('changePasswordTemporalBtn');
         if (cpTemporalBtn) cpTemporalBtn.addEventListener('click', VIP.auth.handleChangePasswordTemporalEntry);

@@ -460,7 +460,7 @@ app.use(xss());
 // Fields exposed to the authenticated user about their own profile.
 // Keep this list minimal – internal fields (jugaygana IDs, FCM tokens, etc.)
 // are excluded intentionally to reduce accidental data exposure.
-const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign';
+const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign notificationPlan';
 
 // Admin roles are internal VIPCARGAS accounts that have NO counterpart in
 // JUGAYGANA. They must never be routed through any JUGAYGANA sync, default-
@@ -1993,6 +1993,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         phone: userObj.phone || null,
         phoneVerified: userObj.phoneVerified || false,
         phoneVerificationPending: userObj.phoneVerificationPending === true,
+        notificationPlan: userObj.notificationPlan || null,
         whatsapp: userObj.whatsapp || null,
         accountNumber: userObj.accountNumber,
         role: userObj.role,
@@ -6331,6 +6332,31 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
     });
   } catch (error) {
     logger.error(`Error en install-bonus/claim: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// PLAN DE NOTIFICACIONES (encuesta inicial)
+// ============================================
+// Guarda el plan de notificaciones elegido por el usuario en la encuesta.
+app.post('/api/notification-plan', authMiddleware, async (req, res) => {
+  try {
+    const VALID_PLANS = ['suave', 'normal', 'activo', 'solo_reembolsos'];
+    const plan = req.body && req.body.plan;
+    if (!VALID_PLANS.includes(plan)) {
+      return res.status(400).json({ error: 'Plan de notificaciones inválido' });
+    }
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    user.notificationPlan = plan;
+    await user.save();
+
+    logger.info(`Usuario ${user.username} eligió plan de notificaciones: ${plan}`);
+    res.json({ success: true, notificationPlan: plan });
+  } catch (error) {
+    logger.error(`Error en notification-plan: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

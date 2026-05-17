@@ -103,6 +103,11 @@ VIP.ui = (function () {
         if (VIP.installBonus && typeof VIP.installBonus.init === 'function') {
             VIP.installBonus.init();
         }
+
+        // Encuesta de plan de notificaciones (obligatoria, solo en app instalada).
+        if (VIP.notifSurvey && typeof VIP.notifSurvey.maybeShow === 'function') {
+            VIP.notifSurvey.maybeShow();
+        }
     }
 
     // ---- Layout ----

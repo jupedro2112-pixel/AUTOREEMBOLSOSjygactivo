@@ -2823,12 +2823,25 @@ async function exportUsersCSV() {
     }
 }
 
+// Badge del plan de notificaciones elegido por el usuario en la encuesta.
+function notifPlanBadge(plan) {
+    const map = {
+        suave:           { label: 'Suave',       color: '#28a745' },
+        normal:          { label: 'Normal',      color: '#d4af37' },
+        activo:          { label: 'Activo',      color: '#dc3545' },
+        solo_reembolsos: { label: 'Solo reemb.', color: '#00a8ff' }
+    };
+    const p = map[plan];
+    if (!p) return '<span style="color:#888;">—</span>';
+    return `<span style="background:${p.color}22;border:1px solid ${p.color};color:${p.color};font-size:10px;font-weight:700;border-radius:6px;padding:2px 7px;white-space:nowrap;">${p.label}</span>`;
+}
+
 function renderUsers(users) {
     const tbody = document.getElementById('usersTableBody');
     const adminRole = currentAdmin?.role;
-    
+
     if (!users.length) {
-        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No hay usuarios</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No hay usuarios</td></tr>';
         return;
     }
     
@@ -2885,6 +2898,7 @@ function renderUsers(users) {
             <td>${formatMoney(user.balance)}</td>
             <td>${statusCell}</td>
             <td>${formatDate(user.lastLogin)}</td>
+            <td>${notifPlanBadge(user.notificationPlan)}</td>
             <td>
                 <button class="action-btn-small" title="Ver detalle" onclick='viewUser(${JSON.stringify(user.id)})'>
                     <span class="icon icon-eye"></span>

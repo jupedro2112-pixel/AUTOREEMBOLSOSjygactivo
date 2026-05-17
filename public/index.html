@@ -1164,9 +1164,46 @@
                 <button id="openVerifyPhoneBtn" class="btn btn-primary" style="width: 100%;">🔓 Verificar teléfono</button>
             </div>
             <div class="modal-actions" style="flex-direction: column;">
+                <button id="openNotifPlanBtn" class="btn btn-secondary" style="width: 100%;">🔔 Plan de notificaciones</button>
                 <button id="changePasswordSettingsBtn" class="btn btn-secondary" style="width: 100%;">🔐 Cambiar Contraseña</button>
                 <button id="closeSettingsModal" class="btn btn-secondary" style="width: 100%;">Cerrar</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Modal Encuesta de Plan de Notificaciones (se muestra al abrir la app instalada) -->
+    <div id="notifSurveyModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 420px; position: relative;">
+            <button id="notifSurveyCloseBtn" type="button" style="display:none; position:absolute; top:14px; right:14px; background:none; border:none; color:#888; font-size:24px; cursor:pointer; z-index:10;">✕</button>
+            <div style="text-align:center; font-size:40px; line-height:1; margin-bottom:4px;">🤔</div>
+            <div class="modal-header" style="margin-bottom:16px;">
+                <h2 style="font-size:1.3em;">¿Cuántas notificaciones querés recibir?</h2>
+                <p>Elegí el plan que más te conviene.<br>Lo podés cambiar después.</p>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:13px;">
+                <button type="button" class="notif-plan-card plan-suave" data-plan="suave">
+                    <div class="plan-name"><span class="plan-dot" style="background:#00ff88;"></span>SUAVE</div>
+                    <div class="plan-detail">2 bonos · 5 invitaciones a jugar · 2 regalos al mes</div>
+                    <div class="plan-desc">Para los que prefieren tranquilidad</div>
+                </button>
+                <button type="button" class="notif-plan-card plan-normal" data-plan="normal">
+                    <span class="notif-plan-badge">RECOMENDADO</span>
+                    <div class="plan-name"><span class="plan-dot" style="background:#ffd700;"></span>NORMAL</div>
+                    <div class="plan-detail">4 bonos · 5 invitaciones a jugar · 2 regalos al mes</div>
+                    <div class="plan-desc">Equilibrio entre estar al tanto y no saturar</div>
+                </button>
+                <button type="button" class="notif-plan-card plan-activo" data-plan="activo">
+                    <div class="plan-name"><span class="plan-dot" style="background:#ff6b6b;"></span>ACTIVO</div>
+                    <div class="plan-detail">6 bonos · 10 invitaciones a jugar · 3 regalos al mes</div>
+                    <div class="plan-desc">Para los que quieren todo lo que tenemos</div>
+                </button>
+                <button type="button" class="notif-plan-card plan-reembolsos" data-plan="solo_reembolsos">
+                    <div class="plan-name"><span class="plan-dot" style="background:#00a8ff;"></span>SOLO REEMBOLSOS</div>
+                    <div class="plan-detail">Solo te avisamos cuando tengas un reembolso para reclamar</div>
+                    <div class="plan-desc">Lo mínimo: que no se te escape tu plata</div>
+                </button>
+            </div>
+            <div id="notifSurveyError" class="error-message" style="margin-top:12px;"></div>
         </div>
     </div>
 
@@ -1326,6 +1363,7 @@
     <script src="/js/ui.js"></script>
     <script src="/js/withdraw.js"></script>
     <script src="/js/installbonus.js"></script>
+    <script src="/js/notifsurvey.js"></script>
     <script src="/js/app.js"></script>
     
     <!-- ============================================

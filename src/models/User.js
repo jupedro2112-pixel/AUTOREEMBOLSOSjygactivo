@@ -309,6 +309,16 @@ const userSchema = new mongoose.Schema({
   installBonusClaimedAt: {
     type: Date,
     default: null
+  },
+
+  // Plan de notificaciones elegido en la encuesta inicial (app instalada).
+  // Define el volumen de notificaciones push que el usuario quiere recibir.
+  // null = todavía no respondió la encuesta.
+  notificationPlan: {
+    type: String,
+    enum: ['suave', 'normal', 'activo', 'solo_reembolsos', null],
+    default: null,
+    index: true
   }
 }, {
   timestamps: true,

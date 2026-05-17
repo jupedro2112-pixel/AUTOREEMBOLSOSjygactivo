@@ -257,14 +257,13 @@ function setupEventListeners() {
             homePanelToggle.addEventListener('click', () => {
                 const willCollapse = !homePanel.classList.contains('collapsed');
                 applyHomePanel(willCollapse, true);
-                try { localStorage.setItem('vip_homePanelCollapsed', willCollapse ? '1' : '0'); } catch (e) {}
                 setTimeout(() => {
                     if (VIP.chat && VIP.chat.scrollToBottom) VIP.chat.scrollToBottom();
                 }, 340);
             });
-            let savedCollapsed = '0';
-            try { savedCollapsed = localStorage.getItem('vip_homePanelCollapsed') || '0'; } catch (e) {}
-            applyHomePanel(savedCollapsed === '1', false);
+            // Siempre arranca abierto en cada ingreso: si el usuario lo quiere
+            // cerrar, lo cierra él. No se recuerda el estado entre sesiones.
+            applyHomePanel(false, false);
         }
 
         const headerInstallBtn = document.getElementById('headerInstallBtn');

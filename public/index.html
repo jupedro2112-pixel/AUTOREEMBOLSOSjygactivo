@@ -575,8 +575,8 @@
                 .dash-play-btn {
                     flex:1; background:linear-gradient(135deg,#6a0dad,#9b30ff); color:#fff;
                     border:none; border-radius:11px; padding:9px 10px; font-weight:900;
-                    font-size:14px; cursor:pointer; box-shadow:0 3px 10px rgba(106,13,173,.4);
-                    white-space:nowrap;
+                    font-size:12px; line-height:1.15; cursor:pointer;
+                    box-shadow:0 3px 10px rgba(106,13,173,.4);
                 }
                 .dash-balance {
                     flex:0 0 auto; display:flex; flex-direction:row; align-items:center;
@@ -641,7 +641,7 @@
 
                 <!-- Jugá Aquí + saldo del jugador -->
                 <div class="dash-play">
-                    <button id="plataformaBtn" class="dash-play-btn" title="Ir al Casino" onclick="VIP.ui.openPlatformModal()">🎰 JUGÁ AQUÍ</button>
+                    <button id="plataformaBtn" class="dash-play-btn" title="Ir al Casino" onclick="VIP.ui.openPlatformModal()">🎰 PÁGINA CASINO AQUÍ</button>
                     <div class="dash-balance">
                         <span class="dash-balance-label">💰 TU SALDO</span>
                         <span class="dash-balance-amount" id="userBalance">$0</span>
@@ -710,10 +710,6 @@
                  una notificación). Render dinámico desde js/promobonus.js. -->
             <div id="promoBonusCard" style="display:none;"></div>
 
-            <!-- Botón Retirar mi premio (reemplaza el viejo card de reseña;
-                 las reseñas viven ahora dentro del modal de Información). -->
-            <button class="withdraw-row-btn" id="withdrawChatBtn" title="Retirar premio">💸 RETIRAR MI PREMIO</button>
-
             <!-- Ruleta diaria: la celda vive ahora dentro del panel dorado
                  (.dash-top), al lado de reembolsos. -->
             <!-- Transparencia: últimos ganadores de hoy en la ruleta diaria.
@@ -741,6 +737,10 @@
                 <span class="hpt-chevron">▲</span>
                 <span class="hpt-label">Ocultar menú</span>
             </button>
+
+            <!-- Retirar mi premio: queda FUERA de #homePanel, así sigue
+                 visible aunque se oculte el menú. -->
+            <button class="withdraw-row-btn" id="withdrawChatBtn" title="Retirar premio">💸 RETIRAR MI PREMIO</button>
 
             <style>
                 @keyframes winners-pulse {

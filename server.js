@@ -8643,6 +8643,486 @@ app.post('/api/admin/roulette/:id/retry-credit', authMiddleware, adminMiddleware
 });
 
 
+// ============================================================
+// MOTOR DE REGLAS DE NOTIFICACION AUTOMATICAS
+// ============================================================
+// Portado de pruebafabio. Un cron evalua cada 5 min las NotificationRule
+// activas: si a la regla le toca disparar (trigger cron) resuelve su
+// audiencia y manda push, o crea una NotificationRuleSuggestion para que
+// el admin apruebe. Las audiencias que dependen de PlayerStats /
+// DailyPlayerStats (subsistema NO portado a esta base) devuelven [] —
+// esas reglas se siembran desactivadas.
+const notificationRulesService = require('./src/services/notificationRulesService');
+const NotificationRule = require('./src/models/NotificationRule');
+const NotificationRuleSuggestion = require('./src/models/NotificationRuleSuggestion');
+const NotificationHistory = require('./src/models/NotificationHistory');
+const _notifRulesModels = {
+  User,
+  RefundClaim,
+  NotificationRule,
+  NotificationRuleSuggestion,
+  NotificationHistory
+};
+const _notifRulesSendFn = sendNotificationToAllUsers;
+
+// Seed al boot (idempotente — solo crea las reglas que no existen).
+setTimeout(async () => {
+  try {
+    await notificationRulesService.seedDefaultRulesIfMissing(NotificationRule);
+    logger.info('[notif-rules] seed inicial completado');
+  } catch (err) {
+    logger.error('[notif-rules] seed error: ' + err.message);
+  }
+}, 60 * 1000);
+
+// Evaluar todas las reglas cada 5 min.
+async function _runNotifRulesEvaluator() {
+  try {
+    const result = await notificationRulesService.evaluateAllRules({
+      models: _notifRulesModels,
+      sendPushFn: _notifRulesSendFn,
+      logger
+    });
+    if (result.firedCount > 0 || result.suggestedCount > 0) {
+      logger.info('[notif-rules] eval done: fired=' + result.firedCount + ' suggested=' + result.suggestedCount);
+    }
+  } catch (err) {
+    logger.error('[notif-rules] evaluator error: ' + err.message);
+  }
+}
+setTimeout(function () { _runNotifRulesEvaluator(); }, 3 * 60 * 1000);
+setInterval(function () { _runNotifRulesEvaluator(); }, 5 * 60 * 1000);
+
+
+// ============================================================
+// ENDPOINTS ADMIN — Recuperación de inactivos
+// ----------------------------------------------------------------
+// Sección dedicada en el panel para estudiar la población que tiene
+// la app instalada y armar estrategias escalonadas de re-engagement
+// (48h, 72h, 7d, etc) sin tocar la sección de Automatizaciones.
+// El motor de fondo es el mismo (NotificationRule + Suggestions),
+// pero acá lo presentamos con panorama de actividad, audiencia en vivo
+// y edición inline antes de aprobar.
+// ============================================================
+
+// Panorama: distribución de usuarios con app instalada por última vez
+// que entraron. Se usa para entender la audiencia ANTES de lanzar.
+app.get('/api/admin/recovery/panorama', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    // Filtro base: users reales (no admin), activos, no bloqueados, con app
+    // instalada (al menos un fcmToken con context='standalone' O el flag
+    // legacy fcmTokenContext='standalone').
+    const baseFilter = {
+      role: 'user',
+      isActive: { $ne: false },
+      isBlocked: { $ne: true },
+      $or: [
+        { fcmTokenContext: 'standalone' },
+        { 'fcmTokens.context': 'standalone' }
+      ]
+    };
+
+    const now = Date.now();
+    const H = 3600 * 1000;
+    const buckets = [
+      { key: 'active24h',     label: 'Activos hoy (< 24h)',         minH: 0,    maxH: 24,    color: '#25d366' },
+      { key: 'inactive24_48', label: '24-48h sin entrar',           minH: 24,   maxH: 48,    color: '#ffd700' },
+      { key: 'inactive48_72', label: '48-72h sin entrar',           minH: 48,   maxH: 72,    color: '#ff9f3f' },
+      { key: 'inactive72_168', label: '72h-7 días sin entrar',      minH: 72,   maxH: 168,   color: '#ff5050' },
+      { key: 'inactive7d_30d', label: '7-30 días sin entrar',       minH: 168,  maxH: 720,   color: '#a855f7' },
+      { key: 'inactive30dPlus', label: '+30 días (perdidos)',       minH: 720,  maxH: null,  color: '#555' }
+    ];
+
+    // Total con app instalada (denominador).
+    const totalInstalled = await User.countDocuments(baseFilter);
+
+    // Para cada bucket, contar.
+    const out = [];
+    for (const b of buckets) {
+      const range = {};
+      if (b.maxH != null) range.$gte = new Date(now - b.maxH * H);
+      range.$lte = new Date(now - b.minH * H);
+      const filter = Object.assign({}, baseFilter, { lastLogin: range });
+      const count = await User.countDocuments(filter);
+      out.push({ key: b.key, label: b.label, color: b.color, minH: b.minH, maxH: b.maxH, count });
+    }
+
+    // Sin lastLogin (instalaron y nunca abrieron). Edge case.
+    const neverLoggedIn = await User.countDocuments(Object.assign({}, baseFilter, { $or: [
+      ...baseFilter.$or
+    ], lastLogin: { $in: [null] } }));
+
+    // Top 10 más recientes que dejaron de entrar (entre 24-168h sin login).
+    const recentlyDropped = await User.find(
+      Object.assign({}, baseFilter, { lastLogin: { $gte: new Date(now - 168 * H), $lte: new Date(now - 24 * H) } }),
+      { username: 1, lastLogin: 1, _id: 0 }
+    ).sort({ lastLogin: -1 }).limit(10).lean();
+
+    res.json({
+      success: true,
+      generatedAt: new Date().toISOString(),
+      totalInstalled,
+      buckets: out,
+      neverLoggedIn,
+      recentlyDropped
+    });
+  } catch (err) {
+    logger.error(`recovery/panorama: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Listar estrategias de recuperación (NotificationRule con category='recovery')
+// + audiencia en vivo que matchearía AHORA si dispararan.
+app.get('/api/admin/recovery/strategies', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const rules = await NotificationRule.find({ category: 'recovery' }).sort({ code: 1 }).lean();
+
+    // Para cada regla, resolver audiencia ahora (sin enviar nada).
+    const enriched = [];
+    for (const rule of rules) {
+      let audienceCount = 0;
+      let audienceSample = [];
+      try {
+        const aud = await notificationRulesService._resolveAudience(rule, _notifRulesModels);
+        audienceCount = aud.length;
+        audienceSample = aud.slice(0, 10);
+      } catch (e) {
+        // Si la regla tiene audienceType no resoluble, devolvemos 0 sin romper.
+        audienceCount = 0;
+        audienceSample = [];
+      }
+      enriched.push({
+        id: rule.id,
+        code: rule.code,
+        name: rule.name,
+        description: rule.description || null,
+        enabled: rule.enabled,
+        triggerType: rule.triggerType,
+        cronSchedule: rule.cronSchedule || null,
+        audienceType: rule.audienceType,
+        audienceConfig: rule.audienceConfig || {},
+        title: rule.title,
+        body: rule.body,
+        requiresAdminApproval: !!rule.requiresAdminApproval,
+        cooldownMinutes: rule.cooldownMinutes,
+        lastFiredAt: rule.lastFiredAt || null,
+        totalFiresLifetime: rule.totalFiresLifetime || 0,
+        audienceCount,
+        audienceSample
+      });
+    }
+
+    res.json({ success: true, strategies: enriched });
+  } catch (err) {
+    logger.error(`recovery/strategies: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Crear una nueva estrategia de recuperación. Front pasa minHoursAgo,
+// maxHoursAgo, hour ART, title, body. Backend completa el resto con
+// defaults seguros (requiresAdminApproval=true, audienceType=installed-but-inactive).
+app.post('/api/admin/recovery/strategies', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin principal puede crear estrategias.' });
+    }
+    const { name, minHoursAgo, maxHoursAgo, hour, title, body, cooldownMinutes } = req.body || {};
+
+    const minH = Number(minHoursAgo);
+    const maxH = Number(maxHoursAgo);
+    const cronH = Number(hour);
+    if (!Number.isFinite(minH) || !Number.isFinite(maxH) || minH < 0 || maxH <= minH) {
+      return res.status(400).json({ error: 'minHoursAgo y maxHoursAgo inválidos (maxHoursAgo > minHoursAgo > 0)' });
+    }
+    if (!Number.isFinite(cronH) || cronH < 0 || cronH > 23) {
+      return res.status(400).json({ error: 'hour inválido (0-23)' });
+    }
+    if (typeof title !== 'string' || !title.trim() || title.length > 200) {
+      return res.status(400).json({ error: 'title requerido (max 200)' });
+    }
+    if (typeof body !== 'string' || !body.trim() || body.length > 1000) {
+      return res.status(400).json({ error: 'body requerido (max 1000)' });
+    }
+
+    // Code único: D-INST-<minH>H. Si ya existe, anteponer timestamp.
+    let code = 'D-INST-' + minH + 'H';
+    const existing = await NotificationRule.findOne({ code }).lean();
+    if (existing) code = code + '-' + Date.now();
+
+    const rule = await NotificationRule.create({
+      id: require('uuid').v4(),
+      code,
+      name: (name && String(name).trim()) || ('Inactivos ' + minH + 'h'),
+      description: 'Estrategia de re-engagement para usuarios con app instalada y sin login en ' + minH + '-' + maxH + 'h.',
+      category: 'recovery',
+      enabled: true,
+      triggerType: 'cron',
+      cronSchedule: { hour: cronH, minute: 0 },
+      audienceType: 'installed-but-inactive',
+      audienceConfig: { minHoursAgo: minH, maxHoursAgo: maxH },
+      title: title.trim(),
+      body: body.trim(),
+      bonus: { type: 'none' },
+      requiresAdminApproval: true,
+      cooldownMinutes: Number.isFinite(Number(cooldownMinutes)) ? Math.max(60, Number(cooldownMinutes)) : Math.max(minH * 60, 24 * 60),
+      createdBy: req.user.username || null
+    });
+
+    res.json({ success: true, rule: rule.toObject() });
+  } catch (err) {
+    logger.error(`recovery/strategies POST: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// ENDPOINTS ADMIN para Automatizaciones
+// ============================================================
+
+// Listar reglas con filtros.
+app.get('/api/admin/notification-rules', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { category, enabled } = req.query;
+    const filter = {};
+    if (category) filter.category = category;
+    if (enabled === 'true') filter.enabled = true;
+    if (enabled === 'false') filter.enabled = false;
+    const rules = await NotificationRule.find(filter)
+      .sort({ category: 1, code: 1 })
+      .lean();
+    res.json({ success: true, rules });
+  } catch (err) {
+    logger.error(`/api/admin/notification-rules: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Toggle enabled / editar copy.
+app.patch('/api/admin/notification-rules/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const allowed = ['enabled', 'title', 'body', 'cooldownMinutes', 'requiresAdminApproval', 'cronSchedule', 'bonus'];
+    const update = {};
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) update[k] = req.body[k];
+    }
+    update.updatedBy = req.user.username || null;
+    const rule = await NotificationRule.findOneAndUpdate(
+      { id },
+      { $set: update },
+      { new: true }
+    );
+    if (!rule) return res.status(404).json({ error: 'Regla no encontrada' });
+    res.json({ success: true, rule });
+  } catch (err) {
+    logger.error(`PATCH notification-rules: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Test manual: dispara una regla AHORA (resuelve audiencia + manda push o
+// crea suggestion según corresponda).
+app.post('/api/admin/notification-rules/:id/test-fire', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin principal puede testear reglas.' });
+    }
+    const { id } = req.params;
+    const rule = await NotificationRule.findOne({ id }).lean();
+    if (!rule) return res.status(404).json({ error: 'Regla no encontrada' });
+    const audience = await notificationRulesService._resolveAudience(rule, _notifRulesModels);
+    res.json({
+      success: true,
+      ruleCode: rule.code,
+      audienceCount: audience.length,
+      audienceSample: audience.slice(0, 20),
+      note: 'Dry run: solo se resolvió la audiencia. No se envió nada.'
+    });
+  } catch (err) {
+    logger.error(`test-fire: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Listar suggestions pendientes de aprobación (para el badge + tab).
+app.get('/api/admin/notification-rules/suggestions', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { status = 'pending' } = req.query;
+    const filter = status === 'all' ? {} : { status };
+    const suggestions = await NotificationRuleSuggestion.find(filter)
+      .sort({ suggestedAt: -1 })
+      .limit(200)
+      .lean();
+    const pendingCount = await NotificationRuleSuggestion.countDocuments({ status: 'pending' });
+    res.json({ success: true, suggestions, pendingCount });
+  } catch (err) {
+    logger.error(`GET suggestions: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Editar título/cuerpo de una suggestion PENDING antes de aprobarla.
+// Solo se puede editar si status='pending'. La audiencia (audienceUsernames)
+// no se toca: ya quedó fijada al momento de crear la suggestion.
+app.put('/api/admin/notification-rules/suggestions/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin principal puede editar sugerencias.' });
+    }
+    const { id } = req.params;
+    const { title, body } = req.body || {};
+
+    if (typeof title !== 'string' || typeof body !== 'string') {
+      return res.status(400).json({ error: 'title y body son requeridos (string)' });
+    }
+    const trimmedTitle = title.trim();
+    const trimmedBody = body.trim();
+    if (!trimmedTitle || !trimmedBody) {
+      return res.status(400).json({ error: 'title y body no pueden estar vacíos' });
+    }
+    if (trimmedTitle.length > 200 || trimmedBody.length > 1000) {
+      return res.status(400).json({ error: 'title (max 200) o body (max 1000) muy largos' });
+    }
+
+    const sug = await NotificationRuleSuggestion.findOne({ id }).lean();
+    if (!sug) return res.status(404).json({ error: 'Sugerencia no encontrada' });
+    if (sug.status !== 'pending') {
+      return res.status(400).json({ error: `Sugerencia en estado ${sug.status}, no se puede editar` });
+    }
+
+    await NotificationRuleSuggestion.updateOne(
+      { id },
+      { $set: { title: trimmedTitle, body: trimmedBody } }
+    );
+
+    res.json({ success: true, title: trimmedTitle, body: trimmedBody });
+  } catch (err) {
+    logger.error(`PUT suggestion: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Aprobar una suggestion: dispara el push real + crea giveaway si tiene bonus.
+app.post('/api/admin/notification-rules/suggestions/:id/approve', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin principal puede aprobar sugerencias.' });
+    }
+    const { id } = req.params;
+    const sug = await NotificationRuleSuggestion.findOne({ id }).lean();
+    if (!sug) return res.status(404).json({ error: 'Sugerencia no encontrada' });
+    if (sug.status !== 'pending') return res.status(400).json({ error: `Sugerencia en estado ${sug.status}, no se puede aprobar` });
+
+    // 1) Si tiene giveaway, crearlo primero (cancela cualquier giveaway activo).
+    // CRÍTICO: el regalo se crea con audienceWhitelist = sug.audienceUsernames
+    // para que SOLO esos usuarios puedan reclamarlo. Sin whitelist, el regalo
+    // sería visible a TODOS los users que pollen /api/money-giveaway/active y
+    // los primeros en llegar cobrarían (incluso si NO eran del segmento target).
+    // Regalos automaticos no portados en esta fase: las reglas sembradas
+    // no tienen bonus de plata -> giveawayId queda siempre en null.
+    let giveawayId = null;
+
+    // 2) Mandar push.
+    const filter = { username: { $in: sug.audienceUsernames } };
+    const data = {
+      source: 'rule-suggestion',
+      ruleCode: sug.ruleCode,
+      tag: 'auto-rule-' + sug.ruleCode
+    };
+    if (giveawayId) {
+      data.giveawayAmount = String(sug.bonus.amount);
+      data.giveawayDurationMinutes = String(sug.bonus.durationMinutes);
+    }
+    let sendResult = { successCount: 0, failureCount: 0, error: null };
+    try {
+      sendResult = await _notifRulesSendFn(User, sug.title, sug.body, data, filter);
+    } catch (sendErr) {
+      sendResult.error = sendErr.message;
+    }
+
+
+    // 3) NotificationHistory.
+    const historyId = uuidv4();
+    try {
+      await NotificationHistory.create({
+        id: historyId,
+        sentAt: new Date(),
+        audienceType: 'list',
+        audienceCount: sug.audienceCount,
+        title: sug.title,
+        body: sug.body,
+        type: giveawayId ? 'money_giveaway' : 'plain',
+        successCount: sendResult.successCount || 0,
+        failureCount: sendResult.failureCount || 0,
+        sentBy: req.user.username || null,
+        meta: {
+          ruleId: sug.ruleId,
+          ruleCode: sug.ruleCode,
+          source: 'rule-suggestion',
+          suggestionId: sug.id
+        }
+      });
+    } catch (_) {}
+
+    // 4) Marcar suggestion como aprobada.
+    await NotificationRuleSuggestion.updateOne(
+      { id: sug.id },
+      {
+        $set: {
+          status: 'approved',
+          resolvedAt: new Date(),
+          resolvedBy: req.user.username || null,
+          notificationHistoryId: historyId,
+          giveawayId,
+          pushDelivered: sendResult.successCount || 0,
+          pushFailed: sendResult.failureCount || 0
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      pushDelivered: sendResult.successCount || 0,
+      pushFailed: sendResult.failureCount || 0,
+      giveawayId,
+      sendError: sendResult.error || null
+    });
+  } catch (err) {
+    logger.error(`approve suggestion: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Descartar una suggestion.
+app.post('/api/admin/notification-rules/suggestions/:id/reject', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin principal puede rechazar sugerencias.' });
+    }
+    const { id } = req.params;
+    const reason = req.body?.reason ? String(req.body.reason).slice(0, 200) : null;
+    const r = await NotificationRuleSuggestion.findOneAndUpdate(
+      { id, status: 'pending' },
+      {
+        $set: {
+          status: 'rejected',
+          resolvedAt: new Date(),
+          resolvedBy: req.user.username || null,
+          rejectionReason: reason
+        }
+      },
+      { new: true }
+    );
+    if (!r) return res.status(404).json({ error: 'Sugerencia no encontrada o ya resuelta' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`reject suggestion: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // SPA FALLBACK: sirve index.html para rutas
 // frontend desconocidas (ej: /register?ref=CODE)

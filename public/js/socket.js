@@ -17,7 +17,10 @@ VIP.socket = (function () {
         console.log('🔄 Inicializando socket...');
 
         VIP.state.socket = io({
-            transports: ['websocket'],
+            // WebSocket primero (baja latencia); si la red lo bloquea —proxies
+            // corporativos, algunas redes móviles— cae a polling para que el
+            // chat siga siendo en tiempo real en vez de depender del poll de 30s.
+            transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionAttempts: 10,
             reconnectionDelay: 1000,

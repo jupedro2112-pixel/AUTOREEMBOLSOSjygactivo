@@ -375,8 +375,9 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
     credentials: true
   },
-  // Force WebSocket transport for lower latency and better behavior behind ALB/NLB.
-  // Clients in public/js/socket.js already request ['websocket'] so this is consistent.
+  // WebSocket primero (baja latencia detrás de ALB/NLB); polling como respaldo
+  // para redes que bloquean WebSocket. El cliente (public/js/socket.js) pide la
+  // misma lista, así que un cliente con WS bloqueado igual entra por polling.
   transports: ['websocket', 'polling'],
   pingInterval: 25000,
   pingTimeout: 60000,
@@ -5563,32 +5564,9 @@ io.on('connection', (socket) => {
         throw createError;
       }
       
-      // Asegurar que el ChatStatus existe
-      const targetUserId = isAdminRole ? receiverId : socket.userId;
-      if (targetUserId) {
-        const user = await User.findOne({ id: targetUserId });
-        
-        const updateData = {
-          userId: targetUserId,
-          username: user ? user.username : socket.username,
-          lastMessageAt: new Date()
-        };
-        
-        await ChatStatus.findOneAndUpdate(
-          { userId: targetUserId },
-          updateData,
-          { upsert: true }
-        );
-        
-        // Solo los mensajes del usuario reabren el chat si estaba cerrado (no si está en pagos)
-        if (!isAdminRole) {
-          await ChatStatus.findOneAndUpdate(
-            { userId: targetUserId, status: 'closed' },
-            { status: 'open', closedAt: null, closedBy: null }
-          );
-        }
-      }
-      
+      // Entregar el mensaje en tiempo real ANTES del housekeeping del
+      // ChatStatus: el destinatario no tiene por qué esperar esas escrituras
+      // de DB. Esto recorta la latencia percibida del chat.
       if (!isAdminRole) {
         // Usuario enviando mensaje - notificar a todos los admins
         logger.debug(`[SOCKET] User ${socket.username} sent message`);
@@ -5664,7 +5642,34 @@ io.on('connection', (socket) => {
           _maybeSendPushFallback(receiverId, message);
         }
       }
-      
+
+      // Housekeeping del ChatStatus — corre DESPUÉS de entregar el mensaje y
+      // no puede tumbar el envío: si falla, el mensaje ya fue creado y emitido.
+      const targetUserId = isAdminRole ? receiverId : socket.userId;
+      if (targetUserId) {
+        try {
+          const chatUser = await User.findOne({ id: targetUserId });
+          await ChatStatus.findOneAndUpdate(
+            { userId: targetUserId },
+            {
+              userId: targetUserId,
+              username: chatUser ? chatUser.username : socket.username,
+              lastMessageAt: new Date()
+            },
+            { upsert: true }
+          );
+          // Solo los mensajes del usuario reabren el chat si estaba cerrado.
+          if (!isAdminRole) {
+            await ChatStatus.findOneAndUpdate(
+              { userId: targetUserId, status: 'closed' },
+              { status: 'open', closedAt: null, closedBy: null }
+            );
+          }
+        } catch (csErr) {
+          logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);
+        }
+      }
+
       broadcastStats();
     } catch (error) {
       logger.error(`Error sending message via socket: ${error.message}`);

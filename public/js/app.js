@@ -110,6 +110,54 @@ function setupEventListeners() {
             }
         });
 
+        // Panel del home colapsable: "subir" el menú (ruleta, reembolsos,
+        // saldo, retirar) para agrandar el chat, y bajarlo para ver todo.
+        const homePanel = document.getElementById('homePanel');
+        const homePanelToggle = document.getElementById('homePanelToggle');
+        if (homePanel && homePanelToggle) {
+            const hptLabel = homePanelToggle.querySelector('.hpt-label');
+            const hptChevron = homePanelToggle.querySelector('.hpt-chevron');
+            const applyHomePanel = (collapsed, animate) => {
+                if (collapsed) {
+                    if (animate) {
+                        homePanel.style.maxHeight = homePanel.scrollHeight + 'px';
+                        void homePanel.offsetHeight; // fuerza reflow para animar
+                        homePanel.style.maxHeight = '0px';
+                    } else {
+                        homePanel.style.maxHeight = '0px';
+                    }
+                    homePanel.classList.add('collapsed');
+                    homePanelToggle.setAttribute('aria-expanded', 'false');
+                    if (hptLabel) hptLabel.textContent = 'Ver menú';
+                    if (hptChevron) hptChevron.textContent = '▼';
+                } else {
+                    homePanel.classList.remove('collapsed');
+                    if (animate) {
+                        homePanel.style.maxHeight = homePanel.scrollHeight + 'px';
+                        setTimeout(() => {
+                            if (!homePanel.classList.contains('collapsed')) homePanel.style.maxHeight = 'none';
+                        }, 320);
+                    } else {
+                        homePanel.style.maxHeight = 'none';
+                    }
+                    homePanelToggle.setAttribute('aria-expanded', 'true');
+                    if (hptLabel) hptLabel.textContent = 'Ocultar menú';
+                    if (hptChevron) hptChevron.textContent = '▲';
+                }
+            };
+            homePanelToggle.addEventListener('click', () => {
+                const willCollapse = !homePanel.classList.contains('collapsed');
+                applyHomePanel(willCollapse, true);
+                try { localStorage.setItem('vip_homePanelCollapsed', willCollapse ? '1' : '0'); } catch (e) {}
+                setTimeout(() => {
+                    if (VIP.chat && VIP.chat.scrollToBottom) VIP.chat.scrollToBottom();
+                }, 340);
+            });
+            let savedCollapsed = '0';
+            try { savedCollapsed = localStorage.getItem('vip_homePanelCollapsed') || '0'; } catch (e) {}
+            applyHomePanel(savedCollapsed === '1', false);
+        }
+
         const headerInstallBtn = document.getElementById('headerInstallBtn');
         if (headerInstallBtn) headerInstallBtn.addEventListener('click', VIP.ui.installApp);
 

@@ -570,7 +570,24 @@
                 .dash-balance-label { font-size:10px; color:#aaffcc; font-weight:800; white-space:nowrap; }
                 .dash-balance-amount { font-size:15px; font-weight:900; color:#00ff88; white-space:nowrap; }
                 .chat-section .chat-container { min-height:0; }
+                /* Panel del home colapsable: "subir" el menú agranda el chat. */
+                #homePanel { overflow:hidden; transition:max-height .3s ease; }
+                #homePanelToggle {
+                    flex:0 0 auto; display:flex; align-items:center; justify-content:center;
+                    gap:8px; margin:3px 8px 0; padding:5px 12px; cursor:pointer;
+                    background:linear-gradient(135deg,#2d0052,#1a0033); color:#d4af37;
+                    border:1px solid #d4af37; border-radius:9px;
+                    font-size:11px; font-weight:800; letter-spacing:.4px;
+                    -webkit-tap-highlight-color:rgba(212,175,55,.3); touch-action:manipulation;
+                }
+                #homePanelToggle:active { transform:scale(.99); }
+                #homePanelToggle .hpt-grip {
+                    width:30px; height:3px; border-radius:3px; background:rgba(212,175,55,.5);
+                }
+                #homePanelToggle .hpt-chevron { font-size:9px; }
             </style>
+            <!-- Panel del home (colapsable con #homePanelToggle). -->
+            <div id="homePanel">
             <div class="home-dash">
                 <div class="dash-top">
                     <!-- Ruleta diaria: render dinámico desde js/roulette.js -->
@@ -700,6 +717,15 @@
                     🔒 Los nombres están parcialmente ocultos por privacidad. Los premios son reales y se acreditan automáticamente.
                 </div>
             </div>
+            </div><!-- /#homePanel -->
+
+            <!-- Barra para subir/bajar el panel del home y agrandar el chat. -->
+            <button id="homePanelToggle" type="button" aria-expanded="true" title="Mostrar u ocultar el menú">
+                <span class="hpt-grip"></span>
+                <span class="hpt-chevron">▲</span>
+                <span class="hpt-label">Ocultar menú</span>
+            </button>
+
             <style>
                 @keyframes winners-pulse {
                     0%, 100% { opacity: 1; transform: scale(1); }

@@ -407,27 +407,7 @@
             </div>
         </header>
 
-        <!-- Promo Banner -->
-        <div class="promo-banner">
-            <div class="promo-track">
-                <span class="promo-item">🎁 ¡RETIROS SIN LIMITE! 🎁</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">🔥 ATENCIÓN 24 HORAS 🔥</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">🔥 REEMBOLSOS DIARIOS 🔥</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">💎 VIP 💎</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">🎁 ¡RETIROS SIN LIMITE! 🎁</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">🔥 ATENCIÓN 24 HORAS 🔥</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">🔥 REEMBOLSOS DIARIOS 🔥</span>
-                <span class="promo-separator">★</span>
-                <span class="promo-item">💎 VIP 💎</span>
-                <span class="promo-separator">★</span>
-            </div>
-        </div>
+        <!-- Banner deslizante "Atención 24hs" eliminado para agrandar el chat -->
 
         <!-- Banner de Notificaciones (auto-actualiza según estado de permiso) -->
         <div id="notifBanner" style="display:none; background: linear-gradient(135deg, #6a0dad 0%, #9d4edd 100%); color: #fff; padding: 12px 16px; border-radius: 12px; margin: 8px 12px; box-shadow: 0 4px 15px rgba(157,78,221,0.5); border: 1px solid rgba(255,255,255,0.2);">
@@ -476,12 +456,15 @@
             <!-- ===== DASHBOARD PRINCIPAL ===== -->
             <style>
                 .header.header-toolbar {
+                    position:static; flex:0 0 auto; min-height:0;
                     background:linear-gradient(135deg,#1a0033 0%,#0a0015 100%);
                     animation:none; box-shadow:0 2px 10px rgba(0,0,0,0.5);
                     border-bottom:1px solid #d4af37;
                     display:flex; align-items:center; gap:4px;
                     padding:8px; padding-top:max(8px, env(safe-area-inset-top, 8px));
                 }
+                /* Layout en columna: el chat ocupa todo el alto disponible. */
+                .chat-section { margin:0 !important; }
                 .header-toolbar .tb-btn {
                     flex:0 0 auto; background:linear-gradient(135deg,#2d0052,#1a0033);
                     border:1px solid #d4af37; border-radius:9px;

@@ -108,41 +108,14 @@ VIP.ui = (function () {
             VIP.installBonus.init();
         }
 
-        // Encuesta de plan de notificaciones (obligatoria, solo en app instalada).
-        if (VIP.notifSurvey && typeof VIP.notifSurvey.maybeShow === 'function') {
-            VIP.notifSurvey.maybeShow();
-        }
     }
 
     // ---- Layout ----
 
     function adjustLayout() {
-        const header         = document.querySelector('.header');
-        const promoBanner    = document.querySelector('.promo-banner');
-        const chatSection    = document.querySelector('.chat-section');
-        const inputContainer = document.querySelector('.chat-input-container');
-
-        if (!header || !chatSection) return;
-
-        const headerHeight = header.getBoundingClientRect().height;
-
-        if (promoBanner) {
-            const bannerComputed = window.getComputedStyle(promoBanner);
-            if (bannerComputed.display !== 'none') {
-                promoBanner.style.top = headerHeight + 'px';
-                const bannerHeight = promoBanner.getBoundingClientRect().height;
-                chatSection.style.marginTop = (headerHeight + bannerHeight) + 'px';
-            } else {
-                chatSection.style.marginTop = headerHeight + 'px';
-            }
-        } else {
-            chatSection.style.marginTop = headerHeight + 'px';
-        }
-
-        if (inputContainer) {
-            const inputHeight = inputContainer.getBoundingClientRect().height;
-            chatSection.style.marginBottom = inputHeight + 'px';
-        }
+        // El layout ahora es una columna flex (.chat-screen): el header y la
+        // barra de escribir están en el flujo normal y el chat ocupa el resto
+        // con flex:1. No hace falta compensar con márgenes.
     }
 
     // ---- Balance ----

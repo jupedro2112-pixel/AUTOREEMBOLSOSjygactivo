@@ -4056,6 +4056,8 @@ async function loadCBUConfig() {
     
     // Cargar también la URL del Canal Informativo
     loadCanalUrlConfig();
+    // Cargar la config de la Comunidad (Telegram)
+    loadCommunityConfig();
 }
 
 async function saveCBUConfig() {
@@ -4133,6 +4135,49 @@ async function saveCanalUrl() {
     } catch (error) {
         console.error('Error saving canal URL:', error);
         showToast('Error al guardar URL', 'error');
+    }
+}
+
+async function loadCommunityConfig() {
+    try {
+        const response = await fetch(`${API_URL}/api/config/community`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (response.ok) {
+            const data = await response.json();
+            const nameInput = document.getElementById('communityName');
+            const urlInput = document.getElementById('communityUrl');
+            if (nameInput) nameInput.value = data.name || '';
+            if (urlInput) urlInput.value = data.url || '';
+        }
+    } catch (error) {
+        console.error('Error loading community config:', error);
+    }
+}
+
+async function saveCommunityConfig() {
+    const nameInput = document.getElementById('communityName');
+    const urlInput = document.getElementById('communityUrl');
+    const name = nameInput ? nameInput.value.trim() : '';
+    const url = urlInput ? urlInput.value.trim() : '';
+    try {
+        const response = await fetch(`${API_URL}/api/admin/community`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ name, url })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            showToast('Comunidad guardada correctamente', 'success');
+        } else {
+            showToast(data.error || data.message || 'Error al guardar comunidad', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving community config:', error);
+        showToast('Error al guardar comunidad', 'error');
     }
 }
 

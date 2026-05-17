@@ -9570,6 +9570,34 @@ app.post('/api/admin/bonus-strategy/activate', authMiddleware, adminMiddleware, 
 });
 
 
+// ============================================================
+// COMUNIDAD — config del link de la comunidad / canal de Telegram.
+// ============================================================
+app.get('/api/config/community', authMiddleware, async (req, res) => {
+  try {
+    const c = (await getConfig('communityConfig')) || {};
+    res.json({ name: c.name || '', url: c.url || '' });
+  } catch (err) {
+    logger.error(`/api/config/community: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 60);
+    let url = String((req.body && req.body.url) || '').trim().slice(0, 300);
+    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    await setConfig('communityConfig', { name, url });
+    logger.info(`[community] config guardada por ${(req.user && req.user.username) || '?'}`);
+    res.json({ success: true, name, url });
+  } catch (err) {
+    logger.error(`POST /api/admin/community: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+
 // ============================================
 // SPA FALLBACK: sirve index.html para rutas
 // frontend desconocidas (ej: /register?ref=CODE)

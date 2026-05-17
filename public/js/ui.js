@@ -108,6 +108,11 @@ VIP.ui = (function () {
             VIP.installBonus.init();
         }
 
+        // Encuesta de notificaciones: aparece una sola vez para que el
+        // usuario elija su grupo (suave / normal / activo / solo reembolsos).
+        if (VIP.notifSurvey && typeof VIP.notifSurvey.maybeShow === 'function') {
+            VIP.notifSurvey.maybeShow();
+        }
     }
 
     // ---- Layout ----

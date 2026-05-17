@@ -30,7 +30,6 @@ VIP.notifSurvey = (function () {
     // el usuario está en la app instalada, no hay cambio de clave pendiente,
     // y todavía no eligió un plan.
     function maybeShow() {
-        if (!VIP.ui.isAppStandalone()) return;
         if (VIP.state.passwordChangePending) return;
         const plan = VIP.state.currentUser && VIP.state.currentUser.notificationPlan;
         if (plan) return;

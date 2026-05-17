@@ -9605,6 +9605,104 @@ app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, re
   }
 });
 
+// ============================================================
+// ENCUESTA — config de los grupos de la estrategia de notificaciones.
+// Fase 1: modelo de config (vía config store genérico) + endpoints.
+// El motor que arma el calendario y dispara los pushes es Fase 2.
+// ============================================================
+const ENCUESTA_PLAN_DEFAULTS = {
+  isActive: false,
+  cohorts: {
+    suave:           { bonosPorSemana: 1, incentivosPorSemana: 2 },
+    normal:          { bonosPorSemana: 2, incentivosPorSemana: 3 },
+    activo:          { bonosPorSemana: 3, incentivosPorSemana: 5 },
+    solo_reembolsos: { bonosPorSemana: 0, incentivosPorSemana: 0 }
+  },
+  bonoPercents: [50, 100],
+  bonoVigenciaHoras: 48,
+  quietStartHora: 22,
+  quietEndHora: 10,
+  minGapHoras: 18
+};
+
+function _encNum(v, def, min, max) {
+  let n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  if (typeof min === 'number') n = Math.max(min, n);
+  if (typeof max === 'number') n = Math.min(max, n);
+  return Math.round(n);
+}
+
+// Normaliza la config guardada contra los defaults: nunca devuelve basura.
+function mergeEncuestaConfig(saved) {
+  const s = saved || {};
+  const cohorts = {};
+  ['suave', 'normal', 'activo', 'solo_reembolsos'].forEach(function (k) {
+    const sc = (s.cohorts && s.cohorts[k]) || {};
+    const dc = ENCUESTA_PLAN_DEFAULTS.cohorts[k];
+    cohorts[k] = {
+      bonosPorSemana: _encNum(sc.bonosPorSemana, dc.bonosPorSemana, 0, 14),
+      incentivosPorSemana: _encNum(sc.incentivosPorSemana, dc.incentivosPorSemana, 0, 21)
+    };
+  });
+  let percents = ENCUESTA_PLAN_DEFAULTS.bonoPercents;
+  if (Array.isArray(s.bonoPercents) && s.bonoPercents.length) {
+    percents = s.bonoPercents.map(function (p) { return _encNum(p, 50, 1, 500); });
+  }
+  return {
+    isActive: s.isActive === true,
+    cohorts: cohorts,
+    bonoPercents: percents,
+    bonoVigenciaHoras: _encNum(s.bonoVigenciaHoras, ENCUESTA_PLAN_DEFAULTS.bonoVigenciaHoras, 1, 720),
+    quietStartHora: _encNum(s.quietStartHora, ENCUESTA_PLAN_DEFAULTS.quietStartHora, 0, 23),
+    quietEndHora: _encNum(s.quietEndHora, ENCUESTA_PLAN_DEFAULTS.quietEndHora, 0, 23),
+    minGapHoras: _encNum(s.minGapHoras, ENCUESTA_PLAN_DEFAULTS.minGapHoras, 1, 72)
+  };
+}
+
+app.get('/api/admin/encuesta/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const saved = await getConfig('encuestaPlanConfig');
+    res.json({ success: true, config: mergeEncuestaConfig(saved) });
+  } catch (err) {
+    logger.error(`GET /api/admin/encuesta/config: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.put('/api/admin/encuesta/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const clean = mergeEncuestaConfig(req.body || {});
+    await setConfig('encuestaPlanConfig', clean);
+    logger.info(`[encuesta] config guardada por ${(req.user && req.user.username) || '?'}`);
+    res.json({ success: true, config: clean });
+  } catch (err) {
+    logger.error(`PUT /api/admin/encuesta/config: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Distribución de votos de la encuesta — cuánta gente hay en cada grupo.
+app.get('/api/admin/encuesta/stats', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const rows = await User.aggregate([
+      { $group: { _id: '$notificationPlan', count: { $sum: 1 } } }
+    ]);
+    const stats = { suave: 0, normal: 0, activo: 0, solo_reembolsos: 0, sinVotar: 0 };
+    let total = 0;
+    rows.forEach(function (r) {
+      const c = Number(r.count) || 0;
+      total += c;
+      if (r._id && Object.prototype.hasOwnProperty.call(stats, r._id)) stats[r._id] = c;
+      else stats.sinVotar += c;
+    });
+    res.json({ success: true, total: total, stats: stats });
+  } catch (err) {
+    logger.error(`GET /api/admin/encuesta/stats: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 
 // ============================================
 // SPA FALLBACK: sirve index.html para rutas

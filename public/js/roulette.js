@@ -53,34 +53,24 @@
         }
 
         const spin = _state.spin;
-        // Celda compacta vertical dentro del panel dorado (.dash-top), al
-        // lado de reembolsos. Tap → modal de spin. La lista de ganadores
-        // live vive DENTRO del modal.
-        let cellBg, cellBorder, subText;
+        // Celda compacta con el mismo formato que el recuadro de usuario
+        // (avatar dorado + etiqueta + estado). Tap → modal de spin.
+        let subText;
         if (_state.alreadySpun && spin) {
             const won = Number(spin.prizeARS || 0) > 0;
             if (won && spin.status === 'credited') {
-                cellBg = 'linear-gradient(135deg,#0f4c00,#1a8200)';
-                cellBorder = '#ffd700';
                 subText = 'Ganaste $' + _fmt(spin.prizeARS);
             } else if (won && spin.status === 'credit_failed') {
-                cellBg = 'linear-gradient(135deg,#1a0033,#2d0052)';
-                cellBorder = '#ffaa66';
                 subText = 'Escribinos';
             } else {
-                cellBg = 'linear-gradient(135deg,#1a0033,#2d0052)';
-                cellBorder = '#1a0033';
                 subText = 'Volvé mañana';
             }
         } else {
-            cellBg = 'linear-gradient(135deg,#4a0080,#7c00cc)';
-            cellBorder = '#ffd700';
             subText = '¡GIRÁ HOY!';
         }
 
-        c.innerHTML = '<div class="dash-roulette" onclick="VIP.roulette && VIP.roulette.open()" '
-            + 'style="background:' + cellBg + ';border-color:' + cellBorder + ';">'
-            + '<span class="dash-roulette-emoji">🎰</span>'
+        c.innerHTML = '<div class="dash-roulette" onclick="VIP.roulette && VIP.roulette.open()">'
+            + '<span class="dash-roulette-avatar">🎰</span>'
             + '<span class="dash-roulette-label">RULETA</span>'
             + '<span class="dash-roulette-sub">' + _esc(subText) + '</span>'
             + '</div>';

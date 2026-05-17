@@ -9746,6 +9746,89 @@ app.get('/api/admin/encuesta/calendar', authMiddleware, adminMiddleware, async (
   }
 });
 
+// Reportes diarios de la estrategia (Fase 4): pushes enviados, bonos
+// creados y bonos usados — por día y por grupo, últimos 14 días.
+app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const DIAS = 14;
+    const TZ = 'America/Argentina/Buenos_Aires';
+    const COH = ['suave', 'normal', 'activo'];
+    const since = new Date(Date.now() - DIAS * 86400000);
+
+    function zeroGrupos() {
+      return {
+        suave:  { pushes: 0, bonosCreados: 0, bonosUsados: 0 },
+        normal: { pushes: 0, bonosCreados: 0, bonosUsados: 0 },
+        activo: { pushes: 0, bonosCreados: 0, bonosUsados: 0 }
+      };
+    }
+
+    // Pushes y bonos creados: del registro de disparos.
+    const fires = await EncuestaFire.aggregate([
+      { $match: { firedAt: { $gte: since } } },
+      { $group: {
+          _id: { dia: { $dateToString: { date: '$firedAt', format: '%Y-%m-%d', timezone: TZ } }, cohort: '$cohort' },
+          pushes: { $sum: 1 },
+          bonosCreados: { $sum: '$bonosCreados' }
+      } }
+    ]);
+    // Bonos usados: PromoBonus de la encuesta marcados como usados.
+    const usados = await PromoBonus.aggregate([
+      { $match: { sourceRuleCode: 'encuesta', status: 'used', usedAt: { $gte: since } } },
+      { $group: {
+          _id: { dia: { $dateToString: { date: '$usedAt', format: '%Y-%m-%d', timezone: TZ } }, rule: '$sourceRuleName' },
+          count: { $sum: 1 }
+      } }
+    ]);
+
+    const byDay = {};
+    function ensureDay(d) {
+      if (!byDay[d]) byDay[d] = { fecha: d, pushes: 0, bonosCreados: 0, bonosUsados: 0, porGrupo: zeroGrupos() };
+      return byDay[d];
+    }
+    fires.forEach(function (f) {
+      const c = f._id.cohort;
+      if (COH.indexOf(c) < 0) return;
+      const d = ensureDay(f._id.dia);
+      d.pushes += f.pushes;
+      d.bonosCreados += (f.bonosCreados || 0);
+      d.porGrupo[c].pushes += f.pushes;
+      d.porGrupo[c].bonosCreados += (f.bonosCreados || 0);
+    });
+    usados.forEach(function (u) {
+      const m = /grupo\s+(\w+)/i.exec(u._id.rule || '');
+      const c = m ? m[1].toLowerCase() : null;
+      const d = ensureDay(u._id.dia);
+      d.bonosUsados += u.count;
+      if (c && d.porGrupo[c]) d.porGrupo[c].bonosUsados += u.count;
+    });
+
+    const reportes = [];
+    for (let i = 0; i < DIAS; i++) {
+      const dt = new Date(Date.now() - i * 86400000 - 3 * 3600 * 1000);
+      const key = dt.toISOString().slice(0, 10);
+      reportes.push(byDay[key] || { fecha: key, pushes: 0, bonosCreados: 0, bonosUsados: 0, porGrupo: zeroGrupos() });
+    }
+
+    const totales = { pushes: 0, bonosCreados: 0, bonosUsados: 0, porGrupo: zeroGrupos() };
+    reportes.forEach(function (d) {
+      totales.pushes += d.pushes;
+      totales.bonosCreados += d.bonosCreados;
+      totales.bonosUsados += d.bonosUsados;
+      COH.forEach(function (c) {
+        totales.porGrupo[c].pushes += d.porGrupo[c].pushes;
+        totales.porGrupo[c].bonosCreados += d.porGrupo[c].bonosCreados;
+        totales.porGrupo[c].bonosUsados += d.porGrupo[c].bonosUsados;
+      });
+    });
+
+    res.json({ success: true, dias: DIAS, totales: totales, reportes: reportes });
+  } catch (err) {
+    logger.error(`GET /api/admin/encuesta/reportes: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 
 // ============================================
 // SPA FALLBACK: sirve index.html para rutas

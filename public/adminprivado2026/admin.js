@@ -7873,21 +7873,23 @@ async function loadEncuesta() {
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
     try {
         const headers = { 'Authorization': `Bearer ${currentToken}` };
-        const [cfgR, statsR, calR] = await Promise.all([
+        const [cfgR, statsR, calR, repR] = await Promise.all([
             fetch(`${API_URL}/api/admin/encuesta/config`, { headers }),
             fetch(`${API_URL}/api/admin/encuesta/stats`, { headers }),
-            fetch(`${API_URL}/api/admin/encuesta/calendar`, { headers })
+            fetch(`${API_URL}/api/admin/encuesta/calendar`, { headers }),
+            fetch(`${API_URL}/api/admin/encuesta/reportes`, { headers })
         ]);
         const cfg = (await cfgR.json()).config || {};
         const stats = await statsR.json();
         const cal = (await calR.json()).calendar || {};
-        _encuestaRender(cfg, stats, cal);
+        const rep = await repR.json();
+        _encuestaRender(cfg, stats, cal, rep);
     } catch (e) {
         body.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px;">Error cargando la encuesta.</div>';
     }
 }
 
-function _encuestaRender(cfg, stats, cal) {
+function _encuestaRender(cfg, stats, cal, rep) {
     const body = document.getElementById('encuestaBody');
     if (!body) return;
     const active = cfg.isActive === true;
@@ -7995,6 +7997,29 @@ function _encuestaRender(cfg, stats, cal) {
         h += '</div>';
     });
     h += '</div>';
+
+    // --- Reportes diarios ---
+    const tot = (rep && rep.totales) || { pushes: 0, bonosCreados: 0, bonosUsados: 0 };
+    const usoRate = tot.bonosCreados > 0 ? Math.round(tot.bonosUsados / tot.bonosCreados * 100) : 0;
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:18px 0 8px;">📈 Reportes diarios (últimos ' + ((rep && rep.dias) || 14) + ' días)</h3>';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin-bottom:10px;">';
+    [['📤 Pushes', tot.pushes, '#fff'], ['🎁 Bonos creados', tot.bonosCreados, '#00ff88'], ['✅ Bonos usados', tot.bonosUsados, '#ffd700'], ['📊 % de uso', usoRate + '%', '#c9a0ff']].forEach(function (c) {
+        h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:10px;text-align:center;">'
+            + '<div style="font-size:19px;font-weight:900;color:' + c[2] + ';">' + c[1] + '</div>'
+            + '<div style="font-size:10px;color:#bbb;">' + c[0] + '</div></div>';
+    });
+    h += '</div>';
+    h += '<div style="color:#777;font-size:10px;margin-bottom:8px;">El <strong style="color:#c9a0ff;">% de uso</strong> es la conversión: cuántos de los bonos enviados se terminaron usando en una carga.</div>';
+    h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:380px;">';
+    h += '<tr style="color:#888;font-size:9.5px;text-transform:uppercase;"><th style="text-align:left;padding:5px;">Día</th><th style="padding:5px;">Pushes</th><th style="padding:5px;">Bonos creados</th><th style="padding:5px;">Bonos usados</th></tr>';
+    ((rep && rep.reportes) || []).forEach(function (d) {
+        h += '<tr style="border-top:1px solid rgba(255,255,255,0.05);font-size:11px;">'
+            + '<td style="padding:5px;color:#ddd;">' + d.fecha + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#fff;">' + d.pushes + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#00ff88;">' + d.bonosCreados + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#ffd700;">' + d.bonosUsados + '</td></tr>';
+    });
+    h += '</table></div>';
 
     body.innerHTML = h;
 }

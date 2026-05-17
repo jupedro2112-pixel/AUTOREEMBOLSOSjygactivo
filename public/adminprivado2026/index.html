@@ -91,19 +91,28 @@
                     <span class="icon icon-chart"></span>
                     <span>Datos</span>
                 </a>
+                <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#d4af37;text-transform:uppercase;opacity:.7;">Central</div>
+                <a href="#" class="nav-item" data-section="centralIngresos">
+                    <span>📈</span>
+                    <span>Ingresos diarios</span>
+                </a>
+                <a href="#" class="nav-item" data-section="centralAppUsers">
+                    <span>📱</span>
+                    <span>Usuarios con app</span>
+                </a>
+                <a href="#" class="nav-item" data-section="centralWelcomeBonus">
+                    <span>🎁</span>
+                    <span>Bono $5.000</span>
+                </a>
+                <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#d4af37;text-transform:uppercase;opacity:.7;">Reembolsos</div>
+                <a href="#" class="nav-item" data-section="reembolsos">
+                    <span>💸</span>
+                    <span>Reembolsos reclamados</span>
+                </a>
                 <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#d4af37;text-transform:uppercase;opacity:.7;">Notificaciones</div>
                 <a href="#" class="nav-item" data-section="notifications">
                     <span class="icon icon-bell"></span>
                     <span>Notificaciones</span>
-                </a>
-                <a href="#" class="nav-item" data-section="automations">
-                    <span>🤖</span>
-                    <span>Automatización</span>
-                    <span id="automationsBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
-                </a>
-                <a href="#" class="nav-item" data-section="bonusStrategy">
-                    <span>🚀</span>
-                    <span>Estrategia de bonos</span>
                 </a>
                 <a href="#" class="nav-item" data-section="encuesta">
                     <span>📊</span>
@@ -135,6 +144,16 @@
                 <a href="#" class="nav-item nav-item-sms-masivo" data-section="sms" style="display:none">
                     <span>📱</span>
                     <span>SMS Masivo</span>
+                </a>
+                <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#888;text-transform:uppercase;opacity:.6;">No se usa (limpiar)</div>
+                <a href="#" class="nav-item" data-section="automations" style="opacity:.6;">
+                    <span>🤖</span>
+                    <span>Automatización</span>
+                    <span id="automationsBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
+                </a>
+                <a href="#" class="nav-item" data-section="bonusStrategy" style="opacity:.6;">
+                    <span>🚀</span>
+                    <span>Estrategia de bonos</span>
                 </a>
             </nav>
             <div class="sidebar-footer">
@@ -725,6 +744,88 @@
                             <span style="display:block;font-size:0.7em;color:var(--text-secondary,#888);margin-top:4px;">usuarios que cargaron en los últimos 30 días</span>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 CENTRAL — Ingresos diarios
+                 ============================================================ -->
+            <section id="centralIngresosSection" class="section">
+                <div class="panel-header">
+                    <h2>📈 Ingresos diarios</h2>
+                    <button class="refresh-btn" onclick="loadCentralIngresos()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Total depositado por día (hora Argentina). Sirve para ver de un vistazo cómo viene la caja jornada por jornada.</p>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+                    <label style="color:#aaa;font-size:12px;">Últimos:</label>
+                    <select id="centralIngresosDays" onchange="loadCentralIngresos()" style="background:#0a0a0a;color:#fff;border:1px solid rgba(255,255,255,0.20);padding:5px 9px;border-radius:6px;font-size:12px;">
+                        <option value="7">7 días</option>
+                        <option value="14">14 días</option>
+                        <option value="30" selected>30 días</option>
+                        <option value="60">60 días</option>
+                        <option value="90">90 días</option>
+                    </select>
+                </div>
+                <div id="centralIngresosBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 CENTRAL — Usuarios con app (token completo)
+                 ============================================================ -->
+            <section id="centralAppUsersSection" class="section">
+                <div class="panel-header">
+                    <h2>📱 Usuarios con app</h2>
+                    <button class="refresh-btn" onclick="loadCentralAppUsers()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Usuarios con token de notificaciones registrado. Mostramos el <strong style="color:#d4af37;">token completo</strong> para verificar quién tiene la app instalada y las notificaciones activas. Tocá cada usuario para ver el detalle.</p>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
+                    <input type="text" id="centralAppUsersSearch" placeholder="🔎 Buscar usuario…" oninput="renderCentralAppUsers()" style="background:#0a0a0a;color:#fff;border:1px solid rgba(255,255,255,0.20);padding:6px 10px;border-radius:6px;font-size:12px;flex:1;min-width:160px;">
+                    <select id="centralAppUsersFilter" onchange="renderCentralAppUsers()" style="background:#0a0a0a;color:#fff;border:1px solid rgba(255,255,255,0.20);padding:6px 9px;border-radius:6px;font-size:12px;">
+                        <option value="all">Todos</option>
+                        <option value="standalone">Solo con app instalada</option>
+                        <option value="granted">Solo con notifs activas</option>
+                    </select>
+                </div>
+                <div id="centralAppUsersBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 CENTRAL — Bono $5.000 (quién lo reclamó)
+                 ============================================================ -->
+            <section id="centralWelcomeBonusSection" class="section">
+                <div class="panel-header">
+                    <h2>🎁 Bono $5.000</h2>
+                    <button class="refresh-btn" onclick="loadCentralWelcomeBonus()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Usuarios que reclamaron el bono de $5.000 por instalar la app (one-time). Mostramos el estado actual de su app y notificaciones para detectar quién la desinstaló después de cobrar.</p>
+                </div>
+                <div id="centralWelcomeBonusBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 REEMBOLSOS — cuánta plata reclaman (diario / semanal / mensual)
+                 ============================================================ -->
+            <section id="reembolsosSection" class="section">
+                <div class="panel-header">
+                    <h2>💸 Reembolsos reclamados</h2>
+                    <button class="refresh-btn" onclick="loadReembolsos()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Cuánta plata reclama la gente en reembolsos <strong>diarios</strong>, <strong>semanales</strong> y <strong>mensuales</strong>. Cada tarjeta muestra los totales de las últimas 24 h, 7 días, 30 días y el histórico.</p>
+                </div>
+                <div id="reembolsosBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>
 

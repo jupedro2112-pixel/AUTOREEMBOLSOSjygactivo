@@ -34,6 +34,7 @@
 
 body {
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: 14px;
     background: var(--darker);
     color: var(--light);
     min-height: 100vh;

@@ -7368,6 +7368,201 @@ app.get('/api/admin/datos', authMiddleware, adminMiddleware, async (req, res) =>
 });
 
 // ============================================
+// CENTRAL — vistas de datos del admin
+// ============================================
+const ART_TZ = 'America/Argentina/Buenos_Aires';
+
+// Ingresos diarios: total depositado por día (hora ARG), últimos N días.
+app.get('/api/admin/central/ingresos', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 180);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const rows = await Transaction.aggregate([
+      { $match: { type: 'deposit', timestamp: { $gte: since } } },
+      { $group: {
+        _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp', timezone: ART_TZ } },
+        count: { $sum: 1 },
+        amount: { $sum: '$amount' },
+        users: { $addToSet: '$username' }
+      }},
+      { $project: { _id: 0, date: '$_id', count: 1, amount: 1, uniqueUsers: { $size: '$users' } } },
+      { $sort: { date: -1 } }
+    ]);
+
+    const totals = rows.reduce(function (a, r) {
+      return { count: a.count + r.count, amount: a.amount + (r.amount || 0) };
+    }, { count: 0, amount: 0 });
+    totals.days = rows.length;
+    totals.avgPerDay = rows.length ? Math.round(totals.amount / rows.length) : 0;
+
+    res.json({ days: days, rows: rows, totals: totals });
+  } catch (error) {
+    console.error('Error en central/ingresos:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Usuarios con app: lista de usuarios con token FCM, mostrando el token
+// completo para verificar quién tiene la app y las notificaciones activas.
+app.get('/api/admin/central/app-users', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const users = await User.find({
+      role: 'user',
+      $or: [
+        { fcmToken: { $exists: true, $ne: null } },
+        { 'fcmTokens.0': { $exists: true } }
+      ]
+    }, {
+      username: 1, id: 1, phone: 1, fcmToken: 1, fcmTokens: 1, fcmTokenContext: 1,
+      fcmTokenUpdatedAt: 1, notifPermission: 1, notificationPlan: 1,
+      installBonusClaimed: 1, lastLogin: 1, createdAt: 1
+    }).lean();
+
+    const list = users.map(function (u) {
+      const tokens = [];
+      if (Array.isArray(u.fcmTokens)) {
+        u.fcmTokens.forEach(function (t) {
+          if (t && t.token) {
+            tokens.push({
+              token: t.token,
+              context: t.context || null,
+              notifPermission: t.notifPermission || null,
+              updatedAt: t.updatedAt || null
+            });
+          }
+        });
+      }
+      if (u.fcmToken && !tokens.some(function (t) { return t.token === u.fcmToken; })) {
+        tokens.push({
+          token: u.fcmToken,
+          context: u.fcmTokenContext || null,
+          notifPermission: u.notifPermission || null,
+          updatedAt: u.fcmTokenUpdatedAt || null
+        });
+      }
+      const standalone = tokens.some(function (t) { return t.context === 'standalone'; });
+      const lastUpdate = tokens.reduce(function (acc, t) {
+        const d = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+        return d > acc ? d : acc;
+      }, 0);
+      return {
+        username: u.username,
+        id: u.id,
+        phone: u.phone || null,
+        tokenCount: tokens.length,
+        tokens: tokens,
+        standalone: standalone,
+        notifPermission: u.notifPermission || null,
+        notificationPlan: u.notificationPlan || null,
+        installBonusClaimed: u.installBonusClaimed === true,
+        lastLogin: u.lastLogin || null,
+        createdAt: u.createdAt || null,
+        lastTokenUpdate: lastUpdate ? new Date(lastUpdate) : null
+      };
+    });
+
+    list.sort(function (a, b) {
+      const da = a.lastTokenUpdate ? new Date(a.lastTokenUpdate).getTime() : 0;
+      const db = b.lastTokenUpdate ? new Date(b.lastTokenUpdate).getTime() : 0;
+      return db - da;
+    });
+
+    const summary = {
+      total: list.length,
+      standalone: list.filter(function (u) { return u.standalone; }).length,
+      granted: list.filter(function (u) { return u.notifPermission === 'granted'; }).length,
+      conBono: list.filter(function (u) { return u.installBonusClaimed; }).length
+    };
+
+    res.json({ users: list, summary: summary });
+  } catch (error) {
+    console.error('Error en central/app-users:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Bono $5.000: usuarios que reclamaron el bono por instalar la app, con su
+// estado actual de app/notificaciones para detectar quién lo desinstaló.
+app.get('/api/admin/central/welcome-bonus', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const users = await User.find({ installBonusClaimed: true }, {
+      username: 1, id: 1, installBonusClaimedAt: 1, fcmToken: 1, fcmTokens: 1,
+      fcmTokenContext: 1, notifPermission: 1, notificationPlan: 1, lastLogin: 1
+    }).sort({ installBonusClaimedAt: -1 }).lean();
+
+    const list = users.map(function (u) {
+      const standalone = u.fcmTokenContext === 'standalone' ||
+        (Array.isArray(u.fcmTokens) && u.fcmTokens.some(function (t) { return t && t.context === 'standalone'; }));
+      const hasToken = !!u.fcmToken || (Array.isArray(u.fcmTokens) && u.fcmTokens.length > 0);
+      return {
+        username: u.username,
+        id: u.id,
+        claimedAt: u.installBonusClaimedAt || null,
+        appInstalled: standalone,
+        hasToken: hasToken,
+        notifPermission: u.notifPermission || null,
+        notificationPlan: u.notificationPlan || null,
+        lastLogin: u.lastLogin || null
+      };
+    });
+
+    res.json({
+      amount: INSTALL_BONUS_AMOUNT,
+      count: list.length,
+      totalPaid: list.length * INSTALL_BONUS_AMOUNT,
+      stillInstalled: list.filter(function (u) { return u.appInstalled; }).length,
+      users: list
+    });
+  } catch (error) {
+    console.error('Error en central/welcome-bonus:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Reembolsos: cuánta plata reclama la gente en reembolsos diarios, semanales
+// y mensuales — totales por tipo y por ventana (24h / 7d / 30d / histórico).
+app.get('/api/admin/reembolsos', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const now = Date.now();
+    const d1  = new Date(now - 24 * 60 * 60 * 1000);
+    const d7  = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    const d30 = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
+    const all = await RefundClaim.find({}, {
+      username: 1, type: 1, amount: 1, netAmount: 1, percentage: 1, claimedAt: 1
+    }).sort({ claimedAt: -1 }).lean();
+
+    const blank = function () { return { count: 0, amount: 0 }; };
+    const types = {
+      daily:   { d1: blank(), d7: blank(), d30: blank(), all: blank() },
+      weekly:  { d1: blank(), d7: blank(), d30: blank(), all: blank() },
+      monthly: { d1: blank(), d7: blank(), d30: blank(), all: blank() }
+    };
+
+    all.forEach(function (r) {
+      const bucket = types[r.type];
+      if (!bucket) return;
+      const amt = r.amount || 0;
+      const cd = new Date(r.claimedAt);
+      bucket.all.count++; bucket.all.amount += amt;
+      if (cd >= d30) { bucket.d30.count++; bucket.d30.amount += amt; }
+      if (cd >= d7)  { bucket.d7.count++;  bucket.d7.amount += amt; }
+      if (cd >= d1)  { bucket.d1.count++;  bucket.d1.amount += amt; }
+    });
+
+    res.json({
+      types: types,
+      total: all.length,
+      recent: all.slice(0, 120)
+    });
+  } catch (error) {
+    console.error('Error en admin/reembolsos:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
 // NUEVO PANEL DE ADMIN - ENDPOINTS ADICIONALES
 // ============================================
 

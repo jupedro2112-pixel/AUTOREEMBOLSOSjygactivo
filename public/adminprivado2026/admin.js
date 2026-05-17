@@ -3223,6 +3223,10 @@ function switchSection(section) {
     if (section === 'bonusStrategy') loadBonusStrategy();
     if (section === 'encuesta') loadEncuesta();
     if (section === 'inactivos') loadInactivos();
+    if (section === 'centralIngresos') loadCentralIngresos();
+    if (section === 'centralAppUsers') loadCentralAppUsers();
+    if (section === 'centralWelcomeBonus') loadCentralWelcomeBonus();
+    if (section === 'reembolsos') loadReembolsos();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
@@ -7221,6 +7225,275 @@ function authFetch(url, opts) {
     o.headers = Object.assign({}, o.headers || {}, { 'Authorization': 'Bearer ' + currentToken });
     if (o.body && !o.headers['Content-Type']) o.headers['Content-Type'] = 'application/json';
     return fetch(API_URL + url, o);
+}
+
+// ============================================================
+// CENTRAL + REEMBOLSOS — vistas de datos del admin
+// ============================================================
+function _centEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+function _centMoney(n) {
+    return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+}
+function _centNum(n) {
+    return (Number(n) || 0).toLocaleString('es-AR');
+}
+function _centDate(d) {
+    if (!d) return '—';
+    try {
+        return new Date(d).toLocaleString('es-AR', {
+            day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
+        });
+    } catch (e) { return '—'; }
+}
+function _centStatCard(icon, value, label, color) {
+    return '<div class="stat-card" style="border-color:' + color + '">'
+        + '<span style="font-size:1.3rem">' + icon + '</span>'
+        + '<span class="stat-number" style="color:' + color + '">' + value + '</span>'
+        + '<span class="stat-label">' + label + '</span></div>';
+}
+function _centCopyEl(btn) {
+    const code = btn.parentElement.querySelector('code');
+    if (!code) return;
+    const txt = code.textContent;
+    const done = function () {
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copiado';
+        setTimeout(function () { btn.textContent = orig; }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(done).catch(function () { showToast('No se pudo copiar', 'error'); });
+    } else {
+        showToast('Copiá el token manualmente', 'warning');
+    }
+}
+
+// --- Ingresos diarios ---
+async function loadCentralIngresos() {
+    const body = document.getElementById('centralIngresosBody');
+    if (!body) return;
+    const sel = document.getElementById('centralIngresosDays');
+    const days = sel ? sel.value : 30;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/central/ingresos?days=' + encodeURIComponent(days));
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        const rows = j.rows || [];
+        const t = j.totals || { count: 0, amount: 0, avgPerDay: 0 };
+        let html = '<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
+        html += _centStatCard('💰', _centMoney(t.amount), 'Total depositado', '#ffc107');
+        html += _centStatCard('💳', _centNum(t.count), 'Depósitos', '#2196f3');
+        html += _centStatCard('📅', _centMoney(t.avgPerDay), 'Promedio por día', '#4caf50');
+        html += '</div>';
+        if (!rows.length) {
+            html += '<div class="empty-state"><p>Sin depósitos en el período.</p></div>';
+        } else {
+            html += '<table class="data-table"><thead><tr><th>Día</th>'
+                + '<th style="text-align:right;">Depósitos</th>'
+                + '<th style="text-align:right;">Usuarios</th>'
+                + '<th style="text-align:right;">Total</th></tr></thead><tbody>';
+            rows.forEach(function (row) {
+                html += '<tr><td>' + _centEsc(row.date) + '</td>'
+                    + '<td style="text-align:right;">' + _centNum(row.count) + '</td>'
+                    + '<td style="text-align:right;">' + _centNum(row.uniqueUsers) + '</td>'
+                    + '<td style="text-align:right;color:#ffc107;font-weight:700;">' + _centMoney(row.amount) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        body.innerHTML = html;
+    } catch (e) {
+        body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+
+// --- Usuarios con app (token completo) ---
+let _centAppUsers = [];
+let _centAppUsersSummary = {};
+async function loadCentralAppUsers() {
+    const body = document.getElementById('centralAppUsersBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/central/app-users');
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        _centAppUsers = j.users || [];
+        _centAppUsersSummary = j.summary || {};
+        renderCentralAppUsers();
+    } catch (e) {
+        body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+function renderCentralAppUsers() {
+    const body = document.getElementById('centralAppUsersBody');
+    if (!body) return;
+    const s = _centAppUsersSummary || {};
+    const searchEl = document.getElementById('centralAppUsersSearch');
+    const filterEl = document.getElementById('centralAppUsersFilter');
+    const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
+    const filter = filterEl ? filterEl.value : 'all';
+    let list = _centAppUsers.slice();
+    if (q) list = list.filter(function (u) { return (u.username || '').toLowerCase().indexOf(q) !== -1; });
+    if (filter === 'standalone') list = list.filter(function (u) { return u.standalone; });
+    if (filter === 'granted') list = list.filter(function (u) { return u.notifPermission === 'granted'; });
+
+    let html = '<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
+    html += _centStatCard('📱', _centNum(s.total), 'Con token FCM', '#2196f3');
+    html += _centStatCard('✅', _centNum(s.standalone), 'App instalada', '#4caf50');
+    html += _centStatCard('🔔', _centNum(s.granted), 'Notifs activas', '#d4af37');
+    html += _centStatCard('🎁', _centNum(s.conBono), 'Cobraron bono', '#ff9800');
+    html += '</div>';
+
+    if (!list.length) {
+        body.innerHTML = html + '<div class="empty-state"><p>Sin usuarios para mostrar.</p></div>';
+        return;
+    }
+    list.forEach(function (u) { html += _centAppUserCard(u); });
+    body.innerHTML = html;
+}
+function _centAppUserCard(u) {
+    const planLabels = { suave: 'Suave', normal: 'Normal', activo: 'Activo', solo_reembolsos: 'Solo reembolsos' };
+    const npColors = { granted: '#4caf50', denied: '#ff5050', default: '#ff9800' };
+    const np = u.notifPermission || 'default';
+    let badges = '';
+    if (u.standalone) {
+        badges += '<span style="background:rgba(76,175,80,0.18);color:#4caf50;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:8px;">📲 App</span>';
+    } else {
+        badges += '<span style="background:rgba(255,255,255,0.07);color:#888;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:8px;">🌐 Navegador</span>';
+    }
+    badges += '<span style="background:rgba(0,0,0,0.30);color:' + (npColors[np] || '#ff9800') + ';font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:8px;">🔔 ' + _centEsc(np) + '</span>';
+    if (u.installBonusClaimed) {
+        badges += '<span style="background:rgba(255,152,0,0.18);color:#ff9800;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:8px;">🎁 Bono</span>';
+    }
+    if (u.notificationPlan) {
+        badges += '<span style="background:rgba(212,175,55,0.15);color:#d4af37;font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:8px;">' + _centEsc(planLabels[u.notificationPlan] || u.notificationPlan) + '</span>';
+    }
+    let tokensHtml = '';
+    (u.tokens || []).forEach(function (t) {
+        const ctx = t.context === 'standalone' ? '📲 App instalada'
+            : (t.context === 'browser' ? '🌐 Navegador' : '— sin contexto');
+        tokensHtml += '<div style="margin-top:8px;padding:8px;background:rgba(0,0,0,0.40);border-radius:6px;">'
+            + '<div style="font-size:10px;color:#888;margin-bottom:4px;">' + ctx
+            + ' · permiso: ' + _centEsc(t.notifPermission || 's/d')
+            + ' · ' + _centDate(t.updatedAt) + '</div>'
+            + '<code style="display:block;font-family:monospace;font-size:10px;color:#d4af37;word-break:break-all;line-height:1.45;">' + _centEsc(t.token) + '</code>'
+            + '<button onclick="_centCopyEl(this)" style="margin-top:5px;background:rgba(212,175,55,0.15);color:#d4af37;border:1px solid rgba(212,175,55,0.40);border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;cursor:pointer;">Copiar token</button>'
+            + '</div>';
+    });
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:9px;padding:11px 13px;margin-bottom:8px;">'
+        + '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">'
+        + '<strong style="color:#fff;font-size:13px;">' + _centEsc(u.username) + '</strong>' + badges + '</div>'
+        + '<details style="margin-top:7px;">'
+        + '<summary style="cursor:pointer;color:#d4af37;font-size:11px;list-style:none;">▸ Ver token completo y detalle (' + (u.tokenCount || 0) + ')</summary>'
+        + '<div style="margin-top:7px;font-size:11px;color:#bbb;line-height:1.7;">'
+        + 'Teléfono: ' + _centEsc(u.phone || '—')
+        + ' &nbsp;·&nbsp; Último ingreso: ' + _centDate(u.lastLogin)
+        + ' &nbsp;·&nbsp; Registrado: ' + _centDate(u.createdAt)
+        + tokensHtml + '</div></details></div>';
+}
+
+// --- Bono $5.000 ---
+async function loadCentralWelcomeBonus() {
+    const body = document.getElementById('centralWelcomeBonusBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/central/welcome-bonus');
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        const users = j.users || [];
+        const planLabels = { suave: 'Suave', normal: 'Normal', activo: 'Activo', solo_reembolsos: 'Solo reembolsos' };
+        let html = '<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
+        html += _centStatCard('🎁', _centNum(j.count), 'Lo reclamaron', '#ff9800');
+        html += _centStatCard('💸', _centMoney(j.totalPaid), 'Total pagado', '#ffc107');
+        html += _centStatCard('✅', _centNum(j.stillInstalled), 'Siguen con la app', '#4caf50');
+        html += '</div>';
+        if (!users.length) {
+            html += '<div class="empty-state"><p>Todavía nadie reclamó el bono.</p></div>';
+        } else {
+            html += '<table class="data-table"><thead><tr><th>Usuario</th><th>Reclamó el</th>'
+                + '<th>App</th><th>Notifs</th><th>Plan</th><th>Último ingreso</th></tr></thead><tbody>';
+            users.forEach(function (u) {
+                const appCell = u.appInstalled
+                    ? '<span style="color:#4caf50;font-weight:700;">📲 Sí</span>'
+                    : (u.hasToken ? '<span style="color:#ff9800;">🌐 Navegador</span>'
+                        : '<span style="color:#ff5050;font-weight:700;">❌ Sin app</span>');
+                const npColor = u.notifPermission === 'granted' ? '#4caf50'
+                    : (u.notifPermission === 'denied' ? '#ff5050' : '#ff9800');
+                html += '<tr><td><strong>' + _centEsc(u.username) + '</strong></td>'
+                    + '<td>' + _centDate(u.claimedAt) + '</td>'
+                    + '<td>' + appCell + '</td>'
+                    + '<td><span style="color:' + npColor + ';">' + _centEsc(u.notifPermission || 's/d') + '</span></td>'
+                    + '<td>' + _centEsc(planLabels[u.notificationPlan] || u.notificationPlan || '—') + '</td>'
+                    + '<td>' + _centDate(u.lastLogin) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        body.innerHTML = html;
+    } catch (e) {
+        body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+
+// --- Reembolsos reclamados ---
+function _centRefundCard(title, t, color) {
+    t = t || {};
+    const z = { count: 0, amount: 0 };
+    const win = function (label, w) {
+        w = w || z;
+        return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;">'
+            + '<span style="color:#aaa;">' + label + '</span>'
+            + '<span style="color:#fff;font-weight:700;">' + _centMoney(w.amount)
+            + ' <span style="color:#888;font-weight:400;">(' + (w.count || 0) + ')</span></span></div>';
+    };
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid ' + color + '55;border-radius:10px;padding:13px;">'
+        + '<h3 style="margin:0 0 8px;color:' + color + ';font-size:13px;">' + title + '</h3>'
+        + win('Últimas 24 h', t.d1)
+        + win('Últimos 7 días', t.d7)
+        + win('Últimos 30 días', t.d30)
+        + '<div style="border-top:1px solid rgba(255,255,255,0.10);margin-top:5px;padding-top:5px;">'
+        + win('Histórico', t.all) + '</div></div>';
+}
+async function loadReembolsos() {
+    const body = document.getElementById('reembolsosBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/reembolsos');
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        const types = j.types || {};
+        const recent = j.recent || [];
+        const typeLabels = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual' };
+        let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:18px;">';
+        html += _centRefundCard('📅 Diarios', types.daily, '#4caf50');
+        html += _centRefundCard('📆 Semanales', types.weekly, '#2196f3');
+        html += _centRefundCard('🗓️ Mensuales', types.monthly, '#d4af37');
+        html += '</div>';
+        html += '<h3 style="color:#d4af37;font-size:12.5px;text-transform:uppercase;letter-spacing:1px;margin:0 0 8px;">Últimos reembolsos reclamados</h3>';
+        if (!recent.length) {
+            html += '<div class="empty-state"><p>Todavía nadie reclamó reembolsos.</p></div>';
+        } else {
+            html += '<table class="data-table"><thead><tr><th>Usuario</th><th>Tipo</th>'
+                + '<th style="text-align:right;">Monto</th><th style="text-align:right;">%</th>'
+                + '<th>Fecha</th></tr></thead><tbody>';
+            recent.forEach(function (rc) {
+                html += '<tr><td><strong>' + _centEsc(rc.username) + '</strong></td>'
+                    + '<td>' + _centEsc(typeLabels[rc.type] || rc.type) + '</td>'
+                    + '<td style="text-align:right;color:#ffc107;font-weight:700;">' + _centMoney(rc.amount) + '</td>'
+                    + '<td style="text-align:right;">' + _centNum(rc.percentage) + '%</td>'
+                    + '<td>' + _centDate(rc.claimedAt) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        body.innerHTML = html;
+    } catch (e) {
+        body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
 }
 
 let _autoRulesCache = [];

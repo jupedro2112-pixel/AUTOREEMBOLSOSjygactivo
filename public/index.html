@@ -505,29 +505,35 @@
                 .dash-refunds-title { text-align:center; color:#d4af37; font-weight:900; font-size:12px; letter-spacing:.5px; margin-bottom:7px; }
                 .dash-refunds-row { display:flex; gap:5px; }
                 .dash-refunds-row .refund-btn { flex:1; min-width:0; }
-                .dash-community { }
-                .dash-community-btn {
-                    display:flex; align-items:center; gap:11px; text-decoration:none; color:#fff;
+                .dash-community { display:flex; gap:8px; }
+                .dash-tg-btn {
+                    flex:1; min-width:0; display:flex; align-items:center; gap:9px;
+                    text-decoration:none; color:#fff;
                     background:linear-gradient(135deg,#229ED9,#1a7fb0); border:1px solid #6fd0f5;
-                    border-radius:13px; padding:11px 14px;
+                    border-radius:12px; padding:9px 11px;
                 }
-                .dash-community-text { flex:1; display:flex; flex-direction:column; min-width:0; }
-                .dash-community-text strong { font-size:13.5px; font-weight:900; }
-                .dash-community-text span { font-size:11px; opacity:.92; }
-                .dash-play { display:flex; gap:8px; }
+                .dash-tg-btn.dash-tg-support {
+                    background:linear-gradient(135deg,#6a0dad,#9b30ff); border-color:#c9a0ff;
+                }
+                .dash-tg-emoji { font-size:20px; line-height:1; flex-shrink:0; }
+                .dash-tg-text { display:flex; flex-direction:column; min-width:0; line-height:1.15; }
+                .dash-tg-text strong { font-size:12px; font-weight:900; }
+                .dash-tg-text span { font-size:9.5px; opacity:.9; }
+                .dash-play { display:flex; gap:8px; align-items:stretch; }
                 .dash-play-btn {
                     flex:1; background:linear-gradient(135deg,#6a0dad,#9b30ff); color:#fff;
-                    border:none; border-radius:13px; padding:15px 10px; font-weight:900;
-                    font-size:16px; cursor:pointer; box-shadow:0 4px 14px rgba(106,13,173,.45);
+                    border:none; border-radius:11px; padding:9px 10px; font-weight:900;
+                    font-size:14px; cursor:pointer; box-shadow:0 3px 10px rgba(106,13,173,.4);
+                    white-space:nowrap;
                 }
                 .dash-balance {
-                    flex:0 0 132px; display:flex; flex-direction:column; align-items:center;
-                    justify-content:center; gap:2px; background:linear-gradient(135deg,#0f4c00,#1a8200);
-                    border:1px solid #00ff88; border-radius:13px; padding:8px;
+                    flex:0 0 auto; display:flex; flex-direction:row; align-items:center;
+                    justify-content:center; gap:6px; background:linear-gradient(135deg,#0f4c00,#1a8200);
+                    border:1px solid #00ff88; border-radius:11px; padding:6px 12px;
                 }
-                .dash-balance-label { font-size:10px; color:#aaffcc; font-weight:800; }
-                .dash-balance-amount { font-size:19px; font-weight:900; color:#00ff88; }
-                .chat-section .chat-messages { max-height:300px; }
+                .dash-balance-label { font-size:10px; color:#aaffcc; font-weight:800; white-space:nowrap; }
+                .dash-balance-amount { font-size:15px; font-weight:900; color:#00ff88; white-space:nowrap; }
+                .chat-section .chat-container { min-height:0; }
             </style>
             <div class="home-dash">
                 <div class="dash-top">
@@ -566,15 +572,21 @@
                     </button>
                 </div>
 
-                <!-- Comunidad / Canal de Telegram -->
+                <!-- Comunidad / Canales de Telegram -->
                 <div class="dash-community" id="communitySection" style="display:none;">
-                    <a id="communityLink" href="#" target="_blank" rel="noopener" class="dash-community-btn">
-                        <span style="font-size:24px;">📢</span>
-                        <span class="dash-community-text">
-                            <strong id="communityName">Nuestra comunidad</strong>
-                            <span>Sumate al canal de Telegram</span>
+                    <a id="communityChannelBtn" href="#" target="_blank" rel="noopener" class="dash-tg-btn" style="display:none;">
+                        <span class="dash-tg-emoji">📢</span>
+                        <span class="dash-tg-text">
+                            <strong>Canal Oficial</strong>
+                            <span>Telegram</span>
                         </span>
-                        <span style="font-size:18px;opacity:.8;">›</span>
+                    </a>
+                    <a id="communitySupportBtn" href="#" target="_blank" rel="noopener" class="dash-tg-btn dash-tg-support" style="display:none;">
+                        <span class="dash-tg-emoji">💬</span>
+                        <span class="dash-tg-text">
+                            <strong>Soporte VIP</strong>
+                            <span>Telegram</span>
+                        </span>
                     </a>
                 </div>
 
@@ -595,13 +607,14 @@
                         headers: { 'Authorization': 'Bearer ' + VIP.state.currentToken }
                     }).then(function (r) { return r.ok ? r.json() : null; })
                       .then(function (d) {
-                          if (!d || !d.url) return;
+                          if (!d) return;
                           var sec = document.getElementById('communitySection');
-                          var link = document.getElementById('communityLink');
-                          var nm = document.getElementById('communityName');
-                          if (link) link.href = d.url;
-                          if (nm && d.name) nm.textContent = d.name;
-                          if (sec) sec.style.display = '';
+                          var ch = document.getElementById('communityChannelBtn');
+                          var sup = document.getElementById('communitySupportBtn');
+                          var any = false;
+                          if (ch && d.channelUrl) { ch.href = d.channelUrl; ch.style.display = ''; any = true; }
+                          if (sup && d.supportUrl) { sup.href = d.supportUrl; sup.style.display = ''; any = true; }
+                          if (sec && any) sec.style.display = '';
                       }).catch(function () {});
                 }
                 document.addEventListener('DOMContentLoaded', function () {

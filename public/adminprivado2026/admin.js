@@ -4145,10 +4145,10 @@ async function loadCommunityConfig() {
         });
         if (response.ok) {
             const data = await response.json();
-            const nameInput = document.getElementById('communityName');
-            const urlInput = document.getElementById('communityUrl');
-            if (nameInput) nameInput.value = data.name || '';
-            if (urlInput) urlInput.value = data.url || '';
+            const channelInput = document.getElementById('communityChannelUrl');
+            const supportInput = document.getElementById('communitySupportUrl');
+            if (channelInput) channelInput.value = data.channelUrl || '';
+            if (supportInput) supportInput.value = data.supportUrl || '';
         }
     } catch (error) {
         console.error('Error loading community config:', error);
@@ -4156,10 +4156,10 @@ async function loadCommunityConfig() {
 }
 
 async function saveCommunityConfig() {
-    const nameInput = document.getElementById('communityName');
-    const urlInput = document.getElementById('communityUrl');
-    const name = nameInput ? nameInput.value.trim() : '';
-    const url = urlInput ? urlInput.value.trim() : '';
+    const channelInput = document.getElementById('communityChannelUrl');
+    const supportInput = document.getElementById('communitySupportUrl');
+    const channelUrl = channelInput ? channelInput.value.trim() : '';
+    const supportUrl = supportInput ? supportInput.value.trim() : '';
     try {
         const response = await fetch(`${API_URL}/api/admin/community`, {
             method: 'POST',
@@ -4167,7 +4167,7 @@ async function saveCommunityConfig() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({ name, url })
+            body: JSON.stringify({ channelUrl, supportUrl })
         });
         const data = await response.json();
         if (response.ok) {

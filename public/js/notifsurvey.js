@@ -34,6 +34,9 @@ VIP.notifSurvey = (function () {
         if (VIP.state.passwordChangePending) return;
         const plan = VIP.state.currentUser && VIP.state.currentUser.notificationPlan;
         if (plan) return;
+        // Guarda local: si ya votó en este dispositivo, no volver a mostrar la
+        // encuesta aunque el plan no haya viajado en el objeto de usuario.
+        try { if (localStorage.getItem('vip_notifPlanVoted') === '1') return; } catch (e) {}
         _open(false);
     }
 
@@ -63,6 +66,7 @@ VIP.notifSurvey = (function () {
 
             if (res.ok && data.success) {
                 if (VIP.state.currentUser) VIP.state.currentUser.notificationPlan = plan;
+                try { localStorage.setItem('vip_notifPlanVoted', '1'); } catch (e) {}
                 VIP.ui.hideModal('notifSurveyModal');
                 VIP.ui.showToast('✅ Plan guardado: ' + PLAN_LABELS[plan], 'success');
             } else {

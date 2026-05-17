@@ -484,19 +484,19 @@
                                 <span class="icon icon-save"></span> Guardar URL Canal
                             </button>
                         </div>
-                        <!-- Comunidad / Canal de Telegram -->
+                        <!-- Comunidad / Canales de Telegram -->
                         <div class="panel-subheader" style="margin-top: 24px;">
                             <h3>Comunidad (Telegram)</h3>
                         </div>
                         <div class="cbu-form">
                             <div class="form-group">
-                                <label>Nombre de la comunidad:</label>
-                                <input type="text" id="communityName" placeholder="Ej: Comunidad VIP" style="width:100%;">
+                                <label>Canal Oficial Telegram:</label>
+                                <input type="url" id="communityChannelUrl" placeholder="https://t.me/tu_canal" style="width:100%;">
                             </div>
                             <div class="form-group">
-                                <label>Link de Telegram:</label>
-                                <input type="url" id="communityUrl" placeholder="https://t.me/tu_comunidad" style="width:100%;">
-                                <small style="color:#aaa;font-size:11px;">Se muestra en la pantalla principal del usuario. Vacío = oculto.</small>
+                                <label>Soporte VIP Telegram:</label>
+                                <input type="url" id="communitySupportUrl" placeholder="https://t.me/tu_soporte" style="width:100%;">
+                                <small style="color:#aaa;font-size:11px;">Se muestran en la pantalla principal del usuario. Cada campo vacío = ese botón oculto.</small>
                             </div>
                             <button class="btn-primary" onclick="saveCommunityConfig()">
                                 <span class="icon icon-save"></span> Guardar Comunidad

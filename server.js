@@ -9576,7 +9576,11 @@ app.post('/api/admin/bonus-strategy/activate', authMiddleware, adminMiddleware, 
 app.get('/api/config/community', authMiddleware, async (req, res) => {
   try {
     const c = (await getConfig('communityConfig')) || {};
-    res.json({ name: c.name || '', url: c.url || '' });
+    // Fallback al esquema viejo {name,url} -> canal oficial.
+    res.json({
+      channelUrl: c.channelUrl || c.url || '',
+      supportUrl: c.supportUrl || ''
+    });
   } catch (err) {
     logger.error(`/api/config/community: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -9585,12 +9589,16 @@ app.get('/api/config/community', authMiddleware, async (req, res) => {
 
 app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const name = String((req.body && req.body.name) || '').trim().slice(0, 60);
-    let url = String((req.body && req.body.url) || '').trim().slice(0, 300);
-    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
-    await setConfig('communityConfig', { name, url });
+    function _normUrl(v) {
+      let u = String(v || '').trim().slice(0, 300);
+      if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
+      return u;
+    }
+    const channelUrl = _normUrl(req.body && req.body.channelUrl);
+    const supportUrl = _normUrl(req.body && req.body.supportUrl);
+    await setConfig('communityConfig', { channelUrl, supportUrl });
     logger.info(`[community] config guardada por ${(req.user && req.user.username) || '?'}`);
-    res.json({ success: true, name, url });
+    res.json({ success: true, channelUrl, supportUrl });
   } catch (err) {
     logger.error(`POST /api/admin/community: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });

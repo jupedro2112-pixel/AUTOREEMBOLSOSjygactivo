@@ -2836,12 +2836,40 @@ function notifPlanBadge(plan) {
     return `<span style="background:${p.color}22;border:1px solid ${p.color};color:${p.color};font-size:10px;font-weight:700;border-radius:6px;padding:2px 7px;white-space:nowrap;">${p.label}</span>`;
 }
 
+// Topes mensuales por plan (espejo de NOTIF_PLAN_LIMITS del backend).
+const NOTIF_PLAN_LIMITS_ADMIN = {
+    suave:           { bonos: 2, invitaciones: 5,  regalos: 2 },
+    normal:          { bonos: 4, invitaciones: 5,  regalos: 2 },
+    activo:          { bonos: 6, invitaciones: 10, regalos: 3 },
+    solo_reembolsos: { bonos: 0, invitaciones: 0,  regalos: 0 }
+};
+
+// Celda con el consumo de notificaciones del mes vs el tope del plan.
+function notifUsageCell(user) {
+    const plan = user.notificationPlan;
+    const lim = NOTIF_PLAN_LIMITS_ADMIN[plan];
+    if (!lim) return '<span style="color:#888;">—</span>';
+    if (plan === 'solo_reembolsos') {
+        return '<span style="color:#00a8ff;font-size:.76rem;white-space:nowrap;">Solo reembolsos</span>';
+    }
+    const now = new Date();
+    const period = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const c = user.notifMonthlyCounts || {};
+    const cur = (c.period === period) ? c : { bonos: 0, invitaciones: 0, regalos: 0 };
+    const fmt = (used, cap) => {
+        const u = used || 0;
+        const color = (u >= cap) ? '#dc3545' : '#aaa';
+        return `<span style="color:${color}">${u}/${cap}</span>`;
+    };
+    return `<span style="font-size:.76rem;white-space:nowrap;" title="Bonos / Invitaciones / Regalos recibidos este mes">🎁${fmt(cur.bonos, lim.bonos)} 🎰${fmt(cur.invitaciones, lim.invitaciones)} 🎉${fmt(cur.regalos, lim.regalos)}</span>`;
+}
+
 function renderUsers(users) {
     const tbody = document.getElementById('usersTableBody');
     const adminRole = currentAdmin?.role;
 
     if (!users.length) {
-        tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No hay usuarios</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-state">No hay usuarios</td></tr>';
         return;
     }
     
@@ -2910,6 +2938,7 @@ function renderUsers(users) {
             <td>${statusCell}</td>
             <td>${formatDate(user.lastLogin)}</td>
             <td>${notifPlanBadge(user.notificationPlan)}</td>
+            <td>${notifUsageCell(user)}</td>
             <td>${smsCell}</td>
             <td>
                 <button class="action-btn-small" title="Ver detalle" onclick='viewUser(${JSON.stringify(user.id)})'>

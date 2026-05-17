@@ -8581,47 +8581,16 @@ app.get('/api/roulette/recent-winners', authMiddleware, async (req, res) => {
 
 // ============================================================
 // GET /api/claims-feed — feed PÚBLICO (sin auth) de "lo que reclama la
-// gente": premios de ruleta, reembolsos y bonos. Alimenta el ticker en vivo
-// de la pantalla de login. Los nombres van tapados ~80%. Si hay pocos
-// reclamos reales, se completa con ejemplos para que el feed se vea activo.
+// gente": premios de ruleta, reembolsos y bonos — todos REALES, de la base.
+// Alimenta el ticker en vivo de la pantalla de login. Los nombres van
+// tapados ~80%. Si no hay reclamos, el feed viene vacío y el ticker no se
+// muestra.
 // ============================================================
 function _claimsMaskName(u) {
   const s = String(u || '').trim();
   if (!s) return '***';
   const visible = Math.max(1, Math.round(s.length * 0.2));
   return s.slice(0, visible) + '*'.repeat(Math.max(2, s.length - visible));
-}
-
-const _CLAIMS_EXAMPLE_NAMES = ['lucas', 'martin', 'jose', 'daniela', 'rodri', 'meli',
-  'nacho', 'flor', 'santi', 'agus', 'brian', 'romi', 'leo', 'caro', 'dario', 'vale',
-  'seba', 'noe', 'gonza', 'pao', 'juli', 'fede', 'mica', 'tomi'];
-
-function _generateExampleClaims(n) {
-  const kinds = ['ruleta', 'reembolso', 'bono'];
-  const refundTypes = ['daily', 'weekly', 'monthly'];
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const kind = kinds[Math.floor(Math.random() * kinds.length)];
-    const base = _CLAIMS_EXAMPLE_NAMES[Math.floor(Math.random() * _CLAIMS_EXAMPLE_NAMES.length)];
-    const name = _claimsMaskName(base + (Math.floor(Math.random() * 89) + 10));
-    let amount, refundType = null;
-    if (kind === 'ruleta') {
-      amount = (Math.floor(Math.random() * 28) + 2) * 100;
-    } else if (kind === 'bono') {
-      amount = 5000;
-    } else {
-      amount = (Math.floor(Math.random() * 60) + 5) * 100;
-      refundType = refundTypes[Math.floor(Math.random() * refundTypes.length)];
-    }
-    out.push({
-      kind: kind,
-      name: name,
-      amount: amount,
-      refundType: refundType,
-      ts: new Date(Date.now() - Math.floor(Math.random() * 3 * 3600 * 1000))
-    });
-  }
-  return out;
 }
 
 app.get('/api/claims-feed', async (req, res) => {
@@ -8645,14 +8614,7 @@ app.get('/api/claims-feed', async (req, res) => {
       out.push({ kind: 'bono', name: _claimsMaskName(u.username), amount: 5000, refundType: null, ts: u.installBonusClaimedAt });
     });
     out.sort(function (a, b) { return new Date(b.ts) - new Date(a.ts); });
-
-    let items = out.slice(0, 45);
-    const MIN_ITEMS = 18;
-    if (items.length < MIN_ITEMS) {
-      items = items.concat(_generateExampleClaims(MIN_ITEMS - items.length));
-      items.sort(function (a, b) { return new Date(b.ts) - new Date(a.ts); });
-    }
-    res.json({ items: items, realCount: out.length });
+    res.json({ items: out.slice(0, 45) });
   } catch (err) {
     logger.error(`/api/claims-feed: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });

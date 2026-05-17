@@ -8714,6 +8714,37 @@ setInterval(function () { _runNotifRulesEvaluator(); }, 5 * 60 * 1000);
 
 
 // ============================================================
+// MOTOR DE LA ESTRATEGIA "ENCUESTA" (Fase 2)
+// ----------------------------------------------------------------
+// Un cron corre cada 5 min: arma el calendario semanal por grupo y, si
+// a un slot le toca su día/hora (ART), dispara el push (y crea los
+// PromoBonus en los slots de bono). DUERME salvo que la config
+// encuestaPlanConfig tenga isActive=true — así es seguro deployarlo
+// sin que mande nada hasta que el admin lo active.
+// ============================================================
+const encuestaService = require('./src/services/encuestaService');
+const EncuestaFire = require('./src/models/EncuestaFire');
+
+async function _runEncuestaTick() {
+  try {
+    const cfg = mergeEncuestaConfig(await getConfig('encuestaPlanConfig'));
+    const r = await encuestaService.tick({
+      cfg: cfg,
+      models: { User: User, EncuestaFire: EncuestaFire, PromoBonus: PromoBonus },
+      sendPushFn: sendNotificationToAllUsers,
+      logger: logger,
+      now: new Date()
+    });
+    if (r && r.fired > 0) logger.info('[encuesta] tick: disparados=' + r.fired);
+  } catch (err) {
+    logger.error('[encuesta] tick error: ' + err.message);
+  }
+}
+setTimeout(function () { _runEncuestaTick(); }, 4 * 60 * 1000);
+setInterval(function () { _runEncuestaTick(); }, 5 * 60 * 1000);
+
+
+// ============================================================
 // ENDPOINTS ADMIN — Recuperación de inactivos
 // ----------------------------------------------------------------
 // Sección dedicada en el panel para estudiar la población que tiene
@@ -9699,6 +9730,18 @@ app.get('/api/admin/encuesta/stats', authMiddleware, adminMiddleware, async (req
     res.json({ success: true, total: total, stats: stats });
   } catch (err) {
     logger.error(`GET /api/admin/encuesta/stats: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Calendario semanal calculado por grupo — para ver/verificar qué push
+// va a salir cada día. Lo usa la pantalla de admin (Fase 3).
+app.get('/api/admin/encuesta/calendar', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const cfg = mergeEncuestaConfig(await getConfig('encuestaPlanConfig'));
+    res.json({ success: true, isActive: cfg.isActive, calendar: encuestaService.weeklyCalendar(cfg) });
+  } catch (err) {
+    logger.error(`GET /api/admin/encuesta/calendar: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

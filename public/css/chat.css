@@ -252,10 +252,10 @@
 .cbu-chat-btn {
     background: linear-gradient(135deg, #9d4edd 0%, #6603a8 100%);
     color: #fff;
-    font-size: 11px;
+    font-size: 9px;
     font-weight: bold;
     width: auto;
-    padding: 0 12px;
+    padding: 0 10px;
     border-radius: 20px;
 }
 

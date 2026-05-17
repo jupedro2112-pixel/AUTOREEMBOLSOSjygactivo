@@ -1097,6 +1097,9 @@ async function selectConversation(userId, username) {
     elements.chatInputArea.classList.remove('hidden');
     elements.chatUsername.textContent = username;
 
+    // Bono de carga vigente del cliente (lo activó una notificación).
+    loadChatPromoBonus(username);
+
     // Reset banner de bloqueo y botones hasta que loadUserInfo confirme el estado
     if (elements.chatBlockedBanner) elements.chatBlockedBanner.style.display = 'none';
     if (elements.chatBlockedReason) elements.chatBlockedReason.textContent = '';
@@ -7236,6 +7239,9 @@ function _autoRenderRuleCard(r) {
     const apprBadge = r.requiresAdminApproval
         ? '<span style="background:rgba(255,80,80,0.15);color:#ff5050;font-size:10px;padding:2px 7px;border-radius:8px;font-weight:700;margin-left:5px;">✋ Requiere aprobar</span>'
         : '';
+    const chargeBonusBadge = (r.chargeBonus && Number(r.chargeBonus.percent) > 0)
+        ? '<span style="background:rgba(255,215,0,0.15);color:#ffd700;font-size:10px;padding:2px 7px;border-radius:8px;font-weight:700;margin-left:5px;">🎁 Bono ' + r.chargeBonus.percent + '% · ' + (r.chargeBonus.durationMinutes || 120) + 'min</span>'
+        : '';
 
     return '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;">' +
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">' +
@@ -7243,7 +7249,7 @@ function _autoRenderRuleCard(r) {
                 '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">' +
                     '<span style="background:rgba(0,212,255,0.20);color:#00d4ff;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;">' + escapeHtml(r.code) + '</span>' +
                     '<span style="color:' + enabledColor + ';font-size:10px;font-weight:700;">' + enabledLabel + '</span>' +
-                    bonusBadge + apprBadge +
+                    bonusBadge + chargeBonusBadge + apprBadge +
                 '</div>' +
                 '<div style="color:#fff;font-size:13px;font-weight:600;margin-bottom:3px;">' + escapeHtml(r.name) + '</div>' +
                 '<div style="color:#888;font-size:11px;line-height:1.5;">⏰ ' + when + ' · 🎯 ' + escapeHtml(r.audienceType) + '</div>' +
@@ -7296,7 +7302,15 @@ function autoEditRule(id) {
             '<div style="flex:1;"><label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Minuto</label><input type="number" id="autoEditMinute" value="' + ((r.cronSchedule && r.cronSchedule.minute) || 0) + '" min="0" max="59" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;"></div>' +
         '</div>' +
         '<label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Cooldown (minutos por usuario, default 1440 = 24h)</label>' +
-        '<input type="number" id="autoEditCooldown" value="' + (r.cooldownMinutes || 1440) + '" min="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;">';
+        '<input type="number" id="autoEditCooldown" value="' + (r.cooldownMinutes || 1440) + '" min="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;">' +
+        '<div style="margin-top:12px;padding:11px;background:rgba(255,215,0,0.06);border:1px solid rgba(255,215,0,0.30);border-radius:8px;">' +
+            '<div style="color:#ffd700;font-weight:800;font-size:11.5px;margin-bottom:7px;">🎁 BONO DE CARGA (opcional)</div>' +
+            '<div style="color:#999;font-size:10.5px;line-height:1.5;margin-bottom:8px;">Si ponés un % mayor a 0, cada usuario que reciba este push queda con una bonificación vigente: ese % extra sobre su próxima carga, válido por 1 sola carga. El agente lo ve en el chat. 0 = sin bono.</div>' +
+            '<div style="display:flex;gap:8px;">' +
+                '<div style="flex:1;"><label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">% de bono</label><input type="number" id="autoEditBonusPercent" value="' + ((r.chargeBonus && r.chargeBonus.percent) || 0) + '" min="0" max="1000" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,215,0,0.30);background:rgba(0,0,0,0.4);color:#ffd700;font-weight:800;font-size:13px;box-sizing:border-box;"></div>' +
+                '<div style="flex:1;"><label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Dura (minutos)</label><input type="number" id="autoEditBonusMins" value="' + ((r.chargeBonus && r.chargeBonus.durationMinutes) || 120) + '" min="5" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;"></div>' +
+            '</div>' +
+        '</div>';
     modal.style.display = 'flex';
 }
 
@@ -7315,6 +7329,8 @@ async function saveAutoRuleEdit() {
     const hour = Number(document.getElementById('autoEditHour').value);
     const minute = Number(document.getElementById('autoEditMinute').value);
     const cooldown = Number(document.getElementById('autoEditCooldown').value);
+    const bonusPercent = Math.max(0, Number(document.getElementById('autoEditBonusPercent').value) || 0);
+    const bonusMins = Math.max(5, Number(document.getElementById('autoEditBonusMins').value) || 120);
     if (!title || !body) { showToast('Falta título o cuerpo', 'error'); return; }
     if (!isFinite(hour) || hour < 0 || hour > 23) { showToast('Hora inválida', 'error'); return; }
     const cur = _autoRulesCache.find(function (r) { return r.id === _autoEditingRuleId; });
@@ -7328,7 +7344,8 @@ async function saveAutoRuleEdit() {
                     dayOfWeek: cur && cur.cronSchedule ? cur.cronSchedule.dayOfWeek : null,
                     dayOfMonth: cur && cur.cronSchedule ? cur.cronSchedule.dayOfMonth : null
                 },
-                cooldownMinutes: cooldown
+                cooldownMinutes: cooldown,
+                chargeBonus: { percent: bonusPercent, durationMinutes: bonusMins }
             })
         });
         const j = await resp.json();
@@ -7596,6 +7613,60 @@ async function reviewDelete(id) {
         if (j.success) {
             showToast('Reseña borrada', 'info');
             _reviewsFetch();
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+
+// =========================================================================
+// BONO DE CARGA — banner en el chat del admin (lo ve el agente que contesta).
+// =========================================================================
+async function loadChatPromoBonus(username) {
+    const el = document.getElementById('chatPromoBonusBanner');
+    if (!el) return;
+    el.style.display = '';
+    el.style.padding = '8px 14px';
+    el.style.fontSize = '12px';
+    el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
+    el.style.background = 'rgba(0,0,0,0.20)';
+    el.innerHTML = '<span style="color:#888;">⏳ Verificando promoción…</span>';
+    if (!username) { el.style.display = 'none'; return; }
+    try {
+        const r = await authFetch('/api/admin/promo-bonus?username=' + encodeURIComponent(username));
+        const j = await r.json();
+        const b = j && j.bonus;
+        if (!b) {
+            el.style.background = 'rgba(120,120,120,0.18)';
+            el.innerHTML = '<span style="color:#bbb;">🚫 Sin promoción vigente para este cliente.</span>';
+            return;
+        }
+        const mins = Math.max(0, Math.round((new Date(b.expiresAt).getTime() - Date.now()) / 60000));
+        el.style.background = 'linear-gradient(90deg,#0f8a2f,#0a6b25)';
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
+            '<span style="font-size:18px;">🎁</span>' +
+            '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">BONO VIGENTE: ' + b.percent + '% en la carga</strong>' +
+            '<div style="font-size:11px;opacity:0.9;">Vence en ' + mins + ' min · regla ' + escapeHtml(b.sourceRuleCode || '-') + '</div></div>' +
+            '<button onclick="markChatPromoBonusUsed(\'' + b.id + '\')" style="background:#fff;color:#0a7a2f;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✓ Marcar usado</button>' +
+            '</div>';
+    } catch (e) {
+        el.style.display = 'none';
+    }
+}
+
+async function markChatPromoBonusUsed(id) {
+    if (!confirm('¿Marcar el bono como usado? Vale por 1 sola carga — después de esto el cliente no lo tiene más.')) return;
+    try {
+        const r = await authFetch('/api/admin/promo-bonus/' + id + '/use', { method: 'POST' });
+        const j = await r.json();
+        if (j.success) {
+            showToast('Bono marcado como usado', 'success');
+            const el = document.getElementById('chatPromoBonusBanner');
+            if (el) {
+                el.style.background = 'rgba(120,120,120,0.18)';
+                el.innerHTML = '<span style="color:#bbb;">🚫 Sin promoción vigente para este cliente.</span>';
+            }
         } else {
             showToast(j.error || 'Error', 'error');
         }

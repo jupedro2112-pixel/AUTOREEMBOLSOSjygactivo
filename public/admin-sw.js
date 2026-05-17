@@ -8,7 +8,7 @@
  */
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v10';
+const CACHE_VERSION = 'v11';
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).

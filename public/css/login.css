@@ -7,7 +7,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 20px;
+    padding: 6px;
     overflow-y: auto;
 }
 
@@ -15,8 +15,8 @@
     background: rgba(255, 255, 255, 0.05);
     backdrop-filter: blur(10px);
     border: 1px solid #d4af37;
-    border-radius: 20px;
-    padding: 24px;
+    border-radius: 18px;
+    padding: 13px 14px;
     width: 100%;
     max-width: 400px;
     margin: auto;
@@ -41,7 +41,7 @@
 }
 
 .input-group {
-    margin-bottom: 20px;
+    margin-bottom: 11px;
     text-align: left;
 }
 
@@ -54,7 +54,7 @@
 
 .input-group input {
     width: 100%;
-    padding: 15px;
+    padding: 10px 13px;
     border: 2px solid rgba(212, 175, 55, 0.3);
     border-radius: 10px;
     background: rgba(0, 0, 0, 0.3);

@@ -8745,6 +8745,35 @@ setInterval(function () { _runEncuestaTick(); }, 5 * 60 * 1000);
 
 
 // ============================================================
+// MOTOR DE RECUPERACIÓN DE INACTIVOS
+// ----------------------------------------------------------------
+// Escalera por días sin entrar (7d / 14d / 30d, configurable). Un cron
+// cada 6 h le manda a cada inactivo el push del paso que le toca y crea
+// el PromoBonus. DUERME salvo que inactividadConfig.isActive=true.
+// ============================================================
+const inactividadService = require('./src/services/inactividadService');
+const InactividadFire = require('./src/models/InactividadFire');
+
+async function _runInactividadTick() {
+  try {
+    const cfg = mergeInactividadConfig(await getConfig('inactividadConfig'));
+    const r = await inactividadService.tick({
+      cfg: cfg,
+      models: { User: User, InactividadFire: InactividadFire, PromoBonus: PromoBonus },
+      sendPushFn: sendNotificationToAllUsers,
+      logger: logger,
+      now: new Date()
+    });
+    if (r && r.fired > 0) logger.info('[inactividad] tick: disparados=' + r.fired);
+  } catch (err) {
+    logger.error('[inactividad] tick error: ' + err.message);
+  }
+}
+setTimeout(function () { _runInactividadTick(); }, 5 * 60 * 1000);
+setInterval(function () { _runInactividadTick(); }, 6 * 60 * 60 * 1000);
+
+
+// ============================================================
 // ENDPOINTS ADMIN — Recuperación de inactivos
 // ----------------------------------------------------------------
 // Sección dedicada en el panel para estudiar la población que tiene
@@ -9825,6 +9854,81 @@ app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (
     res.json({ success: true, dias: DIAS, totales: totales, reportes: reportes });
   } catch (err) {
     logger.error(`GET /api/admin/encuesta/reportes: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================================
+// RECUPERACIÓN DE INACTIVOS — config de la escalera 7/14/30 días.
+// ============================================================
+const INACTIVIDAD_DEFAULTS = {
+  isActive: false,
+  bonoVigenciaHoras: 72,
+  pasos: [
+    { dias: 7,  tipo: 'bono',   percent: 50,  montoARS: 0 },
+    { dias: 14, tipo: 'bono',   percent: 100, montoARS: 0 },
+    { dias: 30, tipo: 'regalo', percent: 0,   montoARS: 5000 }
+  ]
+};
+
+function mergeInactividadConfig(saved) {
+  const s = saved || {};
+  let pasos = (Array.isArray(s.pasos) && s.pasos.length) ? s.pasos : INACTIVIDAD_DEFAULTS.pasos;
+  pasos = pasos.map(function (p) {
+    p = p || {};
+    return {
+      dias: _encNum(p.dias, 7, 1, 365),
+      tipo: (p.tipo === 'regalo') ? 'regalo' : 'bono',
+      percent: _encNum(p.percent, 50, 0, 500),
+      montoARS: _encNum(p.montoARS, 0, 0, 10000000)
+    };
+  }).sort(function (a, b) { return a.dias - b.dias; });
+  return {
+    isActive: s.isActive === true,
+    bonoVigenciaHoras: _encNum(s.bonoVigenciaHoras, 72, 1, 720),
+    pasos: pasos
+  };
+}
+
+app.get('/api/admin/inactividad/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    res.json({ success: true, config: mergeInactividadConfig(await getConfig('inactividadConfig')) });
+  } catch (err) {
+    logger.error(`GET /api/admin/inactividad/config: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.put('/api/admin/inactividad/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const clean = mergeInactividadConfig(req.body || {});
+    await setConfig('inactividadConfig', clean);
+    logger.info(`[inactividad] config guardada por ${(req.user && req.user.username) || '?'}`);
+    res.json({ success: true, config: clean });
+  } catch (err) {
+    logger.error(`PUT /api/admin/inactividad/config: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Resumen: cuántos inactivos hay por tramo + últimos disparos.
+app.get('/api/admin/inactividad/stats', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const cfg = mergeInactividadConfig(await getConfig('inactividadConfig'));
+    const now = Date.now();
+    const tramos = [];
+    for (const p of cfg.pasos) {
+      const desde = new Date(now - p.dias * 86400000);
+      const count = await User.countDocuments({
+        lastLogin: { $lte: desde, $ne: null },
+        notificationPlan: { $ne: 'solo_reembolsos' }
+      });
+      tramos.push({ dias: p.dias, tipo: p.tipo, percent: p.percent, montoARS: p.montoARS, inactivos: count });
+    }
+    const ultimos = await InactividadFire.find({}).sort({ firedAt: -1 }).limit(20).lean();
+    res.json({ success: true, tramos: tramos, ultimos: ultimos });
+  } catch (err) {
+    logger.error(`GET /api/admin/inactividad/stats: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

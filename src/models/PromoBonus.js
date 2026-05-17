@@ -19,8 +19,13 @@ const promoBonusSchema = new mongoose.Schema({
   userId:   { type: String, default: null, index: true },
   username: { type: String, required: true, index: true, lowercase: true, trim: true },
 
-  // % extra sobre la carga del usuario (ej: 50, 100).
-  percent: { type: Number, required: true, min: 1 },
+  // % extra sobre la carga del usuario (ej: 50, 100). 0 si es un regalo
+  // de monto fijo (ver montoFijoARS).
+  percent: { type: Number, required: true, min: 0 },
+
+  // Regalo de monto fijo en pesos (ej: 5000). Si es > 0, el bono no es
+  // un % sobre la carga sino un regalo directo que el agente acredita.
+  montoFijoARS: { type: Number, default: 0 },
 
   // De qué regla de automatización salió.
   sourceRuleId:   { type: String, default: null },

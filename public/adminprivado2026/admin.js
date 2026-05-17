@@ -3222,6 +3222,7 @@ function switchSection(section) {
     if (section === 'automations') loadAutomations();
     if (section === 'bonusStrategy') loadBonusStrategy();
     if (section === 'encuesta') loadEncuesta();
+    if (section === 'inactivos') loadInactivos();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
@@ -8072,6 +8073,162 @@ async function encuestaSaveConfig() {
         });
         const j = await r.json();
         if (j.success) { showToast('✅ Matriz guardada', 'success'); loadEncuesta(); }
+        else { showToast(j.error || 'Error', 'error'); }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ============================================================
+// INACTIVOS — recuperación escalonada 7/14/30 días
+// ============================================================
+function _escInac(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+}
+
+async function loadInactivos() {
+    const body = document.getElementById('inactivosBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const headers = { 'Authorization': `Bearer ${currentToken}` };
+        const [cfgR, statsR] = await Promise.all([
+            fetch(`${API_URL}/api/admin/inactividad/config`, { headers }),
+            fetch(`${API_URL}/api/admin/inactividad/stats`, { headers })
+        ]);
+        const cfg = (await cfgR.json()).config || {};
+        const stats = await statsR.json();
+        _inactivosRender(cfg, stats);
+    } catch (e) {
+        body.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px;">Error cargando.</div>';
+    }
+}
+
+function _inactivosRender(cfg, stats) {
+    const body = document.getElementById('inactivosBody');
+    if (!body) return;
+    const active = cfg.isActive === true;
+    const pasos = cfg.pasos || [];
+    const tramos = (stats && stats.tramos) || [];
+    const ultimos = (stats && stats.ultimos) || [];
+    const selStyle = 'background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:6px;font-size:11px;font-weight:800;';
+    let h = '';
+
+    // --- Activación ---
+    h += '<div style="background:' + (active ? 'rgba(102,255,102,0.10)' : 'rgba(255,255,255,0.04)')
+        + ';border:1.5px solid ' + (active ? '#66ff66' : 'rgba(255,255,255,0.15)')
+        + ';border-radius:12px;padding:14px;margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
+    h += '<div style="flex:1;min-width:160px;">'
+        + '<div style="font-weight:900;font-size:14px;color:' + (active ? '#66ff66' : '#fff') + ';">'
+        + (active ? '🟢 Recuperación ACTIVA' : '⚪ Recuperación en pausa') + '</div>'
+        + '<div style="color:#aaa;font-size:11px;margin-top:2px;">'
+        + (active ? 'El motor está contactando a los inactivos según la escalera.'
+                  : 'El motor está dormido. Al activarlo se empieza a contactar a los inactivos actuales.') + '</div></div>';
+    h += active
+        ? '<button onclick="inactivosToggleActive(false)" style="background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;border:none;border-radius:9px;padding:10px 18px;font-weight:900;font-size:13px;cursor:pointer;">⏸ Pausar</button>'
+        : '<button onclick="inactivosToggleActive(true)" style="background:linear-gradient(135deg,#00cc6a,#00ff88);color:#000;border:none;border-radius:9px;padding:10px 18px;font-weight:900;font-size:13px;cursor:pointer;">🚀 Activar recuperación</button>';
+    h += '</div>';
+
+    // --- Inactivos por tramo ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">📉 Inactivos por tramo</h3>';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:18px;">';
+    tramos.forEach(function (t) {
+        const premio = t.tipo === 'regalo' ? ('regalo $' + (t.montoARS || 0)) : ('bono ' + (t.percent || 0) + '%');
+        h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:10px;text-align:center;">'
+            + '<div style="font-size:20px;font-weight:900;color:#ffd700;">' + (t.inactivos || 0) + '</div>'
+            + '<div style="font-size:10px;color:#bbb;">+' + t.dias + ' días · ' + premio + '</div></div>';
+    });
+    h += '</div>';
+
+    // --- Escalera (config) ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">⚙️ Escalera de recuperación</h3>';
+    h += '<div style="background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:18px;">';
+    h += '<table style="width:100%;border-collapse:collapse;">';
+    h += '<tr style="color:#888;font-size:9px;text-transform:uppercase;">'
+        + '<th style="padding:4px;">Días inactivo</th><th style="padding:4px;">Tipo</th>'
+        + '<th style="padding:4px;">% bono</th><th style="padding:4px;">$ regalo</th></tr>';
+    pasos.forEach(function (p, i) {
+        h += '<tr>'
+            + '<td style="padding:5px;text-align:center;">' + _encInput('inacInp_' + i + '_dias', p.dias, 1, 365) + '</td>'
+            + '<td style="padding:5px;text-align:center;"><select id="inacInp_' + i + '_tipo" style="' + selStyle + '">'
+            + '<option value="bono"' + (p.tipo !== 'regalo' ? ' selected' : '') + '>Bono %</option>'
+            + '<option value="regalo"' + (p.tipo === 'regalo' ? ' selected' : '') + '>Regalo $</option></select></td>'
+            + '<td style="padding:5px;text-align:center;">' + _encInput('inacInp_' + i + '_percent', p.percent, 0, 500) + '</td>'
+            + '<td style="padding:5px;text-align:center;">' + _encInput('inacInp_' + i + '_monto', p.montoARS, 0, 10000000) + '</td>'
+            + '</tr>';
+    });
+    h += '</table>';
+    h += '<div style="margin-top:10px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Vigencia del bono/regalo (horas)</label>'
+        + '<input type="number" id="inacInp_vigencia" value="' + (cfg.bonoVigenciaHoras || 72) + '" min="1" max="720" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
+    h += '<button onclick="inactivosSaveConfig()" style="margin-top:12px;width:100%;background:linear-gradient(135deg,#d4af37,#ffd700);color:#000;border:none;border-radius:9px;padding:11px;font-weight:900;font-size:13px;cursor:pointer;">💾 Guardar escalera</button>';
+    h += '</div>';
+
+    // --- Últimos disparos ---
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">🔎 Últimos disparos</h3>';
+    if (ultimos.length) {
+        h += '<div style="display:flex;flex-direction:column;gap:5px;">';
+        ultimos.forEach(function (u) {
+            const premio = u.tipo === 'regalo' ? ('🎁 $' + (u.montoARS || 0)) : ('🎁 ' + (u.percent || 0) + '%');
+            h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.07);border-radius:7px;padding:6px 9px;font-size:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+                + '<span style="color:#fff;font-weight:700;">' + _escInac(u.username) + '</span>'
+                + '<span style="color:#c9a0ff;">+' + u.stepDias + 'd · ' + premio + '</span>'
+                + '<span style="color:#777;margin-left:auto;">' + (u.firedAt ? new Date(u.firedAt).toLocaleString('es-AR') : '') + '</span></div>';
+        });
+        h += '</div>';
+    } else {
+        h += '<div style="color:#777;font-size:11px;">Todavía no hubo disparos.</div>';
+    }
+
+    body.innerHTML = h;
+}
+
+async function inactivosToggleActive(activate) {
+    try {
+        const headers = { 'Authorization': `Bearer ${currentToken}` };
+        const r0 = await fetch(`${API_URL}/api/admin/inactividad/config`, { headers });
+        const cfg = (await r0.json()).config || {};
+        cfg.isActive = !!activate;
+        const r = await fetch(`${API_URL}/api/admin/inactividad/config`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${currentToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg)
+        });
+        const j = await r.json();
+        if (j.success) {
+            showToast(activate ? '🚀 Recuperación activada' : '⏸ Recuperación pausada', 'success');
+            loadInactivos();
+        } else { showToast(j.error || 'Error', 'error'); }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function inactivosSaveConfig() {
+    try {
+        const headers = { 'Authorization': `Bearer ${currentToken}` };
+        const r0 = await fetch(`${API_URL}/api/admin/inactividad/config`, { headers });
+        const cfg = (await r0.json()).config || {};
+        const pasos = [];
+        let i = 0;
+        while (document.getElementById('inacInp_' + i + '_dias')) {
+            const tipoEl = document.getElementById('inacInp_' + i + '_tipo');
+            pasos.push({
+                dias: parseInt(document.getElementById('inacInp_' + i + '_dias').value, 10) || 7,
+                tipo: (tipoEl && tipoEl.value === 'regalo') ? 'regalo' : 'bono',
+                percent: parseInt(document.getElementById('inacInp_' + i + '_percent').value, 10) || 0,
+                montoARS: parseInt(document.getElementById('inacInp_' + i + '_monto').value, 10) || 0
+            });
+            i++;
+        }
+        if (pasos.length) cfg.pasos = pasos;
+        const vigEl = document.getElementById('inacInp_vigencia');
+        const vig = parseInt(vigEl && vigEl.value, 10);
+        if (isFinite(vig)) cfg.bonoVigenciaHoras = vig;
+        const r = await fetch(`${API_URL}/api/admin/inactividad/config`, {
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${currentToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(cfg)
+        });
+        const j = await r.json();
+        if (j.success) { showToast('✅ Escalera guardada', 'success'); loadInactivos(); }
         else { showToast(j.error || 'Error', 'error'); }
     } catch (e) { showToast('Error de conexión', 'error'); }
 }

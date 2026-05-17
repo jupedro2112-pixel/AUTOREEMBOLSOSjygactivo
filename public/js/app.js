@@ -186,6 +186,7 @@ function setupEventListeners() {
         const infoBtn = document.getElementById('infoBtn');
         if (infoBtn) infoBtn.addEventListener('click', () => {
             VIP.ui.showModal('infoModal');
+            if (VIP.appTest && typeof VIP.appTest.renderDiagnostics === 'function') VIP.appTest.renderDiagnostics();
             if (VIP.reviews && typeof VIP.reviews.renderInfoSection === 'function') VIP.reviews.renderInfoSection();
         });
         const closeInfoModal = document.getElementById('closeInfoModal');

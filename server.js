@@ -9898,10 +9898,23 @@ app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, re
 // SOPORTE VIP — handle de Telegram configurable. El GET es público
 // porque lo usa el botón "Soporte VIP" de la pantalla de login.
 // ============================================================
+// Mensaje fijo con el que abre el chat de WhatsApp de soporte.
+const SOPORTE_WA_MENSAJE = 'Vengo de VIPCARGAS necesito ayuda';
+
 app.get('/api/config/soporte-vip', async (req, res) => {
   try {
     const c = (await getConfig('soporteVipTelegram')) || {};
-    res.json({ handle: c.handle || '', url: c.url || '' });
+    // Soporta el formato viejo {handle,url} (solo Telegram) y el nuevo
+    // {telegram,whatsapp}, así no se pierde la config previa tras el deploy.
+    const telegram = c.telegram || { handle: c.handle || '', url: c.url || '' };
+    const whatsapp = c.whatsapp || { number: '', url: '' };
+    res.json({
+      telegram: telegram,
+      whatsapp: whatsapp,
+      // Campos legacy (Telegram) por compatibilidad.
+      handle: telegram.handle || '',
+      url: telegram.url || ''
+    });
   } catch (err) {
     logger.error(`/api/config/soporte-vip: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -9910,14 +9923,31 @@ app.get('/api/config/soporte-vip', async (req, res) => {
 
 app.post('/api/admin/soporte-vip', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    let h = String((req.body && req.body.handle) || '').trim();
-    // Acepta @usuario, usuario o un link t.me/usuario y lo normaliza.
-    h = h.replace(/^https?:\/\/(t\.me|telegram\.me)\//i, '').replace(/^@/, '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
-    const handle = h ? '@' + h : '';
-    const url = h ? 'https://t.me/' + h : '';
-    await setConfig('soporteVipTelegram', { handle: handle, url: url });
+    // Telegram: acepta @usuario, usuario o link t.me/usuario y lo normaliza.
+    let tg = String((req.body && req.body.telegramHandle) || '').trim();
+    tg = tg.replace(/^https?:\/\/(t\.me|telegram\.me)\//i, '').replace(/^@/, '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
+    const telegram = {
+      handle: tg ? '@' + tg : '',
+      url: tg ? 'https://t.me/' + tg : ''
+    };
+
+    // WhatsApp: solo dígitos (código de país incluido). El link abre el chat
+    // con el mensaje fijo de soporte ya escrito.
+    const wa = String((req.body && req.body.whatsappNumber) || '').replace(/\D/g, '').slice(0, 20);
+    const whatsapp = {
+      number: wa,
+      url: wa ? 'https://wa.me/' + wa + '?text=' + encodeURIComponent(SOPORTE_WA_MENSAJE) : ''
+    };
+
+    await setConfig('soporteVipTelegram', {
+      telegram: telegram,
+      whatsapp: whatsapp,
+      // Campos legacy para no romper lectores viejos.
+      handle: telegram.handle,
+      url: telegram.url
+    });
     logger.info(`[soporte-vip] config guardada por ${(req.user && req.user.username) || '?'}`);
-    res.json({ success: true, handle: handle, url: url });
+    res.json({ success: true, telegram: telegram, whatsapp: whatsapp });
   } catch (err) {
     logger.error(`POST /api/admin/soporte-vip: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });

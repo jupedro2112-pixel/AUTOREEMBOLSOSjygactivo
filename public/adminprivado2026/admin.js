@@ -4193,17 +4193,21 @@ async function loadSoporteVip() {
         const response = await fetch(`${API_URL}/api/config/soporte-vip`);
         if (response.ok) {
             const data = await response.json();
-            const input = document.getElementById('soporteVipHandle');
-            if (input) input.value = data.handle || '';
+            const tg = document.getElementById('soporteTelegramHandle');
+            const wa = document.getElementById('soporteWhatsappNumber');
+            if (tg) tg.value = (data.telegram && data.telegram.handle) || data.handle || '';
+            if (wa) wa.value = (data.whatsapp && data.whatsapp.number) || '';
         }
     } catch (error) {
-        console.error('Error loading soporte VIP:', error);
+        console.error('Error loading soporte:', error);
     }
 }
 
 async function saveSoporteVip() {
-    const input = document.getElementById('soporteVipHandle');
-    const handle = input ? input.value.trim() : '';
+    const tg = document.getElementById('soporteTelegramHandle');
+    const wa = document.getElementById('soporteWhatsappNumber');
+    const telegramHandle = tg ? tg.value.trim() : '';
+    const whatsappNumber = wa ? wa.value.trim() : '';
     try {
         const response = await fetch(`${API_URL}/api/admin/soporte-vip`, {
             method: 'POST',
@@ -4211,17 +4215,18 @@ async function saveSoporteVip() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({ handle })
+            body: JSON.stringify({ telegramHandle, whatsappNumber })
         });
         const data = await response.json();
         if (response.ok) {
-            if (input) input.value = data.handle || '';
-            showToast('Soporte VIP guardado', 'success');
+            if (tg) tg.value = (data.telegram && data.telegram.handle) || '';
+            if (wa) wa.value = (data.whatsapp && data.whatsapp.number) || '';
+            showToast('Soporte guardado', 'success');
         } else {
             showToast(data.error || 'Error al guardar', 'error');
         }
     } catch (error) {
-        console.error('Error saving soporte VIP:', error);
+        console.error('Error saving soporte:', error);
         showToast('Error al guardar', 'error');
     }
 }

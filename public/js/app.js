@@ -85,17 +85,30 @@ function setupEventListeners() {
         if (loginForm) loginForm.addEventListener('submit', VIP.auth.handleLogin);
         const logoutBtn = document.getElementById('logoutBtn');
         if (logoutBtn) logoutBtn.addEventListener('click', VIP.auth.handleLogout);
-        const helpBtn = document.getElementById('helpBtn');
-        if (helpBtn) helpBtn.addEventListener('click', async () => {
+        // Soporte del login: dos botones (WhatsApp y Telegram). Cada uno trae
+        // la config del server y abre el canal correspondiente.
+        async function _vipFetchSoporte() {
             try {
                 const r = await fetch(VIP.config.API_URL + '/api/config/soporte-vip');
-                const d = r.ok ? await r.json() : null;
-                if (d && d.url) { window.open(d.url, '_blank'); return; }
-            } catch (e) { /* cae al fallback */ }
-            window.open('https://wa.link/metawin2026', '_blank');
+                return r.ok ? await r.json() : null;
+            } catch (e) { return null; }
+        }
+        const helpWhatsappBtn = document.getElementById('helpWhatsappBtn');
+        if (helpWhatsappBtn) helpWhatsappBtn.addEventListener('click', async () => {
+            const d = await _vipFetchSoporte();
+            const url = (d && d.whatsapp && d.whatsapp.url) ? d.whatsapp.url : 'https://wa.link/metawin2026';
+            window.open(url, '_blank');
         });
-        const installBtn = document.getElementById('installBtn');
-        if (installBtn) installBtn.addEventListener('click', VIP.ui.installApp);
+        const helpTelegramBtn = document.getElementById('helpTelegramBtn');
+        if (helpTelegramBtn) helpTelegramBtn.addEventListener('click', async () => {
+            const d = await _vipFetchSoporte();
+            const url = (d && d.telegram && d.telegram.url) ? d.telegram.url : '';
+            if (url) {
+                window.open(url, '_blank');
+            } else {
+                VIP.ui.showToast('Soporte de Telegram no disponible por ahora', 'info');
+            }
+        });
 
         const headerInstallBtn = document.getElementById('headerInstallBtn');
         if (headerInstallBtn) headerInstallBtn.addEventListener('click', VIP.ui.installApp);

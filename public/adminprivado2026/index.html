@@ -722,6 +722,45 @@
                     <div id="notifStrategyContainer">
                         <p style="color:#888;font-size:.85rem;">Cargando plantillas…</p>
                     </div>
+
+                    <div style="margin-top:1.3rem;border-top:1px solid #333;padding-top:1rem;">
+                        <h4 style="color:#d4af37;font-size:.92rem;margin-bottom:.7rem;">⏰ Notificaciones programadas</h4>
+                        <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:.6rem;">
+                            <select id="schedType" class="form-input">
+                                <option value="bono_50">Bono 50%</option>
+                                <option value="bono_100">Bono 100%</option>
+                                <option value="invitacion">Invitación a jugar</option>
+                                <option value="regalo">Regalo</option>
+                                <option value="reembolso">Reembolso disponible</option>
+                            </select>
+                            <select id="schedPlan" class="form-input">
+                                <option value="suave">Plan Suave</option>
+                                <option value="normal">Plan Normal</option>
+                                <option value="activo">Plan Activo</option>
+                                <option value="solo_reembolsos">Solo reembolsos</option>
+                                <option value="todos">Todos</option>
+                            </select>
+                            <select id="schedMode" class="form-input" onchange="updateSchedFields()">
+                                <option value="once">Una vez</option>
+                                <option value="daily">Todos los días</option>
+                                <option value="weekly">Semanal</option>
+                            </select>
+                            <input type="datetime-local" id="schedRunAt" class="form-input">
+                            <input type="time" id="schedTime" class="form-input" style="display:none;">
+                            <select id="schedDow" class="form-input" style="display:none;">
+                                <option value="1">Lunes</option>
+                                <option value="2">Martes</option>
+                                <option value="3">Miércoles</option>
+                                <option value="4">Jueves</option>
+                                <option value="5">Viernes</option>
+                                <option value="6">Sábado</option>
+                                <option value="0">Domingo</option>
+                            </select>
+                            <button class="btn btn-sm btn-primary" onclick="addSchedule()">➕ Programar</button>
+                        </div>
+                        <div style="font-size:.74rem;color:#888;margin-bottom:.7rem;">Las horas son en horario de Argentina.</div>
+                        <div id="schedList"><p style="color:#888;font-size:.85rem;">Cargando…</p></div>
+                    </div>
                 </div>
 
                 <!-- Compositor de notificación -->

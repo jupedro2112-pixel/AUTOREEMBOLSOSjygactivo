@@ -4530,9 +4530,132 @@ async function loadNotificationsPanel() {
     await Promise.all([
         loadNotifStats(),
         loadNotifUsers(1, filter),
-        loadNotifStrategy()
+        loadNotifStrategy(),
+        loadSchedules()
     ]);
 }
+
+// ===== Notificaciones programadas =====
+function updateSchedFields() {
+    const mode = document.getElementById('schedMode').value;
+    document.getElementById('schedRunAt').style.display = (mode === 'once') ? '' : 'none';
+    document.getElementById('schedTime').style.display = (mode === 'once') ? 'none' : '';
+    document.getElementById('schedDow').style.display = (mode === 'weekly') ? '' : 'none';
+}
+
+async function loadSchedules() {
+    const el = document.getElementById('schedList');
+    if (!el) return;
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/strategy/schedules`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        renderSchedules(data.schedules || []);
+    } catch (e) {
+        el.innerHTML = '<p style="color:#dc3545;font-size:.85rem;">No se pudieron cargar las programaciones.</p>';
+    }
+}
+
+function renderSchedules(list) {
+    const el = document.getElementById('schedList');
+    if (!list.length) {
+        el.innerHTML = '<p style="color:#888;font-size:.85rem;">No hay notificaciones programadas.</p>';
+        return;
+    }
+    const TYPE_LABELS = { bono_50: 'Bono 50%', bono_100: 'Bono 100%', invitacion: 'Invitación a jugar', regalo: 'Regalo', reembolso: 'Reembolso' };
+    const DOW = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    el.innerHTML = list.map(s => {
+        let cuando;
+        if (s.mode === 'once') {
+            cuando = 'Una vez — ' + (s.runAt ? new Date(s.runAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : '—');
+        } else if (s.mode === 'daily') {
+            cuando = 'Todos los días a las ' + s.time;
+        } else {
+            cuando = (DOW[s.dayOfWeek] || '?') + ' a las ' + s.time;
+        }
+        const last = s.lastResult ? `<div style="font-size:.72rem;color:#888;margin-top:.2rem;">Último: ${escapeHtml(s.lastResult)}</div>` : '';
+        return `
+        <div style="border:1px solid #333;border-radius:8px;padding:.6rem .8rem;margin-bottom:.5rem;display:flex;justify-content:space-between;align-items:center;gap:.6rem;flex-wrap:wrap;">
+            <div>
+                <div style="color:#fff;font-size:.86rem;font-weight:600;">${TYPE_LABELS[s.type] || s.type} → ${escapeHtml(s.plan)}</div>
+                <div style="font-size:.78rem;color:#aaa;">${escapeHtml(cuando)}${s.enabled ? '' : ' · (pausada)'}</div>
+                ${last}
+            </div>
+            <div style="display:flex;gap:.4rem;">
+                <button class="btn btn-sm btn-secondary" onclick="toggleSchedule('${s._id}', ${s.enabled ? 'false' : 'true'})">${s.enabled ? '⏸ Pausar' : '▶ Activar'}</button>
+                <button class="btn btn-sm btn-secondary" style="color:#dc3545" onclick="deleteSchedule('${s._id}')">🗑</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function addSchedule() {
+    const type = document.getElementById('schedType').value;
+    const plan = document.getElementById('schedPlan').value;
+    const mode = document.getElementById('schedMode').value;
+    const body = { type, plan, mode };
+    if (mode === 'once') {
+        const v = document.getElementById('schedRunAt').value;
+        if (!v) { showToast('Elegí la fecha y hora', 'error'); return; }
+        body.runAt = v;
+    } else {
+        const t = document.getElementById('schedTime').value;
+        if (!t) { showToast('Elegí la hora', 'error'); return; }
+        body.time = t;
+        if (mode === 'weekly') body.dayOfWeek = document.getElementById('schedDow').value;
+    }
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/strategy/schedules`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        showToast('Notificación programada', 'success');
+        loadSchedules();
+    } catch (e) {
+        showToast(e.message || 'Error al programar', 'error');
+    }
+}
+
+async function toggleSchedule(id, enabled) {
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/strategy/schedules/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ enabled })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        loadSchedules();
+    } catch (e) {
+        showToast(e.message || 'Error', 'error');
+    }
+}
+
+async function deleteSchedule(id) {
+    if (!confirm('¿Eliminar esta notificación programada?')) return;
+    try {
+        const res = await fetch(`${API_URL}/api/notifications/strategy/schedules/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Error');
+        showToast('Programación eliminada', 'success');
+        loadSchedules();
+    } catch (e) {
+        showToast(e.message || 'Error', 'error');
+    }
+}
+
+window.updateSchedFields = updateSchedFields;
+window.addSchedule = addSchedule;
+window.toggleSchedule = toggleSchedule;
+window.deleteSchedule = deleteSchedule;
 
 // ===== Estrategia de Notificaciones (plantillas editables) =====
 async function loadNotifStrategy() {

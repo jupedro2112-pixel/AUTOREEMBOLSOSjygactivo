@@ -93,6 +93,8 @@ VIP.ui = (function () {
         document.getElementById('loginScreen').classList.add('hidden');
         document.getElementById('chatScreen').classList.remove('hidden');
         document.getElementById('currentUser').textContent = VIP.state.currentUser?.username || 'Usuario';
+        const _dashUser = document.getElementById('dashUserName');
+        if (_dashUser) _dashUser.textContent = VIP.state.currentUser?.username || 'Usuario';
 
         adjustLayout();
         syncBalance();

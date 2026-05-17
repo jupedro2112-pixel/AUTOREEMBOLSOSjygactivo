@@ -494,15 +494,31 @@
                     border-radius:13px; padding:8px;
                     box-shadow:0 3px 12px rgba(212,175,55,.4);
                 }
-                .dash-cell {
-                    flex:0 0 60px; display:flex; flex-direction:column; align-items:center;
-                    justify-content:center; gap:3px; cursor:pointer; color:#fff;
-                    background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #1a0033;
-                    border-radius:11px; padding:8px 4px;
+                .dash-info-bar {
+                    display:flex; align-items:center; gap:9px; width:100%;
+                    background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #d4af37;
+                    border-radius:9px; padding:7px 13px; cursor:pointer; color:#fff;
+                    font-size:12px; font-weight:700; text-align:left;
                 }
-                .dash-cell-emoji { font-size:22px; line-height:1; }
-                .dash-cell-label { font-size:10px; font-weight:800; color:#ffd700; letter-spacing:.2px; }
-                .dash-fire .fire-streak { background:#ff4500; color:#fff; border-radius:10px; font-size:11px; font-weight:900; padding:1px 8px; }
+                .dash-info-bar .dash-info-icon { font-size:15px; flex-shrink:0; }
+                .dash-info-bar .dash-info-text { flex:1; min-width:0; }
+                .dash-info-bar .dash-info-arrow { color:#d4af37; font-size:17px; font-weight:900; }
+                .dash-user {
+                    flex:0 0 94px; display:flex; flex-direction:column; align-items:center;
+                    justify-content:center; gap:3px; color:#fff;
+                    background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #1a0033;
+                    border-radius:11px; padding:8px 6px;
+                }
+                .dash-user-avatar {
+                    font-size:18px; width:34px; height:34px; display:flex;
+                    align-items:center; justify-content:center;
+                    background:linear-gradient(135deg,#d4af37,#ffd700); border-radius:50%;
+                }
+                .dash-user-label { font-size:8.5px; font-weight:800; color:#ffd700; letter-spacing:.6px; }
+                .dash-user-name {
+                    font-size:11px; font-weight:900; color:#fff; max-width:82px; text-align:center;
+                    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                }
                 .dash-refunds {
                     flex:1; min-width:0; background:linear-gradient(135deg,#1a0033,#0a0015);
                     border:1.5px solid #1a0033; border-radius:11px; padding:7px 7px 8px;
@@ -543,12 +559,13 @@
                 .chat-section .chat-container { min-height:0; }
             </style>
             <div class="home-dash">
+                <!-- Info de nuestro servicio: barra fina abajo de la promo -->
+                <button class="dash-info-bar" id="infoBtn" title="Información de nuestro servicio">
+                    <span class="dash-info-icon">ℹ️</span>
+                    <span class="dash-info-text">Información de nuestro servicio</span>
+                    <span class="dash-info-arrow">›</span>
+                </button>
                 <div class="dash-top">
-                    <button id="fireBtn" class="dash-cell dash-fire" title="Racha diaria — reclamá cada día">
-                        <span class="dash-cell-emoji">🔥</span>
-                        <span class="dash-cell-label">Fueguito</span>
-                        <span class="fire-streak" id="fireStreak">0</span>
-                    </button>
                     <div class="dash-refunds">
                         <div class="dash-refunds-title">🎁 REEMBOLSOS</div>
                         <div class="dash-refunds-row">
@@ -573,10 +590,11 @@
                         </div>
                         <button id="unifiedRefundBtn" class="refund-btn unified-refund-btn" title="Reembolsos" onclick="VIP.refunds.showUnifiedRefundModal()" style="display:none;">🎁 Reembolsos</button>
                     </div>
-                    <button class="dash-cell dash-info" id="infoBtn" title="Información del servicio">
-                        <span class="dash-cell-emoji">ℹ️</span>
-                        <span class="dash-cell-label">Info</span>
-                    </button>
+                    <div class="dash-user">
+                        <span class="dash-user-avatar">👤</span>
+                        <span class="dash-user-label">USUARIO</span>
+                        <span class="dash-user-name" id="dashUserName">Usuario</span>
+                    </div>
                 </div>
 
                 <!-- Comunidad / Canales de Telegram -->

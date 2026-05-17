@@ -25,6 +25,7 @@ VIP.fire = (function () {
 
         const btn    = document.getElementById('fireBtn');
         const streak = document.getElementById('fireStreak');
+        if (!btn || !streak) return;
 
         streak.textContent = VIP.state.fireStatus.streak || 0;
 

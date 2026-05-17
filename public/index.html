@@ -303,11 +303,31 @@
                     Soporte Telegram
                 </button>
             </div>
-            <div class="login-logo" style="font-size:24px;line-height:1;color:#d4af37;margin-bottom:0;">♛</div>
-            <div style="color:#d4af37;font-size:10px;font-weight:900;letter-spacing:5px;margin:3px 0 1px;">V I P</div>
-            <h1 style="letter-spacing:3px;margin:0;">VIPCARGAS</h1>
-            <div style="width:56px;height:2px;background:linear-gradient(90deg,transparent,#d4af37,transparent);margin:6px auto;"></div>
-            <p style="margin-top:0;margin-bottom:7px;">Sala de juegos VIP</p>
+            <!-- Logo VIPCARGAS flanqueado por Reseñas (izq) y Regalos (der). -->
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                <button id="loginReviewsBtn" type="button" style="flex:0 0 64px;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 4px;background:rgba(212,175,55,0.10);border:1px solid rgba(212,175,55,0.45);border-radius:11px;color:#d4af37;cursor:pointer;-webkit-tap-highlight-color:rgba(212,175,55,.3);touch-action:manipulation;">
+                    <span style="font-size:19px;line-height:1;">⭐</span>
+                    <span style="font-size:9px;font-weight:800;letter-spacing:.3px;">Reseñas</span>
+                </button>
+                <div style="flex:1;min-width:0;">
+                    <div class="login-logo" style="font-size:24px;line-height:1;color:#d4af37;margin-bottom:0;">♛</div>
+                    <div style="color:#d4af37;font-size:10px;font-weight:900;letter-spacing:5px;margin:3px 0 1px;">V I P</div>
+                    <h1 style="letter-spacing:3px;margin:0;">VIPCARGAS</h1>
+                    <div style="width:56px;height:2px;background:linear-gradient(90deg,transparent,#d4af37,transparent);margin:6px auto;"></div>
+                </div>
+                <button id="loginGiftsBtn" type="button" style="flex:0 0 64px;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 4px;background:rgba(106,13,173,0.18);border:1px solid rgba(157,78,221,0.55);border-radius:11px;color:#d9b8ff;cursor:pointer;-webkit-tap-highlight-color:rgba(157,78,221,.3);touch-action:manipulation;">
+                    <span style="font-size:19px;line-height:1;">🎁</span>
+                    <span style="font-size:9px;font-weight:800;letter-spacing:.3px;">Regalos</span>
+                </button>
+            </div>
+            <p style="margin-top:0;margin-bottom:6px;">Sala de juegos VIP</p>
+            <!-- Ticker en vivo de lo que reclama la gente (se llena desde app.js). -->
+            <div id="loginClaimsTicker" style="display:none;align-items:center;gap:8px;background:linear-gradient(135deg,rgba(157,78,221,0.16),rgba(212,175,55,0.10));border:1px solid rgba(157,78,221,0.4);border-radius:10px;padding:7px 10px;margin-bottom:12px;overflow:hidden;">
+                <span style="display:inline-flex;align-items:center;gap:4px;flex-shrink:0;font-size:8.5px;font-weight:900;color:#25d366;letter-spacing:.5px;">
+                    <span style="width:6px;height:6px;border-radius:50%;background:#25d366;box-shadow:0 0 6px #25d366;animation:winners-pulse 1.4s ease-in-out infinite;"></span>EN VIVO
+                </span>
+                <span id="loginClaimsText" style="flex:1;min-width:0;font-size:11px;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .25s ease;">—</span>
+            </div>
             
             <form id="loginForm" autocomplete="on">
                 <div style="display:none;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid rgba(212,175,55,0.3);">
@@ -392,10 +412,6 @@
             </div>
 
             <div id="errorMessage" class="error-message"></div>
-
-            <!-- Reseñas de jugadores (prueba social). Se llena dinámicamente
-                 desde js/reviews.js con las opiniones aprobadas. -->
-            <div id="loginReviewsWidget" style="display:none;"></div>
         </div>
     </div>
 
@@ -868,7 +884,7 @@
             <form id="registerForm" autocomplete="on">
                 <div class="input-group">
                     <label>Usuario *</label>
-                    <input type="text" id="registerUsername" name="username" placeholder="Elige un usuario" required autocomplete="username" minlength="3" maxlength="20">
+                    <input type="text" id="registerUsername" name="username" value="VIP" placeholder="VIPtuusuario" required autocomplete="username" minlength="3" maxlength="20">
                     <span id="usernameCheckResult" style="font-size: 11px; margin-top: 4px; display: block;"></span>
                 </div>
                 <div class="input-group">
@@ -1473,6 +1489,20 @@
                 <button type="button" class="btn btn-secondary" id="smsOfferSkipBtn" style="width:100%;">Omitir por ahora</button>
             </div>
             <p style="color:#888; font-size:10.5px; margin:10px 0 0; text-align:center;">Podés hacerlo más tarde desde tu perfil.</p>
+        </div>
+    </div>
+
+    <!-- Modal reusable del login: muestra Reseñas o Regalos (feed en vivo). -->
+    <div id="loginFeedModal" class="modal hidden">
+        <div class="modal-content" style="position: relative;">
+            <button type="button" onclick="VIP.ui.hideModal('loginFeedModal')" style="position: absolute; top: 15px; right: 15px; background: none; border: none; color: #888; font-size: 24px; cursor: pointer; z-index: 10;">✕</button>
+            <div class="modal-header">
+                <h2 id="loginFeedTitle">Reseñas</h2>
+                <p id="loginFeedSubtitle"></p>
+            </div>
+            <div id="loginFeedBody" style="max-height: 62vh; overflow-y: auto; -webkit-overflow-scrolling: touch;">
+                <div style="text-align:center; color:#888; padding:24px;">Cargando…</div>
+            </div>
         </div>
     </div>
 

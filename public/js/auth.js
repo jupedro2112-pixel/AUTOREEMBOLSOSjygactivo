@@ -1156,6 +1156,10 @@ VIP.auth = (function () {
         }
         sendBtn.textContent = '📝 Crear Cuenta';
         sendBtn.onclick = handleRegisterDirect;
+
+        // El usuario de registro arranca siempre con "VIP"; el cliente completa.
+        const ru = document.getElementById('registerUsername');
+        if (ru && !ru.value.trim()) ru.value = 'VIP';
     }
 
     // ============================================

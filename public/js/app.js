@@ -110,6 +110,115 @@ function setupEventListeners() {
             }
         });
 
+        // ===== Login: botones Reseñas / Regalos + ticker en vivo de reclamos =====
+        const _vipEsc = (s) => {
+            const d = document.createElement('div');
+            d.textContent = String(s == null ? '' : s);
+            return d.innerHTML;
+        };
+        const _vipFmtMoney = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+        const _vipRefundLabel = { daily: 'diario', weekly: 'semanal', monthly: 'mensual' };
+        function _vipClaimText(it) {
+            const name = it.name || '***';
+            if (it.kind === 'ruleta') return '🎰 ' + name + ' ganó ' + _vipFmtMoney(it.amount) + ' en la ruleta';
+            if (it.kind === 'bono') return '🎁 ' + name + ' reclamó su bono de ' + _vipFmtMoney(it.amount);
+            return '💸 ' + name + ' reclamó ' + _vipFmtMoney(it.amount) + ' de reembolso ' + (_vipRefundLabel[it.refundType] || '');
+        }
+
+        let _vipClaims = [];
+        let _vipClaimIdx = 0;
+        let _vipClaimTimer = null;
+        async function _vipFetchClaims() {
+            try {
+                const r = await fetch(VIP.config.API_URL + '/api/claims-feed');
+                if (!r.ok) return;
+                const d = await r.json();
+                if (d && Array.isArray(d.items) && d.items.length) _vipClaims = d.items;
+            } catch (e) { /* best-effort */ }
+        }
+        function _vipTickStep() {
+            const ticker = document.getElementById('loginClaimsTicker');
+            const txt = document.getElementById('loginClaimsText');
+            if (!ticker || !txt || !_vipClaims.length) return;
+            txt.style.opacity = '0';
+            setTimeout(() => {
+                _vipClaimIdx = (_vipClaimIdx + 1) % _vipClaims.length;
+                txt.textContent = _vipClaimText(_vipClaims[_vipClaimIdx]);
+                txt.style.opacity = '1';
+            }, 260);
+        }
+        (async function _vipStartTicker() {
+            await _vipFetchClaims();
+            if (!_vipClaims.length) return;
+            const ticker = document.getElementById('loginClaimsTicker');
+            const txt = document.getElementById('loginClaimsText');
+            if (ticker && txt) {
+                ticker.style.display = 'flex';
+                txt.textContent = _vipClaimText(_vipClaims[0]);
+                txt.style.opacity = '1';
+            }
+            if (_vipClaimTimer) clearInterval(_vipClaimTimer);
+            _vipClaimTimer = setInterval(_vipTickStep, 3600);
+            setInterval(_vipFetchClaims, 45000);
+        })();
+
+        function _vipStars(n) {
+            const v = Math.max(0, Math.min(5, Math.round(Number(n) || 0)));
+            let h = '';
+            for (let i = 1; i <= 5; i++) h += '<span style="color:' + (i <= v ? '#ffd700' : '#555') + ';">★</span>';
+            return h;
+        }
+        const loginReviewsBtn = document.getElementById('loginReviewsBtn');
+        if (loginReviewsBtn) loginReviewsBtn.addEventListener('click', async () => {
+            const title = document.getElementById('loginFeedTitle');
+            const sub = document.getElementById('loginFeedSubtitle');
+            const body = document.getElementById('loginFeedBody');
+            if (title) title.textContent = '⭐ Opiniones de jugadores';
+            if (sub) sub.textContent = '';
+            if (body) body.innerHTML = '<div style="text-align:center;color:#888;padding:24px;">Cargando…</div>';
+            VIP.ui.showModal('loginFeedModal');
+            try {
+                const r = await fetch(VIP.config.API_URL + '/api/reviews/public?limit=40');
+                const d = r.ok ? await r.json() : null;
+                if (!d || !d.items || !d.items.length) {
+                    if (body) body.innerHTML = '<div style="text-align:center;color:#888;padding:24px;">Todavía no hay opiniones publicadas.</div>';
+                    return;
+                }
+                if (sub) sub.textContent = Number(d.avgStars || 0).toFixed(1) + ' / 5 · ' + d.total + ' opiniones';
+                let h = '';
+                d.items.forEach((it) => {
+                    h += '<div style="background:rgba(0,0,0,0.30);border-radius:9px;padding:9px 11px;margin-bottom:8px;">';
+                    h += '<div style="font-size:12px;">' + _vipStars(it.stars) + ' <span style="color:#888;font-size:10px;margin-left:5px;">' + _vipEsc(it.maskedUsername || '***') + '</span></div>';
+                    const c = (it.comment || '').trim();
+                    if (c) h += '<div style="color:#ddd;font-size:12px;line-height:1.45;margin-top:3px;">"' + _vipEsc(c) + '"</div>';
+                    h += '</div>';
+                });
+                if (body) body.innerHTML = h;
+            } catch (e) {
+                if (body) body.innerHTML = '<div style="text-align:center;color:#888;padding:24px;">No se pudieron cargar las opiniones.</div>';
+            }
+        });
+        const loginGiftsBtn = document.getElementById('loginGiftsBtn');
+        if (loginGiftsBtn) loginGiftsBtn.addEventListener('click', async () => {
+            const title = document.getElementById('loginFeedTitle');
+            const sub = document.getElementById('loginFeedSubtitle');
+            const body = document.getElementById('loginFeedBody');
+            if (title) title.textContent = '🎁 Regalos en tiempo real';
+            if (sub) sub.textContent = 'Lo que está reclamando la gente ahora';
+            if (body) body.innerHTML = '<div style="text-align:center;color:#888;padding:24px;">Cargando…</div>';
+            VIP.ui.showModal('loginFeedModal');
+            await _vipFetchClaims();
+            if (!_vipClaims.length) {
+                if (body) body.innerHTML = '<div style="text-align:center;color:#888;padding:24px;">Sin movimientos por ahora.</div>';
+                return;
+            }
+            let h = '';
+            _vipClaims.forEach((it) => {
+                h += '<div style="background:rgba(0,0,0,0.30);border-radius:9px;padding:9px 11px;margin-bottom:7px;font-size:12.5px;color:#eee;">' + _vipEsc(_vipClaimText(it)) + '</div>';
+            });
+            if (body) body.innerHTML = h;
+        });
+
         // Panel del home colapsable: "subir" el menú (ruleta, reembolsos,
         // saldo, retirar) para agrandar el chat, y bajarlo para ver todo.
         const homePanel = document.getElementById('homePanel');

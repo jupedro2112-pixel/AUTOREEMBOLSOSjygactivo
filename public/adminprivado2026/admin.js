@@ -7999,26 +7999,40 @@ function _encuestaRender(cfg, stats, cal, rep) {
     });
     h += '</div>';
 
-    // --- Reportes diarios ---
-    const tot = (rep && rep.totales) || { pushes: 0, bonosCreados: 0, bonosUsados: 0 };
+    // --- Reportes diarios + ROI ---
+    const tot = (rep && rep.totales) || { pushes: 0, bonosCreados: 0, bonosUsados: 0, ingreso: 0, costo: 0 };
     const usoRate = tot.bonosCreados > 0 ? Math.round(tot.bonosUsados / tot.bonosCreados * 100) : 0;
-    h += '<h3 style="color:#d4af37;font-size:13px;margin:18px 0 8px;">📈 Reportes diarios (últimos ' + ((rep && rep.dias) || 14) + ' días)</h3>';
-    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin-bottom:10px;">';
-    [['📤 Pushes', tot.pushes, '#fff'], ['🎁 Bonos creados', tot.bonosCreados, '#00ff88'], ['✅ Bonos usados', tot.bonosUsados, '#ffd700'], ['📊 % de uso', usoRate + '%', '#c9a0ff']].forEach(function (c) {
+    const ingreso = Math.round(tot.ingreso || 0);
+    const costo = Math.round(tot.costo || 0);
+    const roiNeto = ingreso - costo;
+    const fmt = function (n) { return '$' + Number(n || 0).toLocaleString('es-AR'); };
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:18px 0 8px;">📈 Reportes diarios y ROI (últimos ' + ((rep && rep.dias) || 14) + ' días)</h3>';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(102px,1fr));gap:8px;margin-bottom:10px;">';
+    [
+        ['📤 Pushes', String(tot.pushes), '#fff'],
+        ['✅ Bonos usados', String(tot.bonosUsados), '#ffd700'],
+        ['📊 % de uso', usoRate + '%', '#c9a0ff'],
+        ['💵 Ingreso', fmt(ingreso), '#00ff88'],
+        ['🎁 Costo bonos', fmt(costo), '#ff8888'],
+        ['📈 ROI neto', fmt(roiNeto), roiNeto >= 0 ? '#00ff88' : '#ff5050']
+    ].forEach(function (c) {
         h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(212,175,55,0.25);border-radius:10px;padding:10px;text-align:center;">'
-            + '<div style="font-size:19px;font-weight:900;color:' + c[2] + ';">' + c[1] + '</div>'
+            + '<div style="font-size:17px;font-weight:900;color:' + c[2] + ';">' + c[1] + '</div>'
             + '<div style="font-size:10px;color:#bbb;">' + c[0] + '</div></div>';
     });
     h += '</div>';
-    h += '<div style="color:#777;font-size:10px;margin-bottom:8px;">El <strong style="color:#c9a0ff;">% de uso</strong> es la conversión: cuántos de los bonos enviados se terminaron usando en una carga.</div>';
-    h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:380px;">';
-    h += '<tr style="color:#888;font-size:9.5px;text-transform:uppercase;"><th style="text-align:left;padding:5px;">Día</th><th style="padding:5px;">Pushes</th><th style="padding:5px;">Bonos creados</th><th style="padding:5px;">Bonos usados</th></tr>';
+    h += '<div style="color:#777;font-size:10px;margin-bottom:8px;">El <strong style="color:#00ff88;">ingreso</strong> es el total de las cargas hechas con bono; el <strong style="color:#ff8888;">costo</strong> es el % regalado. <strong style="color:#c9a0ff;">ROI neto</strong> = ingreso − costo. El monto de la carga se toma automático cuando el depósito incluye bono.</div>';
+    h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:480px;">';
+    h += '<tr style="color:#888;font-size:9px;text-transform:uppercase;"><th style="text-align:left;padding:5px;">Día</th><th style="padding:5px;">Pushes</th><th style="padding:5px;">Usados</th><th style="padding:5px;">Ingreso</th><th style="padding:5px;">Costo</th><th style="padding:5px;">ROI neto</th></tr>';
     ((rep && rep.reportes) || []).forEach(function (d) {
+        const dRoi = Math.round((d.ingreso || 0) - (d.costo || 0));
         h += '<tr style="border-top:1px solid rgba(255,255,255,0.05);font-size:11px;">'
             + '<td style="padding:5px;color:#ddd;">' + d.fecha + '</td>'
             + '<td style="padding:5px;text-align:center;color:#fff;">' + d.pushes + '</td>'
-            + '<td style="padding:5px;text-align:center;color:#00ff88;">' + d.bonosCreados + '</td>'
-            + '<td style="padding:5px;text-align:center;color:#ffd700;">' + d.bonosUsados + '</td></tr>';
+            + '<td style="padding:5px;text-align:center;color:#ffd700;">' + d.bonosUsados + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#00ff88;">' + fmt(Math.round(d.ingreso || 0)) + '</td>'
+            + '<td style="padding:5px;text-align:center;color:#ff8888;">' + fmt(Math.round(d.costo || 0)) + '</td>'
+            + '<td style="padding:5px;text-align:center;color:' + (dRoi >= 0 ? '#00ff88' : '#ff5050') + ';">' + fmt(dRoi) + '</td></tr>';
     });
     h += '</table></div>';
 

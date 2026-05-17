@@ -4844,7 +4844,22 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       }
 
       await recordUserActivity(user.id, 'deposit', parseFloat(amount));
-      
+
+      // ROI de las estrategias: si el depósito incluyó bono, marcamos el
+      // PromoBonus vigente del usuario como usado y guardamos el monto de
+      // la carga. Con eso los reportes calculan ingreso / costo / ROI.
+      if (parseFloat(bonus) > 0) {
+        try {
+          await PromoBonus.findOneAndUpdate(
+            { username: String(user.username).toLowerCase(), status: 'active', expiresAt: { $gt: new Date() } },
+            { $set: { status: 'used', usedBy: req.user.username || null, usedAt: new Date(), cargaMonto: parseFloat(amount) } },
+            { sort: { activatedAt: -1 } }
+          );
+        } catch (promoErr) {
+          logger.warn(`[promo-bonus] no se pudo marcar usado en depósito: ${promoErr.message}`);
+        }
+      }
+
       // Obtener saldo actualizado del usuario
       const balanceResult = await jugayganaMovements.getUserBalance(user.username);
       const newBalance = balanceResult.success ? balanceResult.balance : (result.data?.user_balance_after || 0);
@@ -9784,12 +9799,9 @@ app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (
     const COH = ['suave', 'normal', 'activo'];
     const since = new Date(Date.now() - DIAS * 86400000);
 
+    function zeroCell() { return { pushes: 0, bonosCreados: 0, bonosUsados: 0, ingreso: 0, costo: 0 }; }
     function zeroGrupos() {
-      return {
-        suave:  { pushes: 0, bonosCreados: 0, bonosUsados: 0 },
-        normal: { pushes: 0, bonosCreados: 0, bonosUsados: 0 },
-        activo: { pushes: 0, bonosCreados: 0, bonosUsados: 0 }
-      };
+      return { suave: zeroCell(), normal: zeroCell(), activo: zeroCell() };
     }
 
     // Pushes y bonos creados: del registro de disparos.
@@ -9801,18 +9813,25 @@ app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (
           bonosCreados: { $sum: '$bonosCreados' }
       } }
     ]);
-    // Bonos usados: PromoBonus de la encuesta marcados como usados.
+    // Bonos usados + ROI: PromoBonus de la encuesta marcados como usados.
+    // ingreso = monto de la carga; costo = regalo fijo o % sobre la carga.
     const usados = await PromoBonus.aggregate([
       { $match: { sourceRuleCode: 'encuesta', status: 'used', usedAt: { $gte: since } } },
       { $group: {
           _id: { dia: { $dateToString: { date: '$usedAt', format: '%Y-%m-%d', timezone: TZ } }, rule: '$sourceRuleName' },
-          count: { $sum: 1 }
+          count: { $sum: 1 },
+          ingreso: { $sum: { $ifNull: ['$cargaMonto', 0] } },
+          costo: { $sum: { $cond: [
+            { $gt: [ { $ifNull: ['$montoFijoARS', 0] }, 0 ] },
+            { $ifNull: ['$montoFijoARS', 0] },
+            { $multiply: [ { $ifNull: ['$cargaMonto', 0] }, { $divide: [ { $ifNull: ['$percent', 0] }, 100 ] } ] }
+          ] } }
       } }
     ]);
 
     const byDay = {};
     function ensureDay(d) {
-      if (!byDay[d]) byDay[d] = { fecha: d, pushes: 0, bonosCreados: 0, bonosUsados: 0, porGrupo: zeroGrupos() };
+      if (!byDay[d]) byDay[d] = { fecha: d, pushes: 0, bonosCreados: 0, bonosUsados: 0, ingreso: 0, costo: 0, porGrupo: zeroGrupos() };
       return byDay[d];
     }
     fires.forEach(function (f) {
@@ -9829,25 +9848,35 @@ app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (
       const c = m ? m[1].toLowerCase() : null;
       const d = ensureDay(u._id.dia);
       d.bonosUsados += u.count;
-      if (c && d.porGrupo[c]) d.porGrupo[c].bonosUsados += u.count;
+      d.ingreso += (u.ingreso || 0);
+      d.costo += (u.costo || 0);
+      if (c && d.porGrupo[c]) {
+        d.porGrupo[c].bonosUsados += u.count;
+        d.porGrupo[c].ingreso += (u.ingreso || 0);
+        d.porGrupo[c].costo += (u.costo || 0);
+      }
     });
 
     const reportes = [];
     for (let i = 0; i < DIAS; i++) {
       const dt = new Date(Date.now() - i * 86400000 - 3 * 3600 * 1000);
       const key = dt.toISOString().slice(0, 10);
-      reportes.push(byDay[key] || { fecha: key, pushes: 0, bonosCreados: 0, bonosUsados: 0, porGrupo: zeroGrupos() });
+      reportes.push(byDay[key] || { fecha: key, pushes: 0, bonosCreados: 0, bonosUsados: 0, ingreso: 0, costo: 0, porGrupo: zeroGrupos() });
     }
 
-    const totales = { pushes: 0, bonosCreados: 0, bonosUsados: 0, porGrupo: zeroGrupos() };
+    const totales = { pushes: 0, bonosCreados: 0, bonosUsados: 0, ingreso: 0, costo: 0, porGrupo: zeroGrupos() };
     reportes.forEach(function (d) {
       totales.pushes += d.pushes;
       totales.bonosCreados += d.bonosCreados;
       totales.bonosUsados += d.bonosUsados;
+      totales.ingreso += d.ingreso;
+      totales.costo += d.costo;
       COH.forEach(function (c) {
         totales.porGrupo[c].pushes += d.porGrupo[c].pushes;
         totales.porGrupo[c].bonosCreados += d.porGrupo[c].bonosCreados;
         totales.porGrupo[c].bonosUsados += d.porGrupo[c].bonosUsados;
+        totales.porGrupo[c].ingreso += d.porGrupo[c].ingreso;
+        totales.porGrupo[c].costo += d.porGrupo[c].costo;
       });
     });
 

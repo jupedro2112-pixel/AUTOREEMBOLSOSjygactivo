@@ -27,6 +27,11 @@ const promoBonusSchema = new mongoose.Schema({
   // un % sobre la carga sino un regalo directo que el agente acredita.
   montoFijoARS: { type: Number, default: 0 },
 
+  // Monto de la carga (depósito) en la que se aplicó el bono. Se toma
+  // automáticamente del depósito cuando éste incluye bono. Sirve para
+  // calcular el ROI en pesos de las estrategias.
+  cargaMonto: { type: Number, default: 0 },
+
   // De qué regla de automatización salió.
   sourceRuleId:   { type: String, default: null },
   sourceRuleCode: { type: String, default: null },

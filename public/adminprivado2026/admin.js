@@ -3220,6 +3220,7 @@ function switchSection(section) {
     if (section === 'referrals') loadAdminReferralSummary();
     if (section === 'roulette') loadRouletteAdmin();
     if (section === 'automations') loadAutomations();
+    if (section === 'bonusStrategy') loadBonusStrategy();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
@@ -7667,6 +7668,130 @@ async function markChatPromoBonusUsed(id) {
                 el.style.background = 'rgba(120,120,120,0.18)';
                 el.innerHTML = '<span style="color:#bbb;">🚫 Sin promoción vigente para este cliente.</span>';
             }
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+
+// =========================================================================
+// ESTRATEGIA DE BONOS POR ENCUESTA — panel admin
+// =========================================================================
+async function loadBonusStrategy() {
+    const body = document.getElementById('bonusStrategyBody');
+    if (body) body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/bonus-strategy');
+        const j = await r.json();
+        if (!j.success) { if (body) body.innerHTML = '<div style="color:#ff8080;text-align:center;padding:14px;">Error</div>'; return; }
+        _renderBonusStrategy(j.config || {}, j.stats || {});
+    } catch (e) {
+        if (body) body.innerHTML = '<div style="color:#ff8080;text-align:center;padding:14px;">Error de conexión</div>';
+    }
+}
+
+function _bsField(id, label, value, type, extra) {
+    return '<div style="flex:1;min-width:90px;"><label style="display:block;color:#aaa;font-size:11px;margin-bottom:3px;">' + label + '</label>' +
+        '<input id="' + id + '" type="' + (type || 'text') + '" value="' + escapeHtml(String(value == null ? '' : value)) + '" ' + (extra || '') +
+        ' style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;"></div>';
+}
+
+function _bsStepBlock(n, step) {
+    let h = '<div style="background:rgba(255,215,0,0.05);border:1px solid rgba(255,215,0,0.25);border-radius:10px;padding:13px;margin-bottom:12px;">';
+    h += '<div style="color:#ffd700;font-weight:900;font-size:12px;margin-bottom:8px;">PASO ' + n + ' — bono de ' + (step.percent || 0) + '%</div>';
+    h += '<div style="display:flex;gap:8px;margin-bottom:8px;">' +
+        _bsField('bsS' + n + 'Percent', '% de bono', step.percent, 'number', 'min="1" max="1000"') +
+        _bsField('bsS' + n + 'Dur', 'Dura (minutos)', step.durationMinutes, 'number', 'min="5"') +
+        '</div>';
+    h += '<div style="margin-bottom:8px;">' + _bsField('bsS' + n + 'Title', 'Título del push', step.title, 'text', 'maxlength="120"') + '</div>';
+    h += '<label style="display:block;color:#aaa;font-size:11px;margin-bottom:3px;">Cuerpo del push</label>' +
+        '<textarea id="bsS' + n + 'Body" maxlength="300" style="width:100%;box-sizing:border-box;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;min-height:54px;">' + escapeHtml(step.body || '') + '</textarea>';
+    h += '</div>';
+    return h;
+}
+
+function _bsPlanRow(plan, label, pd) {
+    return '<div style="margin-bottom:8px;"><div style="color:#fff;font-size:12px;font-weight:700;margin-bottom:4px;">' + label + '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+        _bsField('bsD' + plan + '1', 'Paso 1 — horas tras votar', pd.step1Hours, 'number', 'min="0"') +
+        _bsField('bsD' + plan + '2', 'Paso 2 — horas tras votar', pd.step2Hours, 'number', 'min="0"') +
+        '</div></div>';
+}
+
+function _renderBonusStrategy(cfg, stats) {
+    const body = document.getElementById('bonusStrategyBody');
+    if (!body) return;
+    const s1 = cfg.step1 || {}, s2 = cfg.step2 || {};
+    const pd = cfg.planDelays || {};
+    let html = '';
+
+    // Estado + botón lanzar/pausar.
+    html += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:' + (cfg.isActive ? 'rgba(37,211,102,0.10)' : 'rgba(0,0,0,0.30)') + ';border:1px solid ' + (cfg.isActive ? 'rgba(37,211,102,0.40)' : 'rgba(255,255,255,0.12)') + ';border-radius:10px;padding:13px;margin-bottom:14px;">';
+    html += '<div style="flex:1;min-width:180px;"><div style="font-weight:900;font-size:14px;color:' + (cfg.isActive ? '#25d366' : '#aaa') + ';">' + (cfg.isActive ? '🟢 ESTRATEGIA ACTIVA' : '⚪ ESTRATEGIA PAUSADA') + '</div>';
+    html += '<div style="color:#888;font-size:11px;margin-top:3px;">' + (stats.inscriptos || 0) + ' inscriptos · ' + (stats.sinPasos || 0) + ' sin pasos · ' + (stats.recibieron50 || 0) + ' con bono 50% · ' + (stats.completaron || 0) + ' completaron</div></div>';
+    html += '<button onclick="toggleBonusStrategy(' + (cfg.isActive ? 'false' : 'true') + ')" style="' + (cfg.isActive ? 'background:rgba(255,80,80,0.15);color:#ff5050;border:1px solid rgba(255,80,80,0.4)' : 'background:linear-gradient(135deg,#25d366,#128c7e);color:#fff;border:none') + ';padding:10px 18px;border-radius:9px;font-weight:900;font-size:13px;cursor:pointer;">' + (cfg.isActive ? '⏸ Pausar' : '🚀 Lanzar estrategia') + '</button>';
+    html += '</div>';
+
+    html += _bsStepBlock(1, s1);
+    html += _bsStepBlock(2, s2);
+
+    // Retrasos por plan.
+    html += '<div style="background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.25);border-radius:10px;padding:13px;margin-bottom:12px;">';
+    html += '<div style="color:#00d4ff;font-weight:900;font-size:12px;margin-bottom:4px;">⏱ RETRASOS POR PLAN</div>';
+    html += '<div style="color:#999;font-size:10.5px;line-height:1.5;margin-bottom:10px;">Cuántas horas después de votar la encuesta recibe cada paso, según lo que votó. (solo_reembolsos no entra a la estrategia.)</div>';
+    html += _bsPlanRow('suave', '🟢 Plan SUAVE', pd.suave || {});
+    html += _bsPlanRow('normal', '🟡 Plan NORMAL', pd.normal || {});
+    html += _bsPlanRow('activo', '🔴 Plan ACTIVO', pd.activo || {});
+    html += '</div>';
+
+    html += '<button onclick="saveBonusStrategy()" style="width:100%;background:linear-gradient(135deg,#d4af37,#ffd700);color:#000;border:none;padding:12px;border-radius:10px;font-weight:900;font-size:13px;cursor:pointer;">💾 Guardar configuración</button>';
+
+    body.innerHTML = html;
+}
+
+async function toggleBonusStrategy(active) {
+    if (active && !confirm('¿Lanzar la estrategia?\n\nSe va a inscribir a todos los que ya votaron la encuesta y van a empezar a recibir los bonos según su plan.')) return;
+    try {
+        const r = await authFetch('/api/admin/bonus-strategy/activate', {
+            method: 'POST',
+            body: JSON.stringify({ active: active })
+        });
+        const j = await r.json();
+        if (j.success) {
+            showToast(active ? ('🚀 Estrategia lanzada' + (j.backfilled ? (' · ' + j.backfilled + ' inscriptos') : '')) : '⏸ Estrategia pausada', 'success');
+            loadBonusStrategy();
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function saveBonusStrategy() {
+    const num = function (id) { return Number(document.getElementById(id).value); };
+    const val = function (id) { return (document.getElementById(id).value || '').trim(); };
+    const payload = {
+        step1: { percent: num('bsS1Percent'), durationMinutes: num('bsS1Dur'), title: val('bsS1Title'), body: val('bsS1Body') },
+        step2: { percent: num('bsS2Percent'), durationMinutes: num('bsS2Dur'), title: val('bsS2Title'), body: val('bsS2Body') },
+        planDelays: {
+            suave: { step1Hours: num('bsDsuave1'), step2Hours: num('bsDsuave2') },
+            normal: { step1Hours: num('bsDnormal1'), step2Hours: num('bsDnormal2') },
+            activo: { step1Hours: num('bsDactivo1'), step2Hours: num('bsDactivo2') }
+        }
+    };
+    if (!payload.step1.title || !payload.step1.body || !payload.step2.title || !payload.step2.body) {
+        showToast('Faltan título o cuerpo en algún paso', 'error');
+        return;
+    }
+    try {
+        const r = await authFetch('/api/admin/bonus-strategy', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+        const j = await r.json();
+        if (j.success) {
+            showToast('✅ Configuración guardada', 'success');
+            loadBonusStrategy();
         } else {
             showToast(j.error || 'Error', 'error');
         }

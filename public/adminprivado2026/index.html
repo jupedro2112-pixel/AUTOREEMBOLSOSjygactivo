@@ -103,6 +103,10 @@
                     <span>Automatización</span>
                     <span id="automationsBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
                 </a>
+                <a href="#" class="nav-item" data-section="bonusStrategy">
+                    <span>🚀</span>
+                    <span>Estrategia de bonos</span>
+                </a>
                 <a href="#" class="nav-item" data-section="reviews">
                     <span>⭐</span>
                     <span>Reseñas</span>
@@ -994,6 +998,23 @@
                     </div>
                 </div>
             </div>
+
+            <!-- ============================================
+                 SECCIÓN: ESTRATEGIA DE BONOS POR ENCUESTA
+                 Secuencia escalonada 50% -> 100% por plan votado.
+                 ============================================ -->
+            <section id="bonusStrategySection" class="section">
+                <div class="panel-header">
+                    <h2>🚀 Estrategia de bonos</h2>
+                    <button class="refresh-btn" onclick="loadBonusStrategy()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Secuencia escalonada de bonos por encuesta. Cada usuario que vota entra solo: recibe el <strong style="color:#ffd700;">paso 1 (bono 50%)</strong> y después el <strong style="color:#ffd700;">paso 2 (bono 100%)</strong>, según los retrasos del plan que votó. Cada push activa la bonificación vigente (cartel del usuario + banner del agente). Editá el copy y los retrasos, después tocá <strong>Lanzar</strong>.</p>
+                </div>
+                <div id="bonusStrategyBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
 
             <!-- ============================================
                  SECCIÓN: RESEÑAS — moderación de opiniones

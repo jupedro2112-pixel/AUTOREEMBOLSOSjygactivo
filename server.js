@@ -9123,6 +9123,168 @@ app.post('/api/admin/notification-rules/suggestions/:id/reject', authMiddleware,
   }
 });
 
+// ============================================================================
+// RESEÑAS / OPINIONES — 1 por user, con moderación admin antes de publicar.
+// ============================================================================
+const Review = require('./src/models/Review');
+
+function _reviewMaskUsername(u) {
+  const s = String(u || '');
+  if (!s) return '***';
+  const visibleChars = Math.max(1, Math.min(6, Math.ceil(s.length * 0.20)));
+  const hiddenChars = s.length - visibleChars;
+  return '*'.repeat(hiddenChars) + s.slice(hiddenChars);
+}
+function _reviewBucketOf(stars) {
+  const n = Number(stars) || 0;
+  if (n >= 4) return 'bueno';
+  if (n === 3) return 'regular';
+  return 'malo';
+}
+
+// POST /api/reviews — el user crea su reseña (1 sola vez, no editable).
+app.post('/api/reviews', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const username = req.user.username;
+    const stars = Math.round(Number((req.body && req.body.stars) || 0));
+    const comment = String((req.body && req.body.comment) || '').trim().slice(0, 100);
+    const contactPhone = String((req.body && req.body.contactPhone) || '')
+      .trim().replace(/[^\d+\-\s()]/g, '').slice(0, 25);
+    if (!isFinite(stars) || stars < 1 || stars > 5) {
+      return res.status(400).json({ error: 'Estrellas inválidas (1-5)' });
+    }
+    const existing = await Review.findOne({ userId }).lean();
+    if (existing) {
+      return res.status(409).json({ error: 'Ya enviaste tu opinión. Solo se permite una por usuario.', alreadyReviewed: true });
+    }
+    const now = new Date();
+    try {
+      await Review.create({
+        id: uuidv4(), userId, username, stars, comment, contactPhone,
+        approved: false, createdAt: now, updatedAt: now
+      });
+    } catch (e) {
+      if (e && e.code === 11000) {
+        return res.status(409).json({ error: 'Ya enviaste tu opinión.', alreadyReviewed: true });
+      }
+      throw e;
+    }
+    res.json({ success: true, review: { stars, comment, updatedAt: now } });
+  } catch (err) {
+    logger.error(`POST /api/reviews: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/reviews/mine — la reseña propia del user (si existe).
+app.get('/api/reviews/mine', authMiddleware, async (req, res) => {
+  try {
+    const r = await Review.findOne({ userId: req.user.userId }).lean();
+    if (!r) return res.json({ review: null });
+    res.json({ review: { stars: r.stars, comment: r.comment || '', approved: !!r.approved, updatedAt: r.updatedAt } });
+  } catch (err) {
+    logger.error(`GET /api/reviews/mine: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/reviews/public — feed PÚBLICO (sin auth) para la pantalla de
+// registro. Solo reseñas aprobadas. Usernames enmascarados. Devuelve
+// promedio + cantidad para el cartel de prueba social.
+app.get('/api/reviews/public', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 20));
+    const [aggRes, items] = await Promise.all([
+      Review.aggregate([
+        { $match: { approved: true } },
+        { $group: { _id: null, total: { $sum: 1 }, sumStars: { $sum: '$stars' } } }
+      ]),
+      Review.find({ approved: true }, { stars: 1, comment: 1, username: 1, updatedAt: 1, _id: 0 })
+        .sort({ approvedAt: -1, updatedAt: -1 })
+        .limit(limit)
+        .lean()
+    ]);
+    const stats = aggRes[0] || { total: 0, sumStars: 0 };
+    const total = stats.total || 0;
+    const avgStars = total > 0 ? (stats.sumStars / total) : 0;
+    res.json({
+      total, avgStars,
+      items: items.map(r => ({
+        stars: r.stars,
+        comment: r.comment || '',
+        maskedUsername: _reviewMaskUsername(r.username),
+        updatedAt: r.updatedAt
+      }))
+    });
+  } catch (err) {
+    logger.error(`GET /api/reviews/public: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/reviews — lista para moderación (username completo).
+app.get('/api/admin/reviews', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const status = String(req.query.status || 'all').toLowerCase();
+    const filter = {};
+    if (status === 'pending') filter.approved = false;
+    else if (status === 'approved') filter.approved = true;
+    const items = await Review.find(filter).sort({ createdAt: -1 }).limit(500).lean();
+    const pendingCount = await Review.countDocuments({ approved: false });
+    res.json({
+      pendingCount,
+      items: items.map(r => ({
+        id: r.id, username: r.username, stars: r.stars,
+        comment: r.comment || '', contactPhone: r.contactPhone || '',
+        bucket: _reviewBucketOf(r.stars), approved: !!r.approved,
+        createdAt: r.createdAt
+      }))
+    });
+  } catch (err) {
+    logger.error(`GET /api/admin/reviews: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/reviews/:id/approve — aprobar o desaprobar una reseña.
+app.post('/api/admin/reviews/:id/approve', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const approved = !(req.body && req.body.approved === false);
+    const r = await Review.findOneAndUpdate(
+      { id },
+      { $set: {
+        approved,
+        approvedBy: approved ? (req.user.username || null) : null,
+        approvedAt: approved ? new Date() : null
+      } },
+      { new: true }
+    );
+    if (!r) return res.status(404).json({ error: 'Reseña no encontrada' });
+    res.json({ success: true, approved });
+  } catch (err) {
+    logger.error(`POST /api/admin/reviews/:id/approve: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// DELETE /api/admin/reviews/:id — borra una reseña.
+app.delete('/api/admin/reviews/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id requerido' });
+    const removed = await Review.findOneAndDelete({ id }).lean();
+    if (!removed) return res.status(404).json({ error: 'Reseña no encontrada' });
+    logger.info(`[REVIEW-DELETE] ${removed.username} (${removed.stars}) borrada por ${req.user.username}`);
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`DELETE /api/admin/reviews/:id: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+
 // ============================================
 // SPA FALLBACK: sirve index.html para rutas
 // frontend desconocidas (ej: /register?ref=CODE)

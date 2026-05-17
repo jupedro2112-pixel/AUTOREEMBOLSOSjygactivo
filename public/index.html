@@ -381,6 +381,10 @@
             <button id="installBtn" class="btn btn-secondary">📱 Instalar App</button>
             
             <div id="errorMessage" class="error-message"></div>
+
+            <!-- Reseñas de jugadores (prueba social). Se llena dinámicamente
+                 desde js/reviews.js con las opiniones aprobadas. -->
+            <div id="loginReviewsWidget" style="display:none;"></div>
         </div>
     </div>
 
@@ -534,6 +538,10 @@
                     <button id="installBonusClaimBtn" style="background: #000; color: #ffd700; border: none; border-radius: 9px; padding: 9px 15px; font-weight: 800; font-size: 13px; cursor: pointer; flex-shrink: 0;">🎁 Reclamar $5.000</button>
                 </div>
             </div>
+
+            <!-- Card para que el usuario deje su opinión. Render dinámico
+                 desde js/reviews.js; oculto por default. -->
+            <div id="reviewHomeCard" style="display:none;"></div>
 
             <!-- Ruleta diaria — 1 giro/día por user con PWA + notifs. Render
                  dinámico desde js/roulette.js; oculto por default. -->
@@ -1429,6 +1437,7 @@
     <script src="/js/refunds.js"></script>
     <script src="/js/fire.js"></script>
     <script src="/js/roulette.js"></script>
+    <script src="/js/reviews.js"></script>
     <script src="/js/notifications.js"></script>
     <script src="/js/ui.js"></script>
     <script src="/js/withdraw.js"></script>

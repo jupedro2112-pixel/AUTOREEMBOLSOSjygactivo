@@ -1383,6 +1383,21 @@
                     </div>
 
                 </div>
+
+                <!-- Soporte VIP (Telegram) — alimenta el botón "Soporte VIP" del login -->
+                <div class="panel-subheader" style="margin-top:24px;">
+                    <h3>💬 Soporte VIP (Telegram)</h3>
+                </div>
+                <div class="cbu-form">
+                    <div class="form-group">
+                        <label>Usuario de Telegram (con @):</label>
+                        <input type="text" id="soporteVipHandle" placeholder="@soportevip" style="width:100%;">
+                        <small style="color:#aaa;font-size:11px;">Es el botón "Soporte VIP" de la pantalla de login. Poné el @ del usuario o canal, no el link.</small>
+                    </div>
+                    <button class="btn-primary" onclick="saveSoporteVip()">
+                        <span class="icon icon-save"></span> Guardar Soporte VIP
+                    </button>
+                </div>
             </section>
 
         </main>

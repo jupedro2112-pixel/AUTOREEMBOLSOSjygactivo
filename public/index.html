@@ -292,15 +292,17 @@
     <!-- Login Screen -->
     <div id="loginScreen" class="login-screen">
         <div class="login-box">
-            <div class="login-logo">🎰</div>
-            <h1>VIPCARGAS</h1>
-            <p>Inicia sesión para continuar</p>
+            <div class="login-logo" style="font-size:30px;line-height:1;color:#d4af37;margin-bottom:0;">♛</div>
+            <div style="color:#d4af37;font-size:10px;font-weight:900;letter-spacing:5px;margin:5px 0 2px;">V I P</div>
+            <h1 style="letter-spacing:3px;margin:0;">VIPCARGAS</h1>
+            <div style="width:56px;height:2px;background:linear-gradient(90deg,transparent,#d4af37,transparent);margin:9px auto;"></div>
+            <p style="margin-top:0;">Sala de juegos VIP</p>
             
             <form id="loginForm" autocomplete="on">
-                <div style="display:flex;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid rgba(212,175,55,0.3);">
-                    <!-- iOS Safari fix: touch-action:manipulation evita el delay de 300ms del doble-tap;
-                         -webkit-tap-highlight-color asegura feedback visual al tocar. Los handlers se asignan
-                         por addEventListener en auth.js para no depender de inline onclick (más confiable en iOS). -->
+                <div style="display:none;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid rgba(212,175,55,0.3);">
+                    <!-- Modos de login por celular/SMS ocultos: el acceso es solo
+                         usuario + contraseña. La verificación por SMS se ofrece
+                         como paso opcional la primera vez que entra el usuario. -->
                     <button type="button" id="loginByUsernameBtn" onclick="switchLoginMode('username')" style="flex:1;padding:8px 4px;font-size:12px;background:rgba(212,175,55,0.2);color:#d4af37;border:none;cursor:pointer;font-weight:600;-webkit-tap-highlight-color:rgba(212,175,55,0.3);touch-action:manipulation;-webkit-appearance:none;appearance:none;">👤 Usuario</button>
                     <button type="button" id="loginByPhoneBtn" onclick="switchLoginMode('phone')" style="flex:1;padding:8px 4px;font-size:12px;background:transparent;color:#888;border:none;cursor:pointer;-webkit-tap-highlight-color:rgba(212,175,55,0.3);touch-action:manipulation;-webkit-appearance:none;appearance:none;">📱 Celular</button>
                 </div>
@@ -308,7 +310,7 @@
                     <label>Usuario</label>
                     <input type="text" id="username" name="username" placeholder="Ingresa tu usuario" required autocomplete="username">
                 </div>
-                <div id="usernameLoginModeToggle" style="display:flex;gap:8px;margin:8px 0;">
+                <div id="usernameLoginModeToggle" style="display:none;gap:8px;margin:8px 0;">
                     <button type="button" id="usernameLoginByPassword" onclick="switchUsernameLoginMode('password')" style="flex:1;padding:6px;font-size:11px;background:rgba(212,175,55,0.2);color:#d4af37;border:1px solid rgba(212,175,55,0.3);border-radius:6px;cursor:pointer;font-weight:600;-webkit-tap-highlight-color:rgba(212,175,55,0.3);touch-action:manipulation;-webkit-appearance:none;appearance:none;">🔑 Contraseña</button>
                     <button type="button" id="usernameLoginByTemporal" onclick="switchUsernameLoginMode('temporal')" style="flex:1;padding:6px;font-size:11px;background:transparent;color:#888;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:rgba(212,175,55,0.3);touch-action:manipulation;-webkit-appearance:none;appearance:none;">⏳ Código temporal</button>
                 </div>
@@ -365,7 +367,7 @@
 
             <div style="background: rgba(212,175,55,0.08); border: 1px solid rgba(212,175,55,0.3); border-radius: 10px; padding: 11px 13px; margin: 14px 0; text-align: left;">
                 <p style="color: #d4af37; font-size: 12px; font-weight: 700; margin: 0 0 4px;">🔒 Verificá tu teléfono — 100% recomendado</p>
-                <p style="color: #b0b0b0; font-size: 11px; margin: 0; line-height: 1.45;">Te permite recuperar tu cuenta si olvidás la clave, y es obligatorio para retirar. Es un paso para tu seguridad.</p>
+                <p style="color: #b0b0b0; font-size: 11px; margin: 0; line-height: 1.45;">Es opcional, pero te da seguridad total: vas a poder iniciar sesión con tu número por SMS y recuperar tu cuenta si olvidás la clave.</p>
             </div>
 
             <div style="margin: 15px 0; text-align: center;">
@@ -373,11 +375,12 @@
                 <button id="registerBtn" class="btn btn-secondary" style="margin-top: 8px; width: 100%;">📝 Registrarse</button>
             </div>
             
-            <div style="margin: 10px 0; display: flex; gap: 8px;">
-                <button id="findUserBtn" class="btn btn-secondary" style="flex: 1; font-size: 12px;" onclick="showModal('resetPassModal')">🔑 Recuperar Contraseña</button>
+            <div style="margin: 10px 0;">
+                <button id="findUserBtn" class="btn btn-secondary" style="width:100%; font-size: 12px;" onclick="showModal('resetPassModal')">🔑 Recuperar Contraseña</button>
+                <p style="color:#888; font-size:10.5px; margin:5px 0 0; text-align:center;">Solo para clientes con SMS verificado.</p>
             </div>
-            
-            <button id="helpBtn" class="btn btn-secondary">📞 Ayuda</button>
+
+            <button id="helpBtn" class="btn btn-secondary">💬 Soporte VIP</button>
             <button id="installBtn" class="btn btn-secondary">📱 Instalar App</button>
             
             <div id="errorMessage" class="error-message"></div>

@@ -9676,6 +9676,36 @@ app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, re
 });
 
 // ============================================================
+// SOPORTE VIP — handle de Telegram configurable. El GET es público
+// porque lo usa el botón "Soporte VIP" de la pantalla de login.
+// ============================================================
+app.get('/api/config/soporte-vip', async (req, res) => {
+  try {
+    const c = (await getConfig('soporteVipTelegram')) || {};
+    res.json({ handle: c.handle || '', url: c.url || '' });
+  } catch (err) {
+    logger.error(`/api/config/soporte-vip: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/soporte-vip', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    let h = String((req.body && req.body.handle) || '').trim();
+    // Acepta @usuario, usuario o un link t.me/usuario y lo normaliza.
+    h = h.replace(/^https?:\/\/(t\.me|telegram\.me)\//i, '').replace(/^@/, '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 40);
+    const handle = h ? '@' + h : '';
+    const url = h ? 'https://t.me/' + h : '';
+    await setConfig('soporteVipTelegram', { handle: handle, url: url });
+    logger.info(`[soporte-vip] config guardada por ${(req.user && req.user.username) || '?'}`);
+    res.json({ success: true, handle: handle, url: url });
+  } catch (err) {
+    logger.error(`POST /api/admin/soporte-vip: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================================
 // ENCUESTA — config de los grupos de la estrategia de notificaciones.
 // Fase 1: modelo de config (vía config store genérico) + endpoints.
 // El motor que arma el calendario y dispara los pushes es Fase 2.

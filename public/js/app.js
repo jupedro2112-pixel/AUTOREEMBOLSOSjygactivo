@@ -86,7 +86,12 @@ function setupEventListeners() {
         const logoutBtn = document.getElementById('logoutBtn');
         if (logoutBtn) logoutBtn.addEventListener('click', VIP.auth.handleLogout);
         const helpBtn = document.getElementById('helpBtn');
-        if (helpBtn) helpBtn.addEventListener('click', () => {
+        if (helpBtn) helpBtn.addEventListener('click', async () => {
+            try {
+                const r = await fetch(VIP.config.API_URL + '/api/config/soporte-vip');
+                const d = r.ok ? await r.json() : null;
+                if (d && d.url) { window.open(d.url, '_blank'); return; }
+            } catch (e) { /* cae al fallback */ }
             window.open('https://wa.link/metawin2026', '_blank');
         });
         const installBtn = document.getElementById('installBtn');

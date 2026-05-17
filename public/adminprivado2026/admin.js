@@ -3230,6 +3230,7 @@ function switchSection(section) {
             showToast('No tienes permiso para acceder a esta sección', 'error');
             return;
         }
+        loadSoporteVip();
         if (!smsAccessGranted) {
             showSmsPasswordModal();
         } else {
@@ -4180,6 +4181,44 @@ async function saveCommunityConfig() {
     } catch (error) {
         console.error('Error saving community config:', error);
         showToast('Error al guardar comunidad', 'error');
+    }
+}
+
+async function loadSoporteVip() {
+    try {
+        const response = await fetch(`${API_URL}/api/config/soporte-vip`);
+        if (response.ok) {
+            const data = await response.json();
+            const input = document.getElementById('soporteVipHandle');
+            if (input) input.value = data.handle || '';
+        }
+    } catch (error) {
+        console.error('Error loading soporte VIP:', error);
+    }
+}
+
+async function saveSoporteVip() {
+    const input = document.getElementById('soporteVipHandle');
+    const handle = input ? input.value.trim() : '';
+    try {
+        const response = await fetch(`${API_URL}/api/admin/soporte-vip`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ handle })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            if (input) input.value = data.handle || '';
+            showToast('Soporte VIP guardado', 'success');
+        } else {
+            showToast(data.error || 'Error al guardar', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving soporte VIP:', error);
+        showToast('Error al guardar', 'error');
     }
 }
 

@@ -1976,7 +1976,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       // Set two httpOnly cookies: one for page access, one for API calls.
       // Neither can be read by client-side scripts (XSS-safe).
       const adminCookieToken = jwt.sign(
-        { userId: userId, username: userObj.username, role: userObj.role },
+        { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
         JWT_SECRET,
         { expiresIn: '8h' }
       );
@@ -2140,6 +2140,17 @@ app.get('/api/admin/me', async (req, res) => {
     }
     if (!user.isActive) {
       return res.status(401).json({ error: 'Usuario desactivado' });
+    }
+    if (user.isBlocked === true) {
+      return res.status(403).json({ error: 'Cuenta bloqueada' });
+    }
+    // El rol y el tokenVersion se revalidan contra la DB: un admin degradado
+    // o con la sesión revocada no debe seguir entrando con la cookie vieja.
+    if (!adminRoles.includes(user.role)) {
+      return res.status(403).json({ error: 'Acceso denegado' });
+    }
+    if (user.tokenVersion && decoded.tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({ error: 'Sesión expirada' });
     }
     // Issue a fresh short-lived in-memory token for Socket.IO auth.
     // This is NOT stored in localStorage — only held in JavaScript memory.
@@ -2334,6 +2345,24 @@ app.post('/api/auth/change-password', authMiddleware, authLimiter, async (req, r
       user.smsConsent = true;
       // Mantener `whatsapp` sincronizado para compatibilidad con vistas que lo siguen leyendo.
       user.whatsapp = requestedPhone;
+    }
+
+    // Defensa contra robo de token: si NO es un cambio de teléfono (donde el
+    // OTP ya prueba identidad) y NO es el cambio obligatorio de primer ingreso,
+    // exigir la contraseña actual antes de permitir el cambio.
+    if (!isPhoneChange && user.mustChangePassword !== true) {
+      const currentPassword = req.body && req.body.currentPassword;
+      let currentOk = false;
+      if (currentPassword) {
+        try {
+          currentOk = await bcrypt.compare(String(currentPassword), user.password);
+        } catch (e) {
+          currentOk = false;
+        }
+      }
+      if (!currentOk) {
+        return res.status(401).json({ error: 'La contraseña actual es incorrecta', code: 'BAD_CURRENT_PASSWORD' });
+      }
     }
 
     // Asignar contraseña en texto plano; el middleware pre-save del modelo la hasheará
@@ -2662,7 +2691,7 @@ app.post('/api/auth/login-otp-verify', authLimiter, async (req, res) => {
     const adminRoles = ['admin', 'depositor', 'withdrawer'];
     if (adminRoles.includes(userObj.role)) {
       const adminCookieToken = jwt.sign(
-        { userId: userId, username: userObj.username, role: userObj.role },
+        { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
         JWT_SECRET,
         { expiresIn: '8h' }
       );
@@ -2752,9 +2781,11 @@ app.post('/api/auth/verify-reset-otp', sensitiveLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Código incorrecto o expirado' });
     }
 
-    // Generar JWT temporal de 5 minutos solo para reset
+    // Generar JWT temporal de 5 minutos solo para reset. Lleva el tokenVersion
+    // actual del usuario: al completar el reset se incrementa, dejando el
+    // resetToken inservible para un segundo uso.
     const resetToken = jwt.sign(
-      { userId: user.id, username: user.username, purpose: 'reset' },
+      { userId: user.id, username: user.username, purpose: 'reset', tokenVersion: user.tokenVersion ?? 0 },
       JWT_SECRET,
       { expiresIn: '5m' }
     );
@@ -2801,12 +2832,20 @@ app.post('/api/auth/complete-password-reset', sensitiveLimiter, async (req, res)
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
+    // El resetToken es de un solo uso: si su tokenVersion no coincide con el
+    // del usuario, ya fue usado (o las sesiones se cerraron) → se rechaza.
+    if ((user.tokenVersion || 0) !== (decoded.tokenVersion || 0)) {
+      return res.status(400).json({ error: 'Token de reset ya utilizado o expirado' });
+    }
+
     // Cambiar contraseña
     user.password = newPassword;
     user.passwordChangedAt = new Date();
     // Recovering the password via SMS counts as completing a password change,
     // so lift any pending `mustChangePassword` enforcement.
     user.mustChangePassword = false;
+    // Invalida el resetToken (un solo uso) y cierra las sesiones anteriores.
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
 
     await syncPasswordToJugaygana(user, newPassword, 'complete-password-reset');
@@ -5340,13 +5379,30 @@ const connectedAdmins = new Map();
 io.on('connection', (socket) => {
   logger.debug(`New socket connection: ${socket.id}`);
   
-  socket.on('authenticate', (token) => {
+  socket.on('authenticate', async (token) => {
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
+
+      // Revalidar contra la DB (igual que authMiddleware): un usuario
+      // desactivado, bloqueado o con la sesión revocada (tokenVersion) no
+      // debe poder operar el socket aunque la firma del JWT siga siendo válida.
+      let sockUser = await User.findOne({ id: decoded.userId });
+      if (!sockUser) {
+        try { sockUser = await User.findById(decoded.userId); } catch (e) { /* _id inválido */ }
+      }
+      if (!sockUser || sockUser.isActive === false || sockUser.isBlocked === true) {
+        socket.emit('authenticated', { success: false, error: 'Sesión no válida' });
+        return;
+      }
+      if (sockUser.tokenVersion && decoded.tokenVersion !== sockUser.tokenVersion) {
+        socket.emit('authenticated', { success: false, error: 'Sesión expirada' });
+        return;
+      }
+
       socket.userId = decoded.userId;
       socket.username = decoded.username;
       socket.role = decoded.role;
-      
+
       if (['admin', 'depositor', 'withdrawer'].includes(decoded.role)) {
         connectedAdmins.set(decoded.userId, socket);
         socket.join('admins'); // Unir a sala de admins

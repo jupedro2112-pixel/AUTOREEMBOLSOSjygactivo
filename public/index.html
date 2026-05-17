@@ -924,6 +924,10 @@
             </div>
             <!-- Paso 1: Datos del cambio -->
             <form id="changePasswordForm" autocomplete="on">
+                <div class="input-group" id="currentPasswordGroup" style="display:none;">
+                    <label>Contraseña Actual</label>
+                    <input type="password" id="currentPasswordInput" name="current-password" placeholder="Tu contraseña actual" autocomplete="current-password">
+                </div>
                 <div class="input-group">
                     <label>Nueva Contraseña</label>
                     <input type="password" id="newPasswordInput" name="new-password" placeholder="Mínimo 6 caracteres" required minlength="6" autocomplete="new-password">

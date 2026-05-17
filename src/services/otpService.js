@@ -7,6 +7,7 @@
  */
 
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const OtpCode = require('../models/OtpCode');
 const { sendSMS } = require('./smsService');
 
@@ -20,7 +21,8 @@ const MAX_OTPS_PER_HOUR = 3;      // Máximo 3 OTPs por número por hora
  * @returns {string} código de 6 dígitos como string
  */
 function generateCode() {
-  const num = Math.floor(Math.random() * 1000000);
+  // crypto.randomInt: generador criptográficamente seguro (no Math.random).
+  const num = crypto.randomInt(0, 1000000);
   return String(num).padStart(OTP_LENGTH, '0');
 }
 

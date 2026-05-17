@@ -490,6 +490,19 @@ VIP.auth = (function () {
             whatsappInfo.textContent = verifiedPhone ? `✅ Teléfono verificado: ${verifiedPhone}` : '';
         }
 
+        // Campo "contraseña actual": se pide solo en el cambio voluntario con
+        // teléfono ya verificado (caso sin OTP). En el cambio obligatorio de
+        // primer ingreso o en el alta de teléfono (con OTP) no se pide.
+        const currentPwGroup = document.getElementById('currentPasswordGroup');
+        const currentPwInput = document.getElementById('currentPasswordInput');
+        const needCurrentPw = !VIP.state.passwordChangePending && !!verifiedPhone;
+        if (currentPwGroup) currentPwGroup.style.display = needCurrentPw ? '' : 'none';
+        if (currentPwInput) {
+            currentPwInput.value = '';
+            if (needCurrentPw) currentPwInput.setAttribute('required', '');
+            else currentPwInput.removeAttribute('required');
+        }
+
         // Reset del paso OTP: siempre arranca en paso 1 al abrir el modal.
         const otpStep = document.getElementById('changePasswordOtpStep');
         const form = document.getElementById('changePasswordForm');
@@ -591,6 +604,14 @@ VIP.auth = (function () {
             return;
         }
 
+        // Cambio voluntario con teléfono ya verificado → se exige la contraseña actual.
+        const currentPassword = (document.getElementById('currentPasswordInput')?.value || '');
+        if (verifiedPhone && !VIP.state.passwordChangePending && !currentPassword) {
+            errorDiv.textContent = 'Ingresá tu contraseña actual';
+            errorDiv.classList.add('show');
+            return;
+        }
+
         const closeAllSessions = document.getElementById('closeAllSessions').checked;
 
         // CASO A: el usuario ya tiene un teléfono verificado y NO está cambiándolo.
@@ -601,6 +622,7 @@ VIP.auth = (function () {
                 closeAllSessions,
                 phone: null,
                 otpCode: null,
+                currentPassword,
                 errorDiv
             });
         }
@@ -625,6 +647,7 @@ VIP.auth = (function () {
                 closeAllSessions,
                 phone: null,
                 otpCode: null,
+                currentPassword,
                 errorDiv
             });
         }
@@ -685,9 +708,10 @@ VIP.auth = (function () {
         }
     }
 
-    async function _commitPasswordChange({ newPassword, closeAllSessions, phone, otpCode, errorDiv }) {
+    async function _commitPasswordChange({ newPassword, closeAllSessions, phone, otpCode, currentPassword, errorDiv }) {
         try {
             const body = { newPassword, closeAllSessions };
+            if (currentPassword) body.currentPassword = currentPassword;
             if (phone) {
                 body.phone = phone;
                 // Mantener `whatsapp` por compatibilidad con código existente.

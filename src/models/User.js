@@ -319,6 +319,14 @@ const userSchema = new mongoose.Schema({
     enum: ['suave', 'normal', 'activo', 'solo_reembolsos', null],
     default: null,
     index: true
+  },
+
+  // Cuando un admin lo activa, el cliente puede iniciar sesión solo con su
+  // usuario, sin contraseña ni SMS. Se controla por cliente desde el panel.
+  loginWithoutPassword: {
+    type: Boolean,
+    default: false,
+    index: true
   }
 }, {
   timestamps: true,

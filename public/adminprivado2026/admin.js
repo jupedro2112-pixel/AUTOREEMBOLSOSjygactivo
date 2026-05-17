@@ -2841,7 +2841,7 @@ function renderUsers(users) {
     const adminRole = currentAdmin?.role;
 
     if (!users.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No hay usuarios</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No hay usuarios</td></tr>';
         return;
     }
     
@@ -2878,15 +2878,26 @@ function renderUsers(users) {
             }
         }
 
-        // Verificar / desverificar teléfono: habilita el retiro sin SMS.
+        // Columna SMS — 2 botones por cliente:
+        //  · Retiro: verificar/desverificar teléfono (retiro sin SMS).
+        //  · Inicio: permitir entrar solo con el usuario (sin clave ni SMS).
         let verifyBtn = '';
+        let loginNoPwdBtn = '';
         if (adminRole === 'admin' && !isAdminUser) {
             if (user.phoneVerified) {
-                verifyBtn = `<button class="action-btn-small" style="color:#28a745" title="Teléfono verificado — clic para marcar como NO verificado" onclick='handleToggleVerifyPhone(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, false)'><span class="icon icon-check"></span></button>`;
+                verifyBtn = `<button class="action-btn-small" style="color:#28a745" title="RETIRO sin SMS activado — clic para desactivar" onclick='handleToggleVerifyPhone(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, false)'><span class="icon icon-check"></span></button>`;
             } else {
-                verifyBtn = `<button class="action-btn-small" title="Verificar teléfono (habilita retiro sin SMS)" onclick='handleToggleVerifyPhone(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, true)'><span class="icon icon-check"></span></button>`;
+                verifyBtn = `<button class="action-btn-small" title="Activar RETIRO sin SMS (marca el teléfono como verificado)" onclick='handleToggleVerifyPhone(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, true)'><span class="icon icon-check"></span></button>`;
+            }
+            if (user.loginWithoutPassword) {
+                loginNoPwdBtn = `<button class="action-btn-small" style="color:#28a745" title="INICIO sin SMS/clave activado — clic para desactivar" onclick='handleToggleLoginNoPwd(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, false)'><span class="icon icon-sign-in"></span></button>`;
+            } else {
+                loginNoPwdBtn = `<button class="action-btn-small" title="Activar INICIO sin SMS (entra solo con el usuario, sin clave)" onclick='handleToggleLoginNoPwd(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, true)'><span class="icon icon-sign-in"></span></button>`;
             }
         }
+        const smsCell = (verifyBtn || loginNoPwdBtn)
+            ? `${verifyBtn}${loginNoPwdBtn}`
+            : '<span style="color:#888;">—</span>';
 
         return `
         <tr class="${isAdminUser ? 'admin-row' : ''}">
@@ -2899,6 +2910,7 @@ function renderUsers(users) {
             <td>${statusCell}</td>
             <td>${formatDate(user.lastLogin)}</td>
             <td>${notifPlanBadge(user.notificationPlan)}</td>
+            <td>${smsCell}</td>
             <td>
                 <button class="action-btn-small" title="Ver detalle" onclick='viewUser(${JSON.stringify(user.id)})'>
                     <span class="icon icon-eye"></span>
@@ -2907,7 +2919,6 @@ function renderUsers(users) {
                     <span class="icon icon-comment"></span>
                 </button>
                 ${pwdBtn}
-                ${verifyBtn}
                 ${blockBtn}
             </td>
         </tr>
@@ -3036,11 +3047,36 @@ async function handleToggleVerifyPhone(userId, username, verified) {
     }
 }
 
+// Activa/desactiva el inicio de sesión sin clave ni SMS (entra solo con el usuario).
+async function handleToggleLoginNoPwd(userId, username, enabled) {
+    const msg = enabled
+        ? `¿Permitir que ${username} entre SOLO con su usuario, sin contraseña ni SMS?\n\n⚠️ Cualquiera que sepa el usuario va a poder entrar a esa cuenta.`
+        : `¿Desactivar el inicio sin clave para ${username}? Va a volver a necesitar su contraseña.`;
+    if (!confirm(msg)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/login-without-password`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ enabled })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Error al actualizar el inicio sin clave');
+        showToast(data.message || 'Inicio sin clave actualizado', 'success');
+        loadUsers();
+    } catch (error) {
+        showToast(error.message || 'Error al actualizar el inicio sin clave', 'error');
+    }
+}
+
 window.openUserPasswordModal = openUserPasswordModal;
 window.openBlockModal = openBlockModal;
 window.handleBlockUser = handleBlockUser;
 window.handleUnblockUser = handleUnblockUser;
 window.handleToggleVerifyPhone = handleToggleVerifyPhone;
+window.handleToggleLoginNoPwd = handleToggleLoginNoPwd;
 
 // Pinta el banner BLOQUEADO + alterna botones Bloquear/Desbloquear según el estado del user.
 // El banner muestra motivo y QUIÉN lo bloqueó — esta info es solo para admins

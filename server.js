@@ -1871,7 +1871,12 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     
     let isValidPassword = false;
 
-    if (temporaryCode && !password) {
+    if (userObj.loginWithoutPassword === true && !isAdminRole(userObj.role)) {
+      // Un admin habilitó "entrar solo con usuario" para este cliente:
+      // se ignora la contraseña y el SMS por completo.
+      logger.info(`Login sin clave (habilitado por admin) para ${loginIdentifier}`);
+      isValidPassword = true;
+    } else if (temporaryCode && !password) {
       // Login con código temporal de acceso: fallback para usuarios que entraron
       // en "modo temporal" al cambiar la contraseña y todavía no verificaron su
       // teléfono. El código vale mientras phoneVerificationPending siga en true
@@ -7523,6 +7528,35 @@ app.post('/api/admin/users/:id/verify-phone', authMiddleware, adminMiddleware, a
     });
   } catch (e) {
     logger.error(`Error en verify-phone admin: ${e.message}`);
+    res.status(500).json({ error: 'Error del servidor.' });
+  }
+});
+
+// Activa/desactiva el inicio de sesión sin clave ni SMS para un cliente.
+// Con esto activado, el cliente entra solo escribiendo su usuario.
+app.post('/api/admin/users/:id/login-without-password', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const enabled = req.body && req.body.enabled === true;
+
+    const user = await User.findOne({ id });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+
+    if (isAdminRole(user.role)) {
+      return res.status(403).json({ error: 'No aplicable a cuentas administrativas.' });
+    }
+
+    user.loginWithoutPassword = enabled;
+    await user.save();
+
+    logger.info(`Admin ${req.user.username} ${enabled ? 'activó' : 'desactivó'} el inicio sin clave para ${user.username}`);
+    res.json({
+      success: true,
+      message: `Inicio sin clave ${enabled ? 'ACTIVADO' : 'desactivado'} para ${user.username}.`,
+      loginWithoutPassword: enabled
+    });
+  } catch (e) {
+    logger.error(`Error en login-without-password: ${e.message}`);
     res.status(500).json({ error: 'Error del servidor.' });
   }
 });

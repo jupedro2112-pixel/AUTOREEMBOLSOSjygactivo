@@ -504,21 +504,30 @@
                 .dash-info-bar .dash-info-text { flex:1; min-width:0; }
                 .dash-info-bar .dash-info-arrow { color:#d4af37; font-size:17px; font-weight:900; }
                 .dash-user {
-                    flex:0 0 94px; display:flex; flex-direction:column; align-items:center;
+                    flex:0 0 84px; display:flex; flex-direction:column; align-items:center;
                     justify-content:center; gap:3px; color:#fff;
                     background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #1a0033;
-                    border-radius:11px; padding:8px 6px;
+                    border-radius:11px; padding:8px 5px;
                 }
                 .dash-user-avatar {
-                    font-size:18px; width:34px; height:34px; display:flex;
+                    font-size:18px; width:32px; height:32px; display:flex;
                     align-items:center; justify-content:center;
                     background:linear-gradient(135deg,#d4af37,#ffd700); border-radius:50%;
                 }
                 .dash-user-label { font-size:8.5px; font-weight:800; color:#ffd700; letter-spacing:.6px; }
                 .dash-user-name {
-                    font-size:11px; font-weight:900; color:#fff; max-width:82px; text-align:center;
+                    font-size:11px; font-weight:900; color:#fff; max-width:74px; text-align:center;
                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
                 }
+                #rouletteHomeCard { flex:0 0 84px; display:flex; }
+                .dash-roulette {
+                    flex:1; display:flex; flex-direction:column; align-items:center;
+                    justify-content:center; gap:3px; cursor:pointer; color:#fff;
+                    border:1px solid #1a0033; border-radius:11px; padding:8px 4px;
+                }
+                .dash-roulette-emoji { font-size:22px; line-height:1; }
+                .dash-roulette-label { font-size:9.5px; font-weight:900; color:#ffd700; letter-spacing:.5px; }
+                .dash-roulette-sub { font-size:8.5px; font-weight:700; color:#fff; text-align:center; line-height:1.2; }
                 .dash-refunds {
                     flex:1; min-width:0; background:linear-gradient(135deg,#1a0033,#0a0015);
                     border:1.5px solid #1a0033; border-radius:11px; padding:7px 7px 8px;
@@ -566,6 +575,8 @@
                     <span class="dash-info-arrow">›</span>
                 </button>
                 <div class="dash-top">
+                    <!-- Ruleta diaria: render dinámico desde js/roulette.js -->
+                    <div id="rouletteHomeCard" style="display:none;"></div>
                     <div class="dash-refunds">
                         <div class="dash-refunds-title">🎁 REEMBOLSOS</div>
                         <div class="dash-refunds-row">
@@ -672,9 +683,8 @@
                  desde js/reviews.js; oculto por default. -->
             <div id="reviewHomeCard" style="display:none;"></div>
 
-            <!-- Ruleta diaria — 1 giro/día por user con PWA + notifs. Render
-                 dinámico desde js/roulette.js; oculto por default. -->
-            <div id="rouletteHomeCard" style="display:none;"></div>
+            <!-- Ruleta diaria: la celda vive ahora dentro del panel dorado
+                 (.dash-top), al lado de reembolsos. -->
             <!-- Transparencia: últimos ganadores de hoy en la ruleta diaria.
                  Render dinámico desde js/roulette.js. -->
             <div id="rouletteRecentWinnersCard" style="max-width:560px;margin:8px auto 14px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,215,0,0.25);border-radius:12px;padding:12px;">
@@ -758,11 +768,11 @@
             <div class="chat-input">
                 <button class="action-btn attach-btn" id="attachBtn" title="Adjuntar imagen">📸</button>
                 <button class="action-btn cbu-chat-btn" id="cbuChatBtn" title="Ver datos CBU para transferir">💳 CBU</button>
-                <button class="action-btn withdraw-chat-btn" id="withdrawChatBtn" title="Retirar premio">💸 Retirar</button>
                 <input type="file" id="fileInput" accept="image/*,video/*" style="display: none;">
                 <textarea id="messageInput" placeholder="Escribe un mensaje..." rows="1"></textarea>
                 <button class="send-btn" id="sendBtn">📤</button>
             </div>
+            <button class="withdraw-row-btn" id="withdrawChatBtn" title="Retirar premio">💸 RETIRAR MI PREMIO</button>
         </div>
 
       <!-- menu deslizante eliminado: todo va en una sola pagina -->

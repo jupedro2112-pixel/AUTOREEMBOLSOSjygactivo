@@ -12,7 +12,7 @@
     display: flex;
     flex-direction: column;
     margin-top: 125px;
-    margin-bottom: 80px;
+    margin-bottom: 124px;
     overflow: hidden;
 }
 
@@ -264,20 +264,23 @@
     box-shadow: 0 0 15px rgba(157, 78, 221, 0.5);
 }
 
-.withdraw-chat-btn {
+.withdraw-row-btn {
+    width: 100%;
+    margin-top: 7px;
     background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
     color: #fff;
-    font-size: 9.5px;
-    font-weight: bold;
-    width: auto;
-    padding: 0 10px;
-    border-radius: 20px;
-    white-space: nowrap;
+    border: none;
+    border-radius: 12px;
+    padding: 9px;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    box-shadow: 0 3px 10px rgba(255, 68, 68, 0.4);
 }
 
-.withdraw-chat-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 0 15px rgba(255, 68, 68, 0.5);
+.withdraw-row-btn:active {
+    transform: scale(0.99);
 }
 
 #messageInput {

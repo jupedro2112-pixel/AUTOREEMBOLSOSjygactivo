@@ -53,49 +53,37 @@
         }
 
         const spin = _state.spin;
-        // Render unificado: banda de estado arriba + lista de ganadores
-        // embebida dentro del MISMO card (la pidio el owner para no
-        // ocupar toda la pantalla con dos cards separados).
-        let stripBg, stripBorder, stripContent;
+        // Celda compacta vertical dentro del panel dorado (.dash-top), al
+        // lado de reembolsos. Tap → modal de spin. La lista de ganadores
+        // live vive DENTRO del modal.
+        let cellBg, cellBorder, subText;
         if (_state.alreadySpun && spin) {
             const won = Number(spin.prizeARS || 0) > 0;
             if (won && spin.status === 'credited') {
-                stripBg = 'linear-gradient(135deg,#0f4c00,#1a8200)';
-                stripBorder = '#ffd700';
-                stripContent = '<span style="font-size:16px;">🎰</span>'
-                    + '<span style="color:#fff;font-weight:800;flex:1;">Ganaste <strong style="color:#ffd700;">$' + _fmt(spin.prizeARS) + '</strong> hoy · acreditado</span>'
-                    + '<span style="color:#ffd700;font-size:11px;">›</span>';
+                cellBg = 'linear-gradient(135deg,#0f4c00,#1a8200)';
+                cellBorder = '#ffd700';
+                subText = 'Ganaste $' + _fmt(spin.prizeARS);
             } else if (won && spin.status === 'credit_failed') {
-                stripBg = 'rgba(255,170,102,0.10)';
-                stripBorder = '#ffaa66';
-                stripContent = '<span style="font-size:16px;">⚠️</span>'
-                    + '<span style="color:#fff;font-weight:700;flex:1;">Ganaste $' + _fmt(spin.prizeARS) + ' — acreditación falló, escribinos</span>'
-                    + '<span style="color:#ffaa66;font-size:11px;">›</span>';
+                cellBg = 'linear-gradient(135deg,#1a0033,#2d0052)';
+                cellBorder = '#ffaa66';
+                subText = 'Escribinos';
             } else {
-                stripBg = 'rgba(0,0,0,0.30)';
-                stripBorder = 'rgba(255,255,255,0.18)';
-                stripContent = '<span style="font-size:16px;opacity:0.7;">🎰</span>'
-                    + '<span style="color:#ccc;flex:1;">Hoy no ganaste · volvé mañana</span>'
-                    + '<span style="color:#888;font-size:11px;">›</span>';
+                cellBg = 'linear-gradient(135deg,#1a0033,#2d0052)';
+                cellBorder = '#1a0033';
+                subText = 'Volvé mañana';
             }
         } else {
-            stripBg = 'linear-gradient(90deg,#4a0080,#7c00cc)';
-            stripBorder = '#ffd700';
-            stripContent = '<span style="font-size:16px;">🎰</span>'
-                + '<span style="color:#fff;font-weight:800;flex:1;">Ruleta diaria · <span style="color:#ffd700;">girá y ganá hasta $10.000</span></span>'
-                + '<span style="background:#ffd700;color:#000;font-weight:900;padding:3px 9px;border-radius:6px;font-size:11px;letter-spacing:0.5px;">GIRAR</span>';
+            cellBg = 'linear-gradient(135deg,#4a0080,#7c00cc)';
+            cellBorder = '#ffd700';
+            subText = '¡GIRÁ HOY!';
         }
 
-        // Home: SOLO la banda de estado (tap → modal de spin). La lista de
-        // ganadores live vive DENTRO del modal (no duplicamos en el home
-        // para mantener la pantalla limpia).
-        let html = '';
-        html += '<div onclick="VIP.roulette && VIP.roulette.open()" style="cursor:pointer;background:' + stripBg + ';border:1px solid ' + stripBorder + ';border-radius:8px;padding:7px 10px;margin:6px auto;max-width:560px;display:flex;align-items:center;gap:8px;font-size:12.5px;">';
-        html += stripContent;
-        html += '</div>';
-        html += '<style>@keyframes roulettePulseHome { 0%,100% { box-shadow: 0 0 10px rgba(255,215,0,0.30); } 50% { box-shadow: 0 0 16px rgba(255,215,0,0.55); } }</style>';
-
-        c.innerHTML = html;
+        c.innerHTML = '<div class="dash-roulette" onclick="VIP.roulette && VIP.roulette.open()" '
+            + 'style="background:' + cellBg + ';border-color:' + cellBorder + ';">'
+            + '<span class="dash-roulette-emoji">🎰</span>'
+            + '<span class="dash-roulette-label">RULETA</span>'
+            + '<span class="dash-roulette-sub">' + _esc(subText) + '</span>'
+            + '</div>';
         c.style.display = '';
 
         // Ocultamos el card SEPARADO (el viejo).

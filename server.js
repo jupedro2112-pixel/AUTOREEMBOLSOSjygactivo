@@ -6358,6 +6358,23 @@ app.post('/api/notification-plan', authMiddleware, async (req, res) => {
     user.notificationPlan = plan;
     await user.save();
 
+    // Inscribir en la estrategia de bonos por encuesta. solo_reembolsos no
+    // entra. La inscripción guarda CUÁNDO votó — el reloj de la estrategia.
+    if (plan !== 'solo_reembolsos') {
+      try {
+        await StrategyEnrollment.updateOne(
+          { username: String(user.username || '').toLowerCase() },
+          {
+            $set: { plan, userId: user.id },
+            $setOnInsert: { id: uuidv4(), enrolledAt: new Date(), step: 0 }
+          },
+          { upsert: true }
+        );
+      } catch (enrErr) {
+        logger.warn(`[bonus-strategy] inscripción falló para ${user.username}: ${enrErr.message}`);
+      }
+    }
+
     logger.info(`Usuario ${user.username} eligió plan de notificaciones: ${plan}`);
     res.json({ success: true, notificationPlan: plan });
   } catch (error) {
@@ -9372,6 +9389,182 @@ app.post('/api/admin/promo-bonus/:id/use', authMiddleware, adminMiddleware, asyn
     res.json({ success: true });
   } catch (err) {
     logger.error(`/api/admin/promo-bonus/:id/use: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+
+// ============================================================================
+// ESTRATEGIA DE BONOS POR ENCUESTA — secuencia escalonada 50% -> 100%.
+// ============================================================================
+// Cada usuario que vota la encuesta queda inscripto (StrategyEnrollment). Un
+// cron manda el paso 1 (bono 50%) y el paso 2 (bono 100%) segun el retraso
+// del plan que voto, contado desde la inscripcion. Cada push activa un
+// PromoBonus (reutiliza activateChargeBonuses): cartel del usuario + banner
+// del agente. La estrategia corre solo si isActive.
+const BonusStrategyConfig = require('./src/models/BonusStrategyConfig');
+const StrategyEnrollment = require('./src/models/StrategyEnrollment');
+
+async function _getBonusStrategyConfig() {
+  let cfg = await BonusStrategyConfig.findOne({ key: 'default' });
+  if (!cfg) cfg = await BonusStrategyConfig.create({ key: 'default' });
+  return cfg;
+}
+
+// Envia el push del paso + activa el PromoBonus + marca el paso en las
+// inscripciones recibidas.
+async function _strategySendStep(cfg, step, enrollments) {
+  const stepCfg = step === 1 ? cfg.step1 : cfg.step2;
+  const usernames = enrollments.map(e => e.username).filter(Boolean);
+  if (usernames.length === 0) return;
+  const data = { source: 'bonus-strategy', tag: 'bonus-strategy-step' + step };
+  try {
+    await sendNotificationToAllUsers(User, stepCfg.title, stepCfg.body, data, { username: { $in: usernames } });
+  } catch (e) {
+    logger.warn(`[bonus-strategy] push paso ${step} fallo: ${e.message}`);
+  }
+  // Bono vigente: reutiliza la logica de activateChargeBonuses con una regla
+  // sintetica que lleva el % y la duracion del paso.
+  const synthRule = {
+    id: 'bonus-strategy-step' + step,
+    code: 'ESTRATEGIA-' + stepCfg.percent + '%',
+    name: 'Estrategia de bonos — paso ' + step,
+    chargeBonus: { percent: stepCfg.percent, durationMinutes: stepCfg.durationMinutes }
+  };
+  try {
+    await notificationRulesService.activateChargeBonuses(synthRule, usernames, _notifRulesModels, logger);
+  } catch (e) {
+    logger.warn(`[bonus-strategy] activar bonos paso ${step} fallo: ${e.message}`);
+  }
+  const ids = enrollments.map(e => e.id);
+  const upd = step === 1
+    ? { $set: { step: 1, step1At: new Date() } }
+    : { $set: { step: 2, step2At: new Date() } };
+  await StrategyEnrollment.updateMany({ id: { $in: ids } }, upd);
+  logger.info(`[bonus-strategy] paso ${step}: enviado a ${usernames.length} usuario(s)`);
+}
+
+async function _runBonusStrategy() {
+  try {
+    const cfg = await BonusStrategyConfig.findOne({ key: 'default' }).lean();
+    if (!cfg || !cfg.isActive) return;
+    const now = Date.now();
+    for (const plan of ['suave', 'normal', 'activo']) {
+      const pd = (cfg.planDelays && cfg.planDelays[plan]) || { step1Hours: 24, step2Hours: 96 };
+      // Paso 1: inscripciones en step 0 que cumplieron el retraso del paso 1.
+      const cut1 = new Date(now - (Number(pd.step1Hours) || 0) * 3600 * 1000);
+      const due1 = await StrategyEnrollment.find({ plan, step: 0, enrolledAt: { $lte: cut1 } }).limit(2000).lean();
+      if (due1.length > 0) await _strategySendStep(cfg, 1, due1);
+      // Paso 2: inscripciones en step 1 que cumplieron el retraso del paso 2.
+      const cut2 = new Date(now - (Number(pd.step2Hours) || 0) * 3600 * 1000);
+      const due2 = await StrategyEnrollment.find({ plan, step: 1, enrolledAt: { $lte: cut2 } }).limit(2000).lean();
+      if (due2.length > 0) await _strategySendStep(cfg, 2, due2);
+    }
+  } catch (err) {
+    logger.error(`[bonus-strategy] cron error: ${err.message}`);
+  }
+}
+setTimeout(() => { _runBonusStrategy(); }, 4 * 60 * 1000);
+setInterval(() => { _runBonusStrategy(); }, 10 * 60 * 1000);
+
+// GET — config actual + contadores por paso.
+app.get('/api/admin/bonus-strategy', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const cfg = await _getBonusStrategyConfig();
+    const agg = await StrategyEnrollment.aggregate([
+      { $group: { _id: '$step', count: { $sum: 1 } } }
+    ]);
+    const byStep = { 0: 0, 1: 0, 2: 0 };
+    for (const g of agg) byStep[g._id] = g.count;
+    res.json({
+      success: true,
+      config: cfg.toObject(),
+      stats: {
+        inscriptos: byStep[0] + byStep[1] + byStep[2],
+        sinPasos: byStep[0],
+        recibieron50: byStep[1],
+        completaron: byStep[2]
+      }
+    });
+  } catch (err) {
+    logger.error(`GET /api/admin/bonus-strategy: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST — guardar config (pasos + retrasos por plan).
+app.post('/api/admin/bonus-strategy', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const cfg = await _getBonusStrategyConfig();
+    const _step = (src, dst) => {
+      if (!src) return;
+      if (src.percent != null) dst.percent = Math.max(1, Math.min(1000, Number(src.percent) || 0));
+      if (src.durationMinutes != null) dst.durationMinutes = Math.max(5, Number(src.durationMinutes) || 120);
+      if (typeof src.title === 'string') dst.title = src.title.slice(0, 120);
+      if (typeof src.body === 'string') dst.body = src.body.slice(0, 300);
+    };
+    _step(b.step1, cfg.step1);
+    _step(b.step2, cfg.step2);
+    if (b.planDelays) {
+      for (const plan of ['suave', 'normal', 'activo']) {
+        const pd = b.planDelays[plan];
+        if (!pd) continue;
+        if (pd.step1Hours != null) cfg.planDelays[plan].step1Hours = Math.max(0, Number(pd.step1Hours) || 0);
+        if (pd.step2Hours != null) cfg.planDelays[plan].step2Hours = Math.max(0, Number(pd.step2Hours) || 0);
+      }
+    }
+    cfg.updatedAt = new Date();
+    cfg.updatedBy = (req.user && req.user.username) || null;
+    cfg.markModified('step1'); cfg.markModified('step2'); cfg.markModified('planDelays');
+    await cfg.save();
+    res.json({ success: true, config: cfg.toObject() });
+  } catch (err) {
+    logger.error(`POST /api/admin/bonus-strategy: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST — lanzar o pausar la estrategia. Al lanzar, inscribe a los que ya
+// votaron la encuesta y todavia no tienen inscripcion (backfill).
+app.post('/api/admin/bonus-strategy/activate', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const active = !(req.body && req.body.active === false);
+    const cfg = await _getBonusStrategyConfig();
+    cfg.isActive = active;
+    if (active) {
+      cfg.activatedAt = new Date();
+      cfg.activatedBy = (req.user && req.user.username) || null;
+    }
+    await cfg.save();
+
+    let backfilled = 0;
+    if (active) {
+      const voters = await User.find(
+        { notificationPlan: { $in: ['suave', 'normal', 'activo'] } },
+        { id: 1, username: 1, notificationPlan: 1, _id: 0 }
+      ).lean();
+      const existing = new Set(
+        (await StrategyEnrollment.find({}, { username: 1, _id: 0 }).lean()).map(e => e.username)
+      );
+      const toInsert = [];
+      for (const v of voters) {
+        const uname = String(v.username || '').toLowerCase();
+        if (!uname || existing.has(uname)) continue;
+        toInsert.push({
+          id: uuidv4(), userId: v.id, username: uname,
+          plan: v.notificationPlan, enrolledAt: new Date(), step: 0
+        });
+      }
+      if (toInsert.length > 0) {
+        await StrategyEnrollment.insertMany(toInsert, { ordered: false }).catch(() => {});
+        backfilled = toInsert.length;
+      }
+    }
+    logger.info(`[bonus-strategy] ${active ? 'LANZADA' : 'PAUSADA'} por ${(req.user && req.user.username) || '?'} (backfill ${backfilled})`);
+    res.json({ success: true, isActive: active, backfilled });
+  } catch (err) {
+    logger.error(`POST /api/admin/bonus-strategy/activate: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

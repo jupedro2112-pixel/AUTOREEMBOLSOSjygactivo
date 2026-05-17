@@ -845,34 +845,6 @@
                     <label>Repetir Contraseña *</label>
                     <input type="password" id="registerPasswordConfirm" name="confirm-password" placeholder="Repite tu contraseña" required minlength="6" autocomplete="new-password">
                 </div>
-                <div class="input-group" id="registerPhoneGroup">
-                    <label>Teléfono *</label>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <select id="registerPhonePrefix" style="flex-shrink:0; width: 110px; padding: 8px 6px; border-radius: 8px; border: 1px solid rgba(212,175,55,0.3); background: rgba(0,0,0,0.4); color: #fff; font-size: 14px;">
-                            <option value="+54">🇦🇷 +54</option>
-                            <option value="+591">🇧🇴 +591</option>
-                            <option value="+55">🇧🇷 +55</option>
-                            <option value="+56">🇨🇱 +56</option>
-                            <option value="+57">🇨🇴 +57</option>
-                            <option value="+506">🇨🇷 +506</option>
-                            <option value="+53">🇨🇺 +53</option>
-                            <option value="+593">🇪🇨 +593</option>
-                            <option value="+503">🇸🇻 +503</option>
-                            <option value="+502">🇬🇹 +502</option>
-                            <option value="+504">🇭🇳 +504</option>
-                            <option value="+52">🇲🇽 +52</option>
-                            <option value="+505">🇳🇮 +505</option>
-                            <option value="+507">🇵🇦 +507</option>
-                            <option value="+595">🇵🇾 +595</option>
-                            <option value="+51">🇵🇪 +51</option>
-                            <option value="+1">🇩🇴 +1</option>
-                            <option value="+598">🇺🇾 +598</option>
-                            <option value="+58">🇻🇪 +58</option>
-                        </select>
-                        <input type="tel" id="registerPhone" name="phone" placeholder="9 11 1234-5678" required autocomplete="tel" style="flex: 1;">
-                    </div>
-                    <span style="font-size: 11px; color: #a5b4fc; margin-top: 6px; display: block; line-height: 1.5;">📱 Tu número es importante: podrás iniciar sesión con él, recuperar tu usuario y restablecer tu contraseña si la olvidás.</span>
-                </div>
                 <div class="input-group">
                     <label>Email (opcional)</label>
                     <input type="email" id="registerEmail" name="email" placeholder="tu@email.com" autocomplete="email">
@@ -885,23 +857,9 @@
                 <div id="registerError" class="error-message"></div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" id="closeRegisterModal">Cancelar</button>
-                    <button type="button" class="btn btn-primary" id="registerSendOtpBtn" onclick="handleRegisterSendOtp()">📱 Enviar código SMS</button>
+                    <button type="button" class="btn btn-primary" id="registerSendOtpBtn">📝 Crear Cuenta</button>
                 </div>
             </form>
-            </div>
-            <!-- Paso 2: Verificar OTP -->
-            <div id="registerStep2" style="display:none;">
-                <p id="registerOtpMsg" style="color: #00ff88; text-align: center; margin-bottom: 16px;"></p>
-                <div class="input-group">
-                    <label>Código de verificación *</label>
-                    <input type="text" inputmode="numeric" pattern="[0-9]{6}" id="registerOtpCode" placeholder="Código de 6 dígitos" maxlength="6" style="font-size: 22px; text-align: center; letter-spacing: 8px;">
-                </div>
-                <div id="registerOtpError" class="error-message"></div>
-                <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('registerStep1').style.display=''; document.getElementById('registerStep2').style.display='none';">Volver</button>
-                    <button type="button" class="btn btn-primary" id="registerSubmitBtn" onclick="handleRegisterWithOtp()">📝 Crear Cuenta</button>
-                </div>
-                <p style="font-size: 11px; color: #888; text-align: center; margin-top: 10px;">¿No recibiste el código? <a href="#" style="color: #d4af37;" onclick="document.getElementById('registerStep1').style.display=''; document.getElementById('registerStep2').style.display='none'; return false;">Volvé a intentarlo</a></p>
             </div>
         </div>
     </div>
@@ -1457,6 +1415,30 @@
                     <button type="button" id="verifyPhoneConfirmBtn" class="btn btn-primary">✅ Verificar</button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Modal de oferta de verificación SMS — se muestra al primer ingreso de
+         cuentas creadas sin SMS. Es 100% opcional/omitible; solo busca empujar
+         al usuario a verificar su teléfono para asegurar la cuenta. -->
+    <div id="smsOfferModal" class="modal hidden">
+        <div class="modal-content" style="position: relative;">
+            <button onclick="VIP.ui.hideModal('smsOfferModal')" style="position: absolute; top: 15px; right: 15px; background: none; border: none; color: #888; font-size: 24px; cursor: pointer; z-index: 10;">✕</button>
+            <div class="modal-header">
+                <h2>🔒 Asegurá tu cuenta</h2>
+                <p>Verificá tu teléfono — es opcional, pero te lo recomendamos.</p>
+            </div>
+            <div style="background: rgba(212,175,55,0.08); border: 1px solid rgba(212,175,55,0.3); border-radius: 10px; padding: 14px 16px; margin-bottom: 18px;">
+                <p style="color: #d4af37; font-size: 13px; font-weight: 700; margin: 0 0 9px;">Verificando tu número con un SMS:</p>
+                <p style="color: #b0b0b0; font-size: 12px; margin: 0 0 6px; line-height: 1.5;">📲 Vas a poder <strong style="color:#fff;">iniciar sesión con tu número</strong> recibiendo un código por SMS, sin depender de la contraseña.</p>
+                <p style="color: #b0b0b0; font-size: 12px; margin: 0 0 6px; line-height: 1.5;">🔑 Vas a poder <strong style="color:#fff;">recuperar tu cuenta</strong> si alguna vez olvidás la clave.</p>
+                <p style="color: #b0b0b0; font-size: 12px; margin: 0; line-height: 1.5;">🛡️ Le das <strong style="color:#fff;">100% de seguridad</strong> a tu cuenta.</p>
+            </div>
+            <div class="modal-actions" style="flex-direction: column; gap: 8px;">
+                <button type="button" class="btn btn-primary" id="smsOfferVerifyBtn" style="width:100%;">📱 Verificar mi teléfono ahora</button>
+                <button type="button" class="btn btn-secondary" id="smsOfferSkipBtn" style="width:100%;">Omitir por ahora</button>
+            </div>
+            <p style="color:#888; font-size:10.5px; margin:10px 0 0; text-align:center;">Podés hacerlo más tarde desde tu perfil.</p>
         </div>
     </div>
 

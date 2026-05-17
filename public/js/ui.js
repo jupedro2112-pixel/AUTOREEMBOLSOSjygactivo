@@ -29,9 +29,7 @@ VIP.ui = (function () {
         }
         if (modalId === 'registerModal') {
             const s1 = document.getElementById('registerStep1');
-            const s2 = document.getElementById('registerStep2');
             if (s1) s1.style.display = '';
-            if (s2) s2.style.display = 'none';
         }
     }
 

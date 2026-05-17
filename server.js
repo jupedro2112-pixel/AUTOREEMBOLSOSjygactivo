@@ -1375,30 +1375,31 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     }
     
-    if (!phone || phone.trim().length < 8) {
-      return res.status(400).json({ error: 'El número de teléfono es obligatorio (mínimo 8 dígitos)' });
-    }
+    // El registro es solo usuario + contraseña: el SMS dejó de ser obligatorio.
+    // Si igualmente llega un teléfono con su OTP (flujo legacy o verificación
+    // opcional), se valida; si no, la cuenta se crea con el teléfono pendiente
+    // de verificar y se le ofrece el SMS al primer ingreso.
+    const hasPhone = !!(phone && phone.trim().length >= 8);
+    let normalizedPhone = null;
 
-    const normalizedPhone = phone.trim();
+    if (hasPhone) {
+      normalizedPhone = phone.trim();
 
-    // Validar y verificar OTP antes de crear la cuenta
-    if (!otpCode) {
-      return res.status(400).json({ error: 'Se requiere el código de verificación SMS' });
-    }
-
-    if (!validateInternationalPhone(normalizedPhone)) {
-      return res.status(400).json({ error: 'Número de teléfono inválido. Usa formato internacional con código de país (ej: +5491155551234)' });
-    }
-
-    const otpResult = await verifyOTP(normalizedPhone, otpCode, 'register');
-    if (!otpResult.valid) {
-      return res.status(400).json({ error: otpResult.error || 'Código de verificación incorrecto o expirado' });
-    }
-
-    // Check if phone is already registered and verified (second line of defense)
-    const existingPhoneUser = await User.findOne({ phone: normalizedPhone, phoneVerified: true }).lean();
-    if (existingPhoneUser) {
-      return res.status(400).json({ error: 'Este número de teléfono ya está registrado' });
+      if (!otpCode) {
+        return res.status(400).json({ error: 'Se requiere el código de verificación SMS' });
+      }
+      if (!validateInternationalPhone(normalizedPhone)) {
+        return res.status(400).json({ error: 'Número de teléfono inválido. Usa formato internacional con código de país (ej: +5491155551234)' });
+      }
+      const otpResult = await verifyOTP(normalizedPhone, otpCode, 'register');
+      if (!otpResult.valid) {
+        return res.status(400).json({ error: otpResult.error || 'Código de verificación incorrecto o expirado' });
+      }
+      // Check if phone is already registered and verified (second line of defense)
+      const existingPhoneUser = await User.findOne({ phone: normalizedPhone, phoneVerified: true }).lean();
+      if (existingPhoneUser) {
+        return res.status(400).json({ error: 'Este número de teléfono ya está registrado' });
+      }
     }
     
     // Buscar case-insensitive
@@ -1471,7 +1472,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       password: password,
       email: email || null,
       phone: normalizedPhone,
-      phoneVerified: true,
+      phoneVerified: hasPhone,
+      phoneVerificationPending: !hasPhone,
       role: 'user',
       accountNumber: generateAccountNumber(),
       balance: jgResult.user?.balance || jgResult.user?.user_balance || 0,
@@ -1560,11 +1562,14 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         username: newUser.username,
         email: newUser.email,
         phone: newUser.phone,
+        phoneVerified: newUser.phoneVerified === true,
+        phoneVerificationPending: newUser.phoneVerificationPending === true,
         accountNumber: newUser.accountNumber,
         role: newUser.role,
         balance: newUser.balance,
         jugayganaLinked: true,
         needsPasswordChange: false,
+        firstLogin: true,
         referralCode: newUser.referralCode,
         referredBy: isValidReferral ? referrer.username : null
       }
@@ -1998,6 +2003,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         phone: userObj.phone || null,
         phoneVerified: userObj.phoneVerified || false,
         phoneVerificationPending: userObj.phoneVerificationPending === true,
+        firstLogin: !userObj.lastLogin,
         notificationPlan: userObj.notificationPlan || null,
         whatsapp: userObj.whatsapp || null,
         accountNumber: userObj.accountNumber,

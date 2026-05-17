@@ -32,27 +32,45 @@ VIP.auth = (function () {
         }
     }
 
-    // Estado temporal del registro OTP (compartido con app.js global via window)
-    let _vipRegisterOtpPhone = null;
-
     async function handleRegister(e) {
         if (e) e.preventDefault();
-        // El registro ahora usa flujo OTP: handleRegisterSendOtp y handleRegisterWithOtp
-        // Esta función se mantiene por compatibilidad
+        return handleRegisterDirect();
     }
 
-    async function handleRegisterSendOtp() {
+    // Muestra (una sola vez, al primer ingreso) el modal que ofrece verificar
+    // el teléfono por SMS. Es 100% opcional: solo busca empujar a asegurar la
+    // cuenta. No se muestra si el teléfono ya está verificado.
+    function maybeOfferSmsVerification(user) {
+        if (!user) return;
+        if (user.role && user.role !== 'user') return;
+        if (user.phoneVerified === true) return;
+        if (user.firstLogin !== true) return;
+        const key = 'vip_smsOfferShown_' + String(user.username || '').toLowerCase();
+        try {
+            if (localStorage.getItem(key)) return;
+            localStorage.setItem(key, '1');
+        } catch (e) { /* localStorage no disponible: igual ofrecemos una vez */ }
+        setTimeout(function () {
+            try { VIP.ui.showModal('smsOfferModal'); } catch (e) { /* noop */ }
+        }, 1200);
+    }
+
+    // Registro directo: solo usuario + contraseña, sin SMS. Si hay una pauta
+    // activa, también manda campaignCode/utm para conservar la atribución.
+    async function handleRegisterDirect() {
         const username = document.getElementById('registerUsername').value.trim();
         const password = document.getElementById('registerPassword').value;
         const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
-        const phonePrefix = document.getElementById('registerPhonePrefix').value;
-        const phoneNumber = document.getElementById('registerPhone').value.trim();
+        const emailInput = document.getElementById('registerEmail');
+        const email = emailInput ? emailInput.value.trim() : '';
+        const referralInput = document.getElementById('registerReferralCode');
         const errorDiv = document.getElementById('registerError');
+        const btn = document.getElementById('registerSendOtpBtn');
 
         errorDiv.classList.remove('show');
 
-        if (password !== passwordConfirm) {
-            errorDiv.textContent = 'Las contraseñas no coinciden';
+        if (username.length < 3) {
+            errorDiv.textContent = 'El usuario debe tener al menos 3 caracteres';
             errorDiv.classList.add('show');
             return;
         }
@@ -61,87 +79,23 @@ VIP.auth = (function () {
             errorDiv.classList.add('show');
             return;
         }
-        if (username.length < 3) {
-            errorDiv.textContent = 'El usuario debe tener al menos 3 caracteres';
-            errorDiv.classList.add('show');
-            return;
-        }
-        if (!phoneNumber || phoneNumber.replace(/\D/g, '').length < 8) {
-            errorDiv.textContent = 'Ingresá un número de teléfono válido (mínimo 8 dígitos)';
+        if (password !== passwordConfirm) {
+            errorDiv.textContent = 'Las contraseñas no coinciden';
             errorDiv.classList.add('show');
             return;
         }
 
-        const fullPhone = phonePrefix + phoneNumber.replace(/[\s\-().]/g, '');
-        const btn = document.getElementById('registerSendOtpBtn');
-        if (btn) { btn.textContent = 'Enviando...'; btn.disabled = true; }
+        const attribution = VIP.campaign ? VIP.campaign.getActive() : null;
+        // El código de referido solo cuenta si NO vino por una pauta: en el
+        // flujo de pauta la campaña es la atribución relevante.
+        const referralCode = (!attribution && referralInput)
+            ? referralInput.value.trim().toUpperCase()
+            : null;
+
+        if (btn) { btn.textContent = 'Creando cuenta...'; btn.disabled = true; }
 
         try {
             const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
-            const response = await fetch(`${VIP.config.API_URL}/api/auth/send-register-otp`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone: fullPhone, username, metaEventId })
-            });
-            const data = await response.json();
-
-            if (response.ok && data.success) {
-                _vipRegisterOtpPhone = fullPhone;
-                // Sync con variable global si existe (app.js)
-                if (typeof window !== 'undefined') window._registerOtpPhone = fullPhone;
-                document.getElementById('registerStep1').style.display = 'none';
-                document.getElementById('registerStep2').style.display = '';
-                document.getElementById('registerOtpMsg').textContent = `✅ ${data.message} (${data.phone})`;
-                document.getElementById('registerOtpCode').value = '';
-                document.getElementById('registerOtpError').classList.remove('show');
-
-                // Meta Pixel — Lead (deduplicado con CAPI server-side por event_id).
-                if (VIP.pixel) VIP.pixel.trackWithId(metaEventId, 'Lead', { content_name: 'register_otp_sent' });
-            } else {
-                errorDiv.textContent = data.error || 'Error al enviar el código SMS';
-                errorDiv.classList.add('show');
-            }
-        } catch (error) {
-            errorDiv.textContent = 'Error de conexión. Intenta más tarde.';
-            errorDiv.classList.add('show');
-        } finally {
-            if (btn) { btn.textContent = '📱 Enviar código SMS'; btn.disabled = false; }
-        }
-    }
-
-    async function handleRegisterWithOtp() {
-        const username = document.getElementById('registerUsername').value.trim();
-        const password = document.getElementById('registerPassword').value;
-        const email = document.getElementById('registerEmail').value.trim();
-        const referralCodeInput = document.getElementById('registerReferralCode');
-        const referralCode = referralCodeInput ? referralCodeInput.value.trim().toUpperCase() : null;
-        const otpCode = document.getElementById('registerOtpCode').value.trim();
-        const errorDiv = document.getElementById('registerOtpError');
-        const submitBtn = document.getElementById('registerSubmitBtn');
-
-        errorDiv.classList.remove('show');
-
-        if (!otpCode || otpCode.length < 6) {
-            errorDiv.textContent = 'Ingresá el código de 6 dígitos';
-            errorDiv.classList.add('show');
-            return;
-        }
-
-        const phone = _vipRegisterOtpPhone || (typeof window !== 'undefined' ? window._registerOtpPhone : null);
-        if (!phone) {
-            errorDiv.textContent = 'Error: teléfono no encontrado. Volvé al paso anterior.';
-            errorDiv.classList.add('show');
-            return;
-        }
-
-        if (submitBtn) { submitBtn.textContent = 'Creando cuenta...'; submitBtn.disabled = true; }
-
-        try {
-            const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
-            // Si hay una atribución de pauta activa, la pasamos al server para
-            // que también quede registrada en User.acquisitionCampaign aunque
-            // el usuario haya elegido el flujo OTP completo en vez del rápido.
-            const attribution = VIP.campaign ? VIP.campaign.getActive() : null;
             const response = await fetch(`${VIP.config.API_URL}/api/auth/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -149,9 +103,7 @@ VIP.auth = (function () {
                     username,
                     password,
                     email: email || null,
-                    phone,
                     referralCode: referralCode || undefined,
-                    otpCode,
                     metaEventId,
                     campaignCode: attribution ? attribution.code : undefined,
                     utm: attribution ? attribution.utm : undefined
@@ -160,17 +112,15 @@ VIP.auth = (function () {
             const data = await response.json();
 
             if (response.ok) {
-                _vipRegisterOtpPhone = null;
-                if (typeof window !== 'undefined') window._registerOtpPhone = null;
                 VIP.state.currentToken = data.token;
                 VIP.state.currentUser = { ...data.user, id: data.user.id, userId: data.user.id };
                 localStorage.setItem('userToken', VIP.state.currentToken);
 
                 VIP.ui.hideModal('registerModal');
-                document.getElementById('registerForm').reset();
-                document.getElementById('usernameCheckResult').textContent = '';
-                document.getElementById('registerStep1').style.display = '';
-                document.getElementById('registerStep2').style.display = 'none';
+                const form = document.getElementById('registerForm');
+                if (form) form.reset();
+                const checkResult = document.getElementById('usernameCheckResult');
+                if (checkResult) checkResult.textContent = '';
 
                 await initializeSession(true);
                 console.log('[FCM] Registro exitoso, enviando token FCM...');
@@ -183,15 +133,16 @@ VIP.auth = (function () {
                 ));
 
                 VIP.ui.showToast('✅ ¡Cuenta creada exitosamente!', 'success');
+                maybeOfferSmsVerification(data.user);
             } else {
                 errorDiv.textContent = data.error || 'Error al crear cuenta';
                 errorDiv.classList.add('show');
             }
         } catch (error) {
-            errorDiv.textContent = 'Error de conexión';
+            errorDiv.textContent = 'Error de conexión. Intenta más tarde.';
             errorDiv.classList.add('show');
         } finally {
-            if (submitBtn) { submitBtn.textContent = '📝 Crear Cuenta'; submitBtn.disabled = false; }
+            if (btn) { btn.textContent = '📝 Crear Cuenta'; btn.disabled = false; }
         }
     }
 
@@ -318,6 +269,9 @@ VIP.auth = (function () {
                     VIP.state.passwordChangePending = true;
                     prepareChangePasswordModal();
                     VIP.ui.showModal('changePasswordModal');
+                } else {
+                    // Primer ingreso sin teléfono verificado: ofrecer el SMS.
+                    maybeOfferSmsVerification(data.user);
                 }
 
                 VIP.notifications.requestNotificationPermission();
@@ -1179,131 +1133,33 @@ VIP.auth = (function () {
     }
 
     // ============================================
-    // REGISTRO RÁPIDO (link de pauta) — sin OTP de teléfono
+    // MODO DEL MODAL DE REGISTRO
     // ============================================
-    // Si VIP.campaign tiene una atribución activa, el modal de registro se
-    // adapta: oculta el campo teléfono, muestra banner y cambia el botón para
-    // crear cuenta directamente vía /api/auth/register-quick.
+    // El registro es siempre solo usuario + contraseña (sin SMS). Si VIP.campaign
+    // tiene una atribución de pauta activa, además se muestra el banner y se
+    // oculta el código de referido (la campaña es la atribución relevante).
     function applyRegisterModalMode() {
         const banner = document.getElementById('campaignAttributionBanner');
-        const phoneGroup = document.getElementById('registerPhoneGroup');
-        const phoneInput = document.getElementById('registerPhone');
         const referralGroup = document.getElementById('registerReferralGroup');
         const referralInput = document.getElementById('registerReferralCode');
-        const sendOtpBtn = document.getElementById('registerSendOtpBtn');
-        if (!sendOtpBtn) return;
+        const sendBtn = document.getElementById('registerSendOtpBtn');
+        if (!sendBtn) return;
 
         const attribution = VIP.campaign && VIP.campaign.getActive();
 
+        if (banner) banner.style.display = attribution ? '' : 'none';
         if (attribution) {
-            if (banner) banner.style.display = '';
-            if (phoneGroup) phoneGroup.style.display = 'none';
-            if (phoneInput) phoneInput.required = false;
-            // En el flujo de pauta no mostramos el código de referido — la
-            // atribución a la campaña es el "referido" relevante.
             if (referralGroup) referralGroup.style.display = 'none';
             if (referralInput) referralInput.value = '';
-            sendOtpBtn.textContent = '📝 Crear Cuenta';
-            sendOtpBtn.onclick = handleRegisterQuick;
         } else {
-            if (banner) banner.style.display = 'none';
-            if (phoneGroup) phoneGroup.style.display = '';
-            if (phoneInput) phoneInput.required = true;
             if (referralGroup) referralGroup.style.display = '';
-            sendOtpBtn.textContent = '📱 Enviar código SMS';
-            sendOtpBtn.onclick = handleRegisterSendOtp;
         }
-    }
-
-    async function handleRegisterQuick() {
-        const username = document.getElementById('registerUsername').value.trim();
-        const password = document.getElementById('registerPassword').value;
-        const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
-        const email = document.getElementById('registerEmail').value.trim();
-        const errorDiv = document.getElementById('registerError');
-        const btn = document.getElementById('registerSendOtpBtn');
-
-        errorDiv.classList.remove('show');
-
-        if (password !== passwordConfirm) {
-            errorDiv.textContent = 'Las contraseñas no coinciden';
-            errorDiv.classList.add('show');
-            return;
-        }
-        if (password.length < 6) {
-            errorDiv.textContent = 'La contraseña debe tener al menos 6 caracteres';
-            errorDiv.classList.add('show');
-            return;
-        }
-        if (username.length < 3) {
-            errorDiv.textContent = 'El usuario debe tener al menos 3 caracteres';
-            errorDiv.classList.add('show');
-            return;
-        }
-
-        const attribution = VIP.campaign && VIP.campaign.getActive();
-        if (!attribution) {
-            errorDiv.textContent = 'No se detectó una pauta activa. Recargá la página e intentá de nuevo.';
-            errorDiv.classList.add('show');
-            return;
-        }
-
-        if (btn) { btn.textContent = 'Creando cuenta...'; btn.disabled = true; }
-
-        try {
-            const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
-            const response = await fetch(`${VIP.config.API_URL}/api/auth/register-quick`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    username,
-                    password,
-                    email: email || null,
-                    campaignCode: attribution.code,
-                    visitorId: VIP.campaign.getVisitorId(),
-                    utm: attribution.utm || {},
-                    metaEventId
-                })
-            });
-            const data = await response.json();
-
-            if (response.ok) {
-                VIP.state.currentToken = data.token;
-                VIP.state.currentUser = { ...data.user, id: data.user.id, userId: data.user.id };
-                localStorage.setItem('userToken', VIP.state.currentToken);
-
-                VIP.ui.hideModal('registerModal');
-                document.getElementById('registerForm').reset();
-
-                await initializeSession(true);
-                try { await VIP.notifications.sendFcmTokenAfterLogin(); } catch (e) { /* opcional */ }
-
-                // Meta Pixel — CompleteRegistration con metadata de campaña.
-                if (VIP.pixel) {
-                    VIP.pixel.trackWithId(metaEventId, 'CompleteRegistration', Object.assign(
-                        { content_name: 'signup_quick', status: true },
-                        VIP.campaign.getActiveCustomData()
-                    ));
-                }
-
-                VIP.ui.showToast('✅ ¡Cuenta creada! Ya podés jugar.', 'success');
-            } else {
-                errorDiv.textContent = data.error || 'Error al crear cuenta';
-                errorDiv.classList.add('show');
-            }
-        } catch (error) {
-            errorDiv.textContent = 'Error de conexión';
-            errorDiv.classList.add('show');
-        } finally {
-            if (btn) {
-                btn.textContent = '📝 Crear Cuenta';
-                btn.disabled = false;
-            }
-        }
+        sendBtn.textContent = '📝 Crear Cuenta';
+        sendBtn.onclick = handleRegisterDirect;
     }
 
     // ============================================
-    // VERIFICACIÓN DE TELÉFONO POST-REGISTRO RÁPIDO
+    // VERIFICACIÓN DE TELÉFONO (opcional, post-registro)
     // ============================================
     async function handleVerifyPhoneSend() {
         const prefix = document.getElementById('verifyPhonePrefix').value;
@@ -1413,9 +1269,8 @@ VIP.auth = (function () {
     return {
         checkUsernameAvailability,
         handleRegister,
-        handleRegisterSendOtp,
-        handleRegisterWithOtp,
-        handleRegisterQuick,
+        handleRegisterDirect,
+        maybeOfferSmsVerification,
         applyRegisterModalMode,
         handleVerifyPhoneSend,
         handleVerifyPhoneConfirm,
@@ -1443,8 +1298,6 @@ VIP.auth = (function () {
 
 // Window aliases for any HTML onclick / external callers
 window.checkUsernameAvailability = VIP.auth.checkUsernameAvailability;
-window.handleRegisterSendOtp = VIP.auth.handleRegisterSendOtp;
-window.handleRegisterWithOtp = VIP.auth.handleRegisterWithOtp;
 window.handleRequestPasswordReset = VIP.auth.handleRequestPasswordReset;
 window.handleVerifyResetOtp = VIP.auth.handleVerifyResetOtp;
 window.handleCompletePasswordReset = VIP.auth.handleCompletePasswordReset;

@@ -265,6 +265,23 @@ function setupEventListeners() {
         if (verifyPhoneSendBtn) verifyPhoneSendBtn.addEventListener('click', VIP.auth.handleVerifyPhoneSend);
         const verifyPhoneConfirmBtn = document.getElementById('verifyPhoneConfirmBtn');
         if (verifyPhoneConfirmBtn) verifyPhoneConfirmBtn.addEventListener('click', VIP.auth.handleVerifyPhoneConfirm);
+
+        // Modal de oferta de verificación SMS (se muestra al primer ingreso).
+        const smsOfferVerifyBtn = document.getElementById('smsOfferVerifyBtn');
+        if (smsOfferVerifyBtn) smsOfferVerifyBtn.addEventListener('click', () => {
+            VIP.ui.hideModal('smsOfferModal');
+            const s1 = document.getElementById('verifyPhoneStep1');
+            const s2 = document.getElementById('verifyPhoneStep2');
+            const input = document.getElementById('verifyPhoneInput');
+            const err = document.getElementById('verifyPhoneError');
+            if (s1) s1.style.display = '';
+            if (s2) s2.style.display = 'none';
+            if (input) input.value = '';
+            if (err) err.classList.remove('show');
+            VIP.ui.showModal('verifyPhoneModal');
+        });
+        const smsOfferSkipBtn = document.getElementById('smsOfferSkipBtn');
+        if (smsOfferSkipBtn) smsOfferSkipBtn.addEventListener('click', () => VIP.ui.hideModal('smsOfferModal'));
         const closeSettingsModal = document.getElementById('closeSettingsModal');
         if (closeSettingsModal) closeSettingsModal.addEventListener('click', () => VIP.ui.hideModal('settingsModal'));
         const changePasswordSettingsBtn = document.getElementById('changePasswordSettingsBtn');

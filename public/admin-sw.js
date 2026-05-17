@@ -8,7 +8,7 @@
  */
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).
@@ -112,9 +112,12 @@ self.addEventListener('fetch', (event) => {
     }
 
     if (isNetworkFirst(url)) {
-        // Network-first: always try network so deploys are immediately visible.
+        // Network-first con `cache: 'no-store'`: ignora el caché HTTP del
+        // navegador para que admin.js / index.html / admin.css siempre lleguen
+        // frescos del servidor tras un deploy (el caché del SW queda solo como
+        // respaldo offline).
         event.respondWith(
-            fetch(event.request)
+            fetch(event.request, { cache: 'no-store' })
                 .then((response) => {
                     if (response && response.status === 200 && response.type === 'basic') {
                         // Only cache same-origin ('basic') responses.

@@ -94,6 +94,10 @@
                     <span class="icon icon-bell"></span>
                     <span>Notificaciones</span>
                 </a>
+                <a href="#" class="nav-item" data-section="roulette">
+                    <span>🎰</span>
+                    <span>Ruleta diaria</span>
+                </a>
                 <a href="#" class="nav-item" data-section="referrals">
                     <span class="icon icon-chart"></span>
                     <span>Referidos</span>
@@ -873,6 +877,73 @@
                         <p style="color:#888;text-align:center">Cargando usuarios...</p>
                     </div>
                     <div id="notifPagination" style="margin-top:1rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap"></div>
+                </div>
+            </section>
+
+            <!-- ============================================
+                 SECCIÓN: RULETA DIARIA — stats + historial
+                 1 giro/día por user con PWA + notifs. Auto-credit JUGAYGANA.
+                 Vemos quién ganó qué, totales diarios, y reintentar
+                 créditos que fallaron.
+                 ============================================ -->
+            <section id="rouletteSection" class="section">
+                <div class="panel-header">
+                    <h2>🎰 Ruleta diaria</h2>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <select id="rouletteDays" onchange="loadRouletteAdmin()" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-weight:700;">
+                            <option value="7">Últimos 7 días</option>
+                            <option value="14" selected>Últimos 14 días</option>
+                            <option value="30">Últimos 30 días</option>
+                            <option value="90">Últimos 90 días</option>
+                        </select>
+                        <button class="refresh-btn" onclick="loadRouletteAdmin()" title="Actualizar">🔄</button>
+                    </div>
+                </div>
+                <!-- Budget diario: monto máximo a regalar por día, distribuido
+                     a lo largo de las 24h. Si el pool de la hora ya se gastó,
+                     se fuerza SIN PREMIO automáticamente. -->
+                <div style="background:linear-gradient(135deg,rgba(255,215,0,0.12),rgba(255,107,53,0.08));border:1.5px solid rgba(255,215,0,0.55);border-radius:11px;padding:13px 14px;margin-bottom:14px;">
+                    <div style="color:#ffd700;font-weight:900;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;">💰 BUDGET DIARIO (distribuido a lo largo del día)</div>
+                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">Tope de plata a regalar por día. Se reparte parejo en 24h: si a las 12hs ya se gastó el 50%, los próximos ganadores se fuerzan a SIN PREMIO hasta que avance el día.</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px;">
+                        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#fff;cursor:pointer;">
+                            <input type="checkbox" id="rouletteBudgetEnabled" style="accent-color:#ffd700;">
+                            <span>Activar tope</span>
+                        </label>
+                        <input id="rouletteBudgetARS" type="number" min="0" step="100000" placeholder="10000000" style="flex:1;min-width:120px;background:rgba(0,0,0,0.45);border:1px solid rgba(255,215,0,0.40);color:#ffd700;padding:8px 11px;border-radius:7px;font-weight:800;font-size:13px;box-sizing:border-box;">
+                        <span style="color:#aaa;font-size:12px;">ARS / día</span>
+                        <button onclick="saveRouletteBudget()" style="background:linear-gradient(135deg,#ffd700,#ff8800);color:#000;border:none;padding:8px 14px;border-radius:7px;font-weight:900;font-size:12.5px;cursor:pointer;">💾 GUARDAR</button>
+                    </div>
+                    <div id="rouletteBudgetStatus" style="font-size:11.5px;color:#aaa;"></div>
+                </div>
+
+                <!-- Test del giro: simulación que no afecta el spin real
+                     del user ni acredita plata. Sirve para que el owner
+                     vea qué premio le habría salido + cómo se ve el flow. -->
+                <div style="background:linear-gradient(135deg,rgba(0,212,255,0.10),rgba(155,48,255,0.08));border:1.5px dashed rgba(0,212,255,0.50);border-radius:11px;padding:13px 14px;margin-bottom:14px;">
+                    <div style="color:#00d4ff;font-weight:900;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;">🧪 PROBAR GIRO (simulación)</div>
+                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">Tirá un giro de prueba a nombre de un usuario. No le afecta su giro real ni acredita plata — solo te muestra qué premio le habría salido con las probabilidades vigentes.</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                        <input id="rouletteTestUsername" type="text" placeholder="Username (ej: atojuan)" style="flex:1;min-width:160px;background:rgba(0,0,0,0.45);border:1px solid rgba(0,212,255,0.40);color:#fff;padding:8px 11px;border-radius:7px;font-size:13px;box-sizing:border-box;">
+                        <button onclick="rouletteTestSpin()" style="background:linear-gradient(135deg,#00d4ff,#0080ff);color:#000;border:none;padding:8px 16px;border-radius:7px;font-weight:900;font-size:12.5px;cursor:pointer;letter-spacing:0.4px;">🎰 PROBAR GIRO</button>
+                    </div>
+                    <div id="rouletteTestResult" style="margin-top:9px;"></div>
+                </div>
+
+                <!-- Reiniciar la ruleta del día: borra los giros de HOY
+                     para que todos los que ya giraron puedan girar de nuevo. -->
+                <div style="background:linear-gradient(135deg,rgba(255,60,60,0.10),rgba(255,107,53,0.06));border:1.5px solid rgba(255,60,60,0.50);border-radius:11px;padding:13px 14px;margin-bottom:14px;">
+                    <div style="color:#ff6060;font-weight:900;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;">🔄 REINICIAR RULETA DIARIA</div>
+                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">Borra los giros de HOY. Todos los que ya giraron van a poder volver a girar. Los premios ya acreditados no se tocan. Usalo cuando quieras reabrir la ruleta en el día.</div>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#fff;margin-bottom:9px;">
+                        <input type="checkbox" id="rouletteResetNotify" checked style="accent-color:#ff6060;">
+                        <span>📲 Avisar a todos por notificación ("🎰 Ruleta diaria actualizada · ¡Volvé a probar tu suerte!")</span>
+                    </label>
+                    <button onclick="resetRouletteDaily()" style="background:linear-gradient(135deg,#ff4040,#c20000);color:#fff;border:none;padding:8px 16px;border-radius:7px;font-weight:900;font-size:12.5px;cursor:pointer;letter-spacing:0.4px;">🔄 REINICIAR LA RULETA DE HOY</button>
+                    <div id="rouletteResetStatus" style="font-size:11.5px;color:#aaa;margin-top:9px;"></div>
+                </div>
+                <div id="rouletteAdminBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>
 

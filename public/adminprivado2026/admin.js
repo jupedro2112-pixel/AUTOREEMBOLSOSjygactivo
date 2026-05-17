@@ -3215,6 +3215,7 @@ function switchSection(section) {
     if (section === 'datos') loadDatos();
     if (section === 'notifications') loadNotificationsPanel();
     if (section === 'referrals') loadAdminReferralSummary();
+    if (section === 'roulette') loadRouletteAdmin();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
         if (currentAdmin?.role !== 'admin') {
@@ -6856,3 +6857,263 @@ window.viewCampaignStats = viewCampaignStats;
 window.closeCampaignStatsModal = closeCampaignStatsModal;
 window.editCampaignFromStats = editCampaignFromStats;
 
+// =========================================================================
+// RULETA DIARIA — helpers locales (la base vieja no tiene authFetch global).
+// =========================================================================
+function rouletteAuthFetch(url, opts) {
+    const o = opts || {};
+    o.headers = Object.assign({}, o.headers || {}, { 'Authorization': 'Bearer ' + currentToken });
+    return fetch(API_URL + url, o);
+}
+function rouletteEscapeJsArg(v) {
+    return String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/[\r\n]/g, '');
+}
+
+// =========================================================================
+// RULETA DIARIA — panel admin: stats + historial
+// =========================================================================
+// Cargar el budget diario de la ruleta cuando entra a la sección.
+async function loadRouletteBudget() {
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/budget');
+        const d = await r.json();
+        if (!r.ok || !d.success) return;
+        const enabledEl = document.getElementById('rouletteBudgetEnabled');
+        const amtEl = document.getElementById('rouletteBudgetARS');
+        const statusEl = document.getElementById('rouletteBudgetStatus');
+        if (enabledEl) enabledEl.checked = !!d.enabled;
+        if (amtEl) amtEl.value = d.dailyBudgetARS || '';
+        if (statusEl) {
+            const fmt = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
+            const pct = d.dailyBudgetARS > 0 ? Math.round((d.spentToday / d.dailyBudgetARS) * 100) : 0;
+            const pctColor = pct >= 80 ? '#ff8080' : (pct >= 50 ? '#ffaa66' : '#aaffaa');
+            statusEl.innerHTML = '📅 Hoy (' + escapeHtml(d.dateKey) + '): <strong>' + fmt(d.spentToday) + '</strong> gastados · ' + d.winnersToday + ' ganadores' +
+                (d.dailyBudgetARS > 0 ? ' · <span style="color:' + pctColor + ';">' + pct + '%</span> del tope' : '');
+        }
+    } catch (_) {}
+}
+
+async function saveRouletteBudget() {
+    const enabled = document.getElementById('rouletteBudgetEnabled')?.checked;
+    const amt = parseInt(document.getElementById('rouletteBudgetARS')?.value || '0', 10) || 0;
+    if (enabled && amt <= 0) {
+        showToast('Si activás el tope, poné un monto > 0', 'error');
+        return;
+    }
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/budget', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled, dailyBudgetARS: amt })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+            showToast(d.error || 'Error al guardar', 'error');
+            return;
+        }
+        showToast('✅ Budget guardado', 'success');
+        loadRouletteBudget();
+    } catch (e) {
+        showToast('Error al guardar', 'error');
+    }
+}
+
+// Reinicia la ruleta del día: borra los giros de HOY para que todos puedan
+// volver a girar. Confirmación obligatoria — es una acción destructiva.
+async function resetRouletteDaily() {
+    if (!confirm('¿Reiniciar la ruleta de HOY?\n\nTodos los que ya giraron hoy van a poder girar de nuevo. Los premios ya acreditados NO se tocan.')) return;
+    const notify = !!(document.getElementById('rouletteResetNotify') || {}).checked;
+    const box = document.getElementById('rouletteResetStatus');
+    if (box) { box.style.color = '#aaa'; box.textContent = '⏳ Reiniciando…'; }
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/reset-daily', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notify: notify })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) throw new Error(d.error || 'No se pudo reiniciar');
+        let msg = '✅ Ruleta reiniciada — ' + (d.deleted || 0) + ' giro(s) borrado(s). Todos pueden girar de nuevo.';
+        if (d.notified != null) msg += ' 📲 Notif enviada a ' + d.notified + ' usuarios.';
+        if (box) { box.style.color = '#66ff99'; box.textContent = msg; }
+        if (typeof loadRouletteAdmin === 'function') loadRouletteAdmin();
+    } catch (e) {
+        if (box) { box.style.color = '#ff8080'; box.textContent = '❌ ' + (e.message || e); }
+    }
+}
+
+// Probar el giro de la ruleta a nombre de un user (simulación) — no
+// afecta el spin real ni acredita plata. Solo muestra qué premio le
+// habría salido con la tabla de probabilidades vigente.
+async function rouletteTestSpin() {
+    const username = (document.getElementById('rouletteTestUsername')?.value || '').trim();
+    const box = document.getElementById('rouletteTestResult');
+    if (!username) {
+        if (box) box.innerHTML = '<div style="color:#ff8080;padding:6px;font-size:12px;">Falta el username</div>';
+        return;
+    }
+    if (box) box.innerHTML = '<div style="color:#aaa;text-align:center;padding:6px;font-size:12px;">⏳ Girando…</div>';
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/test-spin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+            if (box) box.innerHTML = '<div style="color:#ff8080;padding:6px;font-size:12px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
+            return;
+        }
+        const won = (d.prize.prizeARS || 0) > 0;
+        const color = won ? '#ffd700' : '#888';
+        const bg = won ? 'rgba(255,215,0,0.10)' : 'rgba(255,255,255,0.04)';
+        const border = won ? '#ffd700' : 'rgba(255,255,255,0.18)';
+        if (box) {
+            box.innerHTML =
+                '<div style="background:' + bg + ';border:1.5px solid ' + border + ';border-radius:9px;padding:10px 12px;display:flex;align-items:center;gap:10px;">' +
+                    '<div style="font-size:30px;line-height:1;">' + (d.prize.emoji || '🎲') + '</div>' +
+                    '<div style="flex:1;">' +
+                        '<div style="color:' + color + ';font-weight:900;font-size:14px;">' + escapeHtml(d.prize.prizeLabel) + (won ? ' · $' + Number(d.prize.prizeARS).toLocaleString('es-AR') : '') + '</div>' +
+                        '<div style="color:#aaa;font-size:11px;">A nombre de <strong>@' + escapeHtml(d.username) + '</strong> · peso ' + d.prize.weight + ' · simulación, no afecta nada real.</div>' +
+                    '</div>' +
+                '</div>';
+        }
+    } catch (e) {
+        if (box) box.innerHTML = '<div style="color:#ff8080;padding:6px;font-size:12px;">Error: ' + escapeHtml(e.message || '') + '</div>';
+    }
+}
+
+async function loadRouletteAdmin() {
+    const days = parseInt((document.getElementById('rouletteDays') || {}).value || '14', 10) || 14;
+    const body = document.getElementById('rouletteAdminBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    // Cargar budget en paralelo (no bloqueante).
+    loadRouletteBudget();
+    try {
+        const [statsResp, historyResp] = await Promise.all([
+            rouletteAuthFetch('/api/admin/roulette/stats?days=' + days),
+            rouletteAuthFetch('/api/admin/roulette/history?pageSize=100')
+        ]);
+        const stats = await statsResp.json();
+        const history = await historyResp.json();
+        if (!statsResp.ok || !stats.success) {
+            body.innerHTML = '<div style="color:#ff8080;text-align:center;padding:14px;">' + escapeHtml(stats.error || 'Error') + '</div>';
+            return;
+        }
+        const t = stats.totals || {};
+        const fmtMoney = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
+        const fmtNum = (n) => Number(n || 0).toLocaleString('es-AR');
+
+        let html = '';
+
+        // === Stats arriba (totales del periodo) ===
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:14px;">';
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,215,0,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Giros totales</div><div style="color:#ffd700;font-size:22px;font-weight:900;margin-top:2px;">' + fmtNum(t.spinsTotal) + '</div></div>';
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(102,255,102,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Ganadores</div><div style="color:#66ff66;font-size:22px;font-weight:900;margin-top:2px;">' + fmtNum(t.winnersTotal) + '</div><div style="color:#888;font-size:10px;">' + (t.spinsTotal > 0 ? ((t.winnersTotal / t.spinsTotal * 100).toFixed(1) + '%') : '—') + '</div></div>';
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,215,0,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">$ Regalado</div><div style="color:#ffd700;font-size:22px;font-weight:900;margin-top:2px;">' + fmtMoney(t.givenTotal) + '</div></div>';
+        if (t.pendingTotal > 0) html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,128,128,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">$ Pendiente</div><div style="color:#ff8080;font-size:22px;font-weight:900;margin-top:2px;">' + fmtMoney(t.pendingTotal) + '</div><div style="color:#888;font-size:10px;">credit fallido</div></div>';
+        html += '</div>';
+
+        // === Por día ===
+        if ((stats.byDay || []).length > 0) {
+            html += '<h3 style="color:#ffd700;font-size:12px;margin:14px 0 8px;letter-spacing:1.5px;text-transform:uppercase;">📅 Por día</h3>';
+            html += '<div style="background:rgba(0,0,0,0.20);border-radius:8px;overflow:hidden;margin-bottom:14px;">';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+            html += '<thead><tr style="background:rgba(255,215,0,0.08);color:#ffd700;text-align:left;">';
+            html += '<th style="padding:8px 10px;font-weight:800;">Fecha</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">Giros</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">Ganadores</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">$ Regalado</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">$ Pendiente</th>';
+            html += '</tr></thead><tbody>';
+            for (const d of stats.byDay) {
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.05);">';
+                html += '<td style="padding:7px 10px;color:#fff;font-weight:700;">' + escapeHtml(d._id) + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:#ddd;">' + fmtNum(d.spins) + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:#66ff66;font-weight:700;">' + fmtNum(d.winners) + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:#ffd700;font-weight:800;">' + fmtMoney(d.totalGiven) + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:' + (d.totalPending > 0 ? '#ff8080' : '#888') + ';">' + (d.totalPending > 0 ? fmtMoney(d.totalPending) : '—') + '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table></div>';
+        }
+
+        // === Por premio ===
+        if ((stats.byPrize || []).length > 0) {
+            html += '<h3 style="color:#ffd700;font-size:12px;margin:14px 0 8px;letter-spacing:1.5px;text-transform:uppercase;">🎯 Por premio</h3>';
+            html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">';
+            for (const p of stats.byPrize) {
+                const isWin = Number(p._id) > 0;
+                const color = !isWin ? '#888' : (p._id >= 10000 ? '#ffd700' : (p._id >= 1000 ? '#ff8c5a' : '#aaffaa'));
+                html += '<div style="background:rgba(0,0,0,0.30);border:1px solid ' + color + '40;border-radius:8px;padding:8px 12px;">';
+                html += '<div style="color:' + color + ';font-weight:900;font-size:13px;">' + (isWin ? '$' + fmtNum(p._id) : 'SIN PREMIO') + '</div>';
+                html += '<div style="color:#ddd;font-size:11px;">' + fmtNum(p.count) + ' veces</div>';
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        // === Historial reciente ===
+        html += '<h3 style="color:#ffd700;font-size:12px;margin:18px 0 8px;letter-spacing:1.5px;text-transform:uppercase;">🏆 Quién ganó qué (últimos 100)</h3>';
+        const items = (history && history.items) || [];
+        if (items.length === 0) {
+            html += '<div style="color:#aaa;text-align:center;padding:20px;background:rgba(255,255,255,0.03);border-radius:8px;">Todavía nadie giró la ruleta.</div>';
+        } else {
+            html += '<div style="background:rgba(0,0,0,0.20);border-radius:8px;overflow:hidden;max-height:60vh;overflow-y:auto;">';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px;">';
+            html += '<thead style="position:sticky;top:0;background:#2d0052;z-index:1;"><tr style="color:#ffd700;text-align:left;">';
+            html += '<th style="padding:8px 10px;font-weight:800;">Cuándo</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;">Usuario</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">Premio</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:center;">Estado</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;">tx / Acción</th>';
+            html += '</tr></thead><tbody>';
+            for (const it of items) {
+                const when = it.spunAt ? new Date(it.spunAt).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+                const statusBadge = {
+                    no_prize:      '<span style="background:rgba(136,136,136,0.15);color:#aaa;border:1px solid #888;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">SIN PREMIO</span>',
+                    won:           '<span style="background:rgba(255,170,102,0.15);color:#ffaa66;border:1px solid #ffaa66;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">⏳ PROCESANDO</span>',
+                    credited:      '<span style="background:rgba(102,255,102,0.15);color:#66ff66;border:1px solid #66ff66;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">✅ ACREDITADO</span>',
+                    credit_failed: '<span style="background:rgba(255,128,128,0.15);color:#ff8080;border:1px solid #ff8080;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">❌ FALLO</span>'
+                }[it.status] || it.status;
+                html += '<tr style="border-top:1px solid rgba(255,255,255,0.05);">';
+                html += '<td style="padding:7px 10px;color:#aaa;font-size:10.5px;white-space:nowrap;">' + escapeHtml(when) + '</td>';
+                html += '<td style="padding:7px 10px;color:#fff;font-weight:700;">' + escapeHtml(it.username || '?') + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:' + (it.prizeARS >= 10000 ? '#ffd700' : (it.prizeARS >= 1000 ? '#ff8c5a' : (it.prizeARS > 0 ? '#aaffaa' : '#888'))) + ';font-weight:800;">' + (it.prizeARS > 0 ? fmtMoney(it.prizeARS) : '—') + '</td>';
+                html += '<td style="padding:7px 10px;text-align:center;">' + statusBadge + '</td>';
+                html += '<td style="padding:7px 10px;color:#888;font-size:10px;font-family:monospace;">';
+                if (it.status === 'credited' && it.creditTxId) {
+                    html += escapeHtml(String(it.creditTxId).slice(0, 18));
+                } else if (it.status === 'credit_failed') {
+                    html += '<button onclick="retryRouletteCredit(\'' + rouletteEscapeJsArg(it.id) + '\')" style="background:rgba(0,212,255,0.10);color:#00d4ff;border:1px solid rgba(0,212,255,0.40);padding:3px 8px;border-radius:5px;font-size:10px;font-weight:700;cursor:pointer;">🔁 Reintentar</button>';
+                } else {
+                    html += '—';
+                }
+                html += '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table></div>';
+        }
+
+        body.innerHTML = html;
+    } catch (e) {
+        body.innerHTML = '<div style="color:#ff8080;text-align:center;padding:14px;">Error de conexión: ' + escapeHtml(e.message || '') + '</div>';
+    }
+}
+
+async function retryRouletteCredit(spinId) {
+    if (!confirm('¿Reintentar la acreditación de este premio? Va a llamar a JUGAYGANA para acreditar al saldo del user.')) return;
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/' + encodeURIComponent(spinId) + '/retry-credit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { alert('❌ ' + (d.error || 'Error')); return; }
+        showToast('✅ Acreditado · tx ' + (d.transactionId || 'OK'), 'success');
+        loadRouletteAdmin();
+    } catch (e) {
+        alert('Error de conexión');
+    }
+}

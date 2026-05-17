@@ -103,6 +103,11 @@
                     <span>Automatización</span>
                     <span id="automationsBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
                 </a>
+                <a href="#" class="nav-item" data-section="reviews">
+                    <span>⭐</span>
+                    <span>Reseñas</span>
+                    <span id="reviewsBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
+                </a>
                 <a href="#" class="nav-item" data-section="referrals">
                     <span class="icon icon-chart"></span>
                     <span>Referidos</span>
@@ -987,6 +992,28 @@
                     </div>
                 </div>
             </div>
+
+            <!-- ============================================
+                 SECCIÓN: RESEÑAS — moderación de opiniones
+                 Solo las aprobadas se muestran en el registro.
+                 ============================================ -->
+            <section id="reviewsSection" class="section">
+                <div class="panel-header">
+                    <h2>⭐ Reseñas</h2>
+                    <button class="refresh-btn" onclick="loadReviews()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Opiniones que dejan los usuarios desde la app. Solo las <strong style="color:#25d366;">aprobadas</strong> se muestran en la pantalla de registro como prueba social. Revisá las pendientes y aprobá las que quieras publicar.</p>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+                    <button class="reviews-filter-btn" data-f="all" onclick="reviewsSetFilter('all')" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(212,175,55,0.45);background:rgba(212,175,55,0.15);color:#d4af37;font-weight:800;font-size:12px;cursor:pointer;">Todas</button>
+                    <button class="reviews-filter-btn" data-f="pending" onclick="reviewsSetFilter('pending')" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.30);color:#aaa;font-weight:800;font-size:12px;cursor:pointer;">Pendientes</button>
+                    <button class="reviews-filter-btn" data-f="approved" onclick="reviewsSetFilter('approved')" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.30);color:#aaa;font-weight:800;font-size:12px;cursor:pointer;">Publicadas</button>
+                </div>
+                <div id="reviewsAdminBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
 
             <!-- Referidos Section -->
             <section id="referralsSection" class="section">

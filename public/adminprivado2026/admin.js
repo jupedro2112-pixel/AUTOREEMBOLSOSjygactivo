@@ -3217,6 +3217,7 @@ function switchSection(section) {
     if (section === 'referrals') loadAdminReferralSummary();
     if (section === 'roulette') loadRouletteAdmin();
     if (section === 'automations') loadAutomations();
+    if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
         if (currentAdmin?.role !== 'admin') {
@@ -7484,6 +7485,119 @@ async function autoRejectSuggestion(id) {
             showToast('Descartada', 'info');
             await _autoFetchSuggestions();
             _autoRenderActiveTab();
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+
+// =========================================================================
+// RESEÑAS — panel admin de moderación (aprobar / ocultar / borrar)
+// =========================================================================
+let _reviewsCache = [];
+let _reviewsFilter = 'all';
+
+function loadReviews() {
+    _reviewsFetch();
+}
+
+async function _reviewsFetch() {
+    const body = document.getElementById('reviewsAdminBody');
+    if (body) body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/reviews?status=' + _reviewsFilter);
+        const j = await r.json();
+        _reviewsCache = j.items || [];
+        const navBadge = document.getElementById('reviewsBadge');
+        if (navBadge) {
+            if (j.pendingCount > 0) { navBadge.textContent = String(j.pendingCount); navBadge.style.display = ''; }
+            else navBadge.style.display = 'none';
+        }
+        _reviewsRender();
+    } catch (e) {
+        if (body) body.innerHTML = '<div style="color:#ff8080;text-align:center;padding:14px;">Error de conexión</div>';
+    }
+}
+
+function reviewsSetFilter(f) {
+    _reviewsFilter = f;
+    document.querySelectorAll('.reviews-filter-btn').forEach(function (b) {
+        const on = b.getAttribute('data-f') === f;
+        b.style.background = on ? 'rgba(212,175,55,0.15)' : 'rgba(0,0,0,0.30)';
+        b.style.color = on ? '#d4af37' : '#aaa';
+        b.style.borderColor = on ? 'rgba(212,175,55,0.45)' : 'rgba(255,255,255,0.10)';
+    });
+    _reviewsFetch();
+}
+
+function _reviewStarsTxt(n) {
+    const v = Math.max(0, Math.min(5, Math.round(Number(n) || 0)));
+    let h = '';
+    for (let i = 1; i <= 5; i++) h += (i <= v ? '★' : '☆');
+    return h;
+}
+
+function _reviewsRender() {
+    const body = document.getElementById('reviewsAdminBody');
+    if (!body) return;
+    if (_reviewsCache.length === 0) {
+        body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">No hay reseñas para este filtro.</div>';
+        return;
+    }
+    let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
+    for (const r of _reviewsCache) {
+        const when = r.createdAt ? new Date(r.createdAt).toLocaleString('es-AR') : '';
+        const bucketColor = r.bucket === 'bueno' ? '#25d366' : (r.bucket === 'regular' ? '#ffaa44' : '#ff5050');
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-left:3px solid ' + bucketColor + ';border-radius:9px;padding:11px;">';
+        html += '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">';
+        html += '<div style="flex:1;min-width:220px;">';
+        html += '<div style="margin-bottom:3px;"><span style="color:#ffd700;font-size:14px;">' + _reviewStarsTxt(r.stars) + '</span> <strong style="color:#fff;font-size:12px;margin-left:6px;">' + escapeHtml(r.username) + '</strong>';
+        html += r.approved
+            ? ' <span style="background:rgba(37,211,102,0.15);color:#25d366;font-size:9px;font-weight:800;padding:1px 6px;border-radius:6px;">PUBLICADA</span>'
+            : ' <span style="background:rgba(255,170,68,0.15);color:#ffaa44;font-size:9px;font-weight:800;padding:1px 6px;border-radius:6px;">PENDIENTE</span>';
+        html += '</div>';
+        html += '<div style="color:#ddd;font-size:12px;line-height:1.4;">"' + escapeHtml(r.comment || '(sin comentario)') + '"</div>';
+        if (r.contactPhone) html += '<div style="color:#888;font-size:10px;margin-top:3px;">📞 ' + escapeHtml(r.contactPhone) + '</div>';
+        html += '<div style="color:#666;font-size:10px;margin-top:3px;">' + escapeHtml(when) + '</div>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+        if (r.approved) {
+            html += '<button onclick="reviewSetApproved(\'' + r.id + '\',false)" style="padding:6px 10px;font-size:11px;font-weight:700;background:rgba(255,170,68,0.15);color:#ffaa44;border:1px solid rgba(255,170,68,0.40);border-radius:6px;cursor:pointer;">👁 Ocultar</button>';
+        } else {
+            html += '<button onclick="reviewSetApproved(\'' + r.id + '\',true)" style="padding:6px 10px;font-size:11px;font-weight:700;background:rgba(37,211,102,0.15);color:#25d366;border:1px solid rgba(37,211,102,0.40);border-radius:6px;cursor:pointer;">✅ Aprobar</button>';
+        }
+        html += '<button onclick="reviewDelete(\'' + r.id + '\')" style="padding:6px 10px;font-size:11px;font-weight:700;background:rgba(255,80,80,0.15);color:#ff5050;border:1px solid rgba(255,80,80,0.40);border-radius:6px;cursor:pointer;">🗑</button>';
+        html += '</div></div></div>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+}
+
+async function reviewSetApproved(id, approved) {
+    try {
+        const r = await authFetch('/api/admin/reviews/' + id + '/approve', {
+            method: 'POST',
+            body: JSON.stringify({ approved: approved })
+        });
+        const j = await r.json();
+        if (j.success) {
+            showToast(approved ? '✅ Reseña publicada' : '👁 Reseña ocultada', 'success');
+            _reviewsFetch();
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function reviewDelete(id) {
+    if (!confirm('¿Borrar esta reseña? No se puede deshacer.')) return;
+    try {
+        const r = await authFetch('/api/admin/reviews/' + id, { method: 'DELETE' });
+        const j = await r.json();
+        if (j.success) {
+            showToast('Reseña borrada', 'info');
+            _reviewsFetch();
+        } else {
+            showToast(j.error || 'Error', 'error');
         }
     } catch (e) { showToast('Error de conexión', 'error'); }
 }

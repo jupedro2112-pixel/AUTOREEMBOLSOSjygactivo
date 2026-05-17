@@ -3216,6 +3216,7 @@ function switchSection(section) {
     if (section === 'notifications') loadNotificationsPanel();
     if (section === 'referrals') loadAdminReferralSummary();
     if (section === 'roulette') loadRouletteAdmin();
+    if (section === 'automations') loadAutomations();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'sms') {
         if (currentAdmin?.role !== 'admin') {
@@ -7116,4 +7117,373 @@ async function retryRouletteCredit(spinId) {
     } catch (e) {
         alert('Error de conexión');
     }
+}
+
+
+// =========================================================================
+// AUTOMATIZACION DE NOTIFICACIONES — panel admin (reglas + sugerencias)
+// =========================================================================
+// authFetch: fetch autenticado para esta seccion (la base vieja no lo tiene
+// global). Agrega el Bearer y, si hay body, el Content-Type JSON.
+function authFetch(url, opts) {
+    const o = opts || {};
+    o.headers = Object.assign({}, o.headers || {}, { 'Authorization': 'Bearer ' + currentToken });
+    if (o.body && !o.headers['Content-Type']) o.headers['Content-Type'] = 'application/json';
+    return fetch(API_URL + url, o);
+}
+
+let _autoRulesCache = [];
+let _autoSuggestionsCache = [];
+let _autoActiveTab = 'rules';
+let _autoEditingRuleId = null;
+const _autoDayOfWeekLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const _autoCategoryLabels = {
+    refund: 'Recordatorios de reembolso',
+    welcome: 'Follow-ups de bienvenida',
+    engagement: 'Engagement / por plan votado',
+    recovery: 'Recuperación de inactivos',
+    giveaway: 'Regalos automáticos',
+    whatsapp: 'Para agentes (WhatsApp)'
+};
+
+function loadAutomations() {
+    Promise.all([_autoFetchRules(), _autoFetchSuggestions()]).then(function () {
+        _autoRenderActiveTab();
+    });
+}
+
+async function _autoFetchRules() {
+    try {
+        const r = await authFetch('/api/admin/notification-rules');
+        const j = await r.json();
+        _autoRulesCache = j.rules || [];
+    } catch (e) { console.warn('autoFetchRules', e); }
+}
+
+async function _autoFetchSuggestions() {
+    try {
+        const r = await authFetch('/api/admin/notification-rules/suggestions?status=pending');
+        const j = await r.json();
+        _autoSuggestionsCache = j.suggestions || [];
+        const count = j.pendingCount || 0;
+        const badge = document.getElementById('autoPendingCountBadge');
+        const navBadge = document.getElementById('automationsBadge');
+        if (count > 0) {
+            if (badge) { badge.textContent = String(count); badge.style.display = ''; }
+            if (navBadge) { navBadge.textContent = String(count); navBadge.style.display = ''; }
+        } else {
+            if (badge) badge.style.display = 'none';
+            if (navBadge) navBadge.style.display = 'none';
+        }
+    } catch (e) { console.warn('autoFetchSuggestions', e); }
+}
+
+function switchAutomationsTab(tab) {
+    _autoActiveTab = tab;
+    document.querySelectorAll('.auto-tab-btn').forEach(function (b) {
+        const isActive = b.getAttribute('data-tab') === tab;
+        b.style.background = isActive ? 'rgba(212,175,55,0.15)' : 'rgba(0,0,0,0.30)';
+        b.style.color = isActive ? '#d4af37' : '#aaa';
+        b.style.borderColor = isActive ? 'rgba(212,175,55,0.45)' : 'rgba(255,255,255,0.10)';
+    });
+    _autoRenderActiveTab();
+}
+
+function _autoRenderActiveTab() {
+    const c = document.getElementById('automationsContent');
+    if (!c) return;
+    c.innerHTML = (_autoActiveTab === 'pending') ? _autoRenderPendingTab() : _autoRenderRulesTab();
+}
+
+// ============= TAB: REGLAS =============
+function _autoRenderRulesTab() {
+    if (_autoRulesCache.length === 0) {
+        return '<div class="empty-state" style="padding:30px;text-align:center;color:#aaa;">No hay reglas todavía. Se crean solas cuando arranca el servidor.</div>';
+    }
+    const byCat = {};
+    for (const r of _autoRulesCache) {
+        (byCat[r.category] = byCat[r.category] || []).push(r);
+    }
+    let html = '';
+    for (const cat of Object.keys(byCat)) {
+        html += '<div style="margin-bottom:16px;">';
+        html += '<h4 style="color:#d4af37;font-size:12px;margin:8px 0;text-transform:uppercase;letter-spacing:1px;">' + escapeHtml(_autoCategoryLabels[cat] || cat) + ' <span style="color:#666;font-weight:400;">' + byCat[cat].length + '</span></h4>';
+        html += '<div style="display:flex;flex-direction:column;gap:6px;">';
+        for (const r of byCat[cat]) html += _autoRenderRuleCard(r);
+        html += '</div></div>';
+    }
+    return html;
+}
+
+function _autoRenderRuleCard(r) {
+    const enabledColor = r.enabled ? '#25d366' : '#666';
+    const enabledLabel = r.enabled ? 'ACTIVA' : 'PAUSADA';
+    const cs = r.cronSchedule || {};
+    let when = '—';
+    if (r.triggerType === 'cron' && cs.hour != null) {
+        const h = String(cs.hour).padStart(2, '0');
+        const m = String(cs.minute || 0).padStart(2, '0');
+        when = h + ':' + m;
+        if (cs.dayOfWeek != null) when = _autoDayOfWeekLabels[cs.dayOfWeek] + ' ' + when;
+        else if (cs.dayOfMonth != null) when = 'Día ' + cs.dayOfMonth + ' del mes ' + when;
+        else when = 'Cada día ' + when;
+    }
+    const lastFired = r.lastFiredAt ? new Date(r.lastFiredAt).toLocaleString('es-AR') : 'Nunca';
+    const bonusBadge = (r.bonus && r.bonus.type !== 'none')
+        ? '<span style="background:rgba(255,170,68,0.15);color:#ffaa44;font-size:10px;padding:2px 7px;border-radius:8px;font-weight:700;margin-left:5px;">💸 ' + r.bonus.type + ' $' + (r.bonus.amount || 0) + '</span>'
+        : '';
+    const apprBadge = r.requiresAdminApproval
+        ? '<span style="background:rgba(255,80,80,0.15);color:#ff5050;font-size:10px;padding:2px 7px;border-radius:8px;font-weight:700;margin-left:5px;">✋ Requiere aprobar</span>'
+        : '';
+
+    return '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">' +
+            '<div style="flex:1;min-width:240px;">' +
+                '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">' +
+                    '<span style="background:rgba(0,212,255,0.20);color:#00d4ff;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;">' + escapeHtml(r.code) + '</span>' +
+                    '<span style="color:' + enabledColor + ';font-size:10px;font-weight:700;">' + enabledLabel + '</span>' +
+                    bonusBadge + apprBadge +
+                '</div>' +
+                '<div style="color:#fff;font-size:13px;font-weight:600;margin-bottom:3px;">' + escapeHtml(r.name) + '</div>' +
+                '<div style="color:#888;font-size:11px;line-height:1.5;">⏰ ' + when + ' · 🎯 ' + escapeHtml(r.audienceType) + '</div>' +
+                '<div style="color:#aaa;font-size:11px;margin-top:5px;font-style:italic;">"' + escapeHtml(r.title) + ' — ' + escapeHtml(r.body.slice(0, 80)) + (r.body.length > 80 ? '…' : '') + '"</div>' +
+                '<div style="color:#666;font-size:10px;margin-top:5px;">Último disparo: ' + lastFired + ' · Total: ' + (r.totalFiresLifetime || 0) + ' envíos · ' + (r.totalSuggestionsLifetime || 0) + ' sugerencias</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                '<button onclick="autoToggleRule(\'' + r.id + '\')" style="padding:6px 11px;font-size:11px;font-weight:700;background:' + (r.enabled ? 'rgba(255,80,80,0.15)' : 'rgba(37,211,102,0.15)') + ';color:' + (r.enabled ? '#ff5050' : '#25d366') + ';border:1px solid currentColor;border-radius:6px;cursor:pointer;">' + (r.enabled ? '⏸ Pausar' : '▶ Activar') + '</button>' +
+                '<button onclick="autoEditRule(\'' + r.id + '\')" style="padding:6px 11px;font-size:11px;font-weight:700;background:rgba(0,212,255,0.15);color:#00d4ff;border:1px solid rgba(0,212,255,0.40);border-radius:6px;cursor:pointer;">✏ Editar</button>' +
+                '<button onclick="autoTestFireRule(\'' + r.id + '\')" style="padding:6px 11px;font-size:11px;font-weight:700;background:rgba(155,48,255,0.15);color:#c89bff;border:1px solid rgba(155,48,255,0.40);border-radius:6px;cursor:pointer;">🧪 Probar</button>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
+}
+
+async function autoToggleRule(id) {
+    const r = _autoRulesCache.find(function (x) { return x.id === id; });
+    if (!r) return;
+    try {
+        const resp = await authFetch('/api/admin/notification-rules/' + id, {
+            method: 'PATCH',
+            body: JSON.stringify({ enabled: !r.enabled })
+        });
+        const j = await resp.json();
+        if (j.success) {
+            showToast(j.rule.enabled ? '▶ Regla activada' : '⏸ Regla pausada', 'success');
+            await _autoFetchRules();
+            _autoRenderActiveTab();
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function autoEditRule(id) {
+    const r = _autoRulesCache.find(function (x) { return x.id === id; });
+    if (!r) return;
+    _autoEditingRuleId = id;
+    const modal = document.getElementById('autoRuleEditModal');
+    const body = document.getElementById('autoRuleEditBody');
+    if (!modal || !body) return;
+    body.innerHTML =
+        '<div style="margin-bottom:10px;color:#888;font-size:11px;"><strong>' + escapeHtml(r.code) + '</strong> · ' + escapeHtml(r.name) + '</div>' +
+        '<label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Título</label>' +
+        '<input type="text" id="autoEditTitle" value="' + escapeHtml(r.title) + '" maxlength="60" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;margin-bottom:10px;">' +
+        '<label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Cuerpo del mensaje</label>' +
+        '<textarea id="autoEditBody" maxlength="180" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;margin-bottom:10px;min-height:80px;">' + escapeHtml(r.body) + '</textarea>' +
+        '<div style="display:flex;gap:8px;margin-bottom:10px;">' +
+            '<div style="flex:1;"><label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Hora ART (0-23)</label><input type="number" id="autoEditHour" value="' + ((r.cronSchedule && r.cronSchedule.hour) || 0) + '" min="0" max="23" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;"></div>' +
+            '<div style="flex:1;"><label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Minuto</label><input type="number" id="autoEditMinute" value="' + ((r.cronSchedule && r.cronSchedule.minute) || 0) + '" min="0" max="59" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;"></div>' +
+        '</div>' +
+        '<label style="display:block;color:#aaa;font-size:11px;margin-bottom:4px;">Cooldown (minutos por usuario, default 1440 = 24h)</label>' +
+        '<input type="number" id="autoEditCooldown" value="' + (r.cooldownMinutes || 1440) + '" min="0" style="width:100%;padding:9px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:#fff;font-size:13px;box-sizing:border-box;">';
+    modal.style.display = 'flex';
+}
+
+function closeAutoRuleEdit() {
+    const modal = document.getElementById('autoRuleEditModal');
+    if (modal) modal.style.display = 'none';
+    _autoEditingRuleId = null;
+}
+
+async function saveAutoRuleEdit() {
+    if (!_autoEditingRuleId) return;
+    const titleEl = document.getElementById('autoEditTitle');
+    const bodyEl = document.getElementById('autoEditBody');
+    const title = titleEl && titleEl.value.trim();
+    const body = bodyEl && bodyEl.value.trim();
+    const hour = Number(document.getElementById('autoEditHour').value);
+    const minute = Number(document.getElementById('autoEditMinute').value);
+    const cooldown = Number(document.getElementById('autoEditCooldown').value);
+    if (!title || !body) { showToast('Falta título o cuerpo', 'error'); return; }
+    if (!isFinite(hour) || hour < 0 || hour > 23) { showToast('Hora inválida', 'error'); return; }
+    const cur = _autoRulesCache.find(function (r) { return r.id === _autoEditingRuleId; });
+    try {
+        const resp = await authFetch('/api/admin/notification-rules/' + _autoEditingRuleId, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                title: title, body: body,
+                cronSchedule: {
+                    hour: hour, minute: minute,
+                    dayOfWeek: cur && cur.cronSchedule ? cur.cronSchedule.dayOfWeek : null,
+                    dayOfMonth: cur && cur.cronSchedule ? cur.cronSchedule.dayOfMonth : null
+                },
+                cooldownMinutes: cooldown
+            })
+        });
+        const j = await resp.json();
+        if (j.success) {
+            showToast('✅ Cambios guardados', 'success');
+            closeAutoRuleEdit();
+            await _autoFetchRules();
+            _autoRenderActiveTab();
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function autoTestFireRule(id) {
+    try {
+        const resp = await authFetch('/api/admin/notification-rules/' + id + '/test-fire', { method: 'POST' });
+        const j = await resp.json();
+        if (j.success) {
+            const sample = (j.audienceSample || []).slice(0, 5).join(', ');
+            alert('🧪 Dry run\nRegla: ' + j.ruleCode + '\nAudiencia resuelta: ' + j.audienceCount + ' usuarios\n\nMuestra: ' + (sample || '(vacío)') + '\n\nNo se envió nada.');
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ============= TAB: PENDIENTES (sugerencias) =============
+function _autoRenderPendingTab() {
+    if (_autoSuggestionsCache.length === 0) {
+        return '<div class="empty-state" style="padding:30px;text-align:center;color:#aaa;">✅ Sin sugerencias pendientes. Cuando una regla dispare, aparecerá acá.</div>';
+    }
+    let html = '<div style="display:flex;flex-direction:column;gap:14px;">';
+    for (const s of _autoSuggestionsCache) {
+        const ageMin = Math.floor((Date.now() - new Date(s.suggestedAt).getTime()) / 60000);
+        const expHours = Math.max(0, Math.floor((new Date(s.expiresAt).getTime() - Date.now()) / 3600000));
+        const bonusText = (s.bonus && s.bonus.type !== 'none')
+            ? '💸 ' + s.bonus.type + ' $' + s.bonus.amount + ' x ' + s.audienceCount + ' usuarios'
+            : '📢 Sin bonus, solo push';
+        const audWrapId = 'sug-aud-' + s.id;
+        const audList = (s.audienceUsernames || []).slice(0, 500);
+        const audHtml = audList.length > 0
+            ? audList.map(function (u) { return '<span style="display:inline-block;background:rgba(0,212,255,0.10);color:#9be8ff;font-size:11px;padding:3px 8px;border-radius:5px;margin:2px;">' + escapeHtml(u) + '</span>'; }).join('')
+            : '<span style="color:#888;font-size:11px;">(sin usuarios en la lista)</span>';
+        const audMore = (s.audienceUsernames && s.audienceUsernames.length > 500)
+            ? '<div style="margin-top:6px;color:#888;font-size:10px;">+ ' + (s.audienceUsernames.length - 500) + ' usuarios más (no mostrados)</div>'
+            : '';
+
+        html += '<div style="background:rgba(255,170,68,0.05);border:1px solid rgba(255,170,68,0.30);border-radius:10px;padding:14px;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:10px;">' +
+                '<div style="flex:1;min-width:240px;">' +
+                    '<div style="margin-bottom:5px;">' +
+                        '<span style="background:rgba(0,212,255,0.20);color:#00d4ff;font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;">' + escapeHtml(s.ruleCode) + '</span> ' +
+                        '<span style="color:#888;font-size:11px;margin-left:4px;">hace ' + ageMin + ' min · expira en ' + expHours + 'h</span>' +
+                    '</div>' +
+                    '<div style="color:#fff;font-size:13px;font-weight:600;margin-bottom:3px;">' + escapeHtml(s.ruleName) + '</div>' +
+                    '<div style="color:#ffaa44;font-size:11px;font-weight:700;">' + bonusText + '</div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="margin-bottom:10px;">' +
+                '<label style="display:block;color:#aaa;font-size:11px;font-weight:700;margin-bottom:4px;">Título</label>' +
+                '<input id="sug-title-' + s.id + '" type="text" maxlength="200" value="' + escapeHtml(s.title) + '" style="width:100%;padding:8px 10px;background:rgba(0,0,0,0.30);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:13px;box-sizing:border-box;" />' +
+            '</div>' +
+            '<div style="margin-bottom:10px;">' +
+                '<label style="display:block;color:#aaa;font-size:11px;font-weight:700;margin-bottom:4px;">Cuerpo</label>' +
+                '<textarea id="sug-body-' + s.id + '" maxlength="1000" rows="3" style="width:100%;padding:8px 10px;background:rgba(0,0,0,0.30);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;font-size:13px;resize:vertical;box-sizing:border-box;">' + escapeHtml(s.body) + '</textarea>' +
+            '</div>' +
+            '<div style="margin-bottom:10px;">' +
+                '<button onclick="autoToggleAudience(\'' + s.id + '\')" style="padding:6px 12px;font-size:11px;font-weight:700;background:rgba(0,212,255,0.10);color:#00d4ff;border:1px solid rgba(0,212,255,0.30);border-radius:6px;cursor:pointer;">👥 Ver afectados (' + s.audienceCount + ')</button>' +
+                '<div id="' + audWrapId + '" style="display:none;margin-top:8px;padding:8px;background:rgba(0,0,0,0.20);border-radius:6px;max-height:200px;overflow-y:auto;">' +
+                    audHtml + audMore +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                '<button onclick="autoSaveSuggestionEdits(\'' + s.id + '\')" style="padding:8px 14px;font-size:12px;font-weight:700;background:rgba(0,212,255,0.15);color:#00d4ff;border:1px solid rgba(0,212,255,0.40);border-radius:7px;cursor:pointer;">💾 Guardar cambios</button>' +
+                '<button onclick="autoApproveSuggestion(\'' + s.id + '\')" style="padding:8px 14px;font-size:12px;font-weight:700;background:linear-gradient(135deg,#25d366,#128c7e);color:#fff;border:none;border-radius:7px;cursor:pointer;">✅ Aprobar y enviar</button>' +
+                '<button onclick="autoRejectSuggestion(\'' + s.id + '\')" style="padding:8px 14px;font-size:12px;font-weight:700;background:rgba(255,80,80,0.15);color:#ff5050;border:1px solid rgba(255,80,80,0.40);border-radius:7px;cursor:pointer;">❌ Descartar</button>' +
+            '</div>' +
+        '</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function autoToggleAudience(id) {
+    const el = document.getElementById('sug-aud-' + id);
+    if (!el) return;
+    el.style.display = (el.style.display === 'none' || !el.style.display) ? 'block' : 'none';
+}
+
+async function autoSaveSuggestionEdits(id) {
+    const s = _autoSuggestionsCache.find(function (x) { return x.id === id; });
+    if (!s) return;
+    const tEl = document.getElementById('sug-title-' + id);
+    const bEl = document.getElementById('sug-body-' + id);
+    if (!tEl || !bEl) return;
+    const title = (tEl.value || '').trim();
+    const body = (bEl.value || '').trim();
+    if (!title || !body) {
+        showToast('Título y cuerpo no pueden estar vacíos', 'error');
+        return;
+    }
+    if (title === s.title && body === s.body) {
+        showToast('No hay cambios para guardar', 'info');
+        return;
+    }
+    try {
+        const resp = await authFetch('/api/admin/notification-rules/suggestions/' + id, {
+            method: 'PUT',
+            body: JSON.stringify({ title: title, body: body })
+        });
+        const j = await resp.json();
+        if (j.success) {
+            s.title = j.title;
+            s.body = j.body;
+            showToast('✅ Cambios guardados', 'success');
+        } else {
+            showToast(j.error || 'Error guardando', 'error');
+        }
+    } catch (e) {
+        showToast('Error de conexión', 'error');
+    }
+}
+
+async function autoApproveSuggestion(id) {
+    const s = _autoSuggestionsCache.find(function (x) { return x.id === id; });
+    if (!s) return;
+    if (!confirm('¿Aprobar y enviar?\n\n' + s.audienceCount + ' usuarios recibirán: "' + s.title + '"')) return;
+    try {
+        const resp = await authFetch('/api/admin/notification-rules/suggestions/' + id + '/approve', { method: 'POST' });
+        const j = await resp.json();
+        if (j.success) {
+            let msg = '✅ Push enviado · ' + (j.pushDelivered || 0) + ' entregados, ' + (j.pushFailed || 0) + ' con token inválido';
+            if (j.sendError) msg = '⚠️ Aprobada pero envío falló: ' + j.sendError;
+            showToast(msg, j.sendError ? 'error' : 'success');
+            await _autoFetchSuggestions();
+            _autoRenderActiveTab();
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function autoRejectSuggestion(id) {
+    const reason = prompt('Razón del descarte (opcional):', '');
+    if (reason === null) return;
+    try {
+        const resp = await authFetch('/api/admin/notification-rules/suggestions/' + id + '/reject', {
+            method: 'POST',
+            body: JSON.stringify({ reason: reason })
+        });
+        const j = await resp.json();
+        if (j.success) {
+            showToast('Descartada', 'info');
+            await _autoFetchSuggestions();
+            _autoRenderActiveTab();
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
 }

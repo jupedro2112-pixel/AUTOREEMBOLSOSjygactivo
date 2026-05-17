@@ -98,6 +98,11 @@
                     <span>🎰</span>
                     <span>Ruleta diaria</span>
                 </a>
+                <a href="#" class="nav-item" data-section="automations">
+                    <span>🤖</span>
+                    <span>Automatización</span>
+                    <span id="automationsBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
+                </a>
                 <a href="#" class="nav-item" data-section="referrals">
                     <span class="icon icon-chart"></span>
                     <span>Referidos</span>
@@ -946,6 +951,42 @@
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>
+
+            <!-- ============================================
+                 SECCIÓN: AUTOMATIZACIÓN DE NOTIFICACIONES
+                 Reglas que mandan push solas (motor cron cada 5 min) +
+                 cola de sugerencias pendientes de aprobación del admin.
+                 ============================================ -->
+            <section id="automationsSection" class="section">
+                <div class="panel-header">
+                    <h2>🤖 Automatización de notificaciones</h2>
+                    <button class="refresh-btn" onclick="loadAutomations()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0 0 6px;color:#d4af37;font-weight:700;font-size:13px;">¿Qué es esto?</p>
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">
+                        Reglas que mandan notificaciones solas. El motor las revisa cada 5 minutos. Cada regla puede <strong>enviar el push directo</strong> o <strong>crear una sugerencia</strong> que aprobás vos en la pestaña Pendientes. Las reglas <strong>por plan</strong> usan lo que cada usuario votó en la encuesta — vienen <strong>desactivadas</strong>: revisá el copy y activalas. Las de reembolso quedan apagadas (necesitan el subsistema de estadísticas).
+                    </p>
+                </div>
+                <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+                    <button class="auto-tab-btn" data-tab="rules" onclick="switchAutomationsTab('rules')" style="padding:8px 16px;border-radius:8px;border:1px solid rgba(212,175,55,0.45);background:rgba(212,175,55,0.15);color:#d4af37;font-weight:800;font-size:12px;cursor:pointer;">📋 Reglas</button>
+                    <button class="auto-tab-btn" data-tab="pending" onclick="switchAutomationsTab('pending')" style="padding:8px 16px;border-radius:8px;border:1px solid rgba(255,255,255,0.10);background:rgba(0,0,0,0.30);color:#aaa;font-weight:800;font-size:12px;cursor:pointer;">✋ Pendientes <span id="autoPendingCountBadge" style="display:none;background:#ff5050;color:#fff;font-size:10px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span></button>
+                </div>
+                <div id="automationsContent" style="min-height:200px;">
+                    <div class="empty-state" style="padding:30px;text-align:center;color:#aaa;">⏳ Cargando…</div>
+                </div>
+            </section>
+            <!-- Modal de edición de regla de automatización -->
+            <div id="autoRuleEditModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;align-items:center;justify-content:center;padding:16px;">
+                <div style="background:linear-gradient(135deg,#1a0033,#0a0015);border:2px solid #d4af37;border-radius:16px;padding:20px;max-width:480px;width:100%;max-height:90vh;overflow-y:auto;">
+                    <h3 style="color:#d4af37;margin:0 0 14px;font-size:16px;">✏ Editar regla</h3>
+                    <div id="autoRuleEditBody"></div>
+                    <div style="display:flex;gap:8px;margin-top:14px;">
+                        <button onclick="saveAutoRuleEdit()" style="flex:1;padding:11px;background:linear-gradient(135deg,#d4af37,#ffd700);color:#000;border:none;border-radius:9px;font-weight:800;font-size:13px;cursor:pointer;">💾 Guardar</button>
+                        <button onclick="closeAutoRuleEdit()" style="flex:1;padding:11px;background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.20);border-radius:9px;font-weight:700;font-size:13px;cursor:pointer;">Cancelar</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- Referidos Section -->
             <section id="referralsSection" class="section">

@@ -1421,7 +1421,14 @@
             </div>
             <!-- Reseñas (prueba social). Render desde js/reviews.js; se oculta si no hay. -->
             <div id="adServiceReviews"></div>
-            <button id="adServiceRegisterBtn" class="btn btn-primary" style="width: 100%; margin-top: 12px;" onclick="hideModal('adServiceModal'); if(window.VIP&&VIP.auth&&VIP.auth.applyRegisterModalMode)VIP.auth.applyRegisterModalMode(); showModal('registerModal');">📝 Registrate aquí</button>
+            <!-- Dos opciones: registrarse ahora, o cerrar y ver la página normal.
+                 Cerrar NO borra la atribución de campaña (vive en localStorage
+                 60 días), así un registro posterior por la vía normal sigue
+                 contando para el publicista correspondiente. -->
+            <div style="display:flex; flex-direction:column; gap:8px; margin-top:12px;">
+                <button id="adServiceRegisterBtn" class="btn btn-primary" style="width: 100%;" onclick="hideModal('adServiceModal'); if(window.VIP&&VIP.auth&&VIP.auth.applyRegisterModalMode)VIP.auth.applyRegisterModalMode(); showModal('registerModal');">📝 Registrarse</button>
+                <button id="adServiceCloseBtn" class="btn btn-secondary" style="width: 100%;" onclick="hideModal('adServiceModal');">Cerrar</button>
+            </div>
         </div>
     </div>
 

@@ -586,7 +586,7 @@ function requireAdminCookie(req, res, next) {
     return res.status(403).send('Forbidden');
   }
   try {
-    const decoded = jwt.verify(cookieVal, JWT_SECRET);
+    const decoded = jwt.verify(cookieVal, JWT_SECRET, { algorithms: ['HS256'] });
     const adminRoles = ['admin', 'depositor', 'withdrawer'];
     if (!adminRoles.includes(decoded.role)) {
       return res.status(403).send('Forbidden');
@@ -1006,7 +1006,7 @@ const authMiddleware = async (req, res, next) => {
   }
   
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
     
     // Buscar usuario por 'id' primero, luego por '_id' como fallback
     let user = await User.findOne({ id: decoded.userId });
@@ -1036,7 +1036,10 @@ const authMiddleware = async (req, res, next) => {
       });
     }
     
-    if (user.tokenVersion && decoded.tokenVersion !== user.tokenVersion) {
+    // Revocación de sesión: comparar siempre, normalizando ausentes a 0.
+    // Antes la condición usaba `user.tokenVersion &&`, que con tokenVersion 0
+    // (falsy) salteaba la verificación.
+    if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
       return res.status(401).json({ error: 'Sesión expirada. Por favor, vuelve a iniciar sesión.' });
     }
     
@@ -1238,7 +1241,7 @@ app.post('/api/pixel/track', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       try {
-        const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET);
+        const decoded = jwt.verify(authHeader.slice(7), JWT_SECRET, { algorithms: ['HS256'] });
         const u = await User.findOne({ id: decoded.userId }).lean();
         if (u) {
           userInfo = { email: u.email, phone: u.phone, externalId: u.id };
@@ -1367,11 +1370,17 @@ app.post('/api/upload/presigned-url', authMiddleware, async (req, res) => {
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     const { username, password, email, phone, referralCode, otpCode, campaignCode, utm } = req.body;
-    
+
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
     }
-    
+
+    // Validar el formato del username: evita XSS almacenado (un username con
+    // HTML/JS se ejecutaría en el panel admin al listar usuarios o abrir el chat).
+    if (!validateUsername(username)) {
+      return res.status(400).json({ error: 'Usuario inválido. Usá 3-30 caracteres: letras, números, punto, guion o guion bajo.' });
+    }
+
     if (password.length < 6) {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     }
@@ -1535,7 +1544,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 
     // Generar token con expiración de 90 días
     const token = jwt.sign(
-      { userId: newUser.id, username: newUser.username, role: newUser.role },
+      { userId: newUser.id, username: newUser.username, role: newUser.role, tokenVersion: newUser.tokenVersion ?? 0 },
       JWT_SECRET,
       { expiresIn: '90d' }
     );
@@ -1674,7 +1683,7 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
     });
 
     const token = jwt.sign(
-      { userId: newUser.id, username: newUser.username, role: newUser.role },
+      { userId: newUser.id, username: newUser.username, role: newUser.role, tokenVersion: newUser.tokenVersion ?? 0 },
       JWT_SECRET,
       { expiresIn: '90d' }
     );
@@ -2040,7 +2049,7 @@ app.post('/api/auth/logout', async (req, res) => {
     const authToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (authToken) {
       try {
-        const decoded = jwt.verify(authToken, JWT_SECRET);
+        const decoded = jwt.verify(authToken, JWT_SECRET, { algorithms: ['HS256'] });
         userId = decoded.userId;
       } catch (_) {
         // JWT expirado/inválido: igual seguimos para limpiar por token si vino
@@ -2128,7 +2137,7 @@ app.get('/api/admin/me', async (req, res) => {
     return res.status(401).json({ error: 'No autenticado' });
   }
   try {
-    const decoded = jwt.verify(cookieToken, JWT_SECRET);
+    const decoded = jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] });
     const adminRoles = ['admin', 'depositor', 'withdrawer'];
     if (!adminRoles.includes(decoded.role)) {
       return res.status(403).json({ error: 'Acceso denegado' });
@@ -2817,7 +2826,7 @@ app.post('/api/auth/complete-password-reset', sensitiveLimiter, async (req, res)
 
     let decoded;
     try {
-      decoded = jwt.verify(resetToken, JWT_SECRET);
+      decoded = jwt.verify(resetToken, JWT_SECRET, { algorithms: ['HS256'] });
     } catch (err) {
       return res.status(400).json({ error: 'Token de reset inválido o expirado' });
     }
@@ -3334,23 +3343,33 @@ app.get('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
 
 app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const { username, password, email, phone, role = 'user', balance = 0 } = req.body;
-    
+    const { username, password, email, phone, role = 'user' } = req.body;
+
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña son requeridos' });
     }
-    
+
+    if (!validateUsername(username)) {
+      return res.status(400).json({ error: 'Usuario inválido. Usá 3-30 caracteres: letras, números, punto, guion o guion bajo.' });
+    }
+
     if (password.length < 6) {
       return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     }
-    
+
     if (!phone || phone.trim().length < 8) {
       return res.status(400).json({ error: 'El número de teléfono es obligatorio (mínimo 8 dígitos)' });
     }
-    
+
     const validRoles = ['user', 'admin', 'depositor', 'withdrawer'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ error: 'Rol inválido' });
+    }
+
+    // Solo el admin general puede crear cuentas con rol distinto de 'user'.
+    // Sin esto, un agente depositor/withdrawer podía crear un admin y escalar.
+    if (req.user.role !== 'admin' && role !== 'user') {
+      return res.status(403).json({ error: 'Solo el administrador general puede crear otros administradores' });
     }
     
     // Buscar case-insensitive
@@ -3371,7 +3390,7 @@ app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
       phone,
       role,
       accountNumber: generateAccountNumber(),
-      balance,
+      balance: 0,
       createdAt: new Date(),
       lastLogin: null,
       isActive: true,
@@ -3379,7 +3398,7 @@ app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
       jugayganaUsername: null,
       jugayganaSyncStatus: role === 'user' ? 'pending' : 'not_applicable'
     });
-    
+
     // Crear chat status
     await ChatStatus.create({
       userId: userId,
@@ -5395,7 +5414,7 @@ io.on('connection', (socket) => {
   
   socket.on('authenticate', async (token) => {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
 
       // Revalidar contra la DB (igual que authMiddleware): un usuario
       // desactivado, bloqueado o con la sesión revocada (tokenVersion) no
@@ -6132,11 +6151,14 @@ app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
+  let withdrawLockAcquired = false;
   try {
-    const { amount } = req.body;
     const username = req.user.username;
 
-    if (!amount || amount < 100) {
+    // Castear el monto: sin esto, un valor no numérico llegaba crudo a la
+    // API de retiro. Se exige número finito y mínimo $100.
+    const amountNum = Number(req.body && req.body.amount);
+    if (!amountNum || !isFinite(amountNum) || amountNum < 100) {
       return res.status(400).json({ error: 'Monto mínimo $100' });
     }
 
@@ -6151,14 +6173,21 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
       });
     }
 
+    // Lock anti-doble-retiro: serializa los retiros concurrentes del mismo
+    // usuario. Se libera en el finally del handler.
+    if (!await acquireRefundLock(req.user.userId, 'withdraw')) {
+      return res.status(429).json({ error: 'Ya tenés un retiro en proceso. Esperá unos segundos.' });
+    }
+    withdrawLockAcquired = true;
+
     const result = await jugaygana.withdrawFromUser(
       username,
-      amount,
+      amountNum,
       `Retiro desde Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
     );
 
     if (result.success) {
-      await recordUserActivity(req.user.userId, 'withdrawal', amount);
+      await recordUserActivity(req.user.userId, 'withdrawal', amountNum);
 
       // Meta CAPI — WithdrawRequest (custom). Señal de usuario activo / ganador.
       try {
@@ -6166,14 +6195,14 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
         metaCapi.track(
           'WithdrawRequest',
           { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
-          { value: parseFloat(amount), currency: 'ARS', content_name: 'withdraw_self_service' },
+          { value: amountNum, currency: 'ARS', content_name: 'withdraw_self_service' },
           { eventId: req.body && req.body.metaEventId, req }
         );
       } catch (e) { /* tracking nunca bloquea */ }
 
       res.json({
         success: true,
-        message: `Retiro de $${amount} realizado correctamente`,
+        message: `Retiro de $${amountNum} realizado correctamente`,
         newBalance: result.data?.user_balance_after,
         transactionId: result.data?.transfer_id || result.data?.transferId
       });
@@ -6183,6 +6212,8 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error en retiro:', error);
     res.status(500).json({ error: 'Error del servidor' });
+  } finally {
+    if (withdrawLockAcquired) releaseRefundLock(req.user.userId, 'withdraw');
   }
 });
 
@@ -6233,6 +6264,7 @@ app.get('/api/withdrawal/account', authMiddleware, async (req, res) => {
 // bancarios (opcional) y manda un mensaje automático al chat para que el agente
 // procese la transferencia bancaria.
 app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
+  let withdrawLockAcquired = false;
   try {
     const { titular, cbu, alias, amount, saveData } = req.body || {};
     const username = req.user.username;
@@ -6260,6 +6292,14 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
         code: 'PHONE_VERIFICATION_REQUIRED'
       });
     }
+
+    // Lock anti-doble-retiro: serializa los retiros concurrentes del mismo
+    // usuario para que dos requests no pasen ambos el chequeo de saldo y
+    // ejecuten un retiro doble. Se libera en el finally del handler.
+    if (!await acquireRefundLock(req.user.userId, 'withdraw')) {
+      return res.status(429).json({ error: 'Ya tenés un retiro en proceso. Esperá unos segundos.' });
+    }
+    withdrawLockAcquired = true;
 
     // Chequear saldo real en JugaYGana ANTES de intentar el retiro.
     const balanceResult = await jugayganaMovements.getUserBalance(username);
@@ -6352,6 +6392,8 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
   } catch (error) {
     logger.error(`Error en withdrawal/request: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
+  } finally {
+    if (withdrawLockAcquired) releaseRefundLock(req.user.userId, 'withdraw');
   }
 });
 
@@ -6378,16 +6420,18 @@ app.get('/api/install-bonus/status', authMiddleware, async (req, res) => {
 // Reclamo del bono. Solo desde la app instalada (standalone) y una vez por cuenta.
 app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
   try {
-    const standalone = req.body && req.body.standalone === true;
-    if (!standalone) {
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // Validación server-side de "app instalada": exige un token FCM en
+    // contexto standalone. El flag req.body.standalone era falsificable
+    // (un curl con {"standalone":true} cobraba el bono sin instalar nada).
+    if (!_rouletteHasAppInstalled(user)) {
       return res.status(400).json({
-        error: 'El bono se reclama desde la app instalada.',
+        error: 'El bono se reclama desde la app instalada con notificaciones activadas.',
         code: 'NOT_STANDALONE'
       });
     }
-
-    const user = await User.findOne({ id: req.user.userId });
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     if (user.installBonusClaimed === true) {
       return res.status(400).json({
@@ -6396,16 +6440,31 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       });
     }
 
-    // Acreditar el bono en JUGAYGANA.
+    // Reserva atómica del bono: setea el flag SOLO si todavía no fue
+    // reclamado. Si otro request concurrente ganó la carrera, éste recibe
+    // null y aborta — sin esto, dos requests simultáneos cobraban doble.
+    const reserved = await User.findOneAndUpdate(
+      { id: req.user.userId, installBonusClaimed: { $ne: true } },
+      { $set: { installBonusClaimed: true, installBonusClaimedAt: new Date() } }
+    );
+    if (!reserved) {
+      return res.status(400).json({
+        error: 'Ya reclamaste el bono por instalar la app.',
+        code: 'ALREADY_CLAIMED'
+      });
+    }
+
+    // Acreditar el bono en JUGAYGANA. Si falla, revertimos la reserva para
+    // que el usuario pueda reintentar más tarde.
     const creditResult = await jugaygana.creditUserBalance(user.username, INSTALL_BONUS_AMOUNT);
     if (!creditResult || !creditResult.success) {
       logger.error(`install-bonus: fallo al acreditar a ${user.username}: ${creditResult && creditResult.error}`);
+      await User.updateOne(
+        { id: req.user.userId },
+        { $set: { installBonusClaimed: false, installBonusClaimedAt: null } }
+      ).catch(() => {});
       return res.status(400).json({ error: 'No se pudo acreditar el bono. Intentá de nuevo en unos minutos.' });
     }
-
-    user.installBonusClaimed = true;
-    user.installBonusClaimedAt = new Date();
-    await user.save();
 
     const amountFmt = '$' + INSTALL_BONUS_AMOUNT.toLocaleString('es-AR');
 
@@ -7125,7 +7184,9 @@ app.get('/api/admin/transactions', authMiddleware, adminMiddleware, async (req, 
     }
     
     if (type && type !== 'all') {
-      query.type = type;
+      // Castear a String: sin esto un objeto ({"$ne":"x"}) se colaba como
+      // operador NoSQL en el query.
+      query.type = String(type);
     }
 
     // Req 8: Filtrar por username si se especifica

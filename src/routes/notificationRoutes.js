@@ -117,7 +117,7 @@ async function requireAdmin(req, res, next) {
 
   let decoded;
   try {
-    decoded = jwt.verify(token, jwtSecret);
+    decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
   } catch (error) {
     console.log('[NOTIF-ADMIN] requireAdmin — jwt.verify failed:', error.message);
     return res.status(401).json({ error: 'Token inválido' });
@@ -181,7 +181,7 @@ router.post('/register-token', async (req, res) => {
       console.error('[FCM] JWT_SECRET undefined at runtime');
       return res.status(500).json({ error: 'Error de configuración del servidor' });
     }
-    const decoded = jwt.verify(token, jwtSecret);
+    const decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
     
     console.log('[FCM] JWT decodificado:', { userId: decoded.userId, username: decoded.username });
     

@@ -25,18 +25,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Auto-abrir el modal de registro cuando el visitante llega por un link
-    // de publicista (?p=CODE) y no tiene sesión iniciada. La idea es bajar
-    // al máximo la fricción entre el clic del anuncio y el signup.
+    // Auto-abrir el pantallazo del servicio cuando el visitante llega por un
+    // link de publicista (?p=CODE) y no tiene sesión iniciada. Muestra los
+    // beneficios del servicio con un CTA "Registrate aquí" que abre el
+    // registro — primero le mostramos qué ofrecemos, después convertimos.
     if (VIP.campaign && VIP.campaign.wasFreshlyCaptured() && !VIP.state.currentToken) {
         // Pequeño defer para que el DOM termine de pintar y la animación del
         // modal se vea fluida en mobile.
         setTimeout(() => {
             try {
-                if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
-                VIP.ui.showModal('registerModal');
+                VIP.ui.showModal('adServiceModal');
             } catch (e) {
-                console.warn('[campaign] no se pudo auto-abrir el modal de registro:', e && e.message);
+                console.warn('[campaign] no se pudo auto-abrir el pantallazo del servicio:', e && e.message);
             }
         }, 250);
     }

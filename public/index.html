@@ -1375,6 +1375,56 @@
         </div>
     </div>
 
+    <!-- Modal Pantallazo del Servicio — bienvenida para visitantes que llegan
+         por un link de publicidad/pauta. Igual que infoModal pero SIN la
+         sección "Estado de tu app" ni reseñas: solo los beneficios del
+         servicio + CTA de registro. Lo abre app.js cuando el visitante viene
+         recién capturado de un anuncio (VIP.campaign.wasFreshlyCaptured()). -->
+    <div id="adServiceModal" class="modal hidden" onclick="if(event.target === this) hideModal('adServiceModal')">
+        <div class="modal-content" style="max-width: 600px; position: relative;" onclick="event.stopPropagation()">
+            <button onclick="hideModal('adServiceModal')" style="position: absolute; top: 15px; right: 15px; background: none; border: none; color: #888; font-size: 24px; cursor: pointer; z-index: 10;">✕</button>
+            <div class="modal-header">
+                <h2>🎮 Información del Servicio</h2>
+                <p>Descubre todos los beneficios de nuestra Sala de Juegos</p>
+            </div>
+            <div class="info-grid">
+                <div class="info-card">
+                    <div class="info-card-icon">💰</div>
+                    <div class="info-card-title">Reembolso Diario</div>
+                    <div class="info-card-desc">20% de tus pérdidas del día anterior, a tu cuenta.</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">📅</div>
+                    <div class="info-card-title">Reembolso Semanal</div>
+                    <div class="info-card-desc">10% de tus pérdidas de la semana (lunes y martes).</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">🗓️</div>
+                    <div class="info-card-title">Reembolso Mensual</div>
+                    <div class="info-card-desc">5% de tus pérdidas del mes, desde el día 7.</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">🎰</div>
+                    <div class="info-card-title">Ruleta Diaria</div>
+                    <div class="info-card-desc">1 giro gratis por día. Ganá hasta $10.000 al instante.</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">🤝</div>
+                    <div class="info-card-title">Referidos</div>
+                    <div class="info-card-desc">Invitá amigos con tu código y ganá recompensas por cada uno.</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">🎁</div>
+                    <div class="info-card-title">Bonificaciones</div>
+                    <div class="info-card-desc">Bonos del 50% y 100% en tus cargas según promos.</div>
+                </div>
+            </div>
+            <div class="modal-actions" style="margin-top: 20px;">
+                <button id="adServiceRegisterBtn" class="btn btn-primary" style="width: 100%;" onclick="hideModal('adServiceModal'); if(window.VIP&&VIP.auth&&VIP.auth.applyRegisterModalMode)VIP.auth.applyRegisterModalMode(); showModal('registerModal');">📝 Registrate aquí</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal Configuración -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content">

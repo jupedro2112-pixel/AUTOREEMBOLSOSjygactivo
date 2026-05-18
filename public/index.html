@@ -21,9 +21,9 @@
     <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32x32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="icons/icon-180x180.png">
     
-    <!-- Firebase SDK (self-hosted para evitar bloqueos de red/CDN/CSP) -->
-    <script src="/lib/firebase/9.1.2/firebase-app-compat.js"></script>
-    <script src="/lib/firebase/9.1.2/firebase-messaging-compat.js"></script>
+    <!-- Firebase SDK: lo carga el loader robusto de abajo (reintentos +
+         fallback de CDN). No se ponen <script> estáticos acá para no bloquear
+         el render del head — la pantalla de login no necesita Firebase. -->
     <script>
         // ============================================
         // FIREBASE SDK LOADER ROBUSTO (RETRIES + CDN FALLBACK)

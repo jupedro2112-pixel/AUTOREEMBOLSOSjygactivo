@@ -3899,39 +3899,53 @@ app.get('/api/messages/:userId', authMiddleware, async (req, res) => {
 
 app.get('/api/conversations', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const messages = await Message.find().sort({ timestamp: -1 }).lean();
-    const users = await User.find().lean();
-    
-    const conversations = {};
-    
-    messages.forEach(msg => {
-      let userId = null;
-      
-      if (msg.senderRole === 'user') {
-        userId = msg.senderId;
-      } else if (msg.receiverRole === 'user') {
-        userId = msg.receiverId;
-      }
-      
-      if (!userId) return;
-      
-      if (!conversations[userId]) {
-        const user = users.find(u => u.id === userId);
-        conversations[userId] = {
-          userId,
-          username: user?.username || 'Desconocido',
-          accountNumber: user?.accountNumber || '',
-          lastMessage: msg,
-          unreadCount: (msg.receiverRole === 'admin' && !msg.read) ? 1 : 0
-        };
-      } else {
-        if (msg.receiverRole === 'admin' && !msg.read) {
-          conversations[userId].unreadCount++;
+    // Agregación en Mongo: agrupa por el usuario de la conversación, toma el
+    // último mensaje y cuenta los no leídos. Evita traer TODA la colección de
+    // mensajes y usuarios a Node y el loop O(mensajes × usuarios) anterior.
+    const rows = await Message.aggregate([
+      { $sort: { timestamp: -1 } },
+      { $addFields: {
+        convUserId: {
+          $cond: [
+            { $eq: ['$senderRole', 'user'] },
+            '$senderId',
+            { $cond: [{ $eq: ['$receiverRole', 'user'] }, '$receiverId', null] }
+          ]
         }
-      }
+      }},
+      { $match: { convUserId: { $ne: null } } },
+      { $group: {
+        _id: '$convUserId',
+        lastMessage: { $first: '$$ROOT' },
+        unreadCount: {
+          $sum: { $cond: [
+            { $and: [{ $eq: ['$receiverRole', 'admin'] }, { $ne: ['$read', true] }] },
+            1, 0
+          ] }
+        }
+      }},
+      { $sort: { 'lastMessage.timestamp': -1 } }
+    ]);
+
+    const userIds = rows.map(r => r._id);
+    const users = await User.find({ id: { $in: userIds } }, { id: 1, username: 1, accountNumber: 1 }).lean();
+    const userMap = {};
+    users.forEach(u => { userMap[u.id] = u; });
+
+    const conversations = rows.map(r => {
+      const u = userMap[r._id] || {};
+      const lm = r.lastMessage || {};
+      delete lm.convUserId;
+      return {
+        userId: r._id,
+        username: u.username || 'Desconocido',
+        accountNumber: u.accountNumber || '',
+        lastMessage: lm,
+        unreadCount: r.unreadCount || 0
+      };
     });
-    
-    res.json(Object.values(conversations));
+
+    res.json(conversations);
   } catch (error) {
     console.error('Error obteniendo conversaciones:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -7596,9 +7610,26 @@ app.get('/api/admin/reembolsos', authMiddleware, adminMiddleware, async (req, re
     const d7  = new Date(now - 7 * 24 * 60 * 60 * 1000);
     const d30 = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
-    const all = await RefundClaim.find({}, {
-      username: 1, type: 1, amount: 1, netAmount: 1, percentage: 1, claimedAt: 1
-    }).sort({ claimedAt: -1 }).lean();
+    // Buckets por tipo y ventana, calculados en Mongo — no se trae toda la
+    // colección de reembolsos a Node.
+    const [agg, recent] = await Promise.all([
+      RefundClaim.aggregate([
+        { $group: {
+          _id: '$type',
+          allCount:  { $sum: 1 },
+          allAmount: { $sum: '$amount' },
+          d30Count:  { $sum: { $cond: [{ $gte: ['$claimedAt', d30] }, 1, 0] } },
+          d30Amount: { $sum: { $cond: [{ $gte: ['$claimedAt', d30] }, '$amount', 0] } },
+          d7Count:   { $sum: { $cond: [{ $gte: ['$claimedAt', d7] }, 1, 0] } },
+          d7Amount:  { $sum: { $cond: [{ $gte: ['$claimedAt', d7] }, '$amount', 0] } },
+          d1Count:   { $sum: { $cond: [{ $gte: ['$claimedAt', d1] }, 1, 0] } },
+          d1Amount:  { $sum: { $cond: [{ $gte: ['$claimedAt', d1] }, '$amount', 0] } }
+        }}
+      ]),
+      RefundClaim.find({}, {
+        username: 1, type: 1, amount: 1, netAmount: 1, percentage: 1, claimedAt: 1
+      }).sort({ claimedAt: -1 }).limit(120).lean()
+    ]);
 
     const blank = function () { return { count: 0, amount: 0 }; };
     const types = {
@@ -7606,22 +7637,21 @@ app.get('/api/admin/reembolsos', authMiddleware, adminMiddleware, async (req, re
       weekly:  { d1: blank(), d7: blank(), d30: blank(), all: blank() },
       monthly: { d1: blank(), d7: blank(), d30: blank(), all: blank() }
     };
-
-    all.forEach(function (r) {
-      const bucket = types[r.type];
-      if (!bucket) return;
-      const amt = r.amount || 0;
-      const cd = new Date(r.claimedAt);
-      bucket.all.count++; bucket.all.amount += amt;
-      if (cd >= d30) { bucket.d30.count++; bucket.d30.amount += amt; }
-      if (cd >= d7)  { bucket.d7.count++;  bucket.d7.amount += amt; }
-      if (cd >= d1)  { bucket.d1.count++;  bucket.d1.amount += amt; }
+    let total = 0;
+    agg.forEach(function (g) {
+      const t = types[g._id];
+      if (!t) return;
+      t.d1  = { count: g.d1Count  || 0, amount: g.d1Amount  || 0 };
+      t.d7  = { count: g.d7Count  || 0, amount: g.d7Amount  || 0 };
+      t.d30 = { count: g.d30Count || 0, amount: g.d30Amount || 0 };
+      t.all = { count: g.allCount || 0, amount: g.allAmount || 0 };
+      total += g.allCount || 0;
     });
 
     res.json({
       types: types,
-      total: all.length,
-      recent: all.slice(0, 120)
+      total: total,
+      recent: recent
     });
   } catch (error) {
     console.error('Error en admin/reembolsos:', error);

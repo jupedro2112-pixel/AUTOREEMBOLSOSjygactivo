@@ -303,8 +303,7 @@ const userSchema = new mongoose.Schema({
   // usuario toca "Reclamar" estando dentro de la app instalada (standalone).
   installBonusClaimed: {
     type: Boolean,
-    default: false,
-    index: true
+    default: false
   },
   installBonusClaimedAt: {
     type: Date,
@@ -348,6 +347,9 @@ const userSchema = new mongoose.Schema({
 userSchema.index({ phone: 1 });
 userSchema.index({ role: 1, createdAt: -1 });
 userSchema.index({ isActive: 1, role: 1 });
+// Para el feed de reclamos y la vista admin del bono $5.000: filtra por
+// reclamado y ordena por fecha de reclamo sin ordenar en memoria.
+userSchema.index({ installBonusClaimed: 1, installBonusClaimedAt: -1 });
 
 // Virtual para verificar si es admin
 userSchema.virtual('isAdmin').get(function() {

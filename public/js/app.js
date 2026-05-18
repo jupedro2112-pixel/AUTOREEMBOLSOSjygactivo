@@ -128,6 +128,7 @@ function setupEventListeners() {
         let _vipClaims = [];
         let _vipClaimIdx = 0;
         let _vipClaimTimer = null;
+        let _vipClaimFetchTimer = null;
         async function _vipFetchClaims() {
             try {
                 const r = await fetch(VIP.config.API_URL + '/api/claims-feed');
@@ -137,6 +138,14 @@ function setupEventListeners() {
             } catch (e) { /* best-effort */ }
         }
         function _vipTickStep() {
+            // El ticker es solo de la pantalla de login: una vez que el usuario
+            // entró, se cortan los intervalos para no seguir consultando
+            // /api/claims-feed en vano.
+            if (VIP.state && VIP.state.currentToken) {
+                if (_vipClaimTimer) clearInterval(_vipClaimTimer);
+                if (_vipClaimFetchTimer) clearInterval(_vipClaimFetchTimer);
+                return;
+            }
             const ticker = document.getElementById('loginClaimsTicker');
             const txt = document.getElementById('loginClaimsText');
             if (!ticker || !txt || !_vipClaims.length) return;
@@ -159,7 +168,8 @@ function setupEventListeners() {
             }
             if (_vipClaimTimer) clearInterval(_vipClaimTimer);
             _vipClaimTimer = setInterval(_vipTickStep, 3600);
-            setInterval(_vipFetchClaims, 45000);
+            if (_vipClaimFetchTimer) clearInterval(_vipClaimFetchTimer);
+            _vipClaimFetchTimer = setInterval(_vipFetchClaims, 45000);
         })();
 
         function _vipStars(n) {

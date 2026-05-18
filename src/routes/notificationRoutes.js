@@ -981,8 +981,11 @@ router.get('/stats', requireAdmin, async (req, res) => {
     console.log('[FCM] Solicitando estadísticas...');
     
     const totalUsers = await User.countDocuments();
-    const usersWithToken = await User.countDocuments({ 
-      fcmToken: { $exists: true, $ne: null } 
+    const usersWithToken = await User.countDocuments({
+      $or: [
+        { fcmToken: { $exists: true, $ne: null } },
+        { 'fcmTokens.0': { $exists: true } }
+      ]
     });
     const usersWithoutToken = totalUsers - usersWithToken;
 
@@ -1033,17 +1036,25 @@ router.get('/diagnostic', requireAdmin, async (req, res) => {
     // Verificar si Firebase Admin está inicializado
     const firebaseInitialized = admin.apps.length > 0;
 
-    // Verificar env vars (sin exponer sus valores)
+    // El servidor acepta 2 formas de credencial: el JSON del service account
+    // (base64 o crudo) — método primario — o las 3 variables legacy. Con
+    // cualquiera de las dos alcanza; no marcar error si está la moderna.
+    const hasServiceAccountJson = !!(process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64 || process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+    const hasLegacyVars = !!(process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY);
     const envVars = {
+      FIREBASE_SERVICE_ACCOUNT_JSON: hasServiceAccountJson,
       FIREBASE_PROJECT_ID:   !!process.env.FIREBASE_PROJECT_ID,
       FIREBASE_CLIENT_EMAIL: !!process.env.FIREBASE_CLIENT_EMAIL,
       FIREBASE_PRIVATE_KEY:  !!process.env.FIREBASE_PRIVATE_KEY,
     };
-    const allEnvVarsPresent = Object.values(envVars).every(Boolean);
+    const allEnvVarsPresent = hasServiceAccountJson || hasLegacyVars;
     
     // Contar usuarios con token
-    const usersWithToken = await User.countDocuments({ 
-      fcmToken: { $exists: true, $ne: null } 
+    const usersWithToken = await User.countDocuments({
+      $or: [
+        { fcmToken: { $exists: true, $ne: null } },
+        { 'fcmTokens.0': { $exists: true } }
+      ]
     });
     
     res.json({
@@ -1196,23 +1207,30 @@ router.get('/users-status', requireAdmin, async (req, res) => {
     const { page = 1, limit = 50, filter = 'all' } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
+    // "Tiene token" = token en el campo legacy fcmToken O en el array fcmTokens[].
+    const HAS_TOKEN = { $or: [
+      { fcmToken: { $exists: true, $ne: null } },
+      { 'fcmTokens.0': { $exists: true } }
+    ] };
+    const NO_TOKEN = { fcmToken: { $in: [null, undefined] }, 'fcmTokens.0': { $exists: false } };
+
     let query = {};
     if (filter === 'with_token') {
-      query = { fcmToken: { $exists: true, $ne: null } };
+      query = HAS_TOKEN;
     } else if (filter === 'without_token') {
-      query = { $or: [{ fcmToken: { $exists: false } }, { fcmToken: null }] };
+      query = NO_TOKEN;
     }
 
     const total = await User.countDocuments(query);
     const users = await User.find(query)
-      .select('username fcmToken fcmTokenUpdatedAt lastLogin createdAt')
+      .select('username fcmToken fcmTokens fcmTokenUpdatedAt lastLogin createdAt')
       .sort({ fcmTokenUpdatedAt: -1, lastLogin: -1 })
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
 
     const totalUsers = await User.countDocuments();
-    const usersWithToken = await User.countDocuments({ fcmToken: { $exists: true, $ne: null } });
+    const usersWithToken = await User.countDocuments(HAS_TOKEN);
 
     const result = {
       success: true,
@@ -1222,13 +1240,17 @@ router.get('/users-status', requireAdmin, async (req, res) => {
         usersWithoutToken: totalUsers - usersWithToken,
         coverage: totalUsers > 0 ? Math.round((usersWithToken / totalUsers) * 100) : 0
       },
-      users: users.map(u => ({
-        username: u.username,
-        hasToken: !!(u.fcmToken),
-        tokenUpdatedAt: u.fcmTokenUpdatedAt,
-        lastLogin: u.lastLogin,
-        tokenPreview: u.fcmToken ? u.fcmToken.substring(0, 20) + '...' : null
-      })),
+      users: users.map(u => {
+        const arrTok = (Array.isArray(u.fcmTokens) && u.fcmTokens[0] && u.fcmTokens[0].token) || null;
+        const tok = u.fcmToken || arrTok;
+        return {
+          username: u.username,
+          hasToken: !!tok,
+          tokenUpdatedAt: u.fcmTokenUpdatedAt,
+          lastLogin: u.lastLogin,
+          tokenPreview: tok ? tok.substring(0, 20) + '...' : null
+        };
+      }),
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),

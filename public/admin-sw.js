@@ -7,8 +7,34 @@
  * la invalidación del caché en dispositivos con la app instalada.
  */
 
+// ============================================
+// FIREBASE CLOUD MESSAGING — handler de background del panel admin.
+// Sin esto, los push al admin con la app cerrada no se mostraban (este SW
+// no importaba el SDK y no había handler de background).
+// ============================================
+try {
+    importScripts('/lib/firebase/9.1.2/firebase-app-compat.js');
+    importScripts('/lib/firebase/9.1.2/firebase-messaging-compat.js');
+} catch (localImportErr) {
+    console.warn('[SW-Admin] Firebase SDK local no disponible, cayendo a gstatic:', localImportErr && localImportErr.message);
+    importScripts('https://www.gstatic.com/firebasejs/9.1.2/firebase-app-compat.js');
+    importScripts('https://www.gstatic.com/firebasejs/9.1.2/firebase-messaging-compat.js');
+}
+
+const firebaseConfig = {
+    apiKey: "AIzaSyAjZuVIxNY-SrnihkyNVupZ8AhXX6qxAxY",
+    authDomain: "saladejuegos-673fa.firebaseapp.com",
+    projectId: "saladejuegos-673fa",
+    storageBucket: "saladejuegos-673fa.firebasestorage.app",
+    messagingSenderId: "553123191180",
+    appId: "1:553123191180:web:277eb460ef78dab8525ea9",
+    measurementId: "G-3ZJRT0NCTE"
+};
+firebase.initializeApp(firebaseConfig);
+const messaging = firebase.messaging();
+
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v23';
+const CACHE_VERSION = 'v24';
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).
@@ -161,10 +187,25 @@ self.addEventListener('fetch', (event) => {
     }
 });
 
-// NOTA: NO registramos un handler 'push' manual. La app admin usa Firebase
-// Cloud Messaging SDK, que registra su propio handler interno para mostrar
-// la notificación en background. Tener ambos handlers causaba conflicto
-// (a veces se mostraban dos notificaciones, otras ninguna). El SDK basta.
+// Notificaciones en background del panel admin (FCM SDK). Cuando el admin
+// tiene la app cerrada, FCM entrega el mensaje acá y se muestra la notif.
+messaging.onBackgroundMessage((payload) => {
+    console.log('[SW-Admin] Notificación en background:', payload);
+    const notif = (payload && payload.notification) || {};
+    const webNotif = (payload && payload.webpush && payload.webpush.notification) || {};
+    const data = (payload && payload.data) || {};
+    const title = notif.title || webNotif.title || 'Panel Admin';
+    const body = notif.body || webNotif.body || 'Tenés una notificación nueva';
+    const icon = notif.icon || webNotif.icon || '/icons/icon-192x192.png';
+    return self.registration.showNotification(title, {
+        body: body,
+        icon: icon,
+        badge: '/icons/icon-192x192.png',
+        tag: data.tag || 'admin-notification',
+        data: data,
+        vibrate: [200, 100, 200]
+    });
+});
 
 // Manejar click en notificación
 self.addEventListener('notificationclick', (event) => {

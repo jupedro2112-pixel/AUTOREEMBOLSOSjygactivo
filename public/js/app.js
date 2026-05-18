@@ -35,6 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => {
             try {
                 VIP.ui.showModal('adServiceModal');
+                if (VIP.reviews && VIP.reviews.renderAdSection) VIP.reviews.renderAdSection();
             } catch (e) {
                 console.warn('[campaign] no se pudo auto-abrir el pantallazo del servicio:', e && e.message);
             }

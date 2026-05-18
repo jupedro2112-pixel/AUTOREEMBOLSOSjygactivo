@@ -461,6 +461,20 @@ function setupEventListeners() {
         });
         const smsOfferSkipBtn = document.getElementById('smsOfferSkipBtn');
         if (smsOfferSkipBtn) smsOfferSkipBtn.addEventListener('click', () => VIP.ui.hideModal('smsOfferModal'));
+
+        // Cartel de atención del home (cuenta sin teléfono verificado): abre verify-phone.
+        const verifyPhoneBannerBtn = document.getElementById('verifyPhoneBannerBtn');
+        if (verifyPhoneBannerBtn) verifyPhoneBannerBtn.addEventListener('click', () => {
+            const s1 = document.getElementById('verifyPhoneStep1');
+            const s2 = document.getElementById('verifyPhoneStep2');
+            const input = document.getElementById('verifyPhoneInput');
+            const err = document.getElementById('verifyPhoneError');
+            if (s1) s1.style.display = '';
+            if (s2) s2.style.display = 'none';
+            if (input) input.value = '';
+            if (err) err.classList.remove('show');
+            VIP.ui.showModal('verifyPhoneModal');
+        });
         const closeSettingsModal = document.getElementById('closeSettingsModal');
         if (closeSettingsModal) closeSettingsModal.addEventListener('click', () => VIP.ui.hideModal('settingsModal'));
         const changePasswordSettingsBtn = document.getElementById('changePasswordSettingsBtn');

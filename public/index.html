@@ -450,6 +450,22 @@
             </div>
         </div>
 
+        <!-- Cartel de atención: cuenta sin teléfono verificado. Visible para
+             todo usuario con phoneVerified !== true. VIP.auth.refreshVerifyPhoneBanner()
+             lo muestra/oculta. Empuja a verificar el teléfono porque el retiro lo exige. -->
+        <div id="verifyPhoneBanner" style="display:none; background: linear-gradient(135deg, #d4af37 0%, #b8860b 100%); color: #1a0033; padding: 12px 16px; border-radius: 12px; margin: 8px 12px; box-shadow: 0 4px 15px rgba(212,175,55,0.45); border: 1px solid rgba(255,255,255,0.25);">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <span style="font-size: 22px;">⚠️</span>
+                <div style="flex: 1; min-width: 0;">
+                    <strong style="font-size: 13px; display: block;">¡Atención! Verificá tu teléfono</strong>
+                    <span style="font-size: 11.5px; display: block; opacity: 0.85;">Para retirar tus premios tu cuenta tiene que estar verificada por SMS. Hacelo ahora para no tener problemas al cobrar.</span>
+                </div>
+                <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                    <button id="verifyPhoneBannerBtn" style="background: #1a0033; color: #d4af37; border: none; border-radius: 8px; padding: 8px 14px; font-weight: 700; font-size: 12px; cursor: pointer;">Verificar ahora</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Modal de instrucciones cuando notifs están bloqueadas en PWA -->
         <div id="notifBlockedModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; padding:20px;">
             <div style="background: linear-gradient(135deg, #1a0033 0%, #0a0015 100%); border:2px solid #d4af37; border-radius:20px; padding:24px; max-width:420px; color:#fff; box-shadow:0 20px 60px rgba(0,0,0,.5);">
@@ -903,6 +919,11 @@
                     <label>Código de Referido (opcional)</label>
                     <input type="text" id="registerReferralCode" name="referralCode" placeholder="Ej: VIP3X7" autocomplete="off" maxlength="12" style="text-transform:uppercase;letter-spacing:2px;">
                     <span style="font-size: 11px; color: #888;">Si te invitó alguien, ingresá su código para vincularte.</span>
+                </div>
+                <div style="background: rgba(212,175,55,0.10); border: 1px solid rgba(212,175,55,0.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;">
+                    <p style="color: #d4af37; margin: 0; font-size: 12px; line-height: 1.4;">
+                        🔒 Para <strong>retirar tus premios</strong> vas a necesitar verificar tu teléfono por SMS. Te lo vamos a pedir al ingresar — es rápido y recomendable hacerlo enseguida para no tener problemas al cobrar.
+                    </p>
                 </div>
                 <div id="registerError" class="error-message"></div>
                 <div class="modal-actions">
@@ -1479,11 +1500,14 @@
         <div class="modal-content" style="position: relative;">
             <button onclick="VIP.ui.hideModal('smsOfferModal')" style="position: absolute; top: 15px; right: 15px; background: none; border: none; color: #888; font-size: 24px; cursor: pointer; z-index: 10;">✕</button>
             <div class="modal-header">
-                <h2>🔒 Asegurá tu cuenta</h2>
-                <p>Verificá tu teléfono — es opcional, pero te lo recomendamos.</p>
+                <h2>🔒 Verificá tu teléfono</h2>
+                <p>Necesario para retirar — te recomendamos hacerlo ahora.</p>
+            </div>
+            <div style="background: rgba(212,175,55,0.14); border: 1px solid rgba(212,175,55,0.5); border-radius: 10px; padding: 13px 15px; margin-bottom: 14px;">
+                <p style="color: #d4af37; font-size: 12.5px; font-weight: 700; margin: 0; line-height: 1.5;">💸 Para <strong style="color:#fff;">retirar tus premios</strong> tu cuenta tiene que tener el teléfono verificado por SMS. Es recomendable hacerlo ahora mismo para no tener problemas el día que quieras cobrar.</p>
             </div>
             <div style="background: rgba(212,175,55,0.08); border: 1px solid rgba(212,175,55,0.3); border-radius: 10px; padding: 14px 16px; margin-bottom: 18px;">
-                <p style="color: #d4af37; font-size: 13px; font-weight: 700; margin: 0 0 9px;">Verificando tu número con un SMS:</p>
+                <p style="color: #d4af37; font-size: 13px; font-weight: 700; margin: 0 0 9px;">Además, verificando tu número:</p>
                 <p style="color: #b0b0b0; font-size: 12px; margin: 0 0 6px; line-height: 1.5;">📲 Vas a poder <strong style="color:#fff;">iniciar sesión con tu número</strong> recibiendo un código por SMS, sin depender de la contraseña.</p>
                 <p style="color: #b0b0b0; font-size: 12px; margin: 0 0 6px; line-height: 1.5;">🔑 Vas a poder <strong style="color:#fff;">recuperar tu cuenta</strong> si alguna vez olvidás la clave.</p>
                 <p style="color: #b0b0b0; font-size: 12px; margin: 0; line-height: 1.5;">🛡️ Le das <strong style="color:#fff;">100% de seguridad</strong> a tu cuenta.</p>
@@ -1492,7 +1516,7 @@
                 <button type="button" class="btn btn-primary" id="smsOfferVerifyBtn" style="width:100%;">📱 Verificar mi teléfono ahora</button>
                 <button type="button" class="btn btn-secondary" id="smsOfferSkipBtn" style="width:100%;">Omitir por ahora</button>
             </div>
-            <p style="color:#888; font-size:10.5px; margin:10px 0 0; text-align:center;">Podés hacerlo más tarde desde tu perfil.</p>
+            <p style="color:#888; font-size:10.5px; margin:10px 0 0; text-align:center;">Si lo omitís, vas a poder usar todo igual, pero te lo vamos a pedir cuando quieras retirar.</p>
         </div>
     </div>
 

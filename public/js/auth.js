@@ -55,6 +55,16 @@ VIP.auth = (function () {
         }, 1200);
     }
 
+    // Muestra/oculta el cartel de atención del home. Visible para todo usuario
+    // con el teléfono sin verificar — el retiro exige verificación por SMS.
+    function refreshVerifyPhoneBanner() {
+        const banner = document.getElementById('verifyPhoneBanner');
+        if (!banner) return;
+        const user = VIP.state.currentUser;
+        const needsVerify = user && (!user.role || user.role === 'user') && user.phoneVerified !== true;
+        banner.style.display = needsVerify ? '' : 'none';
+    }
+
     // Registro directo: solo usuario + contraseña, sin SMS. Si hay una pauta
     // activa, también manda campaignCode/utm para conservar la atribución.
     async function handleRegisterDirect() {
@@ -459,6 +469,7 @@ VIP.auth = (function () {
         VIP.refunds.loadRefundStatus();
         VIP.fire.loadFireStatus();
         VIP.ui.loadCanalInformativoUrl();
+        refreshVerifyPhoneBanner();
 
         return userLoaded;
     }
@@ -1278,6 +1289,7 @@ VIP.auth = (function () {
                 window._verifyPhoneFullPhone = null;
                 VIP.ui.hideModal('verifyPhoneModal');
                 VIP.ui.showToast('✅ Teléfono verificado. Ya podés retirar.', 'success');
+                refreshVerifyPhoneBanner();
                 // Reset form para próxima apertura
                 document.getElementById('verifyPhoneStep1').style.display = '';
                 document.getElementById('verifyPhoneStep2').style.display = 'none';
@@ -1299,6 +1311,7 @@ VIP.auth = (function () {
         handleRegister,
         handleRegisterDirect,
         maybeOfferSmsVerification,
+        refreshVerifyPhoneBanner,
         applyRegisterModalMode,
         handleVerifyPhoneSend,
         handleVerifyPhoneConfirm,

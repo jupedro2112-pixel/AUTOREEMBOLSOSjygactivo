@@ -145,8 +145,16 @@ VIP.withdraw = (function () {
 
         _pendingWithdraw = { titular, cbu, alias, amount, saveData };
 
-        // El retiro ya no exige SMS: se procesa directo. La verificación
-        // por SMS se va a pedir en el registro de inicio.
+        // Para retirar, la cuenta debe tener el teléfono verificado por SMS.
+        // Si todavía no lo verificó, se abre el paso de verificación SMS antes
+        // de procesar el retiro (el registro de inicio es sin SMS, opcional).
+        const verified = VIP.state.currentUser && VIP.state.currentUser.phoneVerified === true;
+        if (!verified) {
+            _clearError('withdrawOtpPhoneError');
+            _showStep('otp-phone');
+            return;
+        }
+
         await _doWithdraw();
     }
 

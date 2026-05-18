@@ -8490,17 +8490,17 @@ function _rouletteWeightedPick() {
   return ROULETTE_PRIZES[ROULETTE_PRIZES.length - 1];
 }
 
-function _rouletteUserFcmTokens(u) {
-  if (!u) return [];
-  const tokens = [];
-  if (u.fcmToken) tokens.push(u.fcmToken);
+// La ruleta diaria es exclusiva para usuarios con la PWA instalada: detecta
+// si el user tiene al menos un token FCM obtenido en contexto 'standalone'
+// (app agregada a la pantalla de inicio). Un token de navegador NO habilita
+// la ruleta, así sigue siendo un incentivo concreto para instalar la app.
+function _rouletteHasAppInstalled(u) {
+  if (!u) return false;
+  if (u.fcmTokenContext === 'standalone') return true;
   if (Array.isArray(u.fcmTokens)) {
-    for (const tk of u.fcmTokens) {
-      const t = tk && tk.token ? tk.token : tk;
-      if (t && !tokens.includes(t)) tokens.push(t);
-    }
+    return u.fcmTokens.some(t => t && t.context === 'standalone');
   }
-  return tokens;
+  return false;
 }
 
 // GET /api/roulette/status — estado del giro de HOY del user actual.
@@ -8509,10 +8509,9 @@ app.get('/api/roulette/status', authMiddleware, async (req, res) => {
     const userId = req.user.userId;
     const username = req.user.username;
     const dateKey = _rouletteDateKeyART();
-    // FCM token gate: solo users con PWA instalada + notifs activadas.
-    const u = await User.findOne({ id: userId }, { fcmToken: 1, fcmTokens: 1 }).lean();
-    const tokens = _rouletteUserFcmTokens(u);
-    const eligible = tokens.length > 0;
+    // Gate: solo users con la PWA instalada (token FCM en contexto standalone).
+    const u = await User.findOne({ id: userId }, { fcmTokenContext: 1, fcmTokens: 1 }).lean();
+    const eligible = _rouletteHasAppInstalled(u);
     const spin = await DailyRouletteSpin.findOne({ userId, dateKey }).lean();
     res.json({
       success: true,
@@ -8797,10 +8796,9 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     const username = req.user.username;
     const dateKey = _rouletteDateKeyART();
 
-    // Gate: solo PWA + notifs activadas.
-    const u = await User.findOne({ id: userId }, { fcmToken: 1, fcmTokens: 1 }).lean();
-    const tokens = _rouletteUserFcmTokens(u);
-    if (tokens.length === 0) {
+    // Gate: solo users con la PWA instalada (token FCM en contexto standalone).
+    const u = await User.findOne({ id: userId }, { fcmTokenContext: 1, fcmTokens: 1 }).lean();
+    if (!_rouletteHasAppInstalled(u)) {
       return res.status(403).json({
         error: 'Solo podés girar si tenés la app instalada con notificaciones aceptadas.',
         needsAppNotifs: true

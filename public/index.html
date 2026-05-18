@@ -1782,9 +1782,11 @@
             }
         }
         
-        // Registrar SW e inicializar notificaciones
-        // Solo se intenta registrar token cuando el usuario está en la APP PWA instalada
-        // (modo standalone). En navegador normal no se registra ningún token push.
+        // Registrar SW e inicializar notificaciones.
+        // Se registra el token push tanto en la PWA instalada (standalone) como en
+        // el navegador (Chrome/Android/Edge/Firefox), para captar el push de todos
+        // los clientes. Única excepción: iOS fuera de la app instalada (Safari solo
+        // entrega Web Push con la PWA agregada a la pantalla de inicio).
         registerServiceWorker().then(async (swRegistration) => {
             const _isStandaloneNow = window.matchMedia('(display-mode: standalone)').matches ||
                                      window.navigator.standalone === true;
@@ -1825,16 +1827,17 @@
             const isStandalone = window.matchMedia('(display-mode: standalone)').matches || 
                                  window.navigator.standalone === true;
 
-            // Solo registrar token push cuando la app está instalada como PWA (modo standalone).
-            // En navegador normal no se obtiene ni registra ningún token para evitar mezclar
-            // contextos y generar tokens inválidos en el backend.
-            if (!isStandalone) {
-                console.log('[FCM] Modo browser detectado. Registro de push omitido (solo PWA instalada).');
+            // Registrar token push en PWA instalada (standalone) Y en navegador
+            // (Chrome/Android/Edge/Firefox soportan Web Push perfectamente).
+            // Única excepción: iOS fuera de la app instalada — Safari solo entrega
+            // push cuando la PWA está agregada a la pantalla de inicio.
+            if (!isStandalone && isIOS) {
+                console.log('[FCM] iOS en navegador: el push requiere la app instalada. Registro omitido.');
                 _notifInitializing = false;
                 return;
             }
 
-            console.log('[FCM] Inicializando notificaciones (PWA standalone)...');
+            console.log('[FCM] Inicializando notificaciones (' + (isStandalone ? 'PWA standalone' : 'navegador') + ')...');
 
             // Debug logs útiles para diagnosticar en Android Chrome
             console.log('[FCM] 📊 Entorno de ejecución:');
@@ -2167,12 +2170,14 @@
         window.sendFcmTokenAfterLogin = async function() {
             console.log('[FCM] sendFcmTokenAfterLogin() llamado');
 
-            // Solo registrar token cuando estamos en la APP PWA instalada (modo standalone).
-            // En navegador normal se omite el registro para evitar mezclar contextos.
+            // Registrar token tanto en la PWA instalada (standalone) como en el
+            // navegador. Única excepción: iOS fuera de la app instalada (Safari no
+            // entrega Web Push en ese contexto).
             const _nowStandalone = window.matchMedia('(display-mode: standalone)').matches ||
                                    window.navigator.standalone === true;
-            if (!_nowStandalone) {
-                console.log('[FCM] sendFcmTokenAfterLogin: modo browser, omitiendo registro de push.');
+            const _isIOSdev = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            if (!_nowStandalone && _isIOSdev) {
+                console.log('[FCM] sendFcmTokenAfterLogin: iOS en navegador, push no soportado. Omitido.');
                 return;
             }
 
@@ -2192,7 +2197,7 @@
             }
 
             const token = localStorage.getItem('fcmToken');
-            const _currentCtx = 'standalone';
+            const _currentCtx = _nowStandalone ? 'standalone' : 'browser';
             const _storedCtx  = localStorage.getItem('fcmTokenContext'); // null en sesiones antiguas
 
             // ── CASO A: Hay token en caché PWA ───────────────────────────────────
@@ -2328,13 +2333,14 @@
         // el backend puede quedar apuntando a un token muerto durante semanas.
         // Reusamos sendFcmTokenAfterLogin que ya hace getToken + detect-rotation
         // + re-register, y lo ejecutamos cada 24h mientras la app esté abierta.
-        // Se omite en navegador puro (no hay token FCM activo en ese contexto).
+        // Se omite solo en iOS-navegador (ahí no hay token FCM posible).
         const FCM_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
         setInterval(function () {
             try {
                 const standalone = window.matchMedia('(display-mode: standalone)').matches ||
                                    window.navigator.standalone === true;
-                if (!standalone) return;
+                const iosDev = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+                if (!standalone && iosDev) return; // iOS en navegador: sin push
                 if (!localStorage.getItem('userToken')) return; // sin sesión: no refresh
                 if (typeof window.sendFcmTokenAfterLogin === 'function') {
                     console.log('[FCM] Refresh periódico de token (24h)');
@@ -3041,20 +3047,21 @@
         `;
         document.head.appendChild(pwaStyles);
         
-        // Botón de notificaciones: solo visible cuando la app está instalada como PWA (standalone).
-        // En navegador normal no se muestra para no generar estados inconsistentes.
+        // Botón de notificaciones: visible en la PWA instalada y en el navegador
+        // (Chrome/Android/Edge/Firefox). Oculto solo en iOS fuera de la app instalada,
+        // donde el Web Push no funciona.
         const notificationBtn = document.getElementById('notificationBtn');
         console.log('[FCM] Buscando botón notificationBtn:', notificationBtn);
         if (notificationBtn) {
             const standaloneMode = window.matchMedia('(display-mode: standalone)').matches ||
                                    window.navigator.standalone === true;
-            // Solo mostrar en modo standalone (PWA instalada). En browser siempre oculto.
-            if (standaloneMode) {
+            const _pushCapable = standaloneMode || !isIOS;
+            if (_pushCapable) {
                 notificationBtn.style.setProperty('display', 'inline-flex', 'important');
             } else {
                 notificationBtn.style.display = 'none';
             }
-            console.log('[FCM] NOTIS visible:', standaloneMode, '(standalone)');
+            console.log('[FCM] NOTIS visible:', _pushCapable, '(standalone:', standaloneMode + ')');
 
             // Click: solicitar permiso si aún no fue concedido y actualizar estado del botón.
             // Diseñado para ser simple y sin efectos secundarios que rompan el flujo.
@@ -3139,8 +3146,8 @@
                                        window.navigator.standalone === true;
                     const fbReady = window.__firebaseLoadState === 'ready';
 
-                    // Solo en standalone se muestra el botón
-                    if (!standalone) {
+                    // Visible en standalone y en navegador no-iOS. Oculto en iOS-navegador.
+                    if (!standalone && isIOS) {
                         notificationBtn.style.display = 'none';
                         return;
                     }

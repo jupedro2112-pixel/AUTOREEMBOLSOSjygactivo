@@ -1289,28 +1289,37 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
     const chunkSize = validBatchSizes.includes(parseInt(batchSize)) ? parseInt(batchSize) : 100;
     const offset = Math.max(0, parseInt(batchOffset) || 0);
 
-    // Build base query based on segment
+    // "Tiene token" = token en el campo legacy fcmToken O en el array fcmTokens[].
+    // Es indispensable incluir el array: un usuario que registró push desde el
+    // navegador (no la PWA) puede tener su token sólo en fcmTokens[].
+    const HAS_TOKEN = { $or: [
+      { fcmToken: { $exists: true, $ne: null } },
+      { 'fcmTokens.0': { $exists: true } }
+    ] };
+
+    // Build base query based on segment. Se usa $and para combinar el filtro del
+    // segmento con HAS_TOKEN sin pisar otros operadores $or del segmento.
     let query;
     if (usernames && usernames.length > 0) {
-      query = { username: { $in: usernames }, fcmToken: { $exists: true, $ne: null } };
+      query = { $and: [ { username: { $in: usernames } }, HAS_TOKEN ] };
     } else if (segment === 'with_balance') {
-      query = { fcmToken: { $exists: true, $ne: null }, balance: { $gt: 0 } };
+      query = { $and: [ { balance: { $gt: 0 } }, HAS_TOKEN ] };
     } else if (segment === 'active') {
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      query = { fcmToken: { $exists: true, $ne: null }, lastLogin: { $gte: cutoff } };
+      query = { $and: [ { lastLogin: { $gte: cutoff } }, HAS_TOKEN ] };
     } else if (segment === 'inactive') {
       const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      query = { fcmToken: { $exists: true, $ne: null }, $or: [{ lastLogin: { $lt: cutoff } }, { lastLogin: { $exists: false } }] };
+      query = { $and: [ { $or: [{ lastLogin: { $lt: cutoff } }, { lastLogin: { $exists: false } }] }, HAS_TOKEN ] };
     } else if (segment === 'inactive_7d') {
       // Inactivos en los últimos 7 días (sin login en 7 días)
       const cutoff7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      query = { fcmToken: { $exists: true, $ne: null }, $or: [{ lastLogin: { $lt: cutoff7d } }, { lastLogin: { $exists: false } }] };
+      query = { $and: [ { $or: [{ lastLogin: { $lt: cutoff7d } }, { lastLogin: { $exists: false } }] }, HAS_TOKEN ] };
     } else {
       // all: todos con token FCM
-      query = { fcmToken: { $exists: true, $ne: null } };
+      query = HAS_TOKEN;
     }
 
-    const allUsers = await User.find(query).select('username fcmToken').sort({ _id: 1 }).lean();
+    const allUsers = await User.find(query).select('username fcmToken fcmTokens id').sort({ _id: 1 }).lean();
 
     if (allUsers.length === 0) {
       return res.json({
@@ -1327,9 +1336,12 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
 
     console.log(`[FCM Batch] Segmento=${segment} total=${totalSegmentUsers} offset=${offset} enviando=${usersToSend.length}`);
 
-    let totalSuccess = 0;
-    let totalFailure = 0;
-    let totalCleaned = 0;
+    let totalSuccess = 0;       // usuarios con al menos un envío exitoso
+    let totalFailure = 0;       // usuarios sin ningún envío exitoso
+    let totalCleaned = 0;       // tokens inválidos borrados
+    let usersFullyCleaned = 0;  // usuarios que quedaron SIN ningún token tras limpiar
+    let tokenSuccess = 0;       // tokens entregados (detalle)
+    let tokenFailure = 0;       // tokens fallidos (detalle)
     const allFailedTokens = [];
     const sentUsernames = [];
 
@@ -1339,64 +1351,107 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
 
     for (const user of usersToSend) {
       sentUsernames.push(user.username);
-      let result;
-      try {
-        // Inyectar batchId + userId en el data payload para que el SW del
-        // cliente pueda confirmar entrega vía /confirm-delivery.
-        const userData = Object.assign({}, data || {}, {
-          batchId: batchId,
-          userId: String(user._id || user.id || user.username)
-        });
-        result = await sendNotificationToUser(user.fcmToken, title, body, userData);
-      } catch (userErr) {
-        console.error(`[FCM Batch] ❌ Error inesperado para ${user.username}:`, userErr.message);
-        result = {
-          success: false,
-          error: userErr.message || 'Error inesperado',
-          code: userErr.code || '',
-          invalidToken: false
-        };
+
+      // Recolectar TODOS los tokens únicos del usuario: array fcmTokens[]
+      // (navegador + PWA) más el campo legacy fcmToken. Sin esto se perdería
+      // a los clientes cuyo token vive sólo en el array.
+      const seenTok = new Set();
+      const userTokens = [];
+      if (Array.isArray(user.fcmTokens)) {
+        for (const e of user.fcmTokens) {
+          if (e && e.token && !seenTok.has(e.token)) {
+            seenTok.add(e.token);
+            userTokens.push(e.token);
+          }
+        }
       }
-      if (result.success) {
+      if (user.fcmToken && !seenTok.has(user.fcmToken)) {
+        seenTok.add(user.fcmToken);
+        userTokens.push(user.fcmToken);
+      }
+      if (userTokens.length === 0) continue;
+
+      // Inyectar batchId + userId en el data payload para que el SW del
+      // cliente pueda confirmar entrega vía /confirm-delivery.
+      const userData = Object.assign({}, data || {}, {
+        batchId: batchId,
+        userId: String(user._id || user.id || user.username)
+      });
+
+      let anySuccess = false;
+      const invalidForUser = [];
+      for (const tk of userTokens) {
+        let result;
+        try {
+          result = await sendNotificationToUser(tk, title, body, userData);
+        } catch (userErr) {
+          console.error(`[FCM Batch] ❌ Error inesperado para ${user.username}:`, userErr.message);
+          result = { success: false, error: userErr.message || 'Error inesperado', code: userErr.code || '', invalidToken: false };
+        }
+        if (result.success) {
+          anySuccess = true;
+          tokenSuccess++;
+        } else {
+          tokenFailure++;
+          const isInvalid = result.invalidToken === true;
+          if (isInvalid) invalidForUser.push(tk);
+          allFailedTokens.push({
+            username: user.username,
+            error: result.error || '',
+            code: result.code || '',
+            cleaned: isInvalid
+          });
+        }
+      }
+
+      if (anySuccess) {
         totalSuccess++;
         _markBatchSent(batchId, user._id || user.id || user.username);
       } else {
         totalFailure++;
-        const errorMsg = result.error || '';
-        const errorCode = result.code || '';
-        const isInvalid = result.invalidToken === true;
+      }
 
-        allFailedTokens.push({ username: user.username, error: errorMsg, code: errorCode, cleaned: isInvalid });
-
-        if (isInvalid) {
+      // Limpiar los tokens inválidos del usuario: del array y del campo legacy.
+      if (invalidForUser.length > 0) {
+        try {
           await User.updateOne(
             { username: user.username },
-            { $set: { fcmToken: null, fcmTokenUpdatedAt: null } }
+            { $pull: { fcmTokens: { token: { $in: invalidForUser } } } }
           );
-          totalCleaned++;
-          console.log(`[FCM Batch] 🧹 Token inválido borrado: ${user.username}`);
-          if (_io) {
-            _io.to('admins').emit('user_app_status', {
-              username: user.username,
-              appInstalled: false
-            });
+          if (user.fcmToken && invalidForUser.includes(user.fcmToken)) {
+            await User.updateOne(
+              { username: user.username, fcmToken: user.fcmToken },
+              { $set: { fcmToken: null, fcmTokenUpdatedAt: null } }
+            );
           }
+          totalCleaned += invalidForUser.length;
+          console.log(`[FCM Batch] 🧹 ${invalidForUser.length} token(s) inválido(s) borrado(s): ${user.username}`);
+          // El usuario quedó sin app si TODOS sus tokens resultaron inválidos.
+          if (invalidForUser.length === userTokens.length) {
+            usersFullyCleaned++;
+            if (_io) {
+              _io.to('admins').emit('user_app_status', {
+                username: user.username,
+                appInstalled: false
+              });
+            }
+          }
+        } catch (cleanErr) {
+          console.error(`[FCM Batch] Error limpiando tokens de ${user.username}:`, cleanErr.message);
         }
       }
     }
 
-    console.log(`[FCM Batch] ✅ Total: ${totalSuccess} exitosas, ${totalFailure} fallidas, ${totalCleaned} tokens limpiados`);
+    console.log(`[FCM Batch] ✅ Usuarios: ${totalSuccess} OK, ${totalFailure} fallidos | Tokens: ${tokenSuccess} OK, ${tokenFailure} fallidos, ${totalCleaned} limpiados`);
 
-    // BUGFIX: el offset siguiente debe descontar los tokens recién limpiados.
-    // Razón: la query usa { fcmToken: { $ne: null } } y se vuelve a ejecutar en
-    // el próximo lote. Como acabamos de poner fcmToken=null a 'totalCleaned'
-    // usuarios, el array de la próxima query tendrá 'totalCleaned' usuarios
-    // menos. Si avanzáramos offset+=chunkSize, saltearíamos silenciosamente a
-    // 'totalCleaned' usuarios efectivos. Ej: lote 1 con offset=0, chunk=100 y
-    // 14 limpiados → nextOffset debe ser 86, no 100, para que el lote 2 cubra
-    // a los users que originalmente estaban en posiciones 100..199 del array.
-    const nextOffset = offset + usersToSend.length - totalCleaned;
-    const remaining = Math.max(0, totalSegmentUsers - totalCleaned - nextOffset);
+    // BUGFIX: el offset siguiente debe descontar los usuarios que quedaron sin
+    // ningún token. Razón: la query del próximo lote usa HAS_TOKEN y se vuelve
+    // a ejecutar; los 'usersFullyCleaned' usuarios ya no aparecerán, corriendo
+    // el array. Si avanzáramos offset+=chunkSize saltearíamos silenciosamente a
+    // esos usuarios. (Limpiar UN token de un usuario que conserva otros NO lo
+    // saca de la query, así que sólo cuenta usersFullyCleaned, no totalCleaned.)
+    const nextOffset = offset + usersToSend.length - usersFullyCleaned;
+    const remaining = Math.max(0, totalSegmentUsers - usersFullyCleaned - nextOffset);
 
     res.json({
       success: true,

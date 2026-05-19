@@ -245,6 +245,22 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  // Identificadores de Meta Ads capturados en el registro del usuario.
+  // Permiten atribuir conversiones server-side vía Conversions API — en
+  // particular el evento Purchase, que se dispara desde el endpoint de admin
+  // donde la cookie del navegador del jugador no viaja en el request.
+  //   metaFbc — cookie _fbc: identificador del clic del anuncio. Es lo que
+  //             ata la conversión al clic en Meta Ads. Formato fb.1.<ts>.<fbclid>.
+  //   metaFbp — cookie _fbp: identificador del navegador.
+  // Se envían sin hashear en user_data. Una vez seteados no se pisan con null.
+  metaFbc: {
+    type: String,
+    default: null
+  },
+  metaFbp: {
+    type: String,
+    default: null
+  },
   // True cuando el usuario se registró por el flujo rápido sin OTP de teléfono.
   // El authMiddleware NO bloquea (a diferencia de mustChangePassword): el
   // usuario puede usar todo normalmente excepto retirar. Los endpoints de

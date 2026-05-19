@@ -116,7 +116,9 @@ VIP.auth = (function () {
                     referralCode: referralCode || undefined,
                     metaEventId,
                     campaignCode: attribution ? attribution.code : undefined,
-                    utm: attribution ? attribution.utm : undefined
+                    utm: attribution ? attribution.utm : undefined,
+                    fbc: (VIP.campaign && VIP.campaign.getFbc()) || undefined,
+                    fbp: (VIP.campaign && VIP.campaign.getFbp()) || undefined
                 })
             });
             const data = await response.json();

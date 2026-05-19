@@ -1026,7 +1026,7 @@ function renderConversations() {
                 <span class="icon icon-user"></span>
             </div>
             <div class="conv-info">
-                <span class="conv-name">${escapeHtml(conv.username)}</span>
+                <span class="conv-name">${escapeHtml(conv.username)}${conv.publisher ? ` <span class="conv-publisher" title="Captado por la pauta de ${escapeHtml(conv.publisher)}">📣 ${escapeHtml(conv.publisher)}</span>` : ''}</span>
                 <span class="conv-preview">${escapeHtml(conv.lastMessage || 'Sin mensajes')}</span>
             </div>
             <div class="conv-meta">
@@ -1963,7 +1963,16 @@ async function loadUserInfo(userId) {
 
         // Reflejar estado de bloqueo en el header del chat
         applyBlockStateToChatHeader(user);
-        
+
+        // Publicista de adquisición: si el cliente llegó por un link de pauta,
+        // mostrar el nombre del publicista al lado del nombre en la cabecera.
+        if (user.acquisitionPublisher) {
+            elements.chatUsername.innerHTML = escapeHtml(user.username) +
+                ' <span class="chat-publisher">(📣 ' + escapeHtml(user.acquisitionPublisher) + ')</span>';
+        } else {
+            elements.chatUsername.textContent = user.username;
+        }
+
         // Mostrar estado de la app de notificaciones
         if (elements.chatAppStatus) {
             // Determinar el mejor estado a partir del array multi-token.
@@ -6929,9 +6938,83 @@ async function viewCampaignStats(code) {
                 <div style="font-size:14px;color:#fff;">${commissionLabel}</div>
                 <div style="font-size:11px;color:#888;margin-top:4px;">Esta cifra es informativa — los pagos se hacen manualmente.</div>
             </div>
+            <div id="campaignStatsUsers" style="margin-top:14px;">
+                <div style="font-size:12px;color:#aaa;">Cargando usuarios registrados…</div>
+            </div>
         `;
+
+        // Cargar la lista de usuarios registrados por esta pauta (best-effort).
+        loadCampaignUsers(code);
     } catch (err) {
         document.getElementById('campaignStatsContent').innerHTML = `<span style="color:#ff6666;">Error: ${escapeHtml(err.message)}</span>`;
+    }
+}
+
+// Carga y renderiza, dentro del modal de estadísticas, la lista de usuarios
+// que se registraron por una campaña. Es best-effort: si falla, no rompe el
+// resto del modal. Verifica _campaignStatsCurrentCode para no pisar el
+// contenido si el admin abrió otra campaña mientras cargaba.
+async function loadCampaignUsers(code) {
+    const container = document.getElementById('campaignStatsUsers');
+    if (!container) return;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(code)}/users?limit=500`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!response.ok) throw new Error('No se pudo cargar la lista de usuarios');
+        const { users } = await response.json();
+
+        if (_campaignStatsCurrentCode !== code) return;
+        const cont = document.getElementById('campaignStatsUsers');
+        if (!cont) return;
+
+        if (!users || users.length === 0) {
+            cont.innerHTML = `<div style="font-size:12px;color:#888;border-top:1px solid rgba(212,175,55,0.2);padding-top:10px;">Todavía no hay usuarios registrados por esta pauta.</div>`;
+            return;
+        }
+
+        const rows = users.map((u) => {
+            const fecha = u.acquiredAt || u.createdAt;
+            const fechaStr = fecha
+                ? new Date(fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                : '—';
+            const phone = u.phone ? escapeHtml(u.phone) : '<span style="color:#888;">sin teléfono</span>';
+            const verif = u.phoneVerified ? '✅' : (u.phoneVerificationPending ? '⏳' : '—');
+            return `
+                <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                    <td style="padding:6px 8px;color:#fff;">${escapeHtml(u.username || '')}</td>
+                    <td style="padding:6px 8px;color:#ccc;">${phone}</td>
+                    <td style="padding:6px 8px;text-align:center;" title="Teléfono verificado">${verif}</td>
+                    <td style="padding:6px 8px;text-align:right;color:#00ff88;">${formatARS(u.balance || 0)}</td>
+                    <td style="padding:6px 8px;text-align:right;color:#aaa;">${fechaStr}</td>
+                </tr>`;
+        }).join('');
+
+        cont.innerHTML = `
+            <div style="border-top:1px solid rgba(212,175,55,0.2);padding-top:12px;">
+                <div style="font-size:13px;color:#d4af37;font-weight:bold;margin-bottom:8px;">
+                    👥 Usuarios registrados por esta pauta (${users.length})
+                </div>
+                <div style="max-height:260px;overflow-y:auto;background:rgba(0,0,0,0.4);border-radius:8px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                        <thead>
+                            <tr style="position:sticky;top:0;background:#13132a;color:#aaa;">
+                                <th style="padding:6px 8px;text-align:left;">Usuario</th>
+                                <th style="padding:6px 8px;text-align:left;">Teléfono</th>
+                                <th style="padding:6px 8px;text-align:center;">Verif.</th>
+                                <th style="padding:6px 8px;text-align:right;">Balance</th>
+                                <th style="padding:6px 8px;text-align:right;">Registro</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            </div>`;
+    } catch (err) {
+        const cont = document.getElementById('campaignStatsUsers');
+        if (cont && _campaignStatsCurrentCode === code) {
+            cont.innerHTML = `<div style="font-size:12px;color:#ff6666;">No se pudo cargar la lista de usuarios registrados.</div>`;
+        }
     }
 }
 

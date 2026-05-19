@@ -21,6 +21,12 @@ VIP.campaign = (function () {
     const VISITOR_KEY = 'vipVisitorId';
     const ATTRIBUTION_TTL_MS = 60 * 24 * 60 * 60 * 1000; // 60 días
 
+    // Copia en memoria de la atribución capturada en esta sesión. Es el
+    // respaldo cuando localStorage está bloqueado (modo privado/incógnito):
+    // garantiza que un visitante que llegó por un link de pauta NUNCA caiga
+    // al flujo de registro con SMS por no poder leer/escribir localStorage.
+    let _memAttribution = null;
+
     function uuid() {
         if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
         const buf = new Uint8Array(16);
@@ -40,6 +46,67 @@ VIP.campaign = (function () {
         return id;
     }
 
+    // ── Meta Ads: identificadores de clic (_fbc) y navegador (_fbp) ─────────
+    // El _fbc ata una conversión al clic en el anuncio. El Pixel lo crea solo
+    // cuando hay ?fbclid= en la URL, pero puede no alcanzar a hacerlo (timing
+    // de fbevents.js, bloqueadores). Acá lo aseguramos: si la cookie _fbc no
+    // existe y hay un fbclid en la URL, la construimos con el formato oficial
+    // `fb.1.<timestamp_ms>.<fbclid>` y la seteamos — así también el Pixel del
+    // navegador la reusa. Persistimos ambos valores en localStorage para que
+    // sobrevivan al limpiado de la URL y al flujo de registro.
+    const FBC_KEY = 'vipFbc';
+    const FBP_KEY = 'vipFbp';
+
+    function readCookie(name) {
+        const escaped = name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1');
+        const m = document.cookie.match('(?:^|; )' + escaped + '=([^;]*)');
+        return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    function setCookie(name, value, maxAgeSeconds) {
+        try {
+            document.cookie = name + '=' + encodeURIComponent(value) +
+                '; path=/; max-age=' + maxAgeSeconds + '; SameSite=Lax';
+        } catch (e) { /* ignore */ }
+    }
+
+    function lsGet(key) {
+        try { return localStorage.getItem(key); } catch (e) { return null; }
+    }
+    function lsSet(key, value) {
+        try { localStorage.setItem(key, value); } catch (e) { /* private mode */ }
+    }
+
+    // Captura _fbc / _fbp al cargar la página. Debe correr ANTES de cleanUrl().
+    function captureFbCookies() {
+        // _fbp: lo crea el Pixel; sólo lo replicamos a localStorage si existe.
+        const fbpCookie = readCookie('_fbp');
+        if (fbpCookie) lsSet(FBP_KEY, fbpCookie);
+
+        // _fbc: usar la cookie si ya existe; si no, construirla desde ?fbclid=.
+        let fbc = readCookie('_fbc');
+        if (!fbc) {
+            try {
+                const fbclid = new URLSearchParams(window.location.search).get('fbclid');
+                if (fbclid) {
+                    fbc = 'fb.1.' + Date.now() + '.' + fbclid;
+                    // 90 días = ventana de atribución estándar de Meta.
+                    setCookie('_fbc', fbc, 90 * 24 * 60 * 60);
+                }
+            } catch (e) { /* ignore */ }
+        }
+        if (fbc) lsSet(FBC_KEY, fbc);
+    }
+
+    // Getter: cookie viva primero, localStorage como fallback (sobrevive al
+    // limpiado de la URL y a navegaciones dentro de la sesión).
+    function getFbc() {
+        return readCookie('_fbc') || lsGet(FBC_KEY) || null;
+    }
+    function getFbp() {
+        return readCookie('_fbp') || lsGet(FBP_KEY) || null;
+    }
+
     function saveAttribution(attribution) {
         const record = {
             code: attribution.code,
@@ -47,25 +114,50 @@ VIP.campaign = (function () {
             capturedAt: Date.now(),
             expiresAt: Date.now() + ATTRIBUTION_TTL_MS
         };
+        // Copia en memoria SIEMPRE — sobrevive aunque localStorage falle.
+        _memAttribution = record;
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(record)); } catch (e) { /* private mode */ }
         return record;
     }
 
     // Devuelve la atribución activa (no expirada) o null.
+    // Resuelve en 3 capas para que un visitante de pauta NUNCA caiga al flujo
+    // de registro con SMS por un fallo de almacenamiento:
+    //   1) localStorage (persistente entre cargas).
+    //   2) copia en memoria (cubre modo privado / localStorage bloqueado).
+    //   3) re-derivar de la URL / del código de campaña inyectado por el server.
     function getActive() {
+        // Capa 1 — localStorage.
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
-            if (!raw) return null;
-            const record = JSON.parse(raw);
-            if (!record || !record.code) return null;
-            if (record.expiresAt && record.expiresAt < Date.now()) {
-                localStorage.removeItem(STORAGE_KEY);
-                return null;
+            if (raw) {
+                const record = JSON.parse(raw);
+                if (record && record.code) {
+                    if (record.expiresAt && record.expiresAt < Date.now()) {
+                        try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ }
+                    } else {
+                        return record;
+                    }
+                }
             }
-            return record;
-        } catch (e) {
-            return null;
+        } catch (e) { /* localStorage no disponible (modo privado) */ }
+
+        // Capa 2 — copia en memoria de esta sesión.
+        if (_memAttribution && (!_memAttribution.expiresAt || _memAttribution.expiresAt >= Date.now())) {
+            return _memAttribution;
         }
+
+        // Capa 3 — re-derivar de la URL / window.__VIP_CAMPAIGN_CODE__.
+        const fromUrl = readFromUrl();
+        if (fromUrl && fromUrl.code) {
+            return {
+                code: fromUrl.code,
+                utm: fromUrl.utm || {},
+                capturedAt: Date.now(),
+                expiresAt: Date.now() + ATTRIBUTION_TTL_MS
+            };
+        }
+        return null;
     }
 
     function clearAttribution() {
@@ -168,6 +260,8 @@ VIP.campaign = (function () {
     // Ejecutado al cargar la página: detecta el código en la URL (si lo hay),
     // guarda atribución, dispara track-click y limpia la URL.
     function bootstrap() {
+        // Capturar fbc/fbp ANTES de readFromUrl/cleanUrl para no perder el fbclid.
+        captureFbCookies();
         const fromUrl = readFromUrl();
         if (fromUrl) {
             saveAttribution(fromUrl);
@@ -185,6 +279,8 @@ VIP.campaign = (function () {
         bootstrap,
         getActive,
         getVisitorId,
+        getFbc,
+        getFbp,
         clearAttribution,
         wasFreshlyCaptured,
         // Útil para Meta Pixel custom_data:

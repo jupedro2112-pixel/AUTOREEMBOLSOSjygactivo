@@ -258,6 +258,18 @@ const referralRevenueService = require('./src/services/referralRevenueService');
 const { resolveJugayganaUserId } = require('./src/services/jugayganaUserLinkService');
 const metaCapi = require('./src/services/metaCapiService');
 
+// Valida y normaliza un valor de cookie _fbc / _fbp de Meta antes de
+// persistirlo o reenviarlo a Conversions API. El formato real es
+// `fb.<subdomainIndex>.<creationTimeMs>.<payload>` (ej: fb.1.1747531860000.IwAR0...).
+// Devuelve el string saneado, o null si no tiene una forma válida.
+function sanitizeFbCookie(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (trimmed.length < 6 || trimmed.length > 512) return null;
+  if (!/^fb\.\d\.\d+\..+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 // ============================================
 // BLOQUEO DE REEMBOLSOS
 // ============================================
@@ -697,6 +709,9 @@ app.get('/:code', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+    // Persistir la pauta en una cookie: en las cargas siguientes (home / recarga)
+    // el server reinyecta el código aunque la URL ya no sea /santinopauta.
+    res.setHeader('Set-Cookie', buildCampaignCookieHeader(normalizedCode));
     res.send(rendered);
   } catch (err) {
     logger.warn(`[vanity /:code] error: ${err.message}`);
@@ -1369,7 +1384,7 @@ app.post('/api/upload/presigned-url', authMiddleware, async (req, res) => {
 // Registro de usuario
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
-    const { username, password, email, phone, referralCode, otpCode, campaignCode, utm } = req.body;
+    const { username, password, email, phone, referralCode, otpCode, campaignCode, utm, fbc, fbp } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
@@ -1476,6 +1491,13 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       }
     }
 
+    // Identificadores de Meta Ads: vienen en el body desde el front; si no,
+    // se leen de la cookie del request. Se persisten en el usuario para que
+    // los eventos server-side futuros (Purchase) puedan atribuirse al clic.
+    const _regFbCtx = metaCapi.extractRequestContext(req);
+    const metaFbc = sanitizeFbCookie(fbc) || sanitizeFbCookie(_regFbCtx.fbc);
+    const metaFbp = sanitizeFbCookie(fbp) || sanitizeFbCookie(_regFbCtx.fbp);
+
     const newUser = await User.create({
       id: userId,
       username,
@@ -1508,7 +1530,10 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         content: utm && utm.content ? String(utm.content).slice(0, 100) : null,
         term: utm && utm.term ? String(utm.term).slice(0, 100) : null
       } : undefined,
-      acquiredAt: attributedCampaign ? new Date() : null
+      acquiredAt: attributedCampaign ? new Date() : null,
+      // Identificadores de Meta Ads para atribución vía Conversions API.
+      metaFbc,
+      metaFbp
     });
 
     // Registrar evento de referido para trazabilidad
@@ -1552,7 +1577,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     // Meta CAPI — CompleteRegistration (conversión clave del funnel).
     metaCapi.track(
       'CompleteRegistration',
-      { email: newUser.email, phone: newUser.phone, externalId: newUser.id },
+      { email: newUser.email, phone: newUser.phone, externalId: newUser.id, fbc: metaFbc, fbp: metaFbp },
       {
         content_name: 'signup',
         status: true,
@@ -1597,7 +1622,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 // crear cuentas sin OTP a discreción — necesita un código real de pauta).
 app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
   try {
-    const { username, password, email, campaignCode, visitorId, utm, metaEventId } = req.body || {};
+    const { username, password, email, campaignCode, visitorId, utm, metaEventId, fbc, fbp } = req.body || {};
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
@@ -1645,6 +1670,11 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
       if (!collision) { newReferralCode = candidate; break; }
     }
 
+    // Identificadores de Meta Ads (ver comentario en /api/auth/register).
+    const _rqFbCtx = metaCapi.extractRequestContext(req);
+    const metaFbc = sanitizeFbCookie(fbc) || sanitizeFbCookie(_rqFbCtx.fbc);
+    const metaFbp = sanitizeFbCookie(fbp) || sanitizeFbCookie(_rqFbCtx.fbp);
+
     const newUser = await User.create({
       id: userId,
       username,
@@ -1671,7 +1701,10 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
         content: utm && utm.content ? String(utm.content).slice(0, 100) : null,
         term: utm && utm.term ? String(utm.term).slice(0, 100) : null
       },
-      acquiredAt: new Date()
+      acquiredAt: new Date(),
+      // Identificadores de Meta Ads para atribución vía Conversions API.
+      metaFbc,
+      metaFbp
     });
 
     await ChatStatus.create({
@@ -1691,7 +1724,7 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
     // Meta CAPI — CompleteRegistration con campaign_code en custom_data.
     metaCapi.track(
       'CompleteRegistration',
-      { email: newUser.email, externalId: newUser.id },
+      { email: newUser.email, externalId: newUser.id, fbc: metaFbc, fbp: metaFbp },
       {
         content_name: 'signup_quick',
         status: true,
@@ -1997,7 +2030,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     if (!isAdminRole(userObj.role)) {
       metaCapi.track(
         'Login',
-        { email: userObj.email, phone: userObj.phone, externalId: userId },
+        { email: userObj.email, phone: userObj.phone, externalId: userId, fbc: userObj.metaFbc, fbp: userObj.metaFbp },
         { content_name: 'login' },
         { eventId: req.body && req.body.metaEventId, req }
       );
@@ -3306,7 +3339,7 @@ app.post('/api/cbu/request', authMiddleware, async (req, res) => {
       const u = await User.findOne({ id: req.user.userId }).lean();
       metaCapi.track(
         'InitiateCheckout',
-        { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
+        { email: u && u.email, phone: u && u.phone, externalId: req.user.userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
         { content_name: 'cbu_request' },
         { eventId: req.body && req.body.metaEventId, req }
       );
@@ -4477,7 +4510,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         const u = await User.findOne({ id: userId }).lean();
         metaCapi.track(
           'RefundClaim',
-          { email: u && u.email, phone: u && u.phone, externalId: userId },
+          { email: u && u.email, phone: u && u.phone, externalId: userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
           { value: refundAmount, currency: 'ARS', content_name: 'refund_daily', period: dateStr },
           { eventId: req.body && req.body.metaEventId, req }
         );
@@ -4617,7 +4650,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         const u = await User.findOne({ id: userId }).lean();
         metaCapi.track(
           'RefundClaim',
-          { email: u && u.email, phone: u && u.phone, externalId: userId },
+          { email: u && u.email, phone: u && u.phone, externalId: userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
           { value: refundAmount, currency: 'ARS', content_name: 'refund_weekly', period: `${fromDateStr} a ${toDateStr}` },
           { eventId: req.body && req.body.metaEventId, req }
         );
@@ -4757,7 +4790,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         const u = await User.findOne({ id: userId }).lean();
         metaCapi.track(
           'RefundClaim',
-          { email: u && u.email, phone: u && u.phone, externalId: userId },
+          { email: u && u.email, phone: u && u.phone, externalId: userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
           { value: refundAmount, currency: 'ARS', content_name: 'refund_monthly', period: `${fromDateStr} a ${toDateStr}` },
           { eventId: req.body && req.body.metaEventId, req }
         );
@@ -5127,7 +5160,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // que recibe el depósito no participa, así que no hay browser pixel para deduplicar.
       metaCapi.track(
         'Purchase',
-        { email: user.email, phone: user.phone, externalId: user.id },
+        { email: user.email, phone: user.phone, externalId: user.id, fbc: user.metaFbc, fbp: user.metaFbp },
         {
           value: parseFloat(amount),
           currency: 'ARS',
@@ -5282,7 +5315,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
       // Meta CAPI — WithdrawRequest (procesado por admin).
       metaCapi.track(
         'WithdrawRequest',
-        { email: user.email, phone: user.phone, externalId: user.id },
+        { email: user.email, phone: user.phone, externalId: user.id, fbc: user.metaFbc, fbp: user.metaFbp },
         { value: parseFloat(amount), currency: 'ARS', content_name: 'withdraw_admin' },
         { req }
       );
@@ -5914,6 +5947,52 @@ app.post('/api/admin/send-notification', authMiddleware, adminMiddleware, async 
 // home. Default: vipcargas.com (configurable por env var).
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://vipcargas.com').replace(/\/$/, '');
 
+// ── Cookie de campaña (pauta) ──────────────────────────────────────────────
+// Cuando un visitante entra por una vanity URL de pauta (ej: /santinopauta) el
+// server le setea esta cookie httpOnly. En cada carga posterior — la home, una
+// recarga, o cualquier ruta SPA — el server lee la cookie y vuelve a inyectar
+// el código de campaña en el HTML. Así la decisión "registro sin SMS" es
+// determinística y server-side: NO depende de que la URL siga siendo
+// /santinopauta (se limpia a / apenas carga) ni del localStorage del navegador,
+// que las webviews de Meta/Instagram restringen de forma inconsistente — causa
+// raíz de que a veces pidiera SMS y a veces no con la misma URL de anuncio.
+const CAMPAIGN_COOKIE_NAME = 'vip_campaign';
+const CAMPAIGN_COOKIE_MAX_AGE = 60 * 24 * 60 * 60; // 60 días (igual que la atribución del cliente)
+
+function getCampaignCookie(req) {
+  const cookieHeader = (req.headers && req.headers.cookie) || '';
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const name = part.slice(0, eq).trim();
+    if (name !== CAMPAIGN_COOKIE_NAME) continue;
+    let val = '';
+    try { val = decodeURIComponent(part.slice(eq + 1).trim()); } catch (e) { return null; }
+    return /^[A-Z0-9_-]{3,40}$/.test(val) ? val : null;
+  }
+  return null;
+}
+
+function buildCampaignCookieHeader(code) {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `${CAMPAIGN_COOKIE_NAME}=${encodeURIComponent(code)}; HttpOnly; SameSite=Lax; Max-Age=${CAMPAIGN_COOKIE_MAX_AGE}; Path=/${secure}`;
+}
+
+// Resuelve el código de campaña vigente para un request a partir de la cookie
+// vip_campaign, validando que la campaña siga existiendo y activa.
+// Devuelve el código (uppercase) o null. Nunca lanza.
+async function resolveCampaignFromCookie(req) {
+  const code = getCampaignCookie(req);
+  if (!code) return null;
+  try {
+    const campaign = await Campaign.findOne({ code, isActive: true }).select('code').lean();
+    return campaign ? campaign.code : null;
+  } catch (err) {
+    logger.warn(`[campaign-cookie] error validando cookie de campaña: ${err.message}`);
+    return null;
+  }
+}
+
 // Renderiza index.html reemplazando los placeholders del server (pixel id,
 // base url pública, y opcionalmente un campaignCode capturado por vanity URL).
 function renderIndexHtml(extras = {}) {
@@ -5927,13 +6006,18 @@ function renderIndexHtml(extras = {}) {
     .replace(/__VIP_CAMPAIGN_CODE_PLACEHOLDER__/g, extras.campaignCode || '');
 }
 
-app.get('/', (req, res) => {
-  const rendered = renderIndexHtml();
+app.get('/', async (req, res) => {
+  // Si el visitante ya pasó por una vanity URL de pauta, reinyectar el código
+  // de campaña desde la cookie para que el flujo de registro sin SMS sea
+  // determinístico aunque la URL ya sea / (limpiada) o esto sea una recarga.
+  const campaignCode = await resolveCampaignFromCookie(req);
+  const rendered = renderIndexHtml({ campaignCode: campaignCode || '' });
   if (!rendered) return res.status(500).send('Error loading page');
   res.setHeader('Content-Type', 'text/html');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
+  if (campaignCode) res.setHeader('Set-Cookie', buildCampaignCookieHeader(campaignCode));
   res.send(rendered);
 });
 
@@ -6125,7 +6209,7 @@ app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
         const u = await User.findOne({ id: req.user.userId }).lean();
         metaCapi.track(
           'Purchase',
-          { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
+          { email: u && u.email, phone: u && u.phone, externalId: req.user.userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
           {
             value: parseFloat(amount),
             currency: 'ARS',
@@ -6195,7 +6279,7 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
         const u = await User.findOne({ id: req.user.userId }).lean();
         metaCapi.track(
           'WithdrawRequest',
-          { email: u && u.email, phone: u && u.phone, externalId: req.user.userId },
+          { email: u && u.email, phone: u && u.phone, externalId: req.user.userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
           { value: amountNum, currency: 'ARS', content_name: 'withdraw_self_service' },
           { eventId: req.body && req.body.metaEventId, req }
         );
@@ -8123,6 +8207,17 @@ app.get('/api/admin/conversations', authMiddleware, adminMiddleware, async (req,
       },
       { $unwind: { path: '$user', preserveNullAndEmptyArrays: false } },
       {
+        // Cruce con campañas: trae el publicista del que vino el usuario
+        // (User.acquisitionCampaign === Campaign.code) para distinguir en la
+        // lista de chats qué clientes llegaron por una pauta.
+        $lookup: {
+          from: 'campaigns',
+          localField: 'user.acquisitionCampaign',
+          foreignField: 'code',
+          as: 'campaign'
+        }
+      },
+      {
         $lookup: {
           from: 'messages',
           let: { uid: '$userId' },
@@ -8162,7 +8257,9 @@ app.get('/api/admin/conversations', authMiddleware, adminMiddleware, async (req,
           unread: { $ifNull: [{ $arrayElemAt: ['$unread.count', 0] }, 0] },
           lastMessage: { $arrayElemAt: ['$lastMsg.content', 0] },
           lastMessageAt: { $ifNull: ['$lastMessageAt', '$updatedAt', new Date()] },
-          status: 1
+          status: 1,
+          acquisitionCampaign: { $ifNull: ['$user.acquisitionCampaign', null] },
+          publisher: { $ifNull: [{ $arrayElemAt: ['$campaign.publisher', 0] }, null] }
         }
       }
     ];
@@ -8193,6 +8290,19 @@ app.get('/api/users/:userId', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
     
+    // Si el usuario llegó por un link de pauta, resolver el nombre del
+    // publicista para que el panel lo muestre al lado del nombre en el chat.
+    if (user.acquisitionCampaign) {
+      try {
+        const campaign = await Campaign.findOne({ code: user.acquisitionCampaign })
+          .select('publisher name').lean();
+        if (campaign) {
+          user.acquisitionPublisher = campaign.publisher || null;
+          user.acquisitionCampaignName = campaign.name || null;
+        }
+      } catch (e) { /* no bloquear la respuesta del perfil por esto */ }
+    }
+
     res.json({ user });
   } catch (error) {
     console.error('Error obteniendo usuario:', error);
@@ -10505,7 +10615,7 @@ app.get('/api/admin/inactividad/stats', authMiddleware, adminMiddleware, async (
 // aunque la ruta no esté definida explícitamente.
 // ============================================
 
-app.get('*', (req, res) => {
+app.get('*', async (req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'Endpoint no encontrado' });
   }
@@ -10515,14 +10625,17 @@ app.get('*', (req, res) => {
   if (STATIC_ASSET_EXT_RE.test(req.path)) {
     return res.status(404).send('Not found');
   }
-  const indexPath = path.join(__dirname, 'public', 'index.html');
-  const content = readFileSafe(indexPath);
-  if (content) {
+  // Reinyectar el código de campaña desde la cookie de pauta (igual que la home)
+  // para que el flujo sin SMS sea determinístico en cualquier ruta SPA.
+  const campaignCode = await resolveCampaignFromCookie(req);
+  const rendered = renderIndexHtml({ campaignCode: campaignCode || '' });
+  if (rendered) {
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    res.send(content);
+    if (campaignCode) res.setHeader('Set-Cookie', buildCampaignCookieHeader(campaignCode));
+    res.send(rendered);
   } else {
     res.status(500).send('Error loading page');
   }

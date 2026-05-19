@@ -79,8 +79,17 @@ function buildUserData(userInfo = {}, requestCtx = {}) {
 
   if (requestCtx.ip) user_data.client_ip_address = requestCtx.ip;
   if (requestCtx.userAgent) user_data.client_user_agent = requestCtx.userAgent;
-  if (requestCtx.fbp) user_data.fbp = requestCtx.fbp;
-  if (requestCtx.fbc) user_data.fbc = requestCtx.fbc;
+  // fbp / fbc — identificadores de Meta Ads (fbp = navegador, fbc = clic del
+  // anuncio, clave para atribuir conversiones a la pauta).
+  // Prioridad: la cookie viva del request (eventos browser-side / self-service).
+  // Fallback: el valor persistido en el usuario (userInfo.fbc / userInfo.fbp).
+  // El fallback es imprescindible para eventos server-side como Purchase
+  // disparado desde un request de admin, donde la cookie del jugador no existe
+  // en req.headers.cookie.
+  const fbp = requestCtx.fbp || userInfo.fbp;
+  const fbc = requestCtx.fbc || userInfo.fbc;
+  if (fbp) user_data.fbp = fbp;
+  if (fbc) user_data.fbc = fbc;
 
   return user_data;
 }

@@ -463,6 +463,10 @@ function setupEventListeners() {
         const smsOfferSkipBtn = document.getElementById('smsOfferSkipBtn');
         if (smsOfferSkipBtn) smsOfferSkipBtn.addEventListener('click', () => VIP.ui.hideModal('smsOfferModal'));
 
+        // Modal de verificación de app + notificaciones (se abre al entrar).
+        const appCheckCloseBtn = document.getElementById('appCheckCloseBtn');
+        if (appCheckCloseBtn) appCheckCloseBtn.addEventListener('click', () => VIP.ui.hideModal('appCheckModal'));
+
         // Cartel de atención del home (cuenta sin teléfono verificado): abre verify-phone.
         const verifyPhoneBannerBtn = document.getElementById('verifyPhoneBannerBtn');
         if (verifyPhoneBannerBtn) verifyPhoneBannerBtn.addEventListener('click', () => {

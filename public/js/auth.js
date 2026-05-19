@@ -470,6 +470,7 @@ VIP.auth = (function () {
         VIP.fire.loadFireStatus();
         VIP.ui.loadCanalInformativoUrl();
         refreshVerifyPhoneBanner();
+        if (VIP.appTest && VIP.appTest.maybeShowAppCheck) VIP.appTest.maybeShowAppCheck();
 
         return userLoaded;
     }

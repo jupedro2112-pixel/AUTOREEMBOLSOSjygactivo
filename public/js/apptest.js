@@ -126,11 +126,92 @@ VIP.appTest = (function () {
         }).catch(function () {});
     }
 
+    // =================================================================
+    // MODAL PROACTIVO DE VERIFICACIÓN (appCheckModal)
+    // Se abre al entrar, una vez por sesión, mientras al usuario le falte
+    // instalar la app o activar las notificaciones (token push). Cuando
+    // ya está todo OK no se muestra más.
+    // =================================================================
+
+    // "Push listo" = permiso concedido Y hay un token FCM registrado en el
+    // dispositivo. Permiso sin token no alcanza para recibir notificaciones.
+    function _hasToken() {
+        try { return !!localStorage.getItem('fcmToken'); } catch (e) { return false; }
+    }
+    function _pushReady() {
+        return _notifOk() && _hasToken();
+    }
+
+    function renderAppCheck() {
+        const box = document.getElementById('appCheckBody');
+        if (!box) return;
+        const appOk = _isAppOk();
+        const pushOk = _pushReady();
+        let html = '<div style="display:flex;flex-direction:column;gap:7px;">';
+        html += _row('📲', 'App instalada', appOk, 'VIP.appTest.doInstall()', '📲 Instalar la app');
+        html += _row('🔔', 'Notificaciones activadas', pushOk, 'VIP.appTest.activateNotifs()', '🔔 Activar notificaciones');
+        html += '</div>';
+        if (appOk && pushOk) {
+            html += '<div style="text-align:center;color:#66ff66;font-weight:800;font-size:12px;margin-top:10px;">✅ ¡Listo! Vas a recibir todas las notificaciones.</div>';
+        } else {
+            html += '<p style="text-align:center;color:#b0b0b0;font-size:11px;margin:10px 0 0;line-height:1.45;">Completá los pasos en rojo para no perderte bonus ni regalos.</p>';
+        }
+        box.innerHTML = html;
+    }
+
+    function doInstall() {
+        if (window.deferredPrompt && VIP.ui && typeof VIP.ui.installApp === 'function') {
+            VIP.ui.installApp();
+        } else {
+            showInstallHelp();
+        }
+    }
+
+    function activateNotifs() {
+        if (typeof Notification === 'undefined') { showNotifHelp(); return; }
+        // Permiso bloqueado: no se puede repedir por JS, hay que guiar al usuario.
+        if (Notification.permission === 'denied') { showNotifHelp(); return; }
+        if (typeof window.enableNotifications === 'function') {
+            window.enableNotifications()
+                .then(function () { renderAppCheck(); })
+                .catch(function () { renderAppCheck(); });
+        } else {
+            requestNotif();
+            renderAppCheck();
+        }
+    }
+
+    // Decide si abrir el modal: solo si falta app o push, una vez por sesión.
+    // Si ya hay otro modal abierto, cede el turno y reintenta en otra sesión
+    // (no marca el flag, para no "gastar" la única aparición de la sesión).
+    function maybeShowAppCheck() {
+        try {
+            if (VIP.state && VIP.state.passwordChangePending) return;
+            if (sessionStorage.getItem('vip_appCheckShown') === '1') return;
+            if (_isAppOk() && _pushReady()) return; // ya está todo OK
+            setTimeout(function () {
+                try {
+                    if (sessionStorage.getItem('vip_appCheckShown') === '1') return;
+                    if (_isAppOk() && _pushReady()) return;
+                    // No apilar sobre otro modal que ya esté abierto.
+                    if (document.querySelector('.modal:not(.hidden)')) return;
+                    sessionStorage.setItem('vip_appCheckShown', '1');
+                    renderAppCheck();
+                    VIP.ui.showModal('appCheckModal');
+                } catch (e) { /* noop */ }
+            }, 1500);
+        } catch (e) { /* sessionStorage no disponible: no bloquear */ }
+    }
+
     return {
         renderDiagnostics: renderDiagnostics,
         showInstallHelp: showInstallHelp,
         showNotifHelp: showNotifHelp,
-        requestNotif: requestNotif
+        requestNotif: requestNotif,
+        renderAppCheck: renderAppCheck,
+        maybeShowAppCheck: maybeShowAppCheck,
+        doInstall: doInstall,
+        activateNotifs: activateNotifs
     };
 
 })();

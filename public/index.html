@@ -1432,6 +1432,20 @@
         </div>
     </div>
 
+    <!-- Modal Verificación de App + Notificaciones — se abre al entrar (una vez
+         por sesión) mientras al usuario le falte instalar la app o activar las
+         notificaciones. Si ya está todo OK no aparece. Render desde js/apptest.js. -->
+    <div id="appCheckModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 400px; position: relative;">
+            <div class="modal-header" style="margin-bottom: 14px;">
+                <h2 style="font-size: 1.25em;">📲 Verificá tu app</h2>
+                <p>Necesario para recibir bonus, regalos y avisos importantes.</p>
+            </div>
+            <div id="appCheckBody"></div>
+            <button id="appCheckCloseBtn" class="btn btn-secondary" style="width: 100%; margin-top: 12px;">Más tarde</button>
+        </div>
+    </div>
+
     <!-- Modal Configuración -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content">

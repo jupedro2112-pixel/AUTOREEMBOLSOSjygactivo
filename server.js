@@ -10560,9 +10560,11 @@ if (process.env.VERCEL) {
       console.error('⛔ FATAL: JWT_SECRET no configurado. El servidor no puede arrancar.');
       process.exit(1);
     }
+    // Secret corto: solo se advierte, NO se aborta. Abortar dejaría la
+    // producción caída si el JWT_SECRET configurado es corto. Se recomienda
+    // usar 32+ caracteres (cambiarlo invalida las sesiones vigentes).
     if (JWT_SECRET.length < 32) {
-      console.error('⛔ FATAL: JWT_SECRET es demasiado corto (mínimo 32 caracteres). El servidor no puede arrancar.');
-      process.exit(1);
+      console.warn('⚠️  ADVERTENCIA: JWT_SECRET es corto (' + JWT_SECRET.length + ' caracteres). Se recomienda 32+ para mayor seguridad.');
     }
 
     await initializeData();

@@ -1483,6 +1483,12 @@ window.handlePhoneOtpVerify = async function() {
                             } catch (e) { /* ignore */ }
                             try {
                                 if (VIP.ui && typeof VIP.ui.showModal === 'function') {
+                                    // Cerrar la encuesta de notificaciones si quedó
+                                    // abierta: en modo obligatorio no tiene botón de
+                                    // cerrar y taparía el modal de cambio de clave.
+                                    if (typeof VIP.ui.hideModal === 'function') {
+                                        VIP.ui.hideModal('notifSurveyModal');
+                                    }
                                     VIP.ui.showModal('changePasswordModal');
                                 }
                             } catch (e) { /* ignore */ }

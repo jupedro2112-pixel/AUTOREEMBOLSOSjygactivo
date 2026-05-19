@@ -31,7 +31,12 @@ VIP.notifSurvey = (function () {
     // y todavía no eligió un plan.
     function maybeShow() {
         if (VIP.state.passwordChangePending) return;
-        const plan = VIP.state.currentUser && VIP.state.currentUser.notificationPlan;
+        const u = VIP.state.currentUser;
+        // No mostrar la encuesta si hay un cambio de contraseña obligatorio:
+        // en modo obligatorio la encuesta no se puede cerrar y guardar el plan
+        // responde 403 MUST_CHANGE_PASSWORD -> el usuario quedaría trabado.
+        if (u && (u.mustChangePassword === true || u.needsPasswordChange === true)) return;
+        const plan = u && u.notificationPlan;
         if (plan) return;
         // Guarda local: si ya votó en este dispositivo, no volver a mostrar la
         // encuesta aunque el plan no haya viajado en el objeto de usuario.
@@ -62,6 +67,22 @@ VIP.notifSurvey = (function () {
                 body: JSON.stringify({ plan })
             });
             const data = await res.json().catch(() => ({}));
+
+            // Cambio de contraseña obligatorio: el server rechaza con 403. La
+            // encuesta en modo obligatorio no tiene botón de cerrar, así que la
+            // cerramos a mano y abrimos el modal de cambio de contraseña para
+            // que el usuario no quede trabado detrás de la encuesta.
+            if (res.status === 403 && data && data.code === 'MUST_CHANGE_PASSWORD') {
+                VIP.state.passwordChangePending = true;
+                VIP.ui.hideModal('notifSurveyModal');
+                try {
+                    if (VIP.auth && typeof VIP.auth.prepareChangePasswordModal === 'function') {
+                        VIP.auth.prepareChangePasswordModal();
+                    }
+                } catch (e) { /* ignore */ }
+                VIP.ui.showModal('changePasswordModal');
+                return;
+            }
 
             if (res.ok && data.success) {
                 if (VIP.state.currentUser) VIP.state.currentUser.notificationPlan = plan;

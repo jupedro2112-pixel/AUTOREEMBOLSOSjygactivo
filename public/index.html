@@ -723,6 +723,13 @@
                     </div>
                     <button id="installBonusClaimBtn" style="background: #000; color: #ffd700; border: none; border-radius: 9px; padding: 9px 15px; font-weight: 800; font-size: 13px; cursor: pointer; flex-shrink: 0;">🎁 Reclamar $5.000</button>
                 </div>
+                <!-- Aviso para usuarios sin pauta (registro directo): el bono
+                     es para probar la página y no es retirable hasta ser usuario
+                     activo. installbonus.js lo muestra/oculta según
+                     VIP.state.currentUser.acquisitionCampaign. -->
+                <div id="installBonusDirectNotice" style="display:none; margin-top:10px; padding:8px 11px; background:rgba(0,0,0,0.12); border:1px solid rgba(0,0,0,0.28); border-radius:9px; font-size:11px; line-height:1.4; color:#1a0033; font-weight:600;">
+                    ⚠️ Este bono es <strong>para que pruebes la página, no es retirable</strong>. Para poder retirarlo necesitás <strong>ser un usuario activo</strong>.
+                </div>
             </div>
 
             <!-- Cartel de bonificación vigente (bono de carga activado por

@@ -28,6 +28,18 @@ VIP.installBonus = (function () {
             }
         } catch (e) { /* si falla, dejamos el cartel oculto */ }
         banner.style.display = _claimed ? 'none' : '';
+
+        // Aviso solo para usuarios que se registraron DIRECTO (sin pauta): el
+        // bono es para probar la página y no es retirable hasta ser usuario
+        // activo. Si vino por pauta, el flujo es distinto y no mostramos esto.
+        // Usamos acquisitionCampaign del usuario (verdad del server), no la
+        // atribución de localStorage (que vence a los 60 días).
+        const notice = _el('installBonusDirectNotice');
+        if (notice) {
+            const fromPauta = !!(VIP.state.currentUser && VIP.state.currentUser.acquisitionCampaign);
+            notice.style.display = (!_claimed && !fromPauta) ? '' : 'none';
+        }
+
         VIP.ui.adjustLayout();
     }
 

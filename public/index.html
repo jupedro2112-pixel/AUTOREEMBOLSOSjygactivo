@@ -1446,6 +1446,15 @@
         </div>
     </div>
 
+    <!-- Modal Test de Notificaciones — al entrar se envía un push de prueba y
+         se le pregunta al usuario si lo recibió. Si dice que no, se limpia el
+         token y se le pide reiniciar. Cuerpo renderizado desde js/apptest.js. -->
+    <div id="notifTestModal" class="modal hidden" onclick="if(event.target === this) hideModal('notifTestModal')">
+        <div class="modal-content" style="max-width: 380px; position: relative;" onclick="event.stopPropagation()">
+            <div id="notifTestBody"></div>
+        </div>
+    </div>
+
     <!-- Modal Configuración -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content">
@@ -2638,6 +2647,27 @@
         };
         
         // ============================================
+        // FUNCIÓN GLOBAL: Resetear el token FCM (test de notificaciones falló)
+        // Borra la suscripción push y el token cacheado. Tras recargar la app,
+        // initNotifications obtiene una suscripción y un token nuevos.
+        // ============================================
+        window.resetFcmToken = async function () {
+            try {
+                if (messaging && typeof messaging.deleteToken === 'function') {
+                    await messaging.deleteToken();
+                }
+            } catch (e) {
+                console.warn('[FCM] resetFcmToken: deleteToken falló:', e && e.message);
+            }
+            try {
+                localStorage.removeItem('fcmToken');
+                localStorage.removeItem('fcmTokenContext');
+                localStorage.removeItem('fcmPushEndpoint');
+            } catch (e) { /* noop */ }
+            fcmToken = null;
+        };
+
+        // ============================================
         // FUNCIÓN GLOBAL: Verificar estado de notificaciones (diagnóstico)
         // Incluye: permiso, token local, token registrado en backend, entorno
         // ============================================
@@ -2821,6 +2851,24 @@
                 const notif = payload.notification || {};
                 const notificationTitle = notif.title || 'Sala de Juegos';
                 const notifBody = notif.body || 'Nueva notificación';
+
+                // Test de notificaciones: mostrar la notificación del sistema
+                // real aunque la app esté en foreground, para que el usuario la
+                // vea y pueda confirmar el test (Sí/No).
+                if (payload.data && payload.data.kind === 'self_test') {
+                    try {
+                        navigator.serviceWorker.ready.then(function (reg) {
+                            reg.showNotification(notificationTitle, {
+                                body: notifBody,
+                                icon: '/icons/icon-192x192.png',
+                                badge: '/icons/icon-72x72.png',
+                                tag: 'self-test',
+                                requireInteraction: false
+                            });
+                        }).catch(function () {});
+                    } catch (e) { /* noop */ }
+                    return;
+                }
 
                 if (document.visibilityState !== 'visible') {
                     // App en background / minimizada: notificación nativa.

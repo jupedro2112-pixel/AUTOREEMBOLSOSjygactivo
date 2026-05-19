@@ -203,6 +203,130 @@ VIP.appTest = (function () {
         } catch (e) { /* sessionStorage no disponible: no bloquear */ }
     }
 
+    // =================================================================
+    // TEST DE NOTIFICACIONES — verificación de entrega real
+    // Al entrar, manda un push de prueba y le pregunta al usuario si lo
+    // recibió. Si dice que no, limpia el token y le pide reiniciar para
+    // regenerarlo. Solo corre si el usuario tiene app + permiso + token,
+    // y una vez que pasó el test no vuelve a correr.
+    // =================================================================
+
+    // Decide si correr el test. Si el token todavía no está (puede estar
+    // regenerándose tras un reinicio) reintenta unas veces.
+    function maybeRunNotifTest(attempt) {
+        attempt = attempt || 0;
+        try {
+            if (VIP.state && VIP.state.passwordChangePending) return;
+            if (!_isAppOk() || !_notifOk()) return;        // sin app/permiso no aplica
+            if (localStorage.getItem('vip_notifTestPassed') === '1') return;
+            if (sessionStorage.getItem('vip_notifTestRan') === '1') return;
+            if (!_hasToken()) {
+                // El token puede estar generándose (post-reinicio). Reintentar.
+                if (attempt < 6) setTimeout(function () { maybeRunNotifTest(attempt + 1); }, 3000);
+                return;
+            }
+            sessionStorage.setItem('vip_notifTestRan', '1');
+            setTimeout(_runNotifTest, 2000);
+        } catch (e) { /* noop */ }
+    }
+
+    async function _runNotifTest() {
+        let token = null;
+        try { token = localStorage.getItem('fcmToken'); } catch (e) { /* noop */ }
+        if (!token || !VIP.state || !VIP.state.currentToken) return;
+        try {
+            const res = await fetch(VIP.config.API_URL + '/api/notifications/self-test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + VIP.state.currentToken
+                },
+                body: JSON.stringify({ fcmToken: token })
+            });
+            const data = await res.json().catch(function () { return {}; });
+            if (data && data.ok) {
+                // El push salió: esperar a que llegue y preguntar.
+                setTimeout(_showTestQuestion, 3500);
+            } else if (data && data.invalidToken) {
+                // FCM rechazó el token: ya está muerto, sin preguntar.
+                _showTestFailed(true);
+            }
+            // Otros errores: silencioso, se reintenta en otra sesión.
+        } catch (e) { /* error de red: no molestar */ }
+    }
+
+    function _showTestQuestion() {
+        const box = document.getElementById('notifTestBody');
+        if (!box) return;
+        let html = '<div style="text-align:center;">';
+        html += '<div style="font-size:46px;line-height:1;margin-bottom:6px;">📩</div>';
+        html += '<h2 style="color:#d4af37;font-size:18px;margin:0 0 6px;">Test de notificaciones</h2>';
+        html += '<p style="color:#ccc;font-size:13px;line-height:1.5;margin:0 0 16px;">Te acabamos de enviar una notificación de prueba. <strong style="color:#fff;">¿La recibiste?</strong></p>';
+        html += '</div>';
+        html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+        html += '<button onclick="VIP.appTest.notifTestYes()" class="btn btn-primary" style="width:100%;">✅ Sí, la recibí</button>';
+        html += '<button onclick="VIP.appTest.notifTestNo()" class="btn btn-secondary" style="width:100%;">❌ No me llegó</button>';
+        html += '</div>';
+        box.innerHTML = html;
+        try { VIP.ui.showModal('notifTestModal'); } catch (e) { /* noop */ }
+    }
+
+    function notifTestYes() {
+        try { localStorage.setItem('vip_notifTestPassed', '1'); } catch (e) { /* noop */ }
+        try { VIP.ui.hideModal('notifTestModal'); } catch (e) { /* noop */ }
+        if (VIP.ui && VIP.ui.showToast) VIP.ui.showToast('✅ Notificaciones verificadas', 'success');
+    }
+
+    async function notifTestNo() {
+        const box = document.getElementById('notifTestBody');
+        if (box) box.innerHTML = '<div style="text-align:center;color:#ccc;padding:24px 12px;font-size:13px;">⏳ Limpiando tu conexión de notificaciones...</div>';
+        let token = null;
+        try { token = localStorage.getItem('fcmToken'); } catch (e) { /* noop */ }
+        // Avisar al backend que borre el token muerto.
+        if (token && VIP.state && VIP.state.currentToken) {
+            try {
+                await fetch(VIP.config.API_URL + '/api/notifications/unregister-token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + VIP.state.currentToken
+                    },
+                    body: JSON.stringify({ fcmToken: token })
+                });
+            } catch (e) { /* best-effort */ }
+        }
+        _showTestFailed(true);
+    }
+
+    // Limpia el token del lado cliente y muestra el cartel de reinicio.
+    function _showTestFailed() {
+        if (typeof window.resetFcmToken === 'function') {
+            try { window.resetFcmToken(); } catch (e) { /* noop */ }
+        } else {
+            try {
+                localStorage.removeItem('fcmToken');
+                localStorage.removeItem('fcmTokenContext');
+                localStorage.removeItem('fcmPushEndpoint');
+            } catch (e) { /* noop */ }
+        }
+        try {
+            localStorage.removeItem('vip_notifTestPassed');
+            // Permitir que el test vuelva a correr tras el reinicio.
+            sessionStorage.removeItem('vip_notifTestRan');
+        } catch (e) { /* noop */ }
+
+        const box = document.getElementById('notifTestBody');
+        if (!box) return;
+        let html = '<div style="text-align:center;">';
+        html += '<div style="font-size:46px;line-height:1;margin-bottom:6px;">🔄</div>';
+        html += '<h2 style="color:#ffaa66;font-size:17px;margin:0 0 8px;">Reiniciá la app</h2>';
+        html += '<p style="color:#ccc;font-size:13px;line-height:1.55;margin:0 0 16px;">Limpiamos tu conexión de notificaciones. <strong style="color:#fff;">Cerrá y volvé a abrir la app</strong> (o tocá el botón) para reactivarlas y quedar 100% verificado.</p>';
+        html += '</div>';
+        html += '<button onclick="location.reload()" class="btn btn-primary" style="width:100%;">🔄 Reiniciar ahora</button>';
+        box.innerHTML = html;
+        try { VIP.ui.showModal('notifTestModal'); } catch (e) { /* noop */ }
+    }
+
     return {
         renderDiagnostics: renderDiagnostics,
         showInstallHelp: showInstallHelp,
@@ -211,7 +335,10 @@ VIP.appTest = (function () {
         renderAppCheck: renderAppCheck,
         maybeShowAppCheck: maybeShowAppCheck,
         doInstall: doInstall,
-        activateNotifs: activateNotifs
+        activateNotifs: activateNotifs,
+        maybeRunNotifTest: maybeRunNotifTest,
+        notifTestYes: notifTestYes,
+        notifTestNo: notifTestNo
     };
 
 })();

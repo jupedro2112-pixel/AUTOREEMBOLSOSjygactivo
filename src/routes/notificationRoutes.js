@@ -285,6 +285,91 @@ router.post('/register-token', registerTokenLimiter, async (req, res) => {
 });
 
 // ============================================
+// MIDDLEWARE — autentica a cualquier usuario por JWT (sin exigir rol admin)
+// ============================================
+async function requireUser(req, res, next) {
+  const token = req.headers.authorization && req.headers.authorization.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Token no proporcionado' });
+  const jwtSecret = _getJwtSecret();
+  if (!jwtSecret) return res.status(500).json({ error: 'Error de configuración del servidor' });
+  let decoded;
+  try {
+    decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
+  } catch (e) {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+  try {
+    let user = await User.findOne({ id: decoded.userId });
+    if (!user) { try { user = await User.findById(decoded.userId); } catch (_) { /* ObjectId inválido */ } }
+    if (!user || !user.isActive || user.isBlocked === true) {
+      return res.status(401).json({ error: 'Usuario no disponible' });
+    }
+    req.authUser = user;
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: 'Error verificando usuario' });
+  }
+}
+
+// ============================================
+// TEST DE ENTREGA REAL — el cliente lo dispara al entrar
+// ============================================
+// Envía un push de prueba al token del dispositivo actual del usuario. El
+// cliente luego le pregunta "¿la recibiste?" (Sí/No). Si el token está
+// muerto FCM lo rechaza y se limpia acá mismo.
+router.post('/self-test', registerTokenLimiter, requireUser, async (req, res) => {
+  try {
+    const fcmToken = req.body && req.body.fcmToken;
+    if (!fcmToken) return res.status(400).json({ error: 'fcmToken requerido' });
+    const tokenStr = String(fcmToken);
+    const user = req.authUser;
+
+    // El token debe pertenecer al usuario (campo individual o array).
+    const owns = user.fcmToken === tokenStr ||
+      (Array.isArray(user.fcmTokens) && user.fcmTokens.some(t => t && t.token === tokenStr));
+    if (!owns) return res.status(403).json({ error: 'Ese token no pertenece a tu cuenta' });
+
+    const result = await sendNotificationToUser(
+      tokenStr,
+      '🔔 Notificación de prueba',
+      'Si ves este mensaje, tus notificaciones funcionan. Volvé a la app y tocá "Sí".',
+      { kind: 'self_test', tag: 'self-test' }
+    );
+
+    if (result && result.success) {
+      return res.json({ ok: true });
+    }
+    // Token muerto: FCM lo rechazó. Lo limpiamos de la cuenta.
+    if (result && result.invalidToken) {
+      await User.updateOne({ id: user.id }, { $pull: { fcmTokens: { token: tokenStr } } }).catch(() => {});
+      await User.updateOne({ id: user.id, fcmToken: tokenStr }, { $set: { fcmToken: null, fcmTokenUpdatedAt: null } }).catch(() => {});
+      return res.json({ ok: false, invalidToken: true });
+    }
+    return res.json({ ok: false, error: (result && result.error) || 'No se pudo enviar la notificación' });
+  } catch (error) {
+    console.error('[FCM] self-test error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Borra un token FCM del usuario (cuando el test de notificación da "No" y
+// hay que regenerarlo). El cliente además hace messaging.deleteToken() local.
+router.post('/unregister-token', registerTokenLimiter, requireUser, async (req, res) => {
+  try {
+    const fcmToken = req.body && req.body.fcmToken;
+    if (!fcmToken) return res.status(400).json({ error: 'fcmToken requerido' });
+    const tokenStr = String(fcmToken);
+    const user = req.authUser;
+    await User.updateOne({ id: user.id }, { $pull: { fcmTokens: { token: tokenStr } } });
+    await User.updateOne({ id: user.id, fcmToken: tokenStr }, { $set: { fcmToken: null, fcmTokenUpdatedAt: null } });
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('[FCM] unregister-token error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
 // ENVIAR NOTIFICACIÓN A UN USUARIO
 // ============================================
 router.post('/send', requireAdmin, async (req, res) => {

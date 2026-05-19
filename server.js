@@ -5687,9 +5687,41 @@ io.on('connection', (socket) => {
         throw createError;
       }
       
-      // Entregar el mensaje en tiempo real ANTES del housekeeping del
-      // ChatStatus: el destinatario no tiene por qué esperar esas escrituras
-      // de DB. Esto recorta la latencia percibida del chat.
+      // Housekeeping del ChatStatus ANTES de emitir 'new_message'. Si se emite
+      // primero, un admin que recibe el evento y recarga su lista de chats puede
+      // leer un ChatStatus todavía sin actualizar (o aún inexistente, en el
+      // primer mensaje de un usuario) y "perder" el chat: no le aparece hasta
+      // que otro evento lo recarga. Hacerlo antes garantiza que cualquier
+      // recarga, de cualquier admin, vea el chat con su estado real.
+      const targetUserId = isAdminRole ? receiverId : socket.userId;
+      if (targetUserId) {
+        try {
+          // El username del usuario emisor ya lo tenemos (socket.username);
+          // sólo para mensajes de admin hay que resolver el del destinatario.
+          let chatUsername = socket.username;
+          if (isAdminRole) {
+            const chatUser = await User.findOne({ id: targetUserId }).select('username').lean();
+            if (chatUser) chatUsername = chatUser.username;
+          }
+          await ChatStatus.findOneAndUpdate(
+            { userId: targetUserId },
+            { userId: targetUserId, username: chatUsername, lastMessageAt: new Date() },
+            { upsert: true, setDefaultsOnInsert: true }
+          );
+          // Solo los mensajes del usuario reabren el chat si estaba cerrado.
+          if (!isAdminRole) {
+            await ChatStatus.findOneAndUpdate(
+              { userId: targetUserId, status: 'closed' },
+              { status: 'open', closedAt: null, closedBy: null }
+            );
+          }
+        } catch (csErr) {
+          logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);
+        }
+      }
+
+      // Entregar el mensaje en tiempo real (ya con el ChatStatus actualizado,
+      // para que cualquier admin que recargue su lista vea el chat).
       if (!isAdminRole) {
         // Usuario enviando mensaje - notificar a todos los admins
         logger.debug(`[SOCKET] User ${socket.username} sent message`);
@@ -5763,33 +5795,6 @@ io.on('connection', (socket) => {
         // de inmediato (no hay ack que esperar).
         if (!delivered) {
           _maybeSendPushFallback(receiverId, message);
-        }
-      }
-
-      // Housekeeping del ChatStatus — corre DESPUÉS de entregar el mensaje y
-      // no puede tumbar el envío: si falla, el mensaje ya fue creado y emitido.
-      const targetUserId = isAdminRole ? receiverId : socket.userId;
-      if (targetUserId) {
-        try {
-          const chatUser = await User.findOne({ id: targetUserId });
-          await ChatStatus.findOneAndUpdate(
-            { userId: targetUserId },
-            {
-              userId: targetUserId,
-              username: chatUser ? chatUser.username : socket.username,
-              lastMessageAt: new Date()
-            },
-            { upsert: true }
-          );
-          // Solo los mensajes del usuario reabren el chat si estaba cerrado.
-          if (!isAdminRole) {
-            await ChatStatus.findOneAndUpdate(
-              { userId: targetUserId, status: 'closed' },
-              { status: 'open', closedAt: null, closedBy: null }
-            );
-          }
-        } catch (csErr) {
-          logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);
         }
       }
 
@@ -6424,7 +6429,7 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     const amountFmt = '$' + amountNum.toLocaleString('es-AR');
 
     // 1. Mensaje del usuario hacia el agente con los datos del retiro.
-    await Message.create({
+    const withdrawMsg = await Message.create({
       id: uuidv4(),
       senderId: req.user.userId,
       senderUsername: req.user.username,
@@ -6443,7 +6448,7 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     });
 
     // 2. Confirmación automática del sistema hacia el usuario.
-    await Message.create({
+    const withdrawConfirmMsg = await Message.create({
       id: uuidv4(),
       senderId: 'system',
       senderUsername: 'Sistema',
@@ -6457,6 +6462,37 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       timestamp: new Date(),
       read: false
     });
+
+    // 3. Mover el chat a "Pagos" automáticamente: el retiro lo gestiona el área
+    //    de pagos. Antes el ChatStatus no se tocaba, así que si el chat estaba
+    //    cerrado (o sin abrir) la solicitud de retiro podía pasar desapercibida.
+    try {
+      await ChatStatus.findOneAndUpdate(
+        { userId: req.user.userId },
+        {
+          userId: req.user.userId,
+          username: req.user.username,
+          status: 'payments',
+          category: 'payments',
+          assignedTo: null,
+          closedAt: null,
+          closedBy: null,
+          lastMessageAt: new Date()
+        },
+        { upsert: true, setDefaultsOnInsert: true }
+      );
+      // Avisar a los paneles admin para que muevan el chat a Pagos en vivo.
+      notifyAdmins('chat_moved', { userId: req.user.userId, to: 'payments', by: 'sistema' });
+      // Entregar los mensajes en tiempo real (al panel admin y al usuario).
+      io.to('admins').emit('new_message', { message: withdrawMsg, userId: req.user.userId, username: req.user.username });
+      io.to('admins').emit('new_message', { message: withdrawConfirmMsg, userId: req.user.userId, username: req.user.username });
+      io.to(`chat_${req.user.userId}`).emit('new_message', withdrawMsg);
+      io.to(`chat_${req.user.userId}`).emit('new_message', withdrawConfirmMsg);
+      io.to(`user_${req.user.userId}`).emit('new_message', withdrawMsg);
+      io.to(`user_${req.user.userId}`).emit('new_message', withdrawConfirmMsg);
+    } catch (chatErr) {
+      logger.error(`[withdrawal/request] No se pudo mover el chat a pagos: ${chatErr.message}`);
+    }
 
     // Meta CAPI — WithdrawRequest (señal de usuario activo / ganador).
     try {

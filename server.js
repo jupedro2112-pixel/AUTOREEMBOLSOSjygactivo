@@ -1737,7 +1737,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Usuario o teléfono, y contraseña (o código temporal) requeridos' });
     }
     
-    logger.debug(`Login attempt for: ${username || phone}`);
+    // No registrar el teléfono completo en logs (dato personal): se enmascara.
+    logger.debug(`Login attempt for: ${username || (phone ? '***' + String(phone).slice(-4) : 'desconocido')}`);
     
     // Buscar usuario case-insensitive (para soportar usernames con mayúsculas/minúsculas)
     let user;
@@ -10557,6 +10558,10 @@ if (process.env.VERCEL) {
     JWT_SECRET = process.env.JWT_SECRET;
     if (!JWT_SECRET) {
       console.error('⛔ FATAL: JWT_SECRET no configurado. El servidor no puede arrancar.');
+      process.exit(1);
+    }
+    if (JWT_SECRET.length < 32) {
+      console.error('⛔ FATAL: JWT_SECRET es demasiado corto (mínimo 32 caracteres). El servidor no puede arrancar.');
       process.exit(1);
     }
 

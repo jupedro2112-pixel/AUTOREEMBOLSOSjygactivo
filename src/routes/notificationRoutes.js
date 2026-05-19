@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const {
   sendNotificationToUser,
   sendNotificationToMultiple,
@@ -19,6 +20,17 @@ const {
 const { User } = require('../../config/database');
 const NotifTemplate = require('../models/NotifTemplate');
 const ScheduledNotif = require('../models/ScheduledNotif');
+
+// Rate limit para el registro de token FCM: evita que un cliente con un token
+// válido inunde el endpoint. 20 req/min por IP es holgado para el flujo normal
+// (registro al login + refresh periódico).
+const registerTokenLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas peticiones. Esperá un momento.' }
+});
 
 // Lazy getter for JWT_SECRET — must be read at runtime (not module load) because
 // in AWS Elastic Beanstalk, SSM Parameter Store secrets load AFTER all modules
@@ -157,7 +169,7 @@ async function requireAdmin(req, res, next) {
 // ============================================
 // GUARDAR TOKEN FCM (Desde el frontend) - REQUIERE AUTENTICACIÓN
 // ============================================
-router.post('/register-token', async (req, res) => {
+router.post('/register-token', registerTokenLimiter, async (req, res) => {
   try {
     const { fcmToken, fcmTokenContext, notifPermission } = req.body;
     const authHeader = req.headers.authorization;
@@ -197,7 +209,13 @@ router.post('/register-token', async (req, res) => {
       console.log('[FCM] Error: Usuario no encontrado en la base de datos');
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
-    
+
+    // Revalidar estado: un usuario desactivado o bloqueado no debe poder
+    // seguir registrando tokens push aunque conserve un JWT vigente.
+    if (!user.isActive || user.isBlocked === true) {
+      return res.status(403).json({ error: 'Cuenta inactiva o bloqueada' });
+    }
+
     console.log('[FCM] Usuario encontrado:', user.username);
 
     const normalizedCtx = fcmTokenContext || 'browser';
@@ -222,6 +240,12 @@ router.post('/register-token', async (req, res) => {
       user.fcmTokens[existingIdx] = tokenEntry;
     } else {
       user.fcmTokens.push(tokenEntry);
+    }
+    // Tope defensivo: conservar como mucho los 10 tokens más recientes para
+    // que el array no pueda crecer sin límite.
+    if (user.fcmTokens.length > 10) {
+      user.fcmTokens.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+      user.fcmTokens = user.fcmTokens.slice(0, 10);
     }
     user.markModified('fcmTokens');
 
@@ -1492,8 +1516,11 @@ router.post('/confirm-delivery', express.json({ limit: '1kb' }), (req, res) => {
     if (!batchId || !userId) {
       return res.status(400).json({ error: 'batchId y userId requeridos' });
     }
+    // Solo se cuenta la confirmación si el userId estaba realmente en el
+    // envío de ese batch. Evita que se inflen las métricas de entrega
+    // posteando userIds arbitrarios contra un batchId.
     const batch = _pendingBatches.get(String(batchId));
-    if (batch) {
+    if (batch && batch.sentUsers.has(String(userId))) {
       batch.confirmedUsers.add(String(userId));
     }
     res.json({ ok: true });

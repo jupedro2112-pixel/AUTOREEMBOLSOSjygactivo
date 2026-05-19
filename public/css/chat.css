@@ -199,6 +199,10 @@
 
 .chat-input {
     display: flex;
+    /* Con letra del sistema muy grande, los botones ocupan de más y el cuadro
+       de escribir queda aplastado. flex-wrap permite que el textarea baje a su
+       propia línea (ancho completo) en lugar de quedar diminuto. */
+    flex-wrap: wrap;
     gap: 8px;
     align-items: center;
 }
@@ -313,6 +317,9 @@
 
 #messageInput {
     flex: 1;
+    /* Piso de ancho usable: si no entra (letra grande), .chat-input lo baja a
+       su propia línea en vez de dejarlo diminuto. Con letra normal no se nota. */
+    min-width: 90px;
     padding: 12px 16px;
     border: 2px solid #d4af37;
     border-radius: 25px;

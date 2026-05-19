@@ -345,35 +345,111 @@ VIP.chat = (function () {
         }
     }
 
-    function compressImage(file, { maxDim = 1600, quality = 0.85 } = {}) {
+    // Convierte un File de imagen a un data URL JPEG comprimido y seguro de enviar.
+    // Resuelve 3 problemas reales que veíamos con fotos de clientes:
+    //  1) "Foto toda negra": un canvas recién creado es transparente; al
+    //     exportar a JPEG (que no tiene canal alfa) los píxeles transparentes
+    //     —p. ej. de un PNG o una captura— quedan NEGROS. Por eso se rellena
+    //     el canvas de blanco ANTES de dibujar la imagen.
+    //  2) "Foto negra" en fotos enormes: iOS/Android fallan al hacer un único
+    //     drawImage de una imagen de muchos megapíxeles hacia un canvas chico y
+    //     devuelven un canvas en negro. Por eso se reduce en pasos de 2x.
+    //  3) "La foto desaparece y no se envía": el data URL pesaba demasiado y el
+    //     server/proxy lo rechazaba. Por eso se itera bajando calidad/tamaño
+    //     hasta que el resultado entre en un presupuesto de bytes seguro.
+    function compressImage(file, { maxDim = 1600, quality = 0.85, maxBytes = 900 * 1024 } = {}) {
         return new Promise((resolve, reject) => {
             const url = URL.createObjectURL(file);
             const img = new Image();
-            img.onload = () => {
-                URL.revokeObjectURL(url);
-                let { width, height } = img;
-                if (width > maxDim || height > maxDim) {
-                    if (width >= height) {
-                        height = Math.round(height * (maxDim / width));
-                        width = maxDim;
-                    } else {
-                        width = Math.round(width * (maxDim / height));
-                        height = maxDim;
-                    }
-                }
-                const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
+            const cleanup = () => { try { URL.revokeObjectURL(url); } catch (e) { /* noop */ } };
+
+            const proceed = () => {
                 try {
-                    resolve(canvas.toDataURL('image/jpeg', quality));
+                    const srcW = img.naturalWidth || img.width;
+                    const srcH = img.naturalHeight || img.height;
+                    if (!srcW || !srcH) {
+                        cleanup();
+                        reject(new Error('La imagen no tiene dimensiones válidas'));
+                        return;
+                    }
+
+                    // Dibuja `source` en un canvas de w×h SIEMPRE sobre fondo
+                    // blanco (evita que lo transparente salga negro en el JPEG).
+                    const paint = (source, w, h) => {
+                        const c = document.createElement('canvas');
+                        c.width = w;
+                        c.height = h;
+                        const cx = c.getContext('2d');
+                        cx.fillStyle = '#ffffff';
+                        cx.fillRect(0, 0, w, h);
+                        cx.drawImage(source, 0, 0, w, h);
+                        return c;
+                    };
+
+                    // Renderiza la imagen a targetW×targetH. Si el original es
+                    // mucho más grande, baja en pasos de 2x: un solo drawImage
+                    // gigante→chico devuelve negro en varios móviles.
+                    const renderAt = (targetW, targetH) => {
+                        let curW = srcW, curH = srcH;
+                        let source = img;
+                        while (curW > targetW * 2 && curH > targetH * 2) {
+                            curW = Math.round(curW / 2);
+                            curH = Math.round(curH / 2);
+                            source = paint(source, curW, curH);
+                        }
+                        return paint(source, targetW, targetH);
+                    };
+
+                    // Ajusta las dimensiones de salida a un máximo de `dim`.
+                    const fit = (dim) => {
+                        let w = srcW, h = srcH;
+                        if (w > dim || h > dim) {
+                            if (w >= h) { h = Math.round(h * (dim / w)); w = dim; }
+                            else { w = Math.round(w * (dim / h)); h = dim; }
+                        }
+                        return { w: Math.max(1, w), h: Math.max(1, h) };
+                    };
+
+                    // Itera tamaño y calidad hasta entrar en maxBytes. Las fotos
+                    // simples salen al primer intento; sólo las muy pesadas bajan.
+                    const dims = [maxDim, 1280, 1024, 800];
+                    let best = null;
+                    for (let di = 0; di < dims.length; di++) {
+                        const { w, h } = fit(dims[di]);
+                        const canvas = renderAt(w, h);
+                        let q = quality;
+                        for (let qi = 0; qi < 6 && q >= 0.4; qi++) {
+                            const dataUrl = canvas.toDataURL('image/jpeg', q);
+                            best = dataUrl;
+                            if (dataUrl.length <= maxBytes) {
+                                cleanup();
+                                resolve(dataUrl);
+                                return;
+                            }
+                            q -= 0.12;
+                        }
+                    }
+                    // No bajó de maxBytes ni en el tamaño más chico: devolvemos
+                    // el mejor intento (el server aplica su propio límite duro).
+                    cleanup();
+                    resolve(best);
                 } catch (err) {
+                    cleanup();
                     reject(err);
                 }
             };
+
+            img.onload = () => {
+                // decode() asegura que los píxeles estén listos antes de dibujar:
+                // en algunos móviles onload dispara antes de tiempo → canvas negro.
+                if (typeof img.decode === 'function') {
+                    img.decode().then(proceed).catch(proceed);
+                } else {
+                    proceed();
+                }
+            };
             img.onerror = () => {
-                URL.revokeObjectURL(url);
+                cleanup();
                 reject(new Error('No se pudo decodificar la imagen'));
             };
             img.src = url;
@@ -402,6 +478,17 @@ VIP.chat = (function () {
         return fallback || `Error ${response.status}`;
     }
 
+    // Marca el mensaje temporal como fallido SIN borrarlo: así la foto NO
+    // "desaparece" del chat — el cliente la sigue viendo y sabe que falló
+    // (mismo comportamiento que un mensaje de texto que no se pudo enviar).
+    function markTempMessageError(tempId) {
+        const el = document.querySelector(`[data-temp-id="${tempId}"]`);
+        if (!el) return;
+        el.classList.add('message-error');
+        const msgDiv = el.querySelector('.message');
+        if (msgDiv) { msgDiv.style.opacity = '0.55'; msgDiv.style.border = '1px solid #ff4444'; }
+    }
+
     async function sendMediaMessage({ dataUrl, fileType, fileLabel, tempId }) {
         const tempMessage = {
             id: tempId,
@@ -415,25 +502,35 @@ VIP.chat = (function () {
         addMessageToChat(tempMessage);
         scrollToBottom();
 
-        const response = await fetch(`${VIP.config.API_URL}/api/messages/send`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${VIP.state.currentToken}`
-            },
-            body: JSON.stringify({ content: dataUrl, type: fileType })
-        });
+        try {
+            const response = await fetch(`${VIP.config.API_URL}/api/messages/send`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${VIP.state.currentToken}`
+                },
+                body: JSON.stringify({ content: dataUrl, type: fileType })
+            });
 
-        if (!response.ok) {
-            removeTempMessage(tempId);
-            const errMsg = await parseErrorMessage(response, `No se pudo enviar ${fileLabel.toLowerCase()}`);
-            VIP.ui.showToast(`${fileLabel}: ${errMsg}`, 'error');
+            if (!response.ok) {
+                // Antes hacía removeTempMessage() y la foto desaparecía. Ahora
+                // se marca como fallida y queda visible para reintentar.
+                markTempMessageError(tempId);
+                const errMsg = await parseErrorMessage(response, `No se pudo enviar ${fileLabel.toLowerCase()}`);
+                VIP.ui.showToast(`${fileLabel}: ${errMsg}`, 'error');
+                return false;
+            }
+
+            loadMessages();
+            VIP.ui.showToast(`${fileLabel} enviada`, 'success');
+            return true;
+        } catch (error) {
+            // Error de red: tampoco se borra la foto, se marca como fallida.
+            console.error('Error enviando archivo:', error);
+            markTempMessageError(tempId);
+            VIP.ui.showToast(`${fileLabel}: error de conexión, no se pudo enviar`, 'error');
             return false;
         }
-
-        loadMessages();
-        VIP.ui.showToast(`${fileLabel} enviada`, 'success');
-        return true;
     }
 
     async function handleFileSelect(e) {

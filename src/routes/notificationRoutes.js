@@ -1410,7 +1410,13 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
     // segmento con HAS_TOKEN sin pisar otros operadores $or del segmento.
     let query;
     if (usernames && usernames.length > 0) {
-      query = { $and: [ { username: { $in: usernames } }, HAS_TOKEN ] };
+      // Match case-insensitive: si el admin tipea el usuario con otra
+      // capitalización (ej. "VipGabi074" vs "vipgabi074") igual debe
+      // encontrarlo, en vez de devolver 0 envíos silenciosamente.
+      const unameRegexes = usernames
+        .filter(u => typeof u === 'string' && u.trim())
+        .map(u => new RegExp('^' + u.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'));
+      query = { $and: [ { username: { $in: unameRegexes } }, HAS_TOKEN ] };
     } else if (segment === 'with_balance') {
       query = { $and: [ { balance: { $gt: 0 } }, HAS_TOKEN ] };
     } else if (segment === 'active') {
@@ -1431,11 +1437,14 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
     const allUsers = await User.find(query).select('username fcmToken fcmTokens id').sort({ _id: 1 }).lean();
 
     if (allUsers.length === 0) {
+      // IMPORTANTE: incluir totalSegmentUsers (y el resto de campos que el
+      // panel lee). Sin esto el front mostraba "Total del segmento: undefined".
       return res.json({
         success: true,
         message: 'No hay usuarios con token FCM para enviar',
-        totalUsers: 0, successCount: 0, failureCount: 0, cleanedTokens: 0,
-        batches: 0, batchResults: [], nextOffset: 0, remaining: 0
+        totalUsers: 0, totalSegmentUsers: 0, successCount: 0, failureCount: 0, cleanedTokens: 0,
+        batches: 0, batchResults: [], nextOffset: 0, remaining: 0,
+        sentUsernames: [], failedTokens: [], batchId: null
       });
     }
 

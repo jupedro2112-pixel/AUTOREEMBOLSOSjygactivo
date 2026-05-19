@@ -5060,6 +5060,17 @@ async function sendBatchNotification(batchOffset) {
         if (resultEl) resultEl.style.display = 'block';
         if (resultContent) {
             if (data.success) {
+                // Segmento vacío: ningún usuario del segmento tiene la app /
+                // token de notificaciones. Mostramos un aviso claro en vez de
+                // una grilla de ceros con "Total del segmento: undefined".
+                if (!data.totalSegmentUsers) {
+                    resultContent.innerHTML = `<p style="color:#fbbf24">⚠️ ${escapeHtml(data.message || 'Ningún usuario de este segmento tiene la app instalada o un token de notificaciones activo.')}</p>`;
+                    showToast('⚠️ No hay usuarios con notificaciones activas en este segmento', 'info');
+                    const statusEl0 = document.getElementById('notifBatchStatus');
+                    if (statusEl0) statusEl0.style.display = 'none';
+                    if (nextBtn) nextBtn.style.display = 'none';
+                    return;
+                }
                 const pct = data.totalUsers > 0 ? Math.round((data.successCount / data.totalUsers) * 100) : 0;
                 const sentNames = data.sentUsernames && data.sentUsernames.length > 0
                     ? `<details style="margin-top:.5rem"><summary style="cursor:pointer;color:#aaa;font-size:.85rem">Ver usuarios enviados (${data.sentUsernames.length}${data.sentUsernames.length < data.totalUsers ? '+' : ''})</summary><div style="margin-top:.5rem;max-height:160px;overflow-y:auto;font-size:.8rem;color:#ccc">${data.sentUsernames.map(u => escapeHtml(u)).join(', ')}</div></details>` : '';

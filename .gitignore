@@ -1,0 +1,21 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno y secretos
+.env
+.env.*
+*.pem
+*.key
+serviceAccountKey.json
+firebase-service-account*.json
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Sistema / editores
+.DS_Store
+.vscode/
+.idea/
+tmp/

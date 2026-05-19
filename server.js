@@ -6561,6 +6561,15 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       });
     }
 
+    // Teléfono verificado por SMS: requisito anti-multi-cuenta. Sin esto, un
+    // mismo número podía abrir varias cuentas y cobrar el bono en cada una.
+    if (user.phoneVerified !== true) {
+      return res.status(400).json({
+        error: 'Para reclamar el bono necesitás tener tu teléfono verificado por SMS. Verificalo y volvé a tocar "Reclamar".',
+        code: 'PHONE_VERIFICATION_REQUIRED'
+      });
+    }
+
     // Reserva atómica del bono: setea el flag SOLO si todavía no fue
     // reclamado. Si otro request concurrente ganó la carrera, éste recibe
     // null y aborta — sin esto, dos requests simultáneos cobraban doble.

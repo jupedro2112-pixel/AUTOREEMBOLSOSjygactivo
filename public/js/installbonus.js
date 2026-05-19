@@ -75,6 +75,19 @@ VIP.installBonus = (function () {
                 setTimeout(() => VIP.chat.loadMessages(), 800);
             } else if (data.code === 'NOT_STANDALONE') {
                 _showHelp();
+            } else if (data.code === 'PHONE_VERIFICATION_REQUIRED') {
+                // Requisito anti-multi-cuenta: pedir verificación de teléfono y
+                // abrir el modal de verify-phone en su paso 1 (limpio).
+                VIP.ui.showToast(data.error || '📱 Verificá tu teléfono por SMS para poder reclamar el bono.', 'info');
+                const s1 = _el('verifyPhoneStep1');
+                const s2 = _el('verifyPhoneStep2');
+                const input = _el('verifyPhoneInput');
+                const err = _el('verifyPhoneError');
+                if (s1) s1.style.display = '';
+                if (s2) s2.style.display = 'none';
+                if (input) input.value = '';
+                if (err) err.classList.remove('show');
+                VIP.ui.showModal('verifyPhoneModal');
             } else if (data.code === 'ALREADY_CLAIMED') {
                 _claimed = true;
                 const banner = _el('installBonusBanner');

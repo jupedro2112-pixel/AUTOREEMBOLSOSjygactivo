@@ -260,6 +260,37 @@
     box-shadow: 0 0 15px rgba(157, 78, 221, 0.5);
 }
 
+/* Botón Fueguito (racha diaria) en la barra del chat, entre la cámara y CBU. */
+.fire-chat-btn {
+    background: linear-gradient(135deg, #ff4500 0%, #ff8c00 100%);
+    color: #fff;
+    position: relative;
+    overflow: visible;
+}
+
+.fire-chat-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 15px rgba(255, 69, 0, 0.5);
+}
+
+/* Badge con el número de racha, en la esquina del botón. */
+.fire-streak-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    background: #fff;
+    color: #ff4500;
+    border-radius: 9px;
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 18px;
+    text-align: center;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
 .withdraw-row-btn {
     display: block;
     width: auto;

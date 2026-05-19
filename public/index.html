@@ -823,6 +823,10 @@
             </div>
             <div class="chat-input">
                 <button class="action-btn attach-btn" id="attachBtn" title="Adjuntar imagen">📸</button>
+                <!-- Fueguito (racha diaria): entre la cámara y el CBU. El click
+                     lo cablea app.js (#fireBtn → VIP.fire.showFireModal) y
+                     fire.js actualiza la racha en #fireStreak. -->
+                <button class="action-btn fire-chat-btn" id="fireBtn" title="Fueguito — racha diaria, reclamá tu premio cada día">🔥<span id="fireStreak" class="fire-streak-badge">0</span></button>
                 <button class="action-btn cbu-chat-btn" id="cbuChatBtn" title="Ver datos CBU para transferir">💳 CBU</button>
                 <input type="file" id="fileInput" accept="image/*,video/*" style="display: none;">
                 <textarea id="messageInput" placeholder="Escribe un mensaje..." rows="1"></textarea>

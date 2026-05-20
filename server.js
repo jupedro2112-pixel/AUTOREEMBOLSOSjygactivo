@@ -4514,6 +4514,8 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         netAmount: netLoss,
         percentage: 20,
         period: dateStr,
+        // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
+        periodKey: 'daily:' + dateStr,
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
         claimedAt: new Date()
       });
@@ -4654,6 +4656,8 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         netAmount: netLoss,
         percentage: 10,
         period: `${fromDateStr} a ${toDateStr}`,
+        // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
+        periodKey: 'weekly:' + fromDateStr,
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
         claimedAt: new Date()
       });
@@ -4794,6 +4798,8 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         netAmount: netLoss,
         percentage: 5,
         period: `${fromDateStr} a ${toDateStr}`,
+        // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
+        periodKey: 'monthly:' + fromDateStr.slice(0, 7),
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
         claimedAt: new Date()
       });

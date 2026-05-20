@@ -257,6 +257,7 @@ const refunds = require('./models/refunds');
 const referralRevenueService = require('./src/services/referralRevenueService');
 const { resolveJugayganaUserId } = require('./src/services/jugayganaUserLinkService');
 const metaCapi = require('./src/services/metaCapiService');
+const fbAdsWebhook = require('./src/services/fbAdsWebhookService');
 
 // Valida y normaliza un valor de cookie _fbc / _fbp de Meta antes de
 // persistirlo o reenviarlo a Conversions API. El formato real es
@@ -1384,7 +1385,7 @@ app.post('/api/upload/presigned-url', authMiddleware, async (req, res) => {
 // Registro de usuario
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
-    const { username, password, email, phone, referralCode, otpCode, campaignCode, utm, fbc, fbp } = req.body;
+    const { username, password, email, phone, referralCode, otpCode, campaignCode, utm, fbc, fbp, landingUrl } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
@@ -1533,7 +1534,9 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       acquiredAt: attributedCampaign ? new Date() : null,
       // Identificadores de Meta Ads para atribución vía Conversions API.
       metaFbc,
-      metaFbp
+      metaFbp,
+      // Landing URL: la usa fbAdsWebhookService para mandarla a fb-ads.
+      landingUrl: (typeof landingUrl === 'string' && landingUrl.length <= 2000) ? landingUrl : null
     });
 
     // Registrar evento de referido para trazabilidad
@@ -1589,6 +1592,9 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       { eventId: req.body && req.body.metaEventId, req }
     );
 
+    // Webhook a fb-ads: conversión clave del embudo. Fire-and-forget.
+    fbAdsWebhook.notify('CompleteRegistration', newUser);
+
     res.status(201).json({
       message: 'Usuario creado exitosamente',
       token,
@@ -1622,7 +1628,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 // crear cuentas sin OTP a discreción — necesita un código real de pauta).
 app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
   try {
-    const { username, password, email, campaignCode, visitorId, utm, metaEventId, fbc, fbp } = req.body || {};
+    const { username, password, email, campaignCode, visitorId, utm, metaEventId, fbc, fbp, landingUrl } = req.body || {};
 
     if (!username || !password) {
       return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
@@ -1704,7 +1710,9 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
       acquiredAt: new Date(),
       // Identificadores de Meta Ads para atribución vía Conversions API.
       metaFbc,
-      metaFbp
+      metaFbp,
+      // Landing URL: la usa fbAdsWebhookService para mandarla a fb-ads.
+      landingUrl: (typeof landingUrl === 'string' && landingUrl.length <= 2000) ? landingUrl : null
     });
 
     await ChatStatus.create({
@@ -1736,6 +1744,9 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
       { eventId: metaEventId, req }
     );
 
+    // Webhook a fb-ads: conversión clave del embudo. Fire-and-forget.
+    fbAdsWebhook.notify('CompleteRegistration', newUser);
+
     res.status(201).json({
       message: 'Cuenta creada. Ya podes ingresar a jugar — para retirar tendrás que verificar un teléfono.',
       token,
@@ -1764,7 +1775,7 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
 // Login
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
-    const { username, phone, password, temporaryCode } = req.body;
+    const { username, phone, password, temporaryCode, fbc, fbp, landingUrl } = req.body;
 
     if ((!username && !phone) || (!password && !temporaryCode)) {
       return res.status(400).json({ error: 'Usuario o teléfono, y contraseña (o código temporal) requeridos' });
@@ -1982,6 +1993,19 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       user.mustChangePassword = false;
       logger.info(`[login] Cleared stale mustChangePassword for admin ${user.username}`);
     }
+
+    // Atribución last-touch: si el visitante vuelve por un anuncio nuevo, el
+    // front manda fbc/fbp/landingUrl en el body. Actualizamos el User para
+    // que las próximas conversiones (Purchase, etc.) atribuyan al click más
+    // reciente, no al de cuando se registró.
+    const _loginFbc = sanitizeFbCookie(fbc);
+    const _loginFbp = sanitizeFbCookie(fbp);
+    if (_loginFbc && _loginFbc !== user.metaFbc) user.metaFbc = _loginFbc;
+    if (_loginFbp && _loginFbp !== user.metaFbp) user.metaFbp = _loginFbp;
+    if (typeof landingUrl === 'string' && landingUrl.length > 0 && landingUrl.length <= 2000 && landingUrl !== user.landingUrl) {
+      user.landingUrl = landingUrl;
+    }
+
     await user.save();
     
     // Token con expiración de 30 días para persistencia de sesión
@@ -5170,6 +5194,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         { req }
       );
 
+      // Webhook a fb-ads: conversión Purchase para aprendizaje por anuncio.
+      fbAdsWebhook.notify('Purchase', user, { value: parseFloat(amount), currency: 'ARS' });
+
       res.json({
         success: true,
         message: 'Depósito realizado correctamente',
@@ -6223,6 +6250,8 @@ app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
           },
           { eventId: req.body && req.body.metaEventId, req }
         );
+        // Webhook a fb-ads: conversión Purchase para aprendizaje por anuncio.
+        fbAdsWebhook.notify('Purchase', u, { value: parseFloat(amount), currency: 'ARS' });
       } catch (e) { /* tracking nunca bloquea */ }
 
       res.json({
@@ -6498,7 +6527,7 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     try {
       metaCapi.track(
         'WithdrawRequest',
-        { email: user.email, phone: user.phone, externalId: req.user.userId },
+        { email: user.email, phone: user.phone, externalId: req.user.userId, fbc: user.metaFbc, fbp: user.metaFbp },
         { value: amountNum, currency: 'ARS', content_name: 'withdraw_self_service' },
         { eventId: req.body && req.body.metaEventId, req }
       );
@@ -10700,6 +10729,8 @@ app.use(errorHandler);
 if (process.env.VERCEL) {
   initializeData().then(() => {
     logger.info('Data initialized for Vercel');
+    // Worker periódico que reprocesa la cola de webhooks a fb-ads.
+    fbAdsWebhook.startWorker();
   });
   
   module.exports = app;
@@ -10727,6 +10758,8 @@ if (process.env.VERCEL) {
 
     await initializeData();
     await setupRedisAdapter();
+    // Worker periódico que reprocesa la cola de webhooks a fb-ads.
+    fbAdsWebhook.startWorker();
     server.listen(PORT, () => {
       logger.info(`Server started on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
     });

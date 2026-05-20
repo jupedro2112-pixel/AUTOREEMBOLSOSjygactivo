@@ -261,6 +261,14 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // URL completa con la que aterrizó el usuario (incluye ?fbclid, ?p=,
+  // utm_*). Se manda en cada conversión al sistema externo fb-ads para
+  // que pueda atribuir al anuncio específico que lo trajo. Se actualiza
+  // last-touch (al registrarse y en cada login si hay nueva atribución).
+  landingUrl: {
+    type: String,
+    default: null
+  },
   // True cuando el usuario se registró por el flujo rápido sin OTP de teléfono.
   // El authMiddleware NO bloquea (a diferencia de mustChangePassword): el
   // usuario puede usar todo normalmente excepto retirar. Los endpoints de

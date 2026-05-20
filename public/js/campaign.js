@@ -56,6 +56,7 @@ VIP.campaign = (function () {
     // sobrevivan al limpiado de la URL y al flujo de registro.
     const FBC_KEY = 'vipFbc';
     const FBP_KEY = 'vipFbp';
+    const LANDING_URL_KEY = 'vipLandingUrl';
 
     function readCookie(name) {
         const escaped = name.replace(/([.$?*|{}()[\]\\/+^])/g, '\\$1');
@@ -90,8 +91,9 @@ VIP.campaign = (function () {
                 const fbclid = new URLSearchParams(window.location.search).get('fbclid');
                 if (fbclid) {
                     fbc = 'fb.1.' + Date.now() + '.' + fbclid;
-                    // 90 días = ventana de atribución estándar de Meta.
-                    setCookie('_fbc', fbc, 90 * 24 * 60 * 60);
+                    // 1 año (brief de atribución fb-ads): la cookie sobrevive
+                    // visitas largas; Meta usa hasta 90 días para reportar.
+                    setCookie('_fbc', fbc, 365 * 24 * 60 * 60);
                 }
             } catch (e) { /* ignore */ }
         }
@@ -105,6 +107,36 @@ VIP.campaign = (function () {
     }
     function getFbp() {
         return readCookie('_fbp') || lsGet(FBP_KEY) || null;
+    }
+
+    // ── Landing URL ─────────────────────────────────────────────────────────
+    // URL completa con la que el usuario aterrizó, con TODA la query string
+    // original (fbclid, utm_*, p=). El sistema fb-ads la parsea para atribuir
+    // la conversión al anuncio específico. Persistimos en localStorage sólo
+    // si la visita trae alguna señal de atribución; así no guardamos cualquier
+    // URL random ajena a una pauta.
+    let _landingUrl = null;
+
+    function captureLandingUrl() {
+        try {
+            const stored = lsGet(LANDING_URL_KEY);
+            if (stored) { _landingUrl = stored; return; }
+        } catch (e) { /* private mode */ }
+
+        const qs = window.location.search || '';
+        const hasFbclid = qs.indexOf('fbclid=') !== -1;
+        const hasPautaParam = qs.indexOf('p=') !== -1 || qs.indexOf('campaign=') !== -1;
+        const fromVanity = window.__VIP_CAMPAIGN_CODE__
+            && typeof window.__VIP_CAMPAIGN_CODE__ === 'string'
+            && window.__VIP_CAMPAIGN_CODE__.indexOf('PLACEHOLDER') === -1;
+        if (hasFbclid || hasPautaParam || fromVanity) {
+            _landingUrl = window.location.href;
+            lsSet(LANDING_URL_KEY, _landingUrl);
+        }
+    }
+
+    function getLandingUrl() {
+        return _landingUrl || null;
     }
 
     function saveAttribution(attribution) {
@@ -260,8 +292,10 @@ VIP.campaign = (function () {
     // Ejecutado al cargar la página: detecta el código en la URL (si lo hay),
     // guarda atribución, dispara track-click y limpia la URL.
     function bootstrap() {
-        // Capturar fbc/fbp ANTES de readFromUrl/cleanUrl para no perder el fbclid.
+        // Capturar fbc/fbp + landingUrl ANTES de readFromUrl/cleanUrl para no
+        // perder el fbclid ni los UTMs originales de la query string.
         captureFbCookies();
+        captureLandingUrl();
         const fromUrl = readFromUrl();
         if (fromUrl) {
             saveAttribution(fromUrl);
@@ -281,6 +315,7 @@ VIP.campaign = (function () {
         getVisitorId,
         getFbc,
         getFbp,
+        getLandingUrl,
         clearAttribution,
         wasFreshlyCaptured,
         // Útil para Meta Pixel custom_data:

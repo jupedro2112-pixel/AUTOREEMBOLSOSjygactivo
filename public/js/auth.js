@@ -118,7 +118,8 @@ VIP.auth = (function () {
                     campaignCode: attribution ? attribution.code : undefined,
                     utm: attribution ? attribution.utm : undefined,
                     fbc: (VIP.campaign && VIP.campaign.getFbc()) || undefined,
-                    fbp: (VIP.campaign && VIP.campaign.getFbp()) || undefined
+                    fbp: (VIP.campaign && VIP.campaign.getFbp()) || undefined,
+                    landingUrl: (VIP.campaign && VIP.campaign.getLandingUrl()) || undefined
                 })
             });
             const data = await response.json();
@@ -236,6 +237,16 @@ VIP.auth = (function () {
                 loginPayload = { username, temporaryCode, metaEventId };
             } else {
                 loginPayload = { username, password, metaEventId };
+            }
+
+            // Atribución last-touch: si el visitante volvió por un nuevo
+            // anuncio, mandamos fbc/fbp/landingUrl para que el server
+            // actualice los campos del User y futuras conversiones (Purchase,
+            // etc.) se atribuyan al click más reciente.
+            if (VIP.campaign) {
+                loginPayload.fbc = VIP.campaign.getFbc() || undefined;
+                loginPayload.fbp = VIP.campaign.getFbp() || undefined;
+                loginPayload.landingUrl = VIP.campaign.getLandingUrl() || undefined;
             }
 
             const response = await fetch(`${VIP.config.API_URL}/api/auth/login`, {

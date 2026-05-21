@@ -34,10 +34,23 @@ function sha256(value) {
 }
 
 // Normaliza teléfono a sólo dígitos antes de hashear (requisito de Meta).
+// Fix móviles AR: los formularios suelen guardar el celular sin el "9" móvil
+// (ej: +54 11 2275-5331 → 541122755331), pero Facebook/WhatsApp almacenan los
+// móviles AR con el "9" intercalado (5491122755331). Sin esa corrección los
+// hashes nunca matchean y el Custom Audience pierde a casi todos los usuarios.
+// La heurística es conservadora: sólo agrega el 9 si el número tiene 12
+// dígitos, empieza con 54, y no tiene ya un 9 móvil. Cualquier otro país o
+// fijo internacional queda intacto. Único falso positivo posible: un fijo
+// AMBA de 12 dígitos — aceptable porque la app es de cargas/apuestas y el
+// 99% de los teléfonos cargados son celulares.
 function normalizePhone(phone) {
   if (!phone) return undefined;
-  const digits = String(phone).replace(/\D/g, '');
-  return digits || undefined;
+  let digits = String(phone).replace(/\D/g, '');
+  if (!digits) return undefined;
+  if (digits.length === 12 && digits.startsWith('54') && digits[2] !== '9') {
+    digits = '549' + digits.slice(2);
+  }
+  return digits;
 }
 
 function newEventId() {

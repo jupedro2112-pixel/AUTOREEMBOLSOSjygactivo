@@ -2984,14 +2984,28 @@ app.post('/api/auth/verify-phone/send-otp', authMiddleware, sensitiveLimiter, sm
       return res.status(400).json({ error: 'Número de teléfono inválido. Usá formato internacional (ej: +5491155551234)' });
     }
 
-    // Si ese teléfono ya está verificado por otro usuario, rechazar.
+    // Si el usuario está intentando verificar su PROPIO número ya verificado,
+    // no tiene sentido reenviar SMS — sólo le pedimos uno nuevo.
+    const selfUser = await User.findOne({ id: req.user.userId }).select('phone phoneVerified').lean();
+    if (selfUser && selfUser.phoneVerified === true && selfUser.phone === normalizedPhone) {
+      return res.status(400).json({
+        error: 'Ya tenés este número vinculado a tu cuenta. Si querés cambiarlo, ingresá uno nuevo.',
+        code: 'PHONE_ALREADY_OWN'
+      });
+    }
+
+    // Si ese teléfono ya está vinculado a OTRA cuenta (verificado), bloqueamos
+    // y le sugerimos recuperar acceso a la cuenta principal en vez de duplicar.
     const existingPhone = await User.findOne({
       phone: normalizedPhone,
       phoneVerified: true,
       id: { $ne: req.user.userId }
     }).lean();
     if (existingPhone) {
-      return res.status(400).json({ error: 'Este número ya está vinculado a otra cuenta' });
+      return res.status(400).json({
+        error: 'Este número ya está vinculado a una cuenta. Ingresá con esa cuenta principal, o si no la recordás usá "Recuperar contraseña". Si querés verificar otro número, ingresá uno distinto.',
+        code: 'PHONE_TAKEN'
+      });
     }
 
     const result = await generateAndSendOTP(normalizedPhone, 'verify-phone');
@@ -3023,6 +3037,15 @@ app.post('/api/auth/verify-phone/confirm', authMiddleware, sensitiveLimiter, asy
       return res.status(400).json({ error: otpResult.error || 'Código inválido o expirado' });
     }
 
+    // Mismo número ya verificado en la propia cuenta: no hay nada que hacer.
+    const selfUser = await User.findOne({ id: req.user.userId }).select('phone phoneVerified').lean();
+    if (selfUser && selfUser.phoneVerified === true && selfUser.phone === normalizedPhone) {
+      return res.status(400).json({
+        error: 'Ya tenés este número vinculado a tu cuenta. Si querés cambiarlo, ingresá uno nuevo.',
+        code: 'PHONE_ALREADY_OWN'
+      });
+    }
+
     // Volver a chequear unicidad por si alguien más verificó ese número entre el send y el confirm.
     const existingPhone = await User.findOne({
       phone: normalizedPhone,
@@ -3030,7 +3053,10 @@ app.post('/api/auth/verify-phone/confirm', authMiddleware, sensitiveLimiter, asy
       id: { $ne: req.user.userId }
     }).lean();
     if (existingPhone) {
-      return res.status(400).json({ error: 'Este número ya está vinculado a otra cuenta' });
+      return res.status(400).json({
+        error: 'Este número ya está vinculado a una cuenta. Ingresá con esa cuenta principal, o si no la recordás usá "Recuperar contraseña". Si querés verificar otro número, ingresá uno distinto.',
+        code: 'PHONE_TAKEN'
+      });
     }
 
     const user = await User.findOne({ id: req.user.userId });
@@ -6664,6 +6690,26 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'No se pudo acreditar el bono. Intentá de nuevo en unos minutos.' });
     }
 
+    // Trazabilidad: registramos el bono como Transaction type='bonus' (NO 'deposit'),
+    // así nunca puede sumar al Revenue de la campaña del publicista. El listado de
+    // transacciones del usuario refleja correctamente el origen como bono de instalación.
+    try {
+      await Transaction.create({
+        id: uuidv4(),
+        type: 'bonus',
+        amount: INSTALL_BONUS_AMOUNT,
+        username: user.username,
+        userId: user.id,
+        description: 'Bono $5.000 por instalar la app',
+        transactionId: creditResult.data?.transfer_id || creditResult.data?.transferId,
+        metadata: { source: 'install_bonus' },
+        timestamp: new Date()
+      });
+    } catch (txErr) {
+      // No bloquea: el bono ya se acreditó en Jugaygana. El log queda para auditar.
+      logger.warn(`[install-bonus] no se pudo registrar Transaction para ${user.username}: ${txErr.message}`);
+    }
+
     const amountFmt = '$' + INSTALL_BONUS_AMOUNT.toLocaleString('es-AR');
 
     // Mensaje de confirmación en el chat.
@@ -7076,9 +7122,21 @@ async function computeCampaignStats(code) {
     };
   }
 
+  // Revenue del publicista = cargas REALES del usuario. Excluimos cualquier
+  // transacción marcada como bono/regalo aunque por error venga como type='deposit'
+  // (futuras integraciones / scripts). Hoy install-bonus se registra como type='bonus'
+  // y queda fuera por el filtro principal — esta exclusión es defensiva.
+  const GIFT_SOURCES = ['install_bonus', 'welcome_gift'];
   const [depositsByUser, withdrawalsAgg] = await Promise.all([
     Transaction.aggregate([
-      { $match: { type: 'deposit', username: { $in: usernames } } },
+      { $match: {
+          type: 'deposit',
+          username: { $in: usernames },
+          $or: [
+            { 'metadata.source': { $exists: false } },
+            { 'metadata.source': { $nin: GIFT_SOURCES } }
+          ]
+      }},
       { $group: { _id: '$username', total: { $sum: '$amount' }, count: { $sum: 1 } } }
     ]),
     Transaction.aggregate([

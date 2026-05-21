@@ -278,11 +278,19 @@ async function createPlatformUser({ username, password, userrole = 'player', cur
 // ShowUsers - Buscar usuario
 // ============================================
 
-async function getUserInfoByName(username) {
+// Devuelve un resultado tri-estado:
+//   { status: 'found',     user: {...} }   → la API confirmó que el usuario existe
+//   { status: 'not_found', user: null  }   → la API respondió OK y el usuario no está
+//   { status: 'error',     error: '...' }  → no se pudo determinar (timeout, 502, sesión, HTML)
+//
+// Esto evita el bug histórico en depositToUser/withdrawFromUser donde un timeout
+// se interpretaba como "no existe" y se disparaba un CREATEUSER innecesario que
+// también fallaba (porque el usuario sí existía).
+async function lookupUserOrError(username) {
   const ok = await ensureSession();
-  if (!ok) return null;
+  if (!ok) return { status: 'error', error: 'No hay sesión válida' };
 
-  const body = toFormUrlEncoded({
+  const buildBody = () => toFormUrlEncoded({
     action: 'ShowUsers',
     token: SESSION_TOKEN,
     page: 1,
@@ -293,63 +301,86 @@ async function getUserInfoByName(username) {
     parentid: SESSION_PARENT_ID || undefined
   });
 
-  const headers = {};
-  if (SESSION_COOKIE) headers.Cookie = SESSION_COOKIE;
+  const buildHeaders = () => {
+    const h = {};
+    if (SESSION_COOKIE) h.Cookie = SESSION_COOKIE;
+    return h;
+  };
 
   try {
-    const resp = await client.post('', body, { 
-      headers, 
-      validateStatus: () => true, 
-      maxRedirects: 0 
+    let resp = await client.post('', buildBody(), {
+      headers: buildHeaders(),
+      validateStatus: () => true,
+      maxRedirects: 0
     });
 
     let data = parsePossiblyWrappedJson(resp.data);
-    if (isHtmlBlocked(data)) return null;
+    if (isHtmlBlocked(data)) {
+      return { status: 'error', error: 'API bloqueada (HTML)' };
+    }
 
-    // Detectar sesión inválida y reintentar una vez
+    // Sesión inválida: renovar y reintentar una vez.
     if (isSessionError(data, resp.status)) {
-      console.error('🔄 getUserInfoByName: sesión inválida detectada, renovando...');
+      console.error('🔄 lookupUserOrError: sesión inválida detectada, renovando...');
       invalidateSession();
       const renewed = await ensureSession();
-      if (!renewed) return null;
-      const retryBody = toFormUrlEncoded({
-        action: 'ShowUsers',
-        token: SESSION_TOKEN,
-        page: 1,
-        pagesize: 50,
-        viewtype: 'tree',
-        username,
-        showhidden: 'false',
-        parentid: SESSION_PARENT_ID || undefined
+      if (!renewed) return { status: 'error', error: 'No se pudo renovar la sesión' };
+      resp = await client.post('', buildBody(), {
+        headers: buildHeaders(),
+        validateStatus: () => true,
+        maxRedirects: 0
       });
-      const retryHeaders = {};
-      if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
-      const retryResp = await client.post('', retryBody, { headers: retryHeaders, validateStatus: () => true, maxRedirects: 0 });
-      data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return null;
+      data = parsePossiblyWrappedJson(resp.data);
+      if (isHtmlBlocked(data)) {
+        return { status: 'error', error: 'API bloqueada tras renovar sesión' };
+      }
+      if (isSessionError(data, resp.status)) {
+        return { status: 'error', error: 'Sesión inválida tras renovar' };
+      }
+    }
+
+    // Una respuesta OK 4xx/5xx también es "error" — no podemos afirmar que el
+    // usuario no exista basados en una falla del servidor.
+    if (resp.status >= 500) {
+      return { status: 'error', error: `Status ${resp.status} de la API` };
     }
 
     const list = data.users || data.data || (Array.isArray(data) ? data : []);
-    const found = list.find(u => 
+    const found = list.find(u =>
       String(u.user_name).toLowerCase().trim() === String(username).toLowerCase().trim()
     );
-    
-    if (!found?.user_id) return null;
+
+    if (!found?.user_id) {
+      // API respondió OK pero el usuario no está en la lista → genuinamente
+      // no existe (o no es visible en esta página). Caller puede crear.
+      return { status: 'not_found', user: null };
+    }
 
     let balanceRaw = Number(found.user_balance ?? found.balance ?? found.balance_amount ?? found.available_balance ?? 0);
     let balance = Number.isInteger(balanceRaw) ? balanceRaw / 100 : balanceRaw;
 
-    return { 
-      id: found.user_id, 
-      balance,
-      username: found.user_name,
-      email: found.user_email,
-      phone: found.user_phone
+    return {
+      status: 'found',
+      user: {
+        id: found.user_id,
+        balance,
+        username: found.user_name,
+        email: found.user_email,
+        phone: found.user_phone
+      }
     };
   } catch (error) {
+    // timeout, ECONNRESET, network — NO podemos saber si existe o no.
     console.error('❌ Error en ShowUsers:', error.message);
-    return null;
+    return { status: 'error', error: error.message };
   }
+}
+
+// Wrapper retro-compatible: el resto del código sigue usándolo como antes
+// (retorna user o null). Solo depositToUser/withdrawFromUser usan el tri-estado.
+async function getUserInfoByName(username) {
+  const result = await lookupUserOrError(username);
+  return result.status === 'found' ? result.user : null;
 }
 
 // ============================================
@@ -643,16 +674,28 @@ async function depositToUser(username, amount, description = '') {
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
 
-  let userInfo = await getUserInfoByName(username);
-  
-  // Si no existe, crear el usuario con reintentos
-  if (!userInfo) {
+  // Lookup tri-estado: distinguir "no existe" (crear) de "error de API" (NO crear).
+  // Si la API responde con timeout/502/HTML, el usuario probablemente SÍ existe
+  // pero no podemos confirmarlo — intentar CREATEUSER fallaría con "duplicado".
+  let lookup = await lookupUserOrError(username);
+
+  if (lookup.status === 'error') {
+    console.error(`⚠️  depositToUser: no se pudo verificar ${username} en JUGAYGANA: ${lookup.error}`);
+    return {
+      success: false,
+      error: `No se pudo verificar el usuario en la plataforma (${lookup.error}). Intentá de nuevo en unos minutos.`
+    };
+  }
+
+  let userInfo = lookup.user;
+
+  // Solo intentamos crear si la API confirmó que NO existe.
+  if (lookup.status === 'not_found') {
     console.log(`👤 Usuario no encontrado, creando: ${username}`);
-    
-    // Intentar crear el usuario hasta 3 veces
+
     let createSuccess = false;
     let createError = '';
-    
+
     for (let attempt = 1; attempt <= 3; attempt++) {
       console.log(`🔄 Intento ${attempt}/3 de crear usuario: ${username}`);
       const createResult = await createPlatformUser({
@@ -661,7 +704,7 @@ async function depositToUser(username, amount, description = '') {
         userrole: 'player',
         currency: 'ARS'
       });
-      
+
       if (createResult.success) {
         createSuccess = true;
         console.log(`✅ Usuario creado exitosamente en intento ${attempt}`);
@@ -672,24 +715,24 @@ async function depositToUser(username, amount, description = '') {
           : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
         console.log(`❌ Intento ${attempt} falló: ${createError}`);
         if (attempt < 3) {
-          await new Promise(r => setTimeout(r, 2000 * attempt)); // Espera progresiva
+          await new Promise(r => setTimeout(r, 2000 * attempt));
         }
       }
     }
-    
-    // Esperar más tiempo y buscar el usuario
+
     if (createSuccess) {
       console.log(`⏳ Esperando a que el usuario esté disponible...`);
       for (let waitAttempt = 1; waitAttempt <= 5; waitAttempt++) {
         await new Promise(r => setTimeout(r, 1500));
-        userInfo = await getUserInfoByName(username);
-        if (userInfo) {
+        const reLookup = await lookupUserOrError(username);
+        if (reLookup.status === 'found') {
+          userInfo = reLookup.user;
           console.log(`✅ Usuario encontrado después de ${waitAttempt} intentos de espera`);
           break;
         }
       }
     }
-    
+
     if (!userInfo) {
       console.error(`❌ No se pudo crear o encontrar el usuario después de múltiples intentos`);
       return { success: false, error: `No se pudo crear el usuario: ${createError}. Por favor, intente nuevamente.` };
@@ -765,16 +808,27 @@ async function withdrawFromUser(username, amount, description = '') {
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
 
-  let userInfo = await getUserInfoByName(username);
-  
-  // Si no existe, crear el usuario con reintentos
-  if (!userInfo) {
+  // Lookup tri-estado: ver depositToUser para el racional. Un retiro sobre un
+  // user que ya existe no tiene por qué disparar CREATEUSER si la API está
+  // intermitente.
+  let lookup = await lookupUserOrError(username);
+
+  if (lookup.status === 'error') {
+    console.error(`⚠️  withdrawFromUser: no se pudo verificar ${username} en JUGAYGANA: ${lookup.error}`);
+    return {
+      success: false,
+      error: `No se pudo verificar el usuario en la plataforma (${lookup.error}). Intentá de nuevo en unos minutos.`
+    };
+  }
+
+  let userInfo = lookup.user;
+
+  if (lookup.status === 'not_found') {
     console.log(`👤 Usuario no encontrado, creando: ${username}`);
-    
-    // Intentar crear el usuario hasta 3 veces
+
     let createSuccess = false;
     let createError = '';
-    
+
     for (let attempt = 1; attempt <= 3; attempt++) {
       console.log(`🔄 Intento ${attempt}/3 de crear usuario: ${username}`);
       const createResult = await createPlatformUser({
@@ -783,7 +837,7 @@ async function withdrawFromUser(username, amount, description = '') {
         userrole: 'player',
         currency: 'ARS'
       });
-      
+
       if (createResult.success) {
         createSuccess = true;
         console.log(`✅ Usuario creado exitosamente en intento ${attempt}`);
@@ -794,24 +848,24 @@ async function withdrawFromUser(username, amount, description = '') {
           : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
         console.log(`❌ Intento ${attempt} falló: ${createError}`);
         if (attempt < 3) {
-          await new Promise(r => setTimeout(r, 2000 * attempt)); // Espera progresiva
+          await new Promise(r => setTimeout(r, 2000 * attempt));
         }
       }
     }
-    
-    // Esperar más tiempo y buscar el usuario
+
     if (createSuccess) {
       console.log(`⏳ Esperando a que el usuario esté disponible...`);
       for (let waitAttempt = 1; waitAttempt <= 5; waitAttempt++) {
         await new Promise(r => setTimeout(r, 1500));
-        userInfo = await getUserInfoByName(username);
-        if (userInfo) {
+        const reLookup = await lookupUserOrError(username);
+        if (reLookup.status === 'found') {
+          userInfo = reLookup.user;
           console.log(`✅ Usuario encontrado después de ${waitAttempt} intentos de espera`);
           break;
         }
       }
     }
-    
+
     if (!userInfo) {
       console.error(`❌ No se pudo crear o encontrar el usuario después de múltiples intentos`);
       return { success: false, error: `No se pudo crear el usuario: ${createError}. Por favor, intente nuevamente.` };

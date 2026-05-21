@@ -6,6 +6,17 @@ window.VIP = window.VIP || {};
 
 VIP.auth = (function () {
 
+    // Aplica Advanced Matching al pixel cuando el backend devolvió los hashes
+    // (data.user.metaMatching). Idempotente: si se llama varias veces con el
+    // mismo matching no duplica eventos. Nunca rompe la UI.
+    function _applyMetaMatching(user) {
+        try {
+            if (VIP.pixel && typeof VIP.pixel.initWithMatching === 'function' && user && user.metaMatching) {
+                VIP.pixel.initWithMatching(user.metaMatching);
+            }
+        } catch (e) { /* tracking nunca rompe */ }
+    }
+
     function escapeHtml(text) {
         if (!text && text !== 0) return '';
         const div = document.createElement('div');
@@ -128,6 +139,9 @@ VIP.auth = (function () {
                 VIP.state.currentToken = data.token;
                 VIP.state.currentUser = { ...data.user, id: data.user.id, userId: data.user.id };
                 localStorage.setItem('userToken', VIP.state.currentToken);
+
+                // Re-init del pixel con Advanced Matching apenas hay sesión.
+                _applyMetaMatching(data.user);
 
                 VIP.ui.hideModal('registerModal');
                 const form = document.getElementById('registerForm');
@@ -265,6 +279,10 @@ VIP.auth = (function () {
                 VIP.state.currentUser = { ...data.user, id: data.user.id, userId: data.user.id };
                 localStorage.setItem('userToken', VIP.state.currentToken);
 
+                // Re-init del pixel con Advanced Matching ANTES del Login event,
+                // así el Login ya viaja con los identificadores hasheados.
+                _applyMetaMatching(data.user);
+
                 // Meta Pixel — Login (custom, deduplicado con CAPI). Sólo si es usuario final.
                 if (VIP.pixel && data.user && data.user.role === 'user') {
                     VIP.pixel.trackWithId(metaEventId, 'Login', { content_name: 'login' });
@@ -355,6 +373,10 @@ VIP.auth = (function () {
                     };
                 }
 
+                // Sesión persistente: arrancamos la página con un user ya
+                // logueado, así que aplicamos AM apenas se confirma el token.
+                _applyMetaMatching(VIP.state.currentUser);
+
                 VIP.ui.showChatScreen();
                 VIP.socket.startMessagePolling();
                 VIP.refunds.loadRefundStatus();
@@ -439,6 +461,10 @@ VIP.auth = (function () {
                             id: userData.id || userData._id,
                             userId: userData.id || userData._id
                         };
+                        // El backend devuelve metaMatching en /api/users/me:
+                        // re-init del pixel para que conversiones posteriores
+                        // (Login refresh, RefundClaim, InitiateCheckout) hereden AM.
+                        _applyMetaMatching(userData);
                         console.log('✅ Usuario cargado exitosamente:', VIP.state.currentUser.username);
                         return true;
                     }

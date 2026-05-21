@@ -19,7 +19,7 @@ const axios = require('axios');
 let logger = console;
 try { logger = require('../utils/logger') || console; } catch (e) { /* fallback */ }
 
-const GRAPH_API_VERSION = 'v19.0';
+const GRAPH_API_VERSION = 'v22.0';
 let _missingConfigLogged = false;
 
 function isConfigured() {
@@ -187,10 +187,55 @@ function track(eventName, userInfo, customData, options) {
   });
 }
 
+// ============================================
+// ADVANCED MATCHING (browser pixel)
+// --------------------------------------------
+// Devuelve los hashes precalculados que el frontend pasa a `fbq('init', ID, {...})`
+// para que cada evento browser-side incluya identificadores hasheados del usuario.
+// Mantiene la normalización en un solo lugar (este archivo) y evita exponer PII
+// en cleartext al cliente. `country` default 'ar' porque el negocio opera en AR.
+// `external_id` se hashea para consistencia con los eventos server-side; Meta
+// acepta tanto hasheado como en texto plano.
+// ============================================
+function buildAdvancedMatching(userInfo) {
+  if (!userInfo) return null;
+  const matching = {};
+  const em = sha256(userInfo.email);
+  if (em) matching.em = em;
+  const ph = sha256(normalizePhone(userInfo.phone));
+  if (ph) matching.ph = ph;
+  const ext = sha256(userInfo.externalId);
+  if (ext) matching.external_id = ext;
+  const fn = sha256(userInfo.firstName);
+  if (fn) matching.fn = fn;
+  const ln = sha256(userInfo.lastName);
+  if (ln) matching.ln = ln;
+  const country = sha256(userInfo.country || 'ar');
+  if (country) matching.country = country;
+  return Object.keys(matching).length ? matching : null;
+}
+
+// ============================================
+// VALUE BUCKETS (Purchase content_category)
+// --------------------------------------------
+// Buckets de monto para alimentar Value Optimization de Meta Ads. Los umbrales
+// están pensados para cargas en ARS — si cambia la moneda, recalibrar.
+// ============================================
+function valueCategory(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  if (n < 5000) return 'low';
+  if (n < 20000) return 'medium';
+  if (n < 50000) return 'high';
+  return 'whale';
+}
+
 module.exports = {
   isConfigured,
   newEventId,
   extractRequestContext,
   sendEvent,
-  track
+  track,
+  buildAdvancedMatching,
+  valueCategory
 };

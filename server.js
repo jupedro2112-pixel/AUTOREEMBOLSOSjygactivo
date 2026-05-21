@@ -1612,7 +1612,12 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
         needsPasswordChange: false,
         firstLogin: true,
         referralCode: newUser.referralCode,
-        referredBy: isValidReferral ? referrer.username : null
+        referredBy: isValidReferral ? referrer.username : null,
+        metaMatching: metaCapi.buildAdvancedMatching({
+          email: newUser.email,
+          phone: newUser.phone,
+          externalId: newUser.id
+        })
       }
     });
   } catch (error) {
@@ -1763,7 +1768,11 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
         jugayganaLinked: true,
         needsPasswordChange: false,
         referralCode: newUser.referralCode,
-        acquisitionCampaign: normalizedCode
+        acquisitionCampaign: normalizedCode,
+        metaMatching: metaCapi.buildAdvancedMatching({
+          email: newUser.email,
+          externalId: newUser.id
+        })
       }
     });
   } catch (error) {
@@ -2081,7 +2090,12 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         needsPasswordChange: needsPasswordChange,
         mustChangePassword: isAdminRole(userObj.role)
           ? false
-          : (needsPasswordChange || userObj.mustChangePassword === true)
+          : (needsPasswordChange || userObj.mustChangePassword === true),
+        metaMatching: isAdminRole(userObj.role) ? null : metaCapi.buildAdvancedMatching({
+          email: userObj.email,
+          phone: userObj.phone,
+          externalId: userId
+        })
       }
     });
   } catch (error) {
@@ -2169,15 +2183,20 @@ app.get('/api/auth/verify', authMiddleware, async (req, res) => {
       return res.status(401).json({ error: 'Usuario no encontrado' });
     }
     
-    res.json({ 
-      valid: true, 
+    res.json({
+      valid: true,
       user: {
         userId: user.id,
         username: user.username,
         email: user.email,
         role: user.role,
         balance: user.balance,
-        mustChangePassword: user.mustChangePassword === true
+        mustChangePassword: user.mustChangePassword === true,
+        metaMatching: isAdminRole(user.role) ? null : metaCapi.buildAdvancedMatching({
+          email: user.email,
+          phone: user.phone,
+          externalId: user.id
+        })
       }
     });
   } catch (error) {
@@ -2265,8 +2284,16 @@ app.get('/api/users/me', authMiddleware, async (req, res) => {
     if (!user) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
-    
-    res.json(user);
+
+    // Hashes para Advanced Matching del pixel browser (sólo usuarios finales).
+    // El frontend re-inicializa fbq con estos valores para mejorar el match en
+    // todos los eventos client-side.
+    const metaMatching = isAdminRole(user.role) ? null : metaCapi.buildAdvancedMatching({
+      email: user.email,
+      phone: user.phone,
+      externalId: user.id
+    });
+    res.json({ ...user, metaMatching });
   } catch (error) {
     console.error('Error obteniendo usuario:', error);
     res.status(500).json({ error: 'Error del servidor' });
@@ -5188,6 +5215,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // Meta CAPI — Purchase (la conversión más valiosa: depósito confirmado por admin).
       // Sólo server-side: este endpoint lo invocan admins, el navegador del jugador
       // que recibe el depósito no participa, así que no hay browser pixel para deduplicar.
+      const depositAdminOrderId = result.data?.transfer_id || result.data?.transferId || null;
       metaCapi.track(
         'Purchase',
         { email: user.email, phone: user.phone, externalId: user.id, fbc: user.metaFbc, fbp: user.metaFbp },
@@ -5195,7 +5223,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           value: parseFloat(amount),
           currency: 'ARS',
           content_name: 'deposit_admin',
-          content_type: 'product'
+          content_type: 'product',
+          content_category: metaCapi.valueCategory(parseFloat(amount)),
+          order_id: depositAdminOrderId
         },
         { req }
       );
@@ -6245,6 +6275,7 @@ app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
       // Meta CAPI — Purchase (depósito self-service desde la app del usuario).
       try {
         const u = await User.findOne({ id: req.user.userId }).lean();
+        const selfServiceOrderId = result.data?.transfer_id || result.data?.transferId || null;
         metaCapi.track(
           'Purchase',
           { email: u && u.email, phone: u && u.phone, externalId: req.user.userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
@@ -6252,7 +6283,9 @@ app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
             value: parseFloat(amount),
             currency: 'ARS',
             content_name: 'deposit_self_service',
-            content_type: 'product'
+            content_type: 'product',
+            content_category: metaCapi.valueCategory(parseFloat(amount)),
+            order_id: selfServiceOrderId
           },
           { eventId: req.body && req.body.metaEventId, req }
         );

@@ -657,9 +657,11 @@ async function creditUserBalance(username, amount) {
     if (data && data.success) {
       return { success: true, data: data };
     } else {
-      return { success: false, error: data.error || 'API Error' };
+      console.error(`❌ creditUserBalance(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
+      return { success: false, error: (data && data.error) || 'API Error' };
     }
   } catch (err) {
+    console.error(`❌ creditUserBalance(${username}, $${amount}) excepción: ${err.message} (code=${err.code || 'n/a'})`);
     return { success: false, error: err.message };
   }
 }
@@ -791,9 +793,11 @@ async function depositToUser(username, amount, description = '') {
     if (data && (data.success || data.transfer_id || data.transferId)) {
       return { success: true, data };
     } else {
-      return { success: false, error: data.error || data.message || 'API Error' };
+      console.error(`❌ depositToUser(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
+      return { success: false, error: (data && (data.error || data.message)) || 'API Error' };
     }
   } catch (err) {
+    console.error(`❌ depositToUser(${username}, $${amount}) excepción: ${err.message} (code=${err.code || 'n/a'})`);
     return { success: false, error: err.message };
   }
 }
@@ -922,9 +926,11 @@ async function withdrawFromUser(username, amount, description = '') {
     if (data && (data.success || data.transfer_id || data.transferId)) {
       return { success: true, data };
     } else {
-      return { success: false, error: data.error || data.message || 'API Error' };
+      console.error(`❌ withdrawFromUser(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
+      return { success: false, error: (data && (data.error || data.message)) || 'API Error' };
     }
   } catch (err) {
+    console.error(`❌ withdrawFromUser(${username}, $${amount}) excepción: ${err.message} (code=${err.code || 'n/a'})`);
     return { success: false, error: err.message };
   }
 }

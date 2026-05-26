@@ -408,17 +408,40 @@ async function makeWithdrawal(username, amount, description = '') {
 
 async function getUserBalance(username) {
   const userInfo = await jugaygana.getUserInfoByName(username);
-  
+
   if (!userInfo) {
     return { success: false, error: 'Usuario no encontrado' };
   }
-  
+
   return {
     success: true,
     balance: userInfo.balance || 0,
     username: userInfo.username,
     userId: userInfo.id
   };
+}
+
+// Reintenta getUserBalance con backoff exponencial. Existe porque un fallo
+// transitorio post-depósito/retiro causaba que el server mostrara "saldo $0"
+// engañoso al usuario, cuando en realidad la operación sí se había acreditado.
+async function getUserBalanceWithRetry(username, { maxAttempts = 3, baseDelayMs = 500 } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const result = await getUserBalance(username);
+    if (result.success) {
+      if (attempt > 1) {
+        console.log(`✅ getUserBalanceWithRetry: ${username} OK en intento ${attempt}/${maxAttempts}`);
+      }
+      return result;
+    }
+    lastError = result.error;
+    console.warn(`⚠️  getUserBalanceWithRetry intento ${attempt}/${maxAttempts} falló para ${username}: ${result.error}`);
+    if (attempt < maxAttempts) {
+      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  return { success: false, error: lastError, attemptsExhausted: true };
 }
 
 // ============================================
@@ -442,5 +465,6 @@ module.exports = {
   makeDeposit,
   makeWithdrawal,
   makeBonus,
-  getUserBalance
+  getUserBalance,
+  getUserBalanceWithRetry
 };

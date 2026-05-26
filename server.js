@@ -5056,10 +5056,24 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         }
       }
 
-      // Obtener saldo actualizado del usuario
-      const balanceResult = await jugayganaMovements.getUserBalance(user.username);
-      const newBalance = balanceResult.success ? balanceResult.balance : (result.data?.user_balance_after || 0);
-      
+      // Obtener saldo actualizado del usuario. Reintenta para evitar el bug
+      // histórico donde un fallo transitorio post-depósito hacía que el server
+      // mandara "Tu nuevo saldo es $0" engañoso (el depósito SÍ se aplicó pero
+      // getUserBalance falló y defaulteábamos a 0).
+      const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+      let newBalance = null;
+      if (balanceResult.success) {
+        newBalance = balanceResult.balance;
+      } else if (result.data?.user_balance_after !== undefined && result.data?.user_balance_after !== null) {
+        // Fallback: usar el balance que JuegayGana devolvió en la propia
+        // respuesta del DepositMoney (si vino). Más confiable que defaultear a 0.
+        newBalance = result.data.user_balance_after;
+        logger.warn(`[deposit] getUserBalanceWithRetry falló para ${user.username}, usando user_balance_after=${newBalance} del DepositMoney`);
+      } else {
+        logger.warn(`[deposit] No se pudo obtener saldo para ${user.username} tras depósito $${amount} (bonus $${bonus}). balanceResult.error=${balanceResult.error}. Mensaje al usuario sin saldo.`);
+      }
+      const balanceStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
+
       // Crear mensaje de sistema para el usuario
       const depositCmdName = parseFloat(bonus) > 0 ? '/sys_deposit_bonus' : '/sys_deposit';
       const depositCmd = await Command.findOne({ name: depositCmdName, isActive: true });
@@ -5068,11 +5082,11 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         messageContent = depositCmd.response
           .replace(/\{amount\}/g, amount)
           .replace(/\{bonus\}/g, bonus)
-          .replace(/\{balance\}/g, newBalance);
+          .replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose');
       } else if (bonus > 0) {
-        messageContent = `🔒💰 Depósito de $${amount} (incluye $${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es $${newBalance} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥`;
+        messageContent = `🔒💰 Depósito de $${amount} (incluye $${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥`;
       } else {
-        messageContent = `🔒💰 Depósito de $${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es $${newBalance} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥`;
+        messageContent = `🔒💰 Depósito de $${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥`;
       }
       
       const systemMessage = await Message.create({
@@ -5156,7 +5170,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       if (!hasAppInstalled) {
         const installCmd = await Command.findOne({ name: '/sys_install_app', isActive: true });
         const installContent = (installCmd && installCmd.response)
-          ? installCmd.response.replace(/\{amount\}/g, amount).replace(/\{balance\}/g, newBalance)
+          ? installCmd.response.replace(/\{amount\}/g, amount).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose')
           : `🎁━━━━━━━━━━━━━━━🎁\n📲 INSTALÁ LA APP\n   Y GANÁ $5.000 🎁\n🎁━━━━━━━━━━━━━━━🎁\n\n¿Todavía no instalaste la app? ¡Hacelo ahora y reclamá tu BONO DE $5.000! 🤑\n\n✅ Te avisamos al toque de tus bonos y reembolsos\n✅ Entrás más rápido y no perdés tu cuenta\n\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, elegí "Agregar a pantalla de inicio".\n\n🎁 Una vez instalada, abrí la app y tocá el botón "🎁 Reclamar $5.000" que vas a ver arriba del chat. ¡El bono se acredita al instante!`;
 
         const installMessage = await Message.create({
@@ -5187,9 +5201,10 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         notifyAdmins('new_message', { message: installData, userId: user.id, username: user.username });
       }
 
-      // Notificar al usuario específico si está conectado
+      // Notificar al usuario específico si está conectado. Sólo si tenemos
+      // balance real — si falló el lookup, omitimos para no escribir "null" en UI.
       const userSocket = connectedUsers.get(user.id);
-      if (userSocket) {
+      if (userSocket && newBalance !== null) {
         userSocket.emit('balance_updated', { balance: newBalance });
       }
 
@@ -5200,7 +5215,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         const depositPushTitle = depositBonus > 0
           ? `💰 Depósito + bonus acreditado`
           : `💰 Depósito acreditado`;
-        const depositPushBody = `$${amount} acreditados en tu cuenta. Nuevo saldo: $${newBalance}.`;
+        const depositPushBody = newBalance !== null
+          ? `$${amount} acreditados en tu cuenta. Nuevo saldo: $${newBalance}.`
+          : `$${amount} acreditados en tu cuenta.`;
         sendPushIfOffline(user, depositPushTitle, depositPushBody, { tag: 'deposit' }).catch((e) => {
           logger.warn(`[FCM] sendPushIfOffline (deposit) falló para ${user.username}: ${e.message}`);
         });
@@ -5259,6 +5276,8 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // Webhook a fb-ads: conversión Purchase para aprendizaje por anuncio.
       fbAdsWebhook.notify('Purchase', user, { value: parseFloat(amount), currency: 'ARS' });
 
+      logger.info(`[deposit] OK admin=${req.user?.username} user=${user.username} amount=$${amount} bonus=$${bonus || 0} transferId=${result.data?.transfer_id || result.data?.transferId || 'n/a'} balanceLookup=${balanceResult.success ? 'ok' : 'failed'}`);
+
       res.json({
         success: true,
         message: 'Depósito realizado correctamente',
@@ -5266,6 +5285,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         transactionId: result.data?.transfer_id || result.data?.transferId
       });
     } else {
+      logger.error(`[deposit] FAIL admin=${req.user?.username} user=${user.username} amount=$${amount} bonus=$${bonus || 0} error=${result.error || 'sin error'}`);
       res.status(400).json({ error: result.error });
     }
   } catch (error) {
@@ -5324,18 +5344,28 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
     
     if (result.success) {
       await recordUserActivity(user.id, 'withdrawal', amount);
-      
-      // Obtener saldo actualizado del usuario
-      const balanceResult = await jugayganaMovements.getUserBalance(user.username);
-      const newBalance = balanceResult.success ? balanceResult.balance : (result.data?.user_balance_after || 0);
-      
+
+      // Obtener saldo actualizado del usuario. Reintenta para evitar "saldo $0"
+      // engañoso cuando getUserBalance falla transitoriamente post-retiro.
+      const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+      let newBalance = null;
+      if (balanceResult.success) {
+        newBalance = balanceResult.balance;
+      } else if (result.data?.user_balance_after !== undefined && result.data?.user_balance_after !== null) {
+        newBalance = result.data.user_balance_after;
+        logger.warn(`[withdrawal] getUserBalanceWithRetry falló para ${user.username}, usando user_balance_after=${newBalance} del WithdrawMoney`);
+      } else {
+        logger.warn(`[withdrawal] No se pudo obtener saldo para ${user.username} tras retiro $${amount}. balanceResult.error=${balanceResult.error}. Mensaje al usuario sin saldo.`);
+      }
+      const balanceStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
+
       // Crear mensaje de sistema para el usuario
       const withdrawalCmd = await Command.findOne({ name: '/sys_withdrawal', isActive: true });
       const messageContent = (withdrawalCmd && withdrawalCmd.response)
         ? withdrawalCmd.response
             .replace(/\{amount\}/g, amount)
-            .replace(/\{balance\}/g, newBalance)
-        : `🔒💸 Retiro de $${amount} realizado correctamente. \n💸 Tu nuevo saldo es $${newBalance} 💸\nSu pago se está procesando. Por favor, aguarde un momento.`;
+            .replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose')
+        : `🔒💸 Retiro de $${amount} realizado correctamente. \n💸 Tu nuevo saldo es ${balanceStr} 💸\nSu pago se está procesando. Por favor, aguarde un momento.`;
       
       const systemMessage = await Message.create({
         id: uuidv4(),
@@ -5376,14 +5406,18 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
         username: user.username
       });
       
-      // Notificar al usuario específico si está conectado
+      // Notificar al usuario específico si está conectado. Sólo si tenemos
+      // balance real — si falló el lookup, omitimos para no escribir "null" en UI.
       const userSocket = connectedUsers.get(user.id);
-      if (userSocket) {
+      if (userSocket && newBalance !== null) {
         userSocket.emit('balance_updated', { balance: newBalance });
       }
 
       // Push FCM para usuarios offline.
-      sendPushIfOffline(user, '💸 Retiro procesado', `$${amount} enviados. Nuevo saldo: $${newBalance}.`, { tag: 'withdrawal' }).catch((e) => {
+      const withdrawalPushBody = newBalance !== null
+        ? `$${amount} enviados. Nuevo saldo: $${newBalance}.`
+        : `$${amount} enviados.`;
+      sendPushIfOffline(user, '💸 Retiro procesado', withdrawalPushBody, { tag: 'withdrawal' }).catch((e) => {
         logger.warn(`[FCM] sendPushIfOffline (withdrawal) falló para ${user.username}: ${e.message}`);
       });
       
@@ -5409,6 +5443,8 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
         { req }
       );
 
+      logger.info(`[withdrawal] OK admin=${req.user?.username} user=${user.username} amount=$${amount} transferId=${result.data?.transfer_id || result.data?.transferId || 'n/a'} balanceLookup=${balanceResult.success ? 'ok' : 'failed'}`);
+
       res.json({
         success: true,
         message: 'Retiro realizado correctamente',
@@ -5416,6 +5452,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
         transactionId: result.data?.transfer_id || result.data?.transferId
       });
     } else {
+      logger.error(`[withdrawal] FAIL admin=${req.user?.username} user=${user.username} amount=$${amount} error=${result.error || 'sin error'}`);
       res.status(400).json({ error: result.error });
     }
   } catch (error) {
@@ -5453,10 +5490,12 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
     }
     
     const depositResult = await jugaygana.creditUserBalance(resolvedUsername, bonusAmount);
-    
+
     if (depositResult.success) {
       // Buscar usuario para obtener su id (necesario para el mensaje)
       const bonusUser = await User.findOne({ username: resolvedUsername });
+
+      logger.info(`[bonus] OK admin=${req.user?.username} user=${resolvedUsername} amount=$${bonusAmount} transferId=${depositResult.data?.transfer_id || depositResult.data?.transferId || 'n/a'}`);
 
       await Transaction.create({
         id: uuidv4(),
@@ -5471,9 +5510,12 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
         timestamp: new Date()
       });
 
-      // Obtener saldo actualizado para incluirlo en el mensaje
-      const balanceResult = await jugayganaMovements.getUserBalance(resolvedUsername);
+      // Obtener saldo actualizado para incluirlo en el mensaje (con retry)
+      const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(resolvedUsername);
       const newBalance = balanceResult.success ? balanceResult.balance : null;
+      if (!balanceResult.success) {
+        logger.warn(`[bonus] getUserBalanceWithRetry falló para ${resolvedUsername} tras bonus $${bonusAmount}. error=${balanceResult.error}`);
+      }
 
       // Enviar mensaje automático al usuario con el monto acreditado y el saldo actual
       if (bonusUser) {
@@ -5517,6 +5559,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
         transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId
       });
     } else {
+      logger.error(`[bonus] FAIL admin=${req.user?.username} user=${resolvedUsername} amount=$${bonusAmount} error=${depositResult.error || 'sin error'}`);
       res.status(400).json({ error: depositResult.error || 'Error al aplicar bonificación' });
     }
   } catch (error) {

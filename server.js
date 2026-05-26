@@ -6557,6 +6557,28 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
 
     await recordUserActivity(req.user.userId, 'withdrawal', amountNum);
 
+    // Registrar Transaction (igual que en /api/admin/withdrawal). Sin esto, los
+    // retiros self-service no aparecían en el dashboard de transacciones.
+    try {
+      await Transaction.create({
+        id: uuidv4(),
+        type: 'withdrawal',
+        amount: amountNum,
+        username: user.username,
+        userId: user.id,
+        description: `Retiro self-service a ${titularT} (${aliasT})`,
+        adminId: null,
+        adminUsername: null,
+        adminRole: null,
+        transactionId: result.data?.transfer_id || result.data?.transferId,
+        metadata: { source: 'self_service', titular: titularT, cbu: cbuT, alias: aliasT },
+        timestamp: new Date()
+      });
+    } catch (txErr) {
+      // No bloquea: el retiro ya se aplicó en JuegayGana. Queda log para auditar.
+      logger.warn(`[withdrawal/request] no se pudo registrar Transaction para ${user.username}: ${txErr.message}`);
+    }
+
     // Guardar datos bancarios para la próxima vez (si el usuario lo pidió).
     if (saveData) {
       user.withdrawalAccount = { titular: titularT, cbu: cbuT, alias: aliasT, savedAt: new Date() };

@@ -6914,6 +6914,7 @@ function renderCampaigns() {
                 <span>📝 ${c.registrations || 0} registros</span>
                 <span>Comisión: ${c.commissionType === 'none' ? '—' : (c.commissionType === 'cpa' ? formatARS(c.commissionValue) + ' / FTD' : c.commissionValue + '% rev')}</span>
                 <span>${c.isActive ? '🟢 Activa' : '🔴 Inactiva'}</span>
+                ${c.hasJugayganaCreds ? '<span style="color:#4caf50;">🔐 Cuenta JG propia</span>' : '<span style="color:#888;">🔐 Usa master</span>'}
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 <button onclick="copyCampaignLink('${escapeHtml(c.code)}')" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.4);color:#00ff88;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">📋 Copiar link</button>
@@ -6933,6 +6934,28 @@ function copyCampaignLink(code) {
     );
 }
 
+// Limpia los campos de creds del modal de Campaña y deja la UI en estado neutro.
+function _resetCampaignCredsForm(hasCreds) {
+    document.getElementById('campaignFormJgUsername').value = '';
+    document.getElementById('campaignFormJgPassword').value = '';
+    document.getElementById('campaignFormJgPassword').placeholder = hasCreds
+        ? '(dejar vacío para no cambiarla)'
+        : 'mínimo 6 caracteres';
+    document.getElementById('campaignFormJgPasswordHint').textContent = hasCreds
+        ? 'Cuenta configurada — escribí una nueva contraseña sólo si la querés cambiar.'
+        : 'Se guarda cifrada en la DB.';
+    document.getElementById('campaignFormCredsStatus').textContent = hasCreds
+        ? '· cuenta propia configurada'
+        : '· sin configurar (usa la master)';
+    document.getElementById('campaignFormCredsStatus').style.color = hasCreds ? '#4caf50' : '#888';
+    document.getElementById('campaignFormTestCredsBtn').style.display = hasCreds ? '' : 'none';
+    document.getElementById('campaignFormClearCredsBtn').style.display = hasCreds ? '' : 'none';
+    document.getElementById('campaignFormTestCredsResult').textContent = '';
+    // Flag interna: en edit, si el usuario tocó "quitar creds", marcamos para enviar
+    // clearJugayganaCreds:true al PUT.
+    window._campaignFormClearCreds = false;
+}
+
 function showCreateCampaignModal() {
     document.getElementById('campaignFormTitle').textContent = 'Nueva campaña';
     document.getElementById('campaignFormMode').value = 'create';
@@ -6946,6 +6969,7 @@ function showCreateCampaignModal() {
     document.getElementById('campaignFormNotes').value = '';
     document.getElementById('campaignFormActiveRow').style.display = 'none';
     document.getElementById('campaignFormError').style.display = 'none';
+    _resetCampaignCredsForm(false);
     showModal('campaignFormModal');
     document.getElementById('campaignFormModal').style.display = 'flex';
 }
@@ -6966,9 +6990,57 @@ function editCampaign(code) {
     document.getElementById('campaignFormActiveRow').style.display = '';
     document.getElementById('campaignFormIsActive').checked = campaign.isActive !== false;
     document.getElementById('campaignFormError').style.display = 'none';
+    // Creds JUGAYGANA: NUNCA mostramos el password (el backend ni lo devuelve).
+    // En edit, el username sí lo precargamos para que el admin lo vea.
+    _resetCampaignCredsForm(!!campaign.hasJugayganaCreds);
+    if (campaign.jugayganaUsername) {
+        document.getElementById('campaignFormJgUsername').value = campaign.jugayganaUsername;
+    }
     showModal('campaignFormModal');
     document.getElementById('campaignFormModal').style.display = 'flex';
 }
+
+// Botón "Probar login": pega contra el endpoint test-jugaygana-creds usando
+// las creds YA guardadas (no las que están en el form). Sirve para validar
+// que las creds persistidas siguen funcionando.
+async function testCampaignJgCreds() {
+    const code = document.getElementById('campaignFormOriginalCode').value;
+    if (!code) return;
+    const resultEl = document.getElementById('campaignFormTestCredsResult');
+    resultEl.textContent = 'Probando…';
+    resultEl.style.color = '#888';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(code)}/test-jugaygana-creds`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await r.json();
+        if (r.ok && data.ok) {
+            resultEl.textContent = '✓ Login OK (parentId=' + (data.parentId || '?') + ')';
+            resultEl.style.color = '#4caf50';
+        } else {
+            resultEl.textContent = '✗ ' + (data.error || 'Falló');
+            resultEl.style.color = '#ff6666';
+        }
+    } catch (e) {
+        resultEl.textContent = '✗ Error de conexión';
+        resultEl.style.color = '#ff6666';
+    }
+}
+
+// Marca para limpiar las creds al guardar (sólo en edit).
+function clearCampaignJgCreds() {
+    if (!confirm('¿Quitar la cuenta JUGAYGANA del publicista? Los próximos usuarios creados por su publisher_admin van a usar la cuenta master.')) return;
+    window._campaignFormClearCreds = true;
+    document.getElementById('campaignFormJgUsername').value = '';
+    document.getElementById('campaignFormJgPassword').value = '';
+    document.getElementById('campaignFormCredsStatus').textContent = '· se quitará al guardar';
+    document.getElementById('campaignFormCredsStatus').style.color = '#ff9800';
+    document.getElementById('campaignFormTestCredsResult').textContent = '';
+}
+
+window.testCampaignJgCreds = testCampaignJgCreds;
+window.clearCampaignJgCreds = clearCampaignJgCreds;
 
 function closeCampaignFormModal() {
     hideModal('campaignFormModal');
@@ -6999,6 +7071,29 @@ async function submitCampaignForm() {
     }
 
     const body = { publisher, name, commissionType, commissionValue, notes };
+
+    // Creds JUGAYGANA del publicista (opcionales).
+    const jgUsername = document.getElementById('campaignFormJgUsername').value.trim();
+    const jgPassword = document.getElementById('campaignFormJgPassword').value;
+
+    if (window._campaignFormClearCreds === true) {
+        // El admin tocó "Quitar cuenta" en edit. Le pedimos al backend que
+        // borre las creds enteras (independientemente de lo que esté en los inputs).
+        body.clearJugayganaCreds = true;
+    } else {
+        // Mandar las creds solo si hay algo cargado. El backend valida la pareja
+        // (en create exige ambos; en edit, password vacío = mantener).
+        if (jgUsername) body.jugayganaUsername = jgUsername;
+        if (jgPassword) body.jugayganaPassword = jgPassword;
+        // Para create exigimos ambos arriba en validación cliente.
+        if (mode === 'create') {
+            if ((jgUsername && !jgPassword) || (!jgUsername && jgPassword)) {
+                errorDiv.textContent = 'Si configurás cuenta JUGAYGANA, completá usuario Y contraseña';
+                errorDiv.style.display = '';
+                return;
+            }
+        }
+    }
 
     try {
         let response;

@@ -1400,6 +1400,31 @@
                             <label style="color:#aaa;font-size:12px;">Notas (opcional)</label>
                             <textarea id="campaignFormNotes" rows="2" maxlength="2000" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;resize:vertical;"></textarea>
                         </div>
+
+                        <!-- Cuenta JUGAYGANA del publicista (opcional) -->
+                        <details style="background:rgba(212,175,55,0.05);border:1px solid rgba(212,175,55,0.2);border-radius:8px;padding:10px 12px;">
+                            <summary style="cursor:pointer;color:#d4af37;font-size:13px;font-weight:600;">🔐 Cuenta JUGAYGANA del publicista <span id="campaignFormCredsStatus" style="color:#888;font-weight:400;font-size:11px;margin-left:6px;"></span></summary>
+                            <div style="margin-top:10px;display:grid;gap:8px;">
+                                <p style="color:#aaa;font-size:11.5px;margin:0;">
+                                    Si cargás un user/pass acá, los usuarios que cree el publisher_admin de esta campaña se van a crear bajo <strong>esta cuenta de JUGAYGANA</strong> (no la master). Así separás la venta.
+                                </p>
+                                <div>
+                                    <label style="color:#aaa;font-size:12px;">Usuario JUGAYGANA</label>
+                                    <input type="text" id="campaignFormJgUsername" autocomplete="off" maxlength="100" placeholder="ej: subagente_juan" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                                </div>
+                                <div>
+                                    <label style="color:#aaa;font-size:12px;">Contraseña JUGAYGANA</label>
+                                    <input type="text" id="campaignFormJgPassword" autocomplete="off" maxlength="100" placeholder="(dejar vacío para no cambiarla)" style="width:100%;padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                                    <small id="campaignFormJgPasswordHint" style="color:#888;">Se guarda cifrada en la DB. En modo edición, dejala vacía si no querés cambiarla.</small>
+                                </div>
+                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                                    <button type="button" id="campaignFormTestCredsBtn" onclick="testCampaignJgCreds()" style="padding:6px 12px;background:#2a2a3a;color:#d4af37;border:1px solid rgba(212,175,55,0.3);border-radius:6px;cursor:pointer;font-size:12px;display:none;">🧪 Probar login</button>
+                                    <button type="button" id="campaignFormClearCredsBtn" onclick="clearCampaignJgCreds()" style="padding:6px 12px;background:#3a1a1a;color:#ff6666;border:1px solid rgba(255,80,80,0.3);border-radius:6px;cursor:pointer;font-size:12px;display:none;">🗑️ Quitar cuenta JUGAYGANA</button>
+                                    <span id="campaignFormTestCredsResult" style="font-size:12px;"></span>
+                                </div>
+                            </div>
+                        </details>
+
                         <div id="campaignFormActiveRow" style="display:none;">
                             <label style="color:#aaa;font-size:12px;display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="campaignFormIsActive" checked> Campaña activa

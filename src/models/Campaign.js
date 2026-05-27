@@ -74,10 +74,41 @@ const campaignSchema = new mongoose.Schema({
   createdBy: {
     type: String,
     default: null
+  },
+  // === Credenciales del sub-agente JUGAYGANA del publicista (opcional) ===
+  // Cuando están configuradas, la creación de usuarios desde un publisher_admin
+  // se hace usando ESTAS credenciales (no la cuenta master del env). Así cada
+  // usuario nuevo queda colgado del sub-agente correcto en JUGAYGANA y la
+  // comisión la cobra el publicista que corresponde.
+  //
+  // Si quedan null, el publisher_admin crea contra la cuenta master (comportamiento
+  // legacy). Las cargas y retiros siguen siempre por la master porque ésta tiene
+  // permiso sobre todos sus sub-agentes en la jerarquía de JUGAYGANA.
+  jugayganaUsername: {
+    type: String,
+    default: null,
+    trim: true
+  },
+  // Password cifrada con AES-256-GCM (src/utils/credsCrypto). NUNCA se almacena
+  // en plano. El blob tiene formato "v1:iv:authTag:ciphertext".
+  jugayganaPasswordEncrypted: {
+    type: String,
+    default: null,
+    select: false  // por defecto no se incluye en find() — sólo se pide explícitamente cuando hay que hacer login
   }
 }, {
   timestamps: true
 });
+
+// Helper estático: ¿esta campaña tiene creds JUGAYGANA configuradas?
+// Usa countDocuments para no traer datos sensibles si sólo necesitamos saber sí/no.
+campaignSchema.statics.hasJugayganaCreds = async function(code) {
+  const c = await this.findOne(
+    { code: String(code).toUpperCase().trim() },
+    { jugayganaUsername: 1 }
+  ).lean();
+  return !!(c && c.jugayganaUsername);
+};
 
 campaignSchema.index({ isActive: 1, publisher: 1 });
 

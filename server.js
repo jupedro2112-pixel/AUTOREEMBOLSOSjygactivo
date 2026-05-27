@@ -271,6 +271,11 @@ function validatePassword(password) {
 const jugaygana = require('./jugaygana');
 const jugayganaMovements = require('./jugaygana-movements');
 const jugayganaService = require('./src/services/jugayganaService');
+// Pool de sesiones JUGAYGANA por publicista — se usa cuando un publisher_admin
+// crea un usuario y la campaña tiene credenciales propias configuradas.
+const jugayganaPublisherSessions = require('./src/services/jugayganaPublisherSessions');
+// Cifrado simétrico para creds JUGAYGANA de cada publicista.
+const credsCrypto = require('./src/utils/credsCrypto');
 const refunds = require('./models/refunds');
 const referralRevenueService = require('./src/services/referralRevenueService');
 const { resolveJugayganaUserId } = require('./src/services/jugayganaUserLinkService');
@@ -7350,6 +7355,9 @@ function calcCommission(campaign, stats) {
 }
 
 // Listar todas las campañas con stats resumidas (clicks + registrations).
+// Importante: jugayganaPasswordEncrypted está marcado select:false en el schema,
+// por lo que NUNCA viaja en esta respuesta. Sólo exponemos hasJugayganaCreds:bool
+// para que el panel sepa si la campaña ya tiene creds configuradas.
 app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const campaigns = await Campaign.find().sort({ createdAt: -1 }).lean();
@@ -7370,7 +7378,10 @@ app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res
     const enriched = campaigns.map(c => ({
       ...c,
       clicks: clicksByCode[c.code] || 0,
-      registrations: regsByCode[c.code] || 0
+      registrations: regsByCode[c.code] || 0,
+      // Bandera derivada: el front la usa para mostrar el badge "Cuenta propia configurada".
+      // No exponemos el password ni siquiera derivado — sólo si hay username.
+      hasJugayganaCreds: !!c.jugayganaUsername
     }));
     res.json({ campaigns: enriched });
   } catch (err) {
@@ -7379,10 +7390,12 @@ app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res
   }
 });
 
-// Crear nueva campaña.
+// Crear nueva campaña. Soporta opcionalmente creds JUGAYGANA del publicista
+// (jugayganaUsername + jugayganaPassword en plano → se cifra antes de guardar).
 app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const { code, publisher, name, commissionType, commissionValue, notes } = req.body || {};
+    const { code, publisher, name, commissionType, commissionValue, notes,
+            jugayganaUsername, jugayganaPassword } = req.body || {};
     if (!code || !publisher || !name) {
       return res.status(400).json({ error: 'code, publisher y name son requeridos' });
     }
@@ -7393,6 +7406,24 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
     const validTypes = ['cpa', 'revshare', 'none'];
     const ct = validTypes.includes(commissionType) ? commissionType : 'none';
     const cv = Number.isFinite(parseFloat(commissionValue)) ? parseFloat(commissionValue) : 0;
+
+    // Validación de pareja JUGAYGANA: ambos campos van juntos o ninguno.
+    let jgUsername = null;
+    let jgPasswordEncrypted = null;
+    const wantsCreds = (typeof jugayganaUsername === 'string' && jugayganaUsername.trim()) ||
+                       (typeof jugayganaPassword === 'string' && jugayganaPassword);
+    if (wantsCreds) {
+      if (!jugayganaUsername || !jugayganaPassword) {
+        return res.status(400).json({ error: 'Para configurar la cuenta del publicista necesitás username Y password' });
+      }
+      try {
+        jgUsername = String(jugayganaUsername).trim();
+        jgPasswordEncrypted = credsCrypto.encrypt(String(jugayganaPassword));
+      } catch (encErr) {
+        logger.error(`[admin/campaigns POST] error cifrando creds: ${encErr.message}`);
+        return res.status(500).json({ error: 'No se pudo cifrar la contraseña (revisá JUGAYGANA_CREDS_KEY)' });
+      }
+    }
 
     const existing = await Campaign.findOne({ code: normalizedCode }).lean();
     if (existing) {
@@ -7408,10 +7439,17 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
       commissionValue: cv,
       notes: notes ? String(notes).slice(0, 2000) : '',
       createdBy: req.user.username,
-      isActive: true
+      isActive: true,
+      jugayganaUsername: jgUsername,
+      jugayganaPasswordEncrypted: jgPasswordEncrypted
     });
 
-    res.status(201).json({ campaign: created.toObject() });
+    // Nunca devolver el password en la respuesta — toObject() lo trae porque
+    // creamos el doc en memoria, pero limpiamos antes de enviar.
+    const out = created.toObject();
+    delete out.jugayganaPasswordEncrypted;
+    out.hasJugayganaCreds = !!jgUsername;
+    res.status(201).json({ campaign: out });
   } catch (err) {
     logger.error(`[admin/campaigns POST] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -7419,10 +7457,15 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
 });
 
 // Editar campaña existente. `code` es inmutable, los demás campos sí se pueden modificar.
+// Para las creds JUGAYGANA: jugayganaUsername se actualiza siempre que venga en el body
+// (string vacío o null = limpiar); jugayganaPassword sólo se actualiza si viene un valor
+// no vacío (vacío/ausente = mantener la actual). Para borrar las creds enteras, mandar
+// jugayganaUsername:null y jugayganaPassword:null explícitamente.
 app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const normalizedCode = String(req.params.code).toUpperCase().trim();
-    const { publisher, name, commissionType, commissionValue, isActive, notes } = req.body || {};
+    const { publisher, name, commissionType, commissionValue, isActive, notes,
+            jugayganaUsername, jugayganaPassword, clearJugayganaCreds } = req.body || {};
     const update = {};
     if (typeof publisher === 'string') update.publisher = publisher.trim().slice(0, 100);
     if (typeof name === 'string') update.name = name.trim().slice(0, 200);
@@ -7431,6 +7474,27 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
     if (typeof isActive === 'boolean') update.isActive = isActive;
     if (typeof notes === 'string') update.notes = notes.slice(0, 2000);
 
+    // === Creds JUGAYGANA ===
+    if (clearJugayganaCreds === true) {
+      update.jugayganaUsername = null;
+      update.jugayganaPasswordEncrypted = null;
+    } else {
+      if (typeof jugayganaUsername === 'string') {
+        update.jugayganaUsername = jugayganaUsername.trim() || null;
+        // Si vacían el username explícitamente y NO mandan password, limpiamos también el password
+        // para mantener el invariante "ambos llenos o ambos vacíos".
+        if (!update.jugayganaUsername) update.jugayganaPasswordEncrypted = null;
+      }
+      if (typeof jugayganaPassword === 'string' && jugayganaPassword.length > 0) {
+        try {
+          update.jugayganaPasswordEncrypted = credsCrypto.encrypt(jugayganaPassword);
+        } catch (encErr) {
+          logger.error(`[admin/campaigns PUT] error cifrando creds: ${encErr.message}`);
+          return res.status(500).json({ error: 'No se pudo cifrar la contraseña (revisá JUGAYGANA_CREDS_KEY)' });
+        }
+      }
+    }
+
     const updated = await Campaign.findOneAndUpdate(
       { code: normalizedCode },
       { $set: update },
@@ -7438,9 +7502,48 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
     ).lean();
 
     if (!updated) return res.status(404).json({ error: 'Campaña no encontrada' });
+
+    // Invalidar sesión en el pool por si cambiaron las creds — el próximo
+    // create-user va a re-loguear con lo nuevo.
+    if ('jugayganaUsername' in update || 'jugayganaPasswordEncrypted' in update) {
+      jugayganaPublisherSessions.invalidateSession(normalizedCode);
+    }
+
+    delete updated.jugayganaPasswordEncrypted;
+    updated.hasJugayganaCreds = !!updated.jugayganaUsername;
     res.json({ campaign: updated });
   } catch (err) {
     logger.error(`[admin/campaigns PUT] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/campaigns/:code/test-jugaygana-creds
+// Intenta loguearse en JUGAYGANA con las creds actualmente guardadas para esta
+// campaña. Útil para que el admin verifique desde el panel que las creds están
+// bien antes de que un publisher_admin intente crear un usuario.
+app.post('/api/admin/campaigns/:code/test-jugaygana-creds', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    const c = await Campaign.findOne({ code: normalizedCode })
+      .select('+jugayganaPasswordEncrypted jugayganaUsername').lean();
+    if (!c) return res.status(404).json({ error: 'Campaña no encontrada' });
+    if (!c.jugayganaUsername || !c.jugayganaPasswordEncrypted) {
+      return res.status(400).json({ error: 'Esta campaña no tiene creds JUGAYGANA configuradas' });
+    }
+    let plain;
+    try {
+      plain = credsCrypto.decrypt(c.jugayganaPasswordEncrypted);
+    } catch (e) {
+      return res.status(500).json({ error: 'No se pudo desencriptar la contraseña (¿cambió JUGAYGANA_CREDS_KEY?)' });
+    }
+    const result = await jugayganaPublisherSessions.testCreds(c.jugayganaUsername, plain);
+    if (result.ok) {
+      return res.json({ ok: true, parentId: result.parentId });
+    }
+    return res.status(400).json({ ok: false, error: result.error || 'Login falló' });
+  } catch (err) {
+    logger.error(`[admin/campaigns test-creds] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -7582,29 +7685,78 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
       category: 'cargas'
     });
 
-    // Sincronizar con JUGAYGANA en background (mismo patrón que POST /api/users).
-    jugaygana.syncUserToPlatform({
-      username: newUser.username,
-      password: password
-    }).then(async (result) => {
-      if (result.success) {
-        await User.updateOne(
-          { id: newUserId },
-          {
-            jugayganaUserId: result.jugayganaUserId || result.user?.user_id,
-            jugayganaUsername: result.jugayganaUsername || result.user?.user_name,
-            jugayganaSyncStatus: result.alreadyExists ? 'linked' : 'synced'
+    // Sincronizar con JUGAYGANA en background. Si la campaña tiene credenciales
+    // propias (sub-agente del publicista), el CREATEUSER se rutea por la sesión
+    // de ese sub-agente para que el usuario quede colgado del publicista correcto
+    // en la jerarquía de JUGAYGANA (y la comisión la cobre quien debe).
+    // Si la campaña no tiene creds configuradas, fallback al cliente master
+    // (comportamiento legacy / idéntico al de POST /api/users).
+    (async () => {
+      try {
+        const hasPubCreds = !!(campaign.jugayganaUsername);
+        if (hasPubCreds) {
+          const result = await jugayganaPublisherSessions.createUserAsPublisher(campaign.code, {
+            username: newUser.username,
+            password: password
+          });
+          if (result.success) {
+            await User.updateOne(
+              { id: newUserId },
+              {
+                jugayganaUserId: result.jugayganaUserId || result.user?.user_id,
+                jugayganaUsername: result.jugayganaUsername || result.user?.user_name,
+                jugayganaSyncStatus: 'synced'
+              }
+            );
+            logger.info(`[publisher_admin create-user] ${username} creado bajo sub-agente de ${campaign.code}`);
+          } else if (result.code === 'NO_CREDS') {
+            // El check inicial dijo que había creds pero al loadCreds dentro del pool
+            // no las encontró — race condition con un PUT de campaña justo en ese
+            // momento. Fallback al master.
+            logger.warn(`[publisher_admin create-user] ${campaign.code} sin creds tras race — fallback master`);
+            const fallback = await jugaygana.syncUserToPlatform({
+              username: newUser.username, password
+            });
+            if (fallback.success) {
+              await User.updateOne({ id: newUserId }, {
+                jugayganaUserId: fallback.jugayganaUserId || fallback.user?.user_id,
+                jugayganaUsername: fallback.jugayganaUsername || fallback.user?.user_name,
+                jugayganaSyncStatus: fallback.alreadyExists ? 'linked' : 'synced'
+              });
+            }
+          } else {
+            // Falló el CREATEUSER con la sesión del publicista. NO hacemos fallback
+            // a la master automáticamente: si la creación falla con las creds del
+            // publicista, queremos que el admin se entere y arregle las creds —
+            // sino el user terminaría bajo la master con atribución mal asignada.
+            await User.updateOne({ id: newUserId }, {
+              jugayganaSyncStatus: 'error',
+              jugayganaSyncError: `[${result.code}] ${result.error}`.slice(0, 500)
+            });
+            logger.warn(`[publisher_admin create-user] CREATEUSER por publicista falló ${campaign.code}/${username}: ${result.error}`);
           }
-        );
-      } else {
-        logger.warn(`[publisher_admin create-user] JUGAYGANA sync falló para ${username}: ${result.error}`);
+        } else {
+          // Campaña sin creds propias — comportamiento legacy: usar cuenta master.
+          const fallback = await jugaygana.syncUserToPlatform({
+            username: newUser.username, password
+          });
+          if (fallback.success) {
+            await User.updateOne({ id: newUserId }, {
+              jugayganaUserId: fallback.jugayganaUserId || fallback.user?.user_id,
+              jugayganaUsername: fallback.jugayganaUsername || fallback.user?.user_name,
+              jugayganaSyncStatus: fallback.alreadyExists ? 'linked' : 'synced'
+            });
+          } else {
+            logger.warn(`[publisher_admin create-user] JUGAYGANA sync (master) falló para ${username}: ${fallback.error}`);
+          }
+        }
+      } catch (err) {
+        logger.warn(`[publisher_admin create-user] JUGAYGANA sync excepción para ${username}: ${err.message}`);
       }
-    }).catch(err => {
-      logger.warn(`[publisher_admin create-user] JUGAYGANA sync excepción para ${username}: ${err.message}`);
-    });
+    })();
 
     logger.info(
-      `[publisher_admin] ${employee.username} (campaign=${campaign.code}) creó usuario ${username}`
+      `[publisher_admin] ${employee.username} (campaign=${campaign.code}, creds=${!!campaign.jugayganaUsername}) creó usuario ${username}`
     );
 
     res.status(201).json({

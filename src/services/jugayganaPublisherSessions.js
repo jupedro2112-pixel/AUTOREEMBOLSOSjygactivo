@@ -24,7 +24,6 @@ const axios = require('axios');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const logger = require('../utils/logger');
 const Campaign = require('../models/Campaign');
-const { decrypt } = require('../utils/credsCrypto');
 
 const API_URL = process.env.JUGAYGANA_API_URL || 'https://admin.agentesadmin.bet/api/admin/';
 const PROXY_URL = process.env.PROXY_URL || '';
@@ -78,14 +77,14 @@ function isHtmlBlocked(data) {
 }
 
 /**
- * Carga la campaña con sus creds (jugayganaPasswordEncrypted está marcado
- * select:false en el schema, hay que pedirlo explícitamente).
+ * Carga la campaña con sus creds (jugayganaPassword está marcado select:false
+ * en el schema, hay que pedirlo explícitamente).
  * @returns { username, password } o null si no hay creds configuradas
  */
 async function _loadCreds(campaignCode) {
   const c = await Campaign.findOne(
     { code: String(campaignCode).toUpperCase().trim() }
-  ).select('+jugayganaPasswordEncrypted jugayganaUsername isActive').lean();
+  ).select('+jugayganaPassword jugayganaUsername isActive').lean();
 
   if (!c) {
     logger.warn(`[PublisherSessions] Campaña ${campaignCode} no existe`);
@@ -95,17 +94,10 @@ async function _loadCreds(campaignCode) {
     logger.warn(`[PublisherSessions] Campaña ${campaignCode} desactivada`);
     return null;
   }
-  if (!c.jugayganaUsername || !c.jugayganaPasswordEncrypted) {
+  if (!c.jugayganaUsername || !c.jugayganaPassword) {
     return null; // sin creds — caller usa fallback global
   }
-
-  try {
-    const password = decrypt(c.jugayganaPasswordEncrypted);
-    return { username: c.jugayganaUsername, password };
-  } catch (err) {
-    logger.error(`[PublisherSessions] No se pudo desencriptar password de ${campaignCode}: ${err.message}`);
-    return null;
-  }
+  return { username: c.jugayganaUsername, password: c.jugayganaPassword };
 }
 
 /**

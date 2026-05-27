@@ -274,8 +274,6 @@ const jugayganaService = require('./src/services/jugayganaService');
 // Pool de sesiones JUGAYGANA por publicista — se usa cuando un publisher_admin
 // crea un usuario y la campaña tiene credenciales propias configuradas.
 const jugayganaPublisherSessions = require('./src/services/jugayganaPublisherSessions');
-// Cifrado simétrico para creds JUGAYGANA de cada publicista.
-const credsCrypto = require('./src/utils/credsCrypto');
 const refunds = require('./models/refunds');
 const referralRevenueService = require('./src/services/referralRevenueService');
 const { resolveJugayganaUserId } = require('./src/services/jugayganaUserLinkService');
@@ -7355,9 +7353,9 @@ function calcCommission(campaign, stats) {
 }
 
 // Listar todas las campañas con stats resumidas (clicks + registrations).
-// Importante: jugayganaPasswordEncrypted está marcado select:false en el schema,
-// por lo que NUNCA viaja en esta respuesta. Sólo exponemos hasJugayganaCreds:bool
-// para que el panel sepa si la campaña ya tiene creds configuradas.
+// Importante: jugayganaPassword está marcado select:false en el schema, por lo
+// que NUNCA viaja en esta respuesta. Sólo exponemos hasJugayganaCreds:bool para
+// que el panel sepa si la campaña ya tiene creds configuradas.
 app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const campaigns = await Campaign.find().sort({ createdAt: -1 }).lean();
@@ -7409,20 +7407,15 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
 
     // Validación de pareja JUGAYGANA: ambos campos van juntos o ninguno.
     let jgUsername = null;
-    let jgPasswordEncrypted = null;
+    let jgPassword = null;
     const wantsCreds = (typeof jugayganaUsername === 'string' && jugayganaUsername.trim()) ||
                        (typeof jugayganaPassword === 'string' && jugayganaPassword);
     if (wantsCreds) {
       if (!jugayganaUsername || !jugayganaPassword) {
         return res.status(400).json({ error: 'Para configurar la cuenta del publicista necesitás username Y password' });
       }
-      try {
-        jgUsername = String(jugayganaUsername).trim();
-        jgPasswordEncrypted = credsCrypto.encrypt(String(jugayganaPassword));
-      } catch (encErr) {
-        logger.error(`[admin/campaigns POST] error cifrando creds: ${encErr.message}`);
-        return res.status(500).json({ error: 'No se pudo cifrar la contraseña (revisá JUGAYGANA_CREDS_KEY)' });
-      }
+      jgUsername = String(jugayganaUsername).trim();
+      jgPassword = String(jugayganaPassword);
     }
 
     const existing = await Campaign.findOne({ code: normalizedCode }).lean();
@@ -7441,13 +7434,14 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
       createdBy: req.user.username,
       isActive: true,
       jugayganaUsername: jgUsername,
-      jugayganaPasswordEncrypted: jgPasswordEncrypted
+      jugayganaPassword: jgPassword
     });
 
-    // Nunca devolver el password en la respuesta — toObject() lo trae porque
-    // creamos el doc en memoria, pero limpiamos antes de enviar.
+    // Nunca devolver el password en la respuesta. select:false en el schema lo
+    // protege en queries normales, pero toObject() del doc en memoria sí lo
+    // trae — limpiamos explícito.
     const out = created.toObject();
-    delete out.jugayganaPasswordEncrypted;
+    delete out.jugayganaPassword;
     out.hasJugayganaCreds = !!jgUsername;
     res.status(201).json({ campaign: out });
   } catch (err) {
@@ -7477,21 +7471,16 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
     // === Creds JUGAYGANA ===
     if (clearJugayganaCreds === true) {
       update.jugayganaUsername = null;
-      update.jugayganaPasswordEncrypted = null;
+      update.jugayganaPassword = null;
     } else {
       if (typeof jugayganaUsername === 'string') {
         update.jugayganaUsername = jugayganaUsername.trim() || null;
         // Si vacían el username explícitamente y NO mandan password, limpiamos también el password
         // para mantener el invariante "ambos llenos o ambos vacíos".
-        if (!update.jugayganaUsername) update.jugayganaPasswordEncrypted = null;
+        if (!update.jugayganaUsername) update.jugayganaPassword = null;
       }
       if (typeof jugayganaPassword === 'string' && jugayganaPassword.length > 0) {
-        try {
-          update.jugayganaPasswordEncrypted = credsCrypto.encrypt(jugayganaPassword);
-        } catch (encErr) {
-          logger.error(`[admin/campaigns PUT] error cifrando creds: ${encErr.message}`);
-          return res.status(500).json({ error: 'No se pudo cifrar la contraseña (revisá JUGAYGANA_CREDS_KEY)' });
-        }
+        update.jugayganaPassword = jugayganaPassword;
       }
     }
 
@@ -7505,11 +7494,11 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
 
     // Invalidar sesión en el pool por si cambiaron las creds — el próximo
     // create-user va a re-loguear con lo nuevo.
-    if ('jugayganaUsername' in update || 'jugayganaPasswordEncrypted' in update) {
+    if ('jugayganaUsername' in update || 'jugayganaPassword' in update) {
       jugayganaPublisherSessions.invalidateSession(normalizedCode);
     }
 
-    delete updated.jugayganaPasswordEncrypted;
+    delete updated.jugayganaPassword;
     updated.hasJugayganaCreds = !!updated.jugayganaUsername;
     res.json({ campaign: updated });
   } catch (err) {
@@ -7526,18 +7515,12 @@ app.post('/api/admin/campaigns/:code/test-jugaygana-creds', authMiddleware, admi
   try {
     const normalizedCode = String(req.params.code).toUpperCase().trim();
     const c = await Campaign.findOne({ code: normalizedCode })
-      .select('+jugayganaPasswordEncrypted jugayganaUsername').lean();
+      .select('+jugayganaPassword jugayganaUsername').lean();
     if (!c) return res.status(404).json({ error: 'Campaña no encontrada' });
-    if (!c.jugayganaUsername || !c.jugayganaPasswordEncrypted) {
+    if (!c.jugayganaUsername || !c.jugayganaPassword) {
       return res.status(400).json({ error: 'Esta campaña no tiene creds JUGAYGANA configuradas' });
     }
-    let plain;
-    try {
-      plain = credsCrypto.decrypt(c.jugayganaPasswordEncrypted);
-    } catch (e) {
-      return res.status(500).json({ error: 'No se pudo desencriptar la contraseña (¿cambió JUGAYGANA_CREDS_KEY?)' });
-    }
-    const result = await jugayganaPublisherSessions.testCreds(c.jugayganaUsername, plain);
+    const result = await jugayganaPublisherSessions.testCreds(c.jugayganaUsername, c.jugayganaPassword);
     if (result.ok) {
       return res.json({ ok: true, parentId: result.parentId });
     }

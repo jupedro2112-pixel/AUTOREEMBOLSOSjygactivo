@@ -84,17 +84,18 @@ const campaignSchema = new mongoose.Schema({
   // Si quedan null, el publisher_admin crea contra la cuenta master (comportamiento
   // legacy). Las cargas y retiros siguen siempre por la master porque ésta tiene
   // permiso sobre todos sus sub-agentes en la jerarquía de JUGAYGANA.
+  //
+  // El password se guarda en texto plano. select:false impide que viaje en
+  // queries normales: sólo se trae cuando se necesita explícitamente para login.
   jugayganaUsername: {
     type: String,
     default: null,
     trim: true
   },
-  // Password cifrada con AES-256-GCM (src/utils/credsCrypto). NUNCA se almacena
-  // en plano. El blob tiene formato "v1:iv:authTag:ciphertext".
-  jugayganaPasswordEncrypted: {
+  jugayganaPassword: {
     type: String,
     default: null,
-    select: false  // por defecto no se incluye en find() — sólo se pide explícitamente cuando hay que hacer login
+    select: false
   }
 }, {
   timestamps: true

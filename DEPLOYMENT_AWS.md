@@ -196,16 +196,6 @@ Para más información sobre AWS ElastiCache: https://docs.aws.amazon.com/elasti
 - `REDIS_URL` o `REDIS_HOST` + `REDIS_PORT` — Conexión a ElastiCache Redis
 - `DB_PASSWORD` — Contraseña para acceso a base de datos del panel admin
 - `NODE_ENV` — Establecer a `production`
-- `JUGAYGANA_CREDS_KEY` — Master key para cifrar las credenciales JUGAYGANA
-  de cada publicista (cuenta sub-agente de JUGAYGANA, guardada por Campaign).
-  Debe ser un string hexadecimal de **64 caracteres (32 bytes)**. Generala una
-  sola vez con:
-  ```bash
-  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-  ```
-  Guardala en SSM Parameter Store igual que `JWT_SECRET`. ⚠️ Si la perdés o la
-  rotás, las creds JUGAYGANA ya cargadas en la DB quedan irrecuperables y hay
-  que volver a configurarlas desde el panel admin.
 
 ## Variables opcionales
 - `S3_BUCKET` — Nombre del bucket S3 para uploads de imágenes

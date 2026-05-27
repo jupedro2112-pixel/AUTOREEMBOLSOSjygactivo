@@ -253,7 +253,7 @@ async function createPlatformUser({ username, password, userrole = 'player', cur
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
       console.error('❌ CREATEUSER bloqueado: respuesta HTML');
-      return { success: false, error: 'IP bloqueada / HTML' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     if (data?.success) {
@@ -356,13 +356,29 @@ async function lookupUserOrError(username) {
       }
     }
 
-    // Una respuesta OK 4xx/5xx también es "error" — no podemos afirmar que el
-    // usuario no exista basados en una falla del servidor.
-    if (resp.status >= 500) {
+    // Cualquier respuesta no-2xx es "error" — no podemos afirmar que el usuario
+    // no exista basados en una falla del servidor. Antes esto sólo cubría >=500
+    // y un 4xx (rate-limit 429, auth 401/403, etc.) caía al parser de lista,
+    // devolvía not_found y disparaba CREATEUSER → JUGAYGANA respondía
+    // "user already existing" porque el usuario SÍ existía.
+    if (resp.status < 200 || resp.status >= 300) {
       return { status: 'error', error: `Status ${resp.status} de la API` };
     }
 
-    const list = data.users || data.data || (Array.isArray(data) ? data : []);
+    // Validación de shape: si la respuesta es 2xx pero no tiene la forma esperada
+    // (ni users[] ni data[] ni array), la API contestó pero no devolvió el catálogo.
+    // Tratar como error en lugar de asumir "no existe" — evita el mismo bug.
+    let list;
+    if (Array.isArray(data?.users)) {
+      list = data.users;
+    } else if (Array.isArray(data?.data)) {
+      list = data.data;
+    } else if (Array.isArray(data)) {
+      list = data;
+    } else {
+      return { status: 'error', error: 'API respondió sin el formato esperado (sin lista de usuarios)' };
+    }
+
     const found = list.find(u =>
       String(u.user_name).toLowerCase().trim() === String(username).toLowerCase().trim()
     );
@@ -537,7 +553,7 @@ async function getUserNetYesterday(username) {
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
       console.error('❌ ShowUserTransfersByAgent bloqueado: respuesta HTML');
-      return { success: false, error: 'IP Bloqueada (HTML)' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     console.log('📊 Respuesta de ShowUserTransfersByAgent:', JSON.stringify(data).substring(0, 500));
@@ -643,7 +659,7 @@ async function creditUserBalance(username, amount) {
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP Bloqueada (HTML)' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     // Detectar sesión inválida y reintentar una vez
@@ -666,7 +682,7 @@ async function creditUserBalance(username, amount) {
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
       const retryResp = await client.post('', retryBody, { headers: retryHeaders });
       data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return { success: false, error: 'IP Bloqueada (HTML)' };
+      if (isHtmlBlocked(data)) return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     console.log("📩 Resultado DepositMoney:", JSON.stringify(data));
@@ -714,6 +730,9 @@ async function depositToUser(username, amount, description = '') {
 
     let createSuccess = false;
     let createError = '';
+    // True cuando CREATEUSER nos confirma que el usuario YA existe — eso significa
+    // que la lookup nos dio un falso negativo y debemos re-buscar en vez de fallar.
+    let userAlreadyExists = false;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       console.log(`🔄 Intento ${attempt}/3 de crear usuario: ${username}`);
@@ -728,31 +747,61 @@ async function depositToUser(username, amount, description = '') {
         createSuccess = true;
         console.log(`✅ Usuario creado exitosamente en intento ${attempt}`);
         break;
-      } else {
-        createError = typeof createResult.error === 'string'
-          ? createResult.error
-          : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
-        console.log(`❌ Intento ${attempt} falló: ${createError}`);
-        if (attempt < 3) {
-          await new Promise(r => setTimeout(r, 2000 * attempt));
-        }
+      }
+
+      createError = typeof createResult.error === 'string'
+        ? createResult.error
+        : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
+      console.log(`❌ Intento ${attempt} falló: ${createError}`);
+
+      // Si JUGAYGANA dice "user already existing" (o variantes), el usuario YA existe.
+      // No es un error real: significa que nuestra lookup dio un falso negativo.
+      // Salimos del loop y caemos al bloque de re-búsqueda — NO seguimos reintentando
+      // CREATEUSER (cada reintento volvería a dar el mismo error).
+      const errLower = createError.toLowerCase();
+      if (errLower.includes('already exist') || errLower.includes('already existing') ||
+          errLower.includes('duplicate') || errLower.includes('ya existe')) {
+        console.warn(`⚠️  CREATEUSER confirma que ${username} ya existe → la lookup dio falso negativo. Reintentando búsqueda...`);
+        userAlreadyExists = true;
+        break;
+      }
+
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 2000 * attempt));
       }
     }
 
-    if (createSuccess) {
-      console.log(`⏳ Esperando a que el usuario esté disponible...`);
+    // Si el usuario YA existía O lo acabamos de crear, esperamos a que aparezca en la búsqueda.
+    if (createSuccess || userAlreadyExists) {
+      console.log(`⏳ ${createSuccess ? 'Esperando a que el usuario esté disponible' : 'Re-buscando usuario que ya existía'}...`);
       for (let waitAttempt = 1; waitAttempt <= 5; waitAttempt++) {
-        await new Promise(r => setTimeout(r, 1500));
+        // En el primer intento no esperamos si el usuario ya existía — la lookup
+        // anterior fue justo antes y puede haber cambiado el estado de la API.
+        // En reintentos sí esperamos para dar tiempo a la propagación / replica lag.
+        if (waitAttempt > 1 || createSuccess) {
+          await new Promise(r => setTimeout(r, 1500));
+        }
         const reLookup = await lookupUserOrError(username);
         if (reLookup.status === 'found') {
           userInfo = reLookup.user;
-          console.log(`✅ Usuario encontrado después de ${waitAttempt} intentos de espera`);
+          console.log(`✅ Usuario encontrado después de ${waitAttempt} intento(s) de espera`);
           break;
+        }
+        if (reLookup.status === 'error') {
+          console.warn(`⚠️  Re-lookup intento ${waitAttempt}/5: error transitorio (${reLookup.error}), seguimos reintentando`);
         }
       }
     }
 
     if (!userInfo) {
+      // Mensaje más claro según el caso real, sin culpar al usuario.
+      if (userAlreadyExists) {
+        console.error(`❌ ${username} existe en JUGAYGANA pero no pudimos confirmarlo tras varios reintentos`);
+        return {
+          success: false,
+          error: 'JUGAYGANA está respondiendo intermitente — el usuario existe pero no podemos confirmarlo ahora. Reintentá en 1-2 minutos.'
+        };
+      }
       console.error(`❌ No se pudo crear o encontrar el usuario después de múltiples intentos`);
       return { success: false, error: `No se pudo crear el usuario: ${createError}. Por favor, intente nuevamente.` };
     }
@@ -778,7 +827,7 @@ async function depositToUser(username, amount, description = '') {
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP Bloqueada (HTML)' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     // Detectar sesión inválida y reintentar una vez
@@ -802,7 +851,7 @@ async function depositToUser(username, amount, description = '') {
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
       const retryResp = await client.post('', retryBody, { headers: retryHeaders });
       data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return { success: false, error: 'IP Bloqueada (HTML)' };
+      if (isHtmlBlocked(data)) return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     console.log("📩 Resultado DepositMoney:", JSON.stringify(data));
@@ -849,6 +898,9 @@ async function withdrawFromUser(username, amount, description = '') {
 
     let createSuccess = false;
     let createError = '';
+    // True cuando CREATEUSER nos confirma que el usuario YA existe — eso significa
+    // que la lookup nos dio un falso negativo y debemos re-buscar en vez de fallar.
+    let userAlreadyExists = false;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       console.log(`🔄 Intento ${attempt}/3 de crear usuario: ${username}`);
@@ -863,31 +915,55 @@ async function withdrawFromUser(username, amount, description = '') {
         createSuccess = true;
         console.log(`✅ Usuario creado exitosamente en intento ${attempt}`);
         break;
-      } else {
-        createError = typeof createResult.error === 'string'
-          ? createResult.error
-          : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
-        console.log(`❌ Intento ${attempt} falló: ${createError}`);
-        if (attempt < 3) {
-          await new Promise(r => setTimeout(r, 2000 * attempt));
-        }
+      }
+
+      createError = typeof createResult.error === 'string'
+        ? createResult.error
+        : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
+      console.log(`❌ Intento ${attempt} falló: ${createError}`);
+
+      // Si JUGAYGANA dice "user already existing", el usuario YA existe — la
+      // lookup dio falso negativo. Salir del loop y re-buscar (mismo patrón
+      // que depositToUser).
+      const errLower = createError.toLowerCase();
+      if (errLower.includes('already exist') || errLower.includes('already existing') ||
+          errLower.includes('duplicate') || errLower.includes('ya existe')) {
+        console.warn(`⚠️  CREATEUSER confirma que ${username} ya existe → la lookup dio falso negativo. Reintentando búsqueda...`);
+        userAlreadyExists = true;
+        break;
+      }
+
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, 2000 * attempt));
       }
     }
 
-    if (createSuccess) {
-      console.log(`⏳ Esperando a que el usuario esté disponible...`);
+    if (createSuccess || userAlreadyExists) {
+      console.log(`⏳ ${createSuccess ? 'Esperando a que el usuario esté disponible' : 'Re-buscando usuario que ya existía'}...`);
       for (let waitAttempt = 1; waitAttempt <= 5; waitAttempt++) {
-        await new Promise(r => setTimeout(r, 1500));
+        if (waitAttempt > 1 || createSuccess) {
+          await new Promise(r => setTimeout(r, 1500));
+        }
         const reLookup = await lookupUserOrError(username);
         if (reLookup.status === 'found') {
           userInfo = reLookup.user;
-          console.log(`✅ Usuario encontrado después de ${waitAttempt} intentos de espera`);
+          console.log(`✅ Usuario encontrado después de ${waitAttempt} intento(s) de espera`);
           break;
+        }
+        if (reLookup.status === 'error') {
+          console.warn(`⚠️  Re-lookup intento ${waitAttempt}/5: error transitorio (${reLookup.error}), seguimos reintentando`);
         }
       }
     }
 
     if (!userInfo) {
+      if (userAlreadyExists) {
+        console.error(`❌ ${username} existe en JUGAYGANA pero no pudimos confirmarlo tras varios reintentos`);
+        return {
+          success: false,
+          error: 'JUGAYGANA está respondiendo intermitente — el usuario existe pero no podemos confirmarlo ahora. Reintentá en 1-2 minutos.'
+        };
+      }
       console.error(`❌ No se pudo crear o encontrar el usuario después de múltiples intentos`);
       return { success: false, error: `No se pudo crear el usuario: ${createError}. Por favor, intente nuevamente.` };
     }
@@ -912,7 +988,7 @@ async function withdrawFromUser(username, amount, description = '') {
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP Bloqueada (HTML)' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     // Detectar sesión inválida y reintentar una vez
@@ -935,7 +1011,7 @@ async function withdrawFromUser(username, amount, description = '') {
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
       const retryResp = await client.post('', retryBody, { headers: retryHeaders });
       data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return { success: false, error: 'IP Bloqueada (HTML)' };
+      if (isHtmlBlocked(data)) return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     console.log("📩 Resultado WithdrawMoney:", JSON.stringify(data));
@@ -1035,7 +1111,7 @@ async function getUserNetLastWeek(username) {
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP Bloqueada (HTML)' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     const totalDepositsCents = Number(data?.total_deposits || 0);
@@ -1136,7 +1212,7 @@ async function getUserNetLastMonth(username) {
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP Bloqueada (HTML)' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     const totalDepositsCents = Number(data?.total_deposits || 0);
@@ -1210,7 +1286,7 @@ async function changeUserPassword(username, currentPassword, newPassword) {
 
     const loginData = parsePossiblyWrappedJson(loginResp.data);
     if (isHtmlBlocked(loginData)) {
-      return { success: false, error: 'IP bloqueada / HTML en login' };
+      return { success: false, error: 'JUGAYGANA no respondió bien al login (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     const userToken = loginData?.token || loginData?.data?.token;
@@ -1235,7 +1311,7 @@ async function changeUserPassword(username, currentPassword, newPassword) {
 
     const changeData = parsePossiblyWrappedJson(changeResp.data);
     if (isHtmlBlocked(changeData)) {
-      return { success: false, error: 'IP bloqueada / HTML en cambio de contraseña' };
+      return { success: false, error: 'JUGAYGANA no respondió bien al cambio de contraseña (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
 
     if (changeData?.success) {

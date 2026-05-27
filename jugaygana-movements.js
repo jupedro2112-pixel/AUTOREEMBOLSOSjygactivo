@@ -85,7 +85,7 @@ async function getUserMovements(username, options = {}) {
     
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP bloqueada / respuesta HTML' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
     
     // Debug: mostrar la respuesta completa
@@ -290,7 +290,7 @@ async function makeDeposit(username, amount, description = '') {
     
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP bloqueada / respuesta HTML' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
     
     // Verificar respuesta exitosa
@@ -378,7 +378,7 @@ async function makeWithdrawal(username, amount, description = '') {
     
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'IP bloqueada / respuesta HTML' };
+      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
     }
     
     // Verificar respuesta exitosa

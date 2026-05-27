@@ -360,6 +360,19 @@ const userSchema = new mongoose.Schema({
     bonos: { type: Number, default: 0 },
     invitaciones: { type: Number, default: 0 },
     regalos: { type: Number, default: 0 }
+  },
+
+  // Anti-multicuenta: IP y user-agent capturados al momento del registro.
+  // Permiten auditar cuentas creadas desde el mismo dispositivo/conexión y
+  // detectar patrones de abuso del bono de instalación.
+  registrationIp: {
+    type: String,
+    default: null,
+    index: true
+  },
+  registrationUserAgent: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true,

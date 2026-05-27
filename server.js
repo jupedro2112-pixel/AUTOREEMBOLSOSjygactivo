@@ -111,6 +111,9 @@ const sensitiveLimiter = rateLimit({
 const smsIpStore = new Map();
 // Tracks bulk SMS requests per IP: { ip -> [timestamp, ...] }
 const bulkSmsIpStore = new Map();
+// Tracks user registrations per IP: { ip -> [timestamp, ...] }
+// Anti-multicuenta: limita creación masiva de cuentas desde una misma IP.
+const registerIpStore = new Map();
 
 // Periodically clean up expired entries to prevent memory leaks (every 30 minutes)
 setInterval(() => {
@@ -124,6 +127,11 @@ setInterval(() => {
     const valid = timestamps.filter(ts => ts > now - 60 * 60 * 1000);
     if (valid.length === 0) bulkSmsIpStore.delete(ip);
     else bulkSmsIpStore.set(ip, valid);
+  }
+  for (const [ip, timestamps] of registerIpStore) {
+    const valid = timestamps.filter(ts => ts > now - 60 * 60 * 1000);
+    if (valid.length === 0) registerIpStore.delete(ip);
+    else registerIpStore.set(ip, valid);
   }
 }, 30 * 60 * 1000).unref();
 
@@ -172,6 +180,16 @@ const bulkSmsIpLimiter = createIpSmsLimiter(
   60 * 60 * 1000,
   1,
   'Demasiadas solicitudes de SMS masivo. Por favor, intenta nuevamente en una hora.'
+);
+
+// Anti-multicuenta: máximo 3 registros por IP por hora. Bloquea la creación
+// masiva de cuentas desde el mismo dispositivo/conexión para abusar del bono.
+// Se aplica tanto a /api/auth/register como a /api/auth/register-quick.
+const registerIpLimiter = createIpSmsLimiter(
+  registerIpStore,
+  60 * 60 * 1000,
+  3,
+  'Demasiados registros desde tu conexión. Esperá una hora antes de crear otra cuenta.'
 );
 
 // ============================================
@@ -1383,7 +1401,7 @@ app.post('/api/upload/presigned-url', authMiddleware, async (req, res) => {
 });
 
 // Registro de usuario
-app.post('/api/auth/register', authLimiter, async (req, res) => {
+app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) => {
   try {
     const { username, password, email, phone, referralCode, otpCode, campaignCode, utm, fbc, fbp, landingUrl } = req.body;
 
@@ -1536,7 +1554,10 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
       metaFbc,
       metaFbp,
       // Landing URL: la usa fbAdsWebhookService para mandarla a fb-ads.
-      landingUrl: (typeof landingUrl === 'string' && landingUrl.length <= 2000) ? landingUrl : null
+      landingUrl: (typeof landingUrl === 'string' && landingUrl.length <= 2000) ? landingUrl : null,
+      // Anti-multicuenta: huella de origen del registro.
+      registrationIp: req.ip || req.socket?.remoteAddress || null,
+      registrationUserAgent: (req.get('User-Agent') || '').slice(0, 500) || null
     });
 
     // Registrar evento de referido para trazabilidad
@@ -1631,7 +1652,7 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 // el primer retiro le exigirá verificar un teléfono real antes de procesarse.
 // Requiere campaignCode válido y activo para evitar abuso (un atacante no puede
 // crear cuentas sin OTP a discreción — necesita un código real de pauta).
-app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
+app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req, res) => {
   try {
     const { username, password, email, campaignCode, visitorId, utm, metaEventId, fbc, fbp, landingUrl } = req.body || {};
 
@@ -1717,7 +1738,10 @@ app.post('/api/auth/register-quick', authLimiter, async (req, res) => {
       metaFbc,
       metaFbp,
       // Landing URL: la usa fbAdsWebhookService para mandarla a fb-ads.
-      landingUrl: (typeof landingUrl === 'string' && landingUrl.length <= 2000) ? landingUrl : null
+      landingUrl: (typeof landingUrl === 'string' && landingUrl.length <= 2000) ? landingUrl : null,
+      // Anti-multicuenta: huella de origen del registro.
+      registrationIp: req.ip || req.socket?.remoteAddress || null,
+      registrationUserAgent: (req.get('User-Agent') || '').slice(0, 500) || null
     });
 
     await ChatStatus.create({
@@ -6729,6 +6753,35 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       });
     }
 
+    // Anti-multicuenta por dispositivo: si alguno de los tokens FCM de este
+    // usuario ya está registrado en OTRO usuario que YA reclamó el bono, este
+    // bono no se acredita. Bloquea el patrón "mismo celular → cuenta nueva →
+    // cobrar bono otra vez" en los casos donde Firebase reutiliza el token.
+    const userTokens = [];
+    if (user.fcmToken) userTokens.push(user.fcmToken);
+    if (Array.isArray(user.fcmTokens)) {
+      for (const t of user.fcmTokens) {
+        if (t && t.token && !userTokens.includes(t.token)) userTokens.push(t.token);
+      }
+    }
+    if (userTokens.length > 0) {
+      const deviceConflict = await User.findOne({
+        id: { $ne: req.user.userId },
+        installBonusClaimed: true,
+        $or: [
+          { fcmToken: { $in: userTokens } },
+          { 'fcmTokens.token': { $in: userTokens } }
+        ]
+      }).select('username id installBonusClaimedAt').lean();
+      if (deviceConflict) {
+        logger.warn(`[install-bonus] DEVICE_ALREADY_CLAIMED bloqueado: user=${user.username} conflictWith=${deviceConflict.username} claimedAt=${deviceConflict.installBonusClaimedAt}`);
+        return res.status(400).json({
+          error: 'Este dispositivo ya recibió el bono de instalación en otra cuenta.',
+          code: 'DEVICE_ALREADY_CLAIMED'
+        });
+      }
+    }
+
     // Reserva atómica del bono: setea el flag SOLO si todavía no fue
     // reclamado. Si otro request concurrente ganó la carrera, éste recibe
     // null y aborta — sin esto, dos requests simultáneos cobraban doble.
@@ -7985,6 +8038,135 @@ app.get('/api/admin/central/welcome-bonus', authMiddleware, adminMiddleware, asy
     });
   } catch (error) {
     console.error('Error en central/welcome-bonus:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Cuentas sospechosas: agrupa usuarios por phone / registrationIp / fcmToken
+// para detectar posibles multicuentas creadas para abusar del bono de instalación.
+// Solo reporta grupos con 2+ cuentas; el admin revisa y decide si bloquear.
+// NOTA: registrationIp/UserAgent solo se capturan desde el deploy del fix
+// anti-multicuenta — usuarios viejos saldrán con ese campo en null.
+app.get('/api/admin/suspicious-accounts', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const minBonusOnly = req.query.bonusOnly === '1' || req.query.bonusOnly === 'true';
+    const matchBase = { role: 'user' };
+    if (minBonusOnly) matchBase.installBonusClaimed = true;
+
+    // 1) Agrupados por phone (ignorando null/vacío).
+    const byPhoneRaw = await User.aggregate([
+      { $match: { ...matchBase, phone: { $ne: null, $exists: true } } },
+      { $group: {
+        _id: '$phone',
+        count: { $sum: 1 },
+        users: { $push: {
+          username: '$username',
+          id: '$id',
+          installBonusClaimed: '$installBonusClaimed',
+          installBonusClaimedAt: '$installBonusClaimedAt',
+          createdAt: '$createdAt',
+          isBlocked: '$isBlocked'
+        } }
+      } },
+      { $match: { count: { $gte: 2 } } },
+      { $sort: { count: -1 } },
+      { $limit: 200 }
+    ]);
+    const byPhone = byPhoneRaw.map(g => ({
+      phone: g._id,
+      count: g.count,
+      bonusClaimedCount: g.users.filter(u => u.installBonusClaimed === true).length,
+      users: g.users
+    }));
+
+    // 2) Agrupados por registrationIp (ignorando null).
+    const byIpRaw = await User.aggregate([
+      { $match: { ...matchBase, registrationIp: { $ne: null, $exists: true } } },
+      { $group: {
+        _id: '$registrationIp',
+        count: { $sum: 1 },
+        users: { $push: {
+          username: '$username',
+          id: '$id',
+          phone: '$phone',
+          installBonusClaimed: '$installBonusClaimed',
+          installBonusClaimedAt: '$installBonusClaimedAt',
+          createdAt: '$createdAt',
+          isBlocked: '$isBlocked'
+        } }
+      } },
+      { $match: { count: { $gte: 2 } } },
+      { $sort: { count: -1 } },
+      { $limit: 200 }
+    ]);
+    const byIp = byIpRaw.map(g => ({
+      registrationIp: g._id,
+      count: g.count,
+      bonusClaimedCount: g.users.filter(u => u.installBonusClaimed === true).length,
+      users: g.users
+    }));
+
+    // 3) Agrupados por fcmToken — combina el campo singular legacy y el array.
+    // Hace dos unwinds (uno virtual del singular vía $cond) y agrupa por token.
+    const byTokenRaw = await User.aggregate([
+      { $match: matchBase },
+      { $project: {
+        id: 1, username: 1, phone: 1,
+        installBonusClaimed: 1, installBonusClaimedAt: 1, createdAt: 1, isBlocked: 1,
+        allTokens: {
+          $setUnion: [
+            { $cond: [{ $and: [{ $ne: ['$fcmToken', null] }, { $ne: ['$fcmToken', ''] }] }, ['$fcmToken'], []] },
+            { $ifNull: [{ $map: { input: '$fcmTokens', as: 't', in: '$$t.token' } }, []] }
+          ]
+        }
+      } },
+      { $unwind: '$allTokens' },
+      { $match: { allTokens: { $nin: [null, ''] } } },
+      { $group: {
+        _id: '$allTokens',
+        count: { $sum: 1 },
+        users: { $push: {
+          username: '$username',
+          id: '$id',
+          phone: '$phone',
+          installBonusClaimed: '$installBonusClaimed',
+          installBonusClaimedAt: '$installBonusClaimedAt',
+          createdAt: '$createdAt',
+          isBlocked: '$isBlocked'
+        } }
+      } },
+      { $match: { count: { $gte: 2 } } },
+      { $sort: { count: -1 } },
+      { $limit: 200 }
+    ]);
+    const byFcmToken = byTokenRaw.map(g => ({
+      fcmToken: g._id ? (String(g._id).slice(0, 12) + '…' + String(g._id).slice(-8)) : null,
+      fcmTokenFull: g._id,
+      count: g.count,
+      bonusClaimedCount: g.users.filter(u => u.installBonusClaimed === true).length,
+      users: g.users
+    }));
+
+    const summary = {
+      groupsByPhone: byPhone.length,
+      groupsByIp: byIp.length,
+      groupsByFcmToken: byFcmToken.length,
+      totalUsersAffected: new Set([
+        ...byPhone.flatMap(g => g.users.map(u => u.id)),
+        ...byIp.flatMap(g => g.users.map(u => u.id)),
+        ...byFcmToken.flatMap(g => g.users.map(u => u.id))
+      ]).size
+    };
+
+    res.json({
+      filter: { bonusOnly: minBonusOnly },
+      summary,
+      byPhone,
+      byIp,
+      byFcmToken
+    });
+  } catch (error) {
+    console.error('Error en suspicious-accounts:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

@@ -412,6 +412,11 @@ function setupEventListeners() {
         const openNotifPlanBtn = document.getElementById('openNotifPlanBtn');
         if (openNotifPlanBtn) openNotifPlanBtn.addEventListener('click', VIP.notifSurvey.openEditable);
 
+        // Publisher welcome — bind de los botones del modal de bienvenida de 2 pasos
+        if (VIP.publisherWelcome && typeof VIP.publisherWelcome.init === 'function') {
+            VIP.publisherWelcome.init();
+        }
+
         // Cambio de contraseña — entrada temporal (fallback cuando el SMS no llega)
         const cpTemporalBtn = document.getElementById('changePasswordTemporalBtn');
         if (cpTemporalBtn) cpTemporalBtn.addEventListener('click', VIP.auth.handleChangePasswordTemporalEntry);

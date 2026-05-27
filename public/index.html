@@ -1492,6 +1492,77 @@
     </div>
 
     <!-- Modal Encuesta de Plan de Notificaciones (se muestra al abrir la app instalada) -->
+    <!-- ================================================================== -->
+    <!-- PUBLISHER WELCOME — bienvenida en 2 pasos para usuarios que entran  -->
+    <!-- desde un publicista (acquisitionCampaign set, publisherWelcomeSeenAt -->
+    <!-- null). No es cerrable: el usuario tiene que recorrer paso 1 → paso 2 -->
+    <!-- → tildar el checkbox → tocar "Comenzar a jugar".                    -->
+    <!-- ================================================================== -->
+    <div id="publisherWelcomeModal" class="modal hidden">
+        <div class="modal-content" style="max-width: 480px; position: relative;">
+            <!-- Sin botón de cerrar: es obligatorio. -->
+
+            <!-- Paso 1: Bienvenida -->
+            <div id="publisherWelcomeStep1">
+                <div style="text-align:center; font-size:40px; line-height:1; margin-bottom:8px;">👋</div>
+                <div class="modal-header" style="margin-bottom:16px; text-align:center;">
+                    <h2 style="font-size:1.4em; color:#d4af37;">BIENVENIDO A VIPCARGAS</h2>
+                </div>
+                <div style="color:#d8d8d8; font-size:14px; line-height:1.55; display:grid; gap:12px;">
+                    <p style="margin:0;">Esta página es donde vas a comunicarte para realizar tus <strong>cargas</strong> y <strong>retiros</strong>.</p>
+                    <p style="margin:0; background:rgba(212,175,55,0.08); border:1px solid rgba(212,175,55,0.25); border-radius:8px; padding:10px 12px;">
+                        📩 Si venís de publicidad, enviá el comprobante de tu carga así se te realiza. Una vez enviado se acredita al instante y ya podés jugar.
+                    </p>
+                    <p style="margin:0; background:rgba(99,102,241,0.08); border:1px solid rgba(99,102,241,0.25); border-radius:8px; padding:10px 12px;">
+                        🤝 Si venís por un referido, creá tu usuario, contraseña y el código de referido.
+                    </p>
+                    <p style="margin:0; color:#aaa; font-size:12px; font-style:italic; padding:8px 0; border-top:1px dashed rgba(255,255,255,0.1);">
+                        🔒 Se pide número de teléfono a cada usuario para que su contraseña sea segura. Ninguna persona tiene acceso a los datos guardados.
+                    </p>
+                </div>
+                <div style="margin-top:20px;">
+                    <button type="button" id="publisherWelcomeNextBtn" class="btn btn-primary" style="width:100%; padding:14px; font-weight:bold; font-size:15px;">
+                        Siguiente →
+                    </button>
+                </div>
+            </div>
+
+            <!-- Paso 2: Beneficios + checkbox obligatorio -->
+            <div id="publisherWelcomeStep2" style="display:none;">
+                <div style="text-align:center; font-size:40px; line-height:1; margin-bottom:8px;">🎁</div>
+                <div class="modal-header" style="margin-bottom:16px; text-align:center;">
+                    <h2 style="font-size:1.3em; color:#d4af37;">BENEFICIOS DE JUGAR EN VIPCARGAS</h2>
+                </div>
+                <ul style="list-style:none; padding:0; margin:0 0 14px; display:grid; gap:9px; color:#d8d8d8; font-size:14px;">
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Atención personalizada 24/7</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Sistema de referidos</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Retiros al instante 24/7</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Sin límite de retiros</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Racha diaria reclamable</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Reembolsos diarios, semanales y mensuales</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Premios, bonificaciones y más</span></li>
+                </ul>
+
+                <div style="background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:11.5px; color:#a0a0a0; line-height:1.5;">
+                    <p style="margin:0 0 4px; color:#d4af37; font-weight:700; font-size:12px;">📋 Reglas básicas de retiros</p>
+                    <p style="margin:0;">Una vez que pedís un retiro, se procesa al instante con tus datos bancarios. Si los datos están mal cargados, se cancela y te avisamos por chat. No hay límite de retiros por día.</p>
+                </div>
+
+                <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:12px; background:rgba(212,175,55,0.08); border:1px solid rgba(212,175,55,0.3); border-radius:8px; margin-bottom:14px;">
+                    <input type="checkbox" id="publisherWelcomeAcceptCheck" style="margin-top:3px; width:18px; height:18px; accent-color:#d4af37; flex-shrink:0;">
+                    <span style="color:#d8d8d8; font-size:13px; line-height:1.45;">Leí y entendí las instrucciones y las reglas de retiros.</span>
+                </label>
+
+                <div style="display:flex; gap:8px;">
+                    <button type="button" id="publisherWelcomeBackBtn" class="btn btn-secondary" style="flex:1; padding:12px;">← Volver</button>
+                    <button type="button" id="publisherWelcomeFinishBtn" class="btn btn-primary" disabled style="flex:2; padding:14px; font-weight:bold; font-size:15px; opacity:0.5;">
+                        🎮 COMENZAR A JUGAR
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="notifSurveyModal" class="modal hidden">
         <div class="modal-content" style="max-width: 420px; position: relative;">
             <button id="notifSurveyCloseBtn" type="button" style="display:none; position:absolute; top:14px; right:14px; background:none; border:none; color:#888; font-size:24px; cursor:pointer; z-index:10;">✕</button>
@@ -1728,6 +1799,7 @@
     <script src="/js/withdraw.js"></script>
     <script src="/js/installbonus.js"></script>
     <script src="/js/notifsurvey.js"></script>
+    <script src="/js/publisherwelcome.js"></script>
     <script src="/js/apptest.js"></script>
     <script src="/js/app.js"></script>
     

@@ -265,6 +265,15 @@ const userSchema = new mongoose.Schema({
     default: 'organic',
     index: true
   },
+  // Sólo aplica a usuarios atribuidos a una campaña (acquisitionCampaign set):
+  // marca la primera vez que el usuario vio y aceptó el welcome de 2 pasos
+  // ("Bienvenido a VIPCARGAS" + "Beneficios de jugar"). El modal se muestra
+  // mientras esto sea null. Una vez tildado el checkbox y tocado "Comenzar a
+  // jugar", el frontend marca esta fecha y no vuelve a aparecer.
+  publisherWelcomeSeenAt: {
+    type: Date,
+    default: null
+  },
   // Sólo se llena cuando acquisitionSource='manual': identifica al
   // publisher_admin (o admin futuro) que creó el usuario desde el panel.
   // Permite reportes de "cuántos usuarios trajo cada cuenta publicista".

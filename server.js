@@ -495,7 +495,7 @@ app.use(xss());
 // Fields exposed to the authenticated user about their own profile.
 // Keep this list minimal – internal fields (jugaygana IDs, FCM tokens, etc.)
 // are excluded intentionally to reduce accidental data exposure.
-const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign notificationPlan';
+const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign acquisitionSource publisherWelcomeSeenAt notificationPlan';
 
 // Admin roles are internal VIPCARGAS accounts that have NO counterpart in
 // JUGAYGANA. They must never be routed through any JUGAYGANA sync, default-
@@ -2379,6 +2379,27 @@ app.get('/api/users/me', authMiddleware, async (req, res) => {
     res.json({ ...user, metaMatching });
   } catch (error) {
     console.error('Error obteniendo usuario:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/users/me/publisher-welcome-seen
+// Marca que el usuario ya leyó y aceptó el welcome de 2 pasos que se muestra
+// a quienes vinieron de una campaña/publicista. Idempotente: si ya está marcado,
+// devuelve OK sin tocar la fecha (preserva el primer registro).
+app.post('/api/users/me/publisher-welcome-seen', authMiddleware, async (req, res) => {
+  try {
+    const result = await User.updateOne(
+      { id: req.user.userId, publisherWelcomeSeenAt: null },
+      { $set: { publisherWelcomeSeenAt: new Date() } }
+    );
+    res.json({
+      success: true,
+      // alreadySeen: ya estaba marcado de antes (idempotencia)
+      alreadySeen: result.matchedCount === 0
+    });
+  } catch (err) {
+    logger.error(`[publisher-welcome-seen] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

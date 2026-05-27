@@ -14,7 +14,7 @@
 //
 // Flujo:
 //   Paso 1 (bienvenida con nombre del publicista) → [Siguiente]
-//   Paso 2 (beneficios + checkbox obligatorio) → [COMENZAR A JUGAR]
+//   Paso 2 (beneficios + checkbox obligatorio) → [Iniciar sesión]
 //   Cierra el modal y el usuario sigue con su flujo normal (registro / login).
 // =====================================================================
 window.VIP = window.VIP || {};

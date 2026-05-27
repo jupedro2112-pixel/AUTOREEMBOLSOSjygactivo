@@ -35,22 +35,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Auto-abrir el pantallazo del servicio cuando el visitante llega por un
-    // link de publicista (?p=CODE) y no tiene sesión iniciada. Muestra los
-    // beneficios del servicio con un CTA "Registrate aquí" que abre el
-    // registro — primero le mostramos qué ofrecemos, después convertimos.
-    if (VIP.campaign && VIP.campaign.wasFreshlyCaptured() && !VIP.state.currentToken) {
-        // Pequeño defer para que el DOM termine de pintar y la animación del
-        // modal se vea fluida en mobile.
-        setTimeout(() => {
-            try {
-                VIP.ui.showModal('adServiceModal');
-                if (VIP.reviews && VIP.reviews.renderAdSection) VIP.reviews.renderAdSection();
-            } catch (e) {
-                console.warn('[campaign] no se pudo auto-abrir el pantallazo del servicio:', e && e.message);
-            }
-        }, 250);
-    }
+    // NOTA: el viejo adServiceModal ("Información del Servicio") se auto-abría
+    // acá para visitantes con atribución de publicidad. Ahora el welcome de 2
+    // pasos (VIP.publisherWelcome.maybeShow, disparado más arriba) cubre el
+    // mismo propósito con flujo obligatorio. El adServiceModal queda en el
+    // HTML por si se invoca manualmente en algún flujo, pero ya no se dispara
+    // automáticamente — evita el race condition donde el cliente veía ambos
+    // modales en secuencia.
 
     VIP.notifications.registerUserServiceWorker();
 

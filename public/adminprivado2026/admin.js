@@ -399,10 +399,17 @@ async function handleLogin(e) {
             
             // Primero mostrar el panel
             showApp();
-            
+
+            // publisher_admin: vista limitada. Skip socket / chats / FCM /
+            // stats globales (no tiene permisos y generaría 403 ruidosos).
+            if (currentAdmin?.role === 'publisher_admin') {
+                showToast('Login exitoso', 'success');
+                return;
+            }
+
             // CORREGIDO: Solicitar permiso para notificaciones del navegador
             requestNotificationPermission();
-            
+
             // Send FCM token to backend now that we have an auth token
             const pendingFcmToken = localStorage.getItem('adminFcmToken');
             if (pendingFcmToken) {
@@ -417,20 +424,20 @@ async function handleLogin(e) {
                     if (d.success) console.log('[FCM Admin] ✅ Token registrado post-login');
                 }).catch(() => {});
             }
-            
+
             // Luego intentar cargar datos (con manejo de errores)
             try {
                 initSocket();
             } catch (e) {
                 console.log('Socket no disponible:', e);
             }
-            
+
             try {
                 loadConversations();
             } catch (e) {
                 console.log('Error cargando conversaciones:', e);
             }
-            
+
             try {
                 loadStats();
             } catch (e) {
@@ -438,7 +445,7 @@ async function handleLogin(e) {
             }
 
             startConversationReconciliation();
-            
+
             showToast('Login exitoso', 'success');
         } else {
             showLoginError(data.message || data.error || 'Credenciales inválidas');
@@ -462,6 +469,12 @@ async function checkAdminSession() {
             currentAdmin = data.user;
             setupRoleBasedUI();
             showApp();
+            // publisher_admin: vista limitada — no carga socket / chats /
+            // stats globales / comandos. setupRoleBasedUI ya disparó sus
+            // stats propios via loadPublisherAdminStats().
+            if (currentAdmin?.role === 'publisher_admin') {
+                return;
+            }
             initSocket();
             // Solicitar permiso para notificaciones al iniciar
             requestNotificationPermission();
@@ -533,6 +546,38 @@ function showPasswordChangeModal() {
 function setupRoleBasedUI() {
     const role = currentAdmin?.role;
     console.log('[Admin Panel] Rol detectado:', currentAdmin?.role);
+
+    // ============================================================
+    // PUBLISHER_ADMIN — vista limitada
+    // Esta cuenta no ve nada del panel general: ocultamos sidebar
+    // entero, stats-bar, y todas las secciones excepto su panel
+    // dedicado. Sale temprano para no aplicar la lógica de tabs/chats
+    // que no aplica a este rol.
+    // ============================================================
+    if (role === 'publisher_admin') {
+        const sidebar = document.querySelector('.sidebar');
+        if (sidebar) sidebar.style.display = 'none';
+        const statsBar = document.querySelector('.stats-bar');
+        if (statsBar) statsBar.style.display = 'none';
+        // Ocultar TODAS las secciones primero...
+        document.querySelectorAll('section.section').forEach(s => {
+            s.classList.remove('active');
+            s.style.display = 'none';
+        });
+        // ...y mostrar SÓLO la de publisher_admin.
+        const paSection = document.getElementById('publisherAdminSection');
+        if (paSection) {
+            paSection.style.display = 'block';
+            paSection.classList.add('active');
+        }
+        // Ajustar layout del main para que ocupe todo (sidebar oculto).
+        const main = document.querySelector('.main-content');
+        if (main) main.style.marginLeft = '0';
+        // Cargar stats iniciales.
+        loadPublisherAdminStats();
+        return;
+    }
+
     // Configurar pestañas visibles según el rol
     const tabOpen = document.querySelector('[data-tab="open"]');
     const tabClosed = document.querySelector('[data-tab="closed"]');
@@ -579,10 +624,145 @@ function setupRoleBasedUI() {
     if (smsNavItem) {
         smsNavItem.style.display = role === 'admin' ? '' : 'none';
     }
+
+    // Cuentas Publicistas y Dashboard Publicistas: sólo admin general
+    const paNavItem = document.querySelector('.nav-item-publisher-admins');
+    if (paNavItem) {
+        paNavItem.style.display = role === 'admin' ? '' : 'none';
+    }
+    const dashNavItem = document.querySelector('.nav-item-publishers-dashboard');
+    if (dashNavItem) {
+        dashNavItem.style.display = role === 'admin' ? '' : 'none';
+    }
     
     // Actualizar botones según la pestaña actual
     updateActionButtonsByTab();
 }
+
+// ============================================
+// PUBLISHER_ADMIN — vista limitada
+// ============================================
+// Sólo se invocan desde la vista publisher_admin (role==='publisher_admin').
+// Cualquier 403 acá indica desincronización entre frontend y backend; se
+// loguea pero no se propaga al usuario porque no hay nada que pueda hacer.
+
+async function loadPublisherAdminStats() {
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admin/my-stats`, {
+            credentials: 'include',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) {
+            console.warn('[publisher_admin] my-stats falló:', r.status);
+            return;
+        }
+        const data = await r.json();
+
+        // Título: "Juan Pérez — Meta Ads enero 2026"
+        const title = document.getElementById('paPublisherName');
+        const subtitle = document.getElementById('paPublisherSubtitle');
+        if (data.publisher) {
+            if (title) title.textContent = data.publisher.publisher;
+            if (subtitle) subtitle.textContent = data.publisher.name + ' (' + data.publisher.code + ')';
+        } else {
+            if (title) title.textContent = 'Mi panel';
+            if (subtitle) subtitle.textContent = 'Sin publicista asignado — contactá al administrador';
+        }
+
+        // Stats
+        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+        const elUsers = document.getElementById('paStatUsers');
+        const elDep = document.getElementById('paStatDeposits');
+        const elWit = document.getElementById('paStatWithdrawals');
+        const elNet = document.getElementById('paStatNet');
+        if (elUsers) elUsers.textContent = data.totals.users;
+        if (elDep) elDep.textContent = fmt(data.totals.deposits);
+        if (elWit) elWit.textContent = fmt(data.totals.withdrawals);
+        if (elNet) elNet.textContent = fmt(data.totals.netRevenue);
+
+        // Recent users
+        const recentBox = document.getElementById('paRecentUsers');
+        if (!recentBox) return;
+        if (!data.recentUsers || data.recentUsers.length === 0) {
+            recentBox.innerHTML = '<span style="color:#888;font-size:13px;">Todavía no creaste usuarios.</span>';
+        } else {
+            recentBox.innerHTML = data.recentUsers.map(u => {
+                const safe = (s) => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+                const dateStr = new Date(u.createdAt).toLocaleString('es-AR');
+                return `<div style="display:flex;justify-content:space-between;padding:10px 12px;background:#1a1a2e;border-radius:6px;font-size:13px;">
+                    <span style="color:#fff;font-weight:600;">${safe(u.username)}</span>
+                    <span style="color:#888;">${safe(dateStr)}</span>
+                </div>`;
+            }).join('');
+        }
+    } catch (e) {
+        console.error('[publisher_admin] loadPublisherAdminStats:', e);
+    }
+}
+
+async function paCreateUser() {
+    const usernameEl = document.getElementById('paNewUsername');
+    const passwordEl = document.getElementById('paNewPassword');
+    const phoneEl = document.getElementById('paNewPhone');
+    const errBox = document.getElementById('paCreateError');
+    const okBox = document.getElementById('paCreateSuccess');
+    const btn = document.getElementById('paCreateBtn');
+
+    if (errBox) errBox.style.display = 'none';
+    if (okBox) okBox.style.display = 'none';
+
+    const username = usernameEl?.value.trim();
+    const password = passwordEl?.value;
+    const phone = phoneEl?.value.trim();
+
+    if (!username || !password) {
+        if (errBox) {
+            errBox.textContent = 'Usuario y contraseña son obligatorios';
+            errBox.style.display = 'block';
+        }
+        return;
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Creando...'; }
+
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admin/create-user`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            },
+            body: JSON.stringify({ username, password, phone: phone || null })
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            if (errBox) {
+                errBox.textContent = data.error || 'Error creando usuario';
+                errBox.style.display = 'block';
+            }
+            return;
+        }
+        if (okBox) {
+            okBox.textContent = `✓ Usuario "${data.user.username}" creado correctamente. Pasale los datos por WhatsApp.`;
+            okBox.style.display = 'block';
+        }
+        usernameEl.value = '';
+        passwordEl.value = '';
+        phoneEl.value = '';
+        // Recargar stats para reflejar el nuevo usuario
+        loadPublisherAdminStats();
+    } catch (e) {
+        if (errBox) {
+            errBox.textContent = 'Error de conexión';
+            errBox.style.display = 'block';
+        }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Crear usuario'; }
+    }
+}
+// Exponer al global scope para los onclick="" del HTML
+window.paCreateUser = paCreateUser;
 
 // Actualizar botones de acción según la pestaña actual
 function updateActionButtonsByTab() {
@@ -3239,6 +3419,20 @@ function switchSection(section) {
     if (section === 'reembolsos') loadReembolsos();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
+    if (section === 'publisherAdmins') {
+        if (currentAdmin?.role !== 'admin') {
+            showToast('No tienes permiso para acceder a esta sección', 'error');
+            return;
+        }
+        loadPublisherAdmins();
+    }
+    if (section === 'publishersDashboard') {
+        if (currentAdmin?.role !== 'admin') {
+            showToast('No tienes permiso para acceder a esta sección', 'error');
+            return;
+        }
+        loadPublishersDashboard();
+    }
     if (section === 'sms') {
         if (currentAdmin?.role !== 'admin') {
             showToast('No tienes permiso para acceder a esta sección', 'error');
@@ -8837,3 +9031,393 @@ async function inactivosSaveConfig() {
         else { showToast(j.error || 'Error', 'error'); }
     } catch (e) { showToast('Error de conexión', 'error'); }
 }
+
+// ============================================
+// CUENTAS PUBLICISTAS (CRUD) — sólo admin general
+// ============================================
+// Carga la lista de cuentas publisher_admin y la renderiza con los datos de
+// su campaña asociada + conteo de usuarios que cada una creó.
+
+function _safe(str) {
+    return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadPublisherAdmins() {
+    const list = document.getElementById('publisherAdminsList');
+    if (!list) return;
+    list.innerHTML = '<span style="color:#888;">Cargando…</span>';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admins`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) {
+            list.innerHTML = '<span style="color:#ff6666;">Error cargando cuentas</span>';
+            return;
+        }
+        const data = await r.json();
+        const items = data.publisherAdmins || [];
+        if (items.length === 0) {
+            list.innerHTML = '<div style="color:#888;padding:20px;text-align:center;border:1px dashed rgba(255,255,255,0.1);border-radius:8px;">Todavía no hay cuentas de publicista. Tocá <strong style="color:#d4af37;">"+ Nueva cuenta"</strong> para crear la primera.</div>';
+            return;
+        }
+        list.innerHTML = items.map(pa => {
+            const campName = pa.campaign ? `${_safe(pa.campaign.publisher)} · ${_safe(pa.campaign.name)}` : '<span style="color:#ff6666;">Campaña no encontrada</span>';
+            const inactiveBadge = !pa.isActive ? '<span style="background:#3a1a1a;color:#ff6666;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;">INACTIVA</span>' : '';
+            const inactiveCamp = pa.campaign && pa.campaign.isActive === false ? '<span style="background:#3a1a1a;color:#ff6666;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;">CAMPAÑA INACTIVA</span>' : '';
+            const lastLogin = pa.lastLogin ? new Date(pa.lastLogin).toLocaleString('es-AR') : '<em style="color:#666;">nunca</em>';
+            return `
+                <div style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.2);border-radius:10px;padding:14px;display:grid;gap:8px;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                        <div>
+                            <strong style="color:#fff;font-size:15px;">${_safe(pa.username)}</strong>${inactiveBadge}${inactiveCamp}
+                            <div style="color:#aaa;font-size:12px;margin-top:2px;">${campName}</div>
+                        </div>
+                        <div style="display:flex;gap:6px;">
+                            <button onclick="showEditPublisherAdminModal('${_safe(pa.id)}')" style="padding:6px 12px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">Editar</button>
+                            <button onclick="togglePublisherAdminActive('${_safe(pa.id)}', ${!pa.isActive})" style="padding:6px 12px;background:${pa.isActive ? '#3a1a1a' : '#1a3a1a'};color:${pa.isActive ? '#ff6666' : '#4caf50'};border:none;border-radius:6px;cursor:pointer;font-size:12px;">${pa.isActive ? 'Desactivar' : 'Activar'}</button>
+                        </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;color:#aaa;font-size:11px;">
+                        <div>👥 Usuarios creados: <strong style="color:#d4af37;">${pa.usersCreatedCount}</strong></div>
+                        <div>📅 Creada: ${new Date(pa.createdAt).toLocaleDateString('es-AR')}</div>
+                        <div>🔑 Último login: ${lastLogin}</div>
+                        <div>🎯 Código: <code style="color:#d4af37;">${_safe(pa.publisherCampaignCode)}</code></div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        console.error('loadPublisherAdmins:', e);
+        list.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+    }
+}
+
+// Cargar el <select> de campañas en el modal con las campañas activas.
+async function _loadCampaignsIntoPaSelect(selectedCode) {
+    const sel = document.getElementById('paFormCampaignCode');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— Cargando —</option>';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/campaigns`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await r.json();
+        const all = data.campaigns || [];
+        const active = all.filter(c => c.isActive !== false);
+        if (active.length === 0) {
+            sel.innerHTML = '<option value="">— No hay campañas activas —</option>';
+            return;
+        }
+        sel.innerHTML = '<option value="">— Elegir campaña —</option>' + active.map(c =>
+            `<option value="${_safe(c.code)}" ${c.code === selectedCode ? 'selected' : ''}>${_safe(c.publisher)} · ${_safe(c.name)} (${_safe(c.code)})</option>`
+        ).join('');
+    } catch (e) {
+        sel.innerHTML = '<option value="">— Error cargando —</option>';
+    }
+}
+
+function showCreatePublisherAdminModal() {
+    document.getElementById('paFormMode').value = 'create';
+    document.getElementById('paFormEditId').value = '';
+    document.getElementById('paFormTitle').textContent = 'Nueva cuenta publicista';
+    document.getElementById('paFormUsername').value = '';
+    document.getElementById('paFormUsername').disabled = false;
+    document.getElementById('paFormPassword').value = '';
+    document.getElementById('paFormPasswordRequired').textContent = '*';
+    document.getElementById('paFormPasswordHint').textContent = 'Se le pasa al publicista por WhatsApp. Él podrá cambiarla después.';
+    document.getElementById('paFormEmail').value = '';
+    document.getElementById('paFormPhone').value = '';
+    document.getElementById('paFormActiveRow').style.display = 'none';
+    document.getElementById('paFormError').style.display = 'none';
+    _loadCampaignsIntoPaSelect();
+    showModal('publisherAdminFormModal');
+}
+
+async function showEditPublisherAdminModal(paId) {
+    // Cargar datos actuales de la lista (ya está en memoria como DOM, pero pedimos
+    // de nuevo por simplicidad y para tener datos frescos).
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admins`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await r.json();
+        const pa = (data.publisherAdmins || []).find(x => x.id === paId);
+        if (!pa) {
+            showToast('Cuenta no encontrada', 'error');
+            return;
+        }
+        document.getElementById('paFormMode').value = 'edit';
+        document.getElementById('paFormEditId').value = pa.id;
+        document.getElementById('paFormTitle').textContent = 'Editar cuenta publicista';
+        document.getElementById('paFormUsername').value = pa.username;
+        document.getElementById('paFormUsername').disabled = true; // inmutable
+        document.getElementById('paFormPassword').value = '';
+        document.getElementById('paFormPasswordRequired').textContent = '';
+        document.getElementById('paFormPasswordHint').textContent = 'Sólo si querés cambiarla. Dejala vacía para mantener la actual.';
+        document.getElementById('paFormEmail').value = pa.email || '';
+        document.getElementById('paFormPhone').value = pa.phone || '';
+        document.getElementById('paFormActiveRow').style.display = '';
+        document.getElementById('paFormIsActive').checked = pa.isActive !== false;
+        document.getElementById('paFormError').style.display = 'none';
+        _loadCampaignsIntoPaSelect(pa.publisherCampaignCode);
+        showModal('publisherAdminFormModal');
+    } catch (e) {
+        showToast('Error cargando cuenta', 'error');
+    }
+}
+
+function closePublisherAdminFormModal() {
+    hideModal('publisherAdminFormModal');
+}
+
+async function submitPublisherAdminForm() {
+    const mode = document.getElementById('paFormMode').value;
+    const errBox = document.getElementById('paFormError');
+    errBox.style.display = 'none';
+
+    const campaignCode = document.getElementById('paFormCampaignCode').value;
+    const username = document.getElementById('paFormUsername').value.trim();
+    const password = document.getElementById('paFormPassword').value;
+    const email = document.getElementById('paFormEmail').value.trim();
+    const phone = document.getElementById('paFormPhone').value.trim();
+
+    if (!campaignCode) {
+        errBox.textContent = 'Elegí una campaña';
+        errBox.style.display = 'block';
+        return;
+    }
+
+    try {
+        let url, method, body;
+        if (mode === 'create') {
+            if (!username || !password) {
+                errBox.textContent = 'Usuario y contraseña son obligatorios';
+                errBox.style.display = 'block';
+                return;
+            }
+            url = `${API_URL}/api/admin/publisher-admins`;
+            method = 'POST';
+            body = JSON.stringify({ campaignCode, username, password, email: email || null, phone: phone || null });
+        } else {
+            const id = document.getElementById('paFormEditId').value;
+            const isActive = document.getElementById('paFormIsActive').checked;
+            url = `${API_URL}/api/admin/publisher-admins/${encodeURIComponent(id)}`;
+            method = 'PUT';
+            const payload = { campaignCode, email: email || null, phone: phone || null, isActive };
+            if (password) payload.password = password;
+            body = JSON.stringify(payload);
+        }
+
+        const r = await fetch(url, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            errBox.textContent = data.error || 'Error guardando';
+            errBox.style.display = 'block';
+            return;
+        }
+        closePublisherAdminFormModal();
+        showToast(mode === 'create' ? 'Cuenta creada' : 'Cuenta actualizada', 'success');
+        loadPublisherAdmins();
+    } catch (e) {
+        errBox.textContent = 'Error de conexión';
+        errBox.style.display = 'block';
+    }
+}
+
+async function togglePublisherAdminActive(paId, makeActive) {
+    if (!confirm(makeActive ? '¿Reactivar esta cuenta?' : '¿Desactivar esta cuenta? El publicista no podrá entrar al panel.')) return;
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admins/${encodeURIComponent(paId)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ isActive: makeActive })
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            showToast(data.error || 'Error', 'error');
+            return;
+        }
+        showToast(makeActive ? 'Cuenta activada' : 'Cuenta desactivada', 'success');
+        loadPublisherAdmins();
+    } catch (e) {
+        showToast('Error de conexión', 'error');
+    }
+}
+
+window.showCreatePublisherAdminModal = showCreatePublisherAdminModal;
+window.showEditPublisherAdminModal = showEditPublisherAdminModal;
+window.closePublisherAdminFormModal = closePublisherAdminFormModal;
+window.submitPublisherAdminForm = submitPublisherAdminForm;
+window.togglePublisherAdminActive = togglePublisherAdminActive;
+
+// ============================================
+// DASHBOARD PUBLICISTAS — sólo admin general
+// ============================================
+
+async function loadPublishersDashboard() {
+    const body = document.getElementById('publishersDashboardBody');
+    if (!body) return;
+    body.innerHTML = '<span style="color:#888;">Cargando…</span>';
+    const from = document.getElementById('dashFrom')?.value || '';
+    const to = document.getElementById('dashTo')?.value || '';
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publishers/dashboard?${qs.toString()}`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) {
+            body.innerHTML = '<span style="color:#ff6666;">Error cargando dashboard</span>';
+            return;
+        }
+        const data = await r.json();
+        const rows = data.publishers || [];
+        if (rows.length === 0) {
+            body.innerHTML = '<div style="color:#888;padding:20px;text-align:center;border:1px dashed rgba(255,255,255,0.1);border-radius:8px;">No hay usuarios atribuidos en el rango seleccionado.</div>';
+            return;
+        }
+
+        const totals = rows.reduce((acc, r) => {
+            acc.users += r.users;
+            acc.deposits += r.deposits;
+            acc.withdrawals += r.withdrawals;
+            return acc;
+        }, { users: 0, deposits: 0, withdrawals: 0 });
+        const totalsNet = totals.deposits - totals.withdrawals;
+        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+
+        body.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px;">
+                <div style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.2);border-radius:8px;padding:12px;">
+                    <div style="color:#888;font-size:10px;letter-spacing:1.2px;font-weight:700;">USUARIOS TOTALES</div>
+                    <div style="font-size:22px;font-weight:bold;color:#d4af37;">${totals.users}</div>
+                </div>
+                <div style="background:#0d0d1a;border:1px solid rgba(76,175,80,0.2);border-radius:8px;padding:12px;">
+                    <div style="color:#888;font-size:10px;letter-spacing:1.2px;font-weight:700;">CARGAS</div>
+                    <div style="font-size:22px;font-weight:bold;color:#4caf50;">${fmt(totals.deposits)}</div>
+                </div>
+                <div style="background:#0d0d1a;border:1px solid rgba(255,102,102,0.2);border-radius:8px;padding:12px;">
+                    <div style="color:#888;font-size:10px;letter-spacing:1.2px;font-weight:700;">RETIROS</div>
+                    <div style="font-size:22px;font-weight:bold;color:#ff6666;">${fmt(totals.withdrawals)}</div>
+                </div>
+                <div style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px;">
+                    <div style="color:#888;font-size:10px;letter-spacing:1.2px;font-weight:700;">NETO</div>
+                    <div style="font-size:22px;font-weight:bold;color:#fff;">${fmt(totalsNet)}</div>
+                </div>
+            </div>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <thead>
+                        <tr style="background:#0d0d1a;color:#d4af37;text-align:left;">
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);">Publicista</th>
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);text-align:right;">Usuarios</th>
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);text-align:right;">Manual / Orgánico</th>
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);text-align:right;">Cargas</th>
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);text-align:right;">Retiros</th>
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);text-align:right;">Neto</th>
+                            <th style="padding:10px;border-bottom:1px solid rgba(212,175,55,0.2);"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map(row => `
+                            <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:10px;color:#fff;font-weight:600;">${_safe(row.publisher)}</td>
+                                <td style="padding:10px;text-align:right;color:#d4af37;font-weight:bold;">${row.users}</td>
+                                <td style="padding:10px;text-align:right;color:#aaa;font-size:12px;">${row.usersManual} / ${row.usersOrganic}</td>
+                                <td style="padding:10px;text-align:right;color:#4caf50;">${fmt(row.deposits)}</td>
+                                <td style="padding:10px;text-align:right;color:#ff6666;">${fmt(row.withdrawals)}</td>
+                                <td style="padding:10px;text-align:right;color:${row.netRevenue >= 0 ? '#fff' : '#ff6666'};font-weight:bold;">${fmt(row.netRevenue)}</td>
+                                <td style="padding:10px;text-align:right;">
+                                    <button onclick="openPublisherUsersModal('${_safe(row.publisher)}')" style="padding:5px 10px;background:#2a2a3a;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">Ver usuarios</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (e) {
+        console.error('loadPublishersDashboard:', e);
+        body.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+    }
+}
+
+function clearDashboardFilters() {
+    const f = document.getElementById('dashFrom'); if (f) f.value = '';
+    const t = document.getElementById('dashTo'); if (t) t.value = '';
+    loadPublishersDashboard();
+}
+
+async function openPublisherUsersModal(publisher) {
+    const titleEl = document.getElementById('puModalTitle');
+    const bodyEl = document.getElementById('puModalBody');
+    if (titleEl) titleEl.textContent = `Usuarios de ${publisher}`;
+    if (bodyEl) bodyEl.innerHTML = 'Cargando…';
+    showModal('publisherUsersModal');
+    const from = document.getElementById('dashFrom')?.value || '';
+    const to = document.getElementById('dashTo')?.value || '';
+    const qs = new URLSearchParams();
+    if (from) qs.set('from', from);
+    if (to) qs.set('to', to);
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/users?${qs.toString()}`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) {
+            if (bodyEl) bodyEl.innerHTML = '<span style="color:#ff6666;">Error cargando</span>';
+            return;
+        }
+        const data = await r.json();
+        const users = data.users || [];
+        if (users.length === 0) {
+            if (bodyEl) bodyEl.innerHTML = '<span style="color:#888;">Sin usuarios para este publicista en el rango seleccionado.</span>';
+            return;
+        }
+        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+        bodyEl.innerHTML = `
+            <div style="overflow-x:auto;max-height:60vh;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead>
+                        <tr style="background:#0d0d1a;color:#d4af37;text-align:left;position:sticky;top:0;">
+                            <th style="padding:8px;">Usuario</th>
+                            <th style="padding:8px;">Origen</th>
+                            <th style="padding:8px;">Creado</th>
+                            <th style="padding:8px;">Creado por</th>
+                            <th style="padding:8px;text-align:right;">Cargas</th>
+                            <th style="padding:8px;text-align:right;">Retiros</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${users.map(u => `
+                            <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:8px;color:#fff;">${_safe(u.username)}</td>
+                                <td style="padding:8px;color:${u.acquisitionSource === 'manual' ? '#d4af37' : '#aaa'};font-size:11px;">${u.acquisitionSource === 'manual' ? '👤 manual' : '🌐 orgánico'}</td>
+                                <td style="padding:8px;color:#888;">${new Date(u.createdAt).toLocaleDateString('es-AR')}</td>
+                                <td style="padding:8px;color:#aaa;">${_safe(u.createdByEmployeeUsername || '—')}</td>
+                                <td style="padding:8px;text-align:right;color:#4caf50;">${fmt(u.deposits)}</td>
+                                <td style="padding:8px;text-align:right;color:#ff6666;">${fmt(u.withdrawals)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+            <div style="margin-top:8px;color:#888;font-size:11px;">${users.length} usuario(s)</div>
+        `;
+    } catch (e) {
+        if (bodyEl) bodyEl.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+    }
+}
+
+function closePublisherUsersModal() {
+    hideModal('publisherUsersModal');
+}
+
+window.loadPublishersDashboard = loadPublishersDashboard;
+window.clearDashboardFilters = clearDashboardFilters;
+window.openPublisherUsersModal = openPublisherUsersModal;
+window.closePublisherUsersModal = closePublisherUsersModal;

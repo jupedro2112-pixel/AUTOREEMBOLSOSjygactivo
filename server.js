@@ -497,8 +497,29 @@ const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificat
 // Admin roles are internal VIPCARGAS accounts that have NO counterpart in
 // JUGAYGANA. They must never be routed through any JUGAYGANA sync, default-
 // password detection, or mustChangePassword flow.
-const ADMIN_ROLES = ['admin', 'depositor', 'withdrawer'];
+// "Admin roles" abarca todo lo que NO es un jugador de JUGAYGANA: admin general,
+// agentes de carga/retiro, y publisher_admin (cuenta dedicada a un publicista).
+// Estas cuentas se saltan toda la lógica de JUGAYGANA sync, default-password
+// detection, mustChangePassword forzado, Meta CAPI tracking, etc.
+const ADMIN_ROLES = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
 const isAdminRole = (role) => ADMIN_ROLES.includes(role);
+
+// Rutas que un publisher_admin puede tocar. Cualquier otra ruta devuelve 403.
+// El authMiddleware aplica este lockdown sólo para ese rol; admin / depositor /
+// withdrawer mantienen su acceso normal.
+const PUBLISHER_ADMIN_ALLOWED_PATHS = [
+  '/api/auth/change-password',
+  '/api/auth/change-password/send-otp',
+  '/api/auth/change-password/pending',
+  '/api/auth/logout',
+  '/api/auth/admin-logout',
+  '/api/auth/verify',
+  '/api/users/me',
+  '/api/admin/me',
+  '/api/admin/change-own-password',
+  '/api/admin/publisher-admin',
+  '/api/health'
+];
 
 // Maximum character length for a block reason stored on a user account.
 // Must match the maxlength attribute in the admin panel block modal HTML.
@@ -1079,6 +1100,24 @@ const authMiddleware = async (req, res, next) => {
     
     req.user = decoded;
 
+    // Lockdown del rol publisher_admin: sólo puede tocar las rutas listadas en
+    // PUBLISHER_ADMIN_ALLOWED_PATHS. Cualquier otra ruta devuelve 403, así no
+    // puede llegar a endpoints de cargas/retiros/chats/usuarios aunque el JWT
+    // sea válido. Match exacto o por prefijo (con "/" final) para soportar
+    // sub-rutas (/api/admin/publisher-admin/create-user, /api/admin/publisher-admin/my-stats).
+    if (user.role === 'publisher_admin') {
+      const reqPath = req.path || '';
+      const allowed = PUBLISHER_ADMIN_ALLOWED_PATHS.some(p =>
+        reqPath === p || reqPath.startsWith(p + '/')
+      );
+      if (!allowed) {
+        return res.status(403).json({
+          error: 'Acceso denegado para tu rol.',
+          code: 'PUBLISHER_ADMIN_FORBIDDEN'
+        });
+      }
+    }
+
     // Enforce mandatory password change server-side.
     // If the user has `mustChangePassword: true` (set by JUGAYGANA import,
     // login default-password detection, or admin reset), only the allow-listed
@@ -1132,6 +1171,16 @@ const depositorMiddleware = (req, res, next) => {
 const withdrawerMiddleware = (req, res, next) => {
   if (req.user.role !== 'admin' && req.user.role !== 'withdrawer') {
     return res.status(403).json({ error: 'Acceso denegado. Solo agentes de retiro.' });
+  }
+  next();
+};
+
+// Sólo cuentas con role='publisher_admin' pueden tocar los endpoints
+// /api/admin/publisher-admin/*. El admin general usa otros endpoints (CRUD
+// /api/admin/publisher-admins) para gestionar a estos publisher_admins.
+const publisherAdminMiddleware = (req, res, next) => {
+  if (req.user.role !== 'publisher_admin') {
+    return res.status(403).json({ error: 'Acceso denegado. Sólo cuentas publisher_admin.' });
   }
   next();
 };
@@ -2071,7 +2120,9 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     // An httpOnly, SameSite=Strict, path-scoped cookie is the recommended
     // alternative to localStorage for session tokens: it is inaccessible to
     // JavaScript (XSS-safe) and is scoped to the admin path only.
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    // publisher_admin también entra al panel /adminprivado2026 (vista limitada),
+    // por eso recibe la misma cookie que los otros roles administrativos.
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
     if (adminRoles.includes(userObj.role)) {
       // Set two httpOnly cookies: one for page access, one for API calls.
       // Neither can be read by client-side scripts (XSS-safe).
@@ -2239,7 +2290,9 @@ app.get('/api/admin/me', async (req, res) => {
   }
   try {
     const decoded = jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] });
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    // publisher_admin también accede al panel (vista limitada) y por eso entra
+    // en la lista de roles permitidos para /api/admin/me.
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
     if (!adminRoles.includes(decoded.role)) {
       return res.status(403).json({ error: 'Acceso denegado' });
     }
@@ -2278,7 +2331,10 @@ app.get('/api/admin/me', async (req, res) => {
         phoneVerified: user.phoneVerified || false,
         role: user.role,
         balance: user.balance,
-        needsPasswordChange: !user.passwordChangedAt
+        needsPasswordChange: !user.passwordChangedAt,
+        // Sólo se llena para role='publisher_admin'. El front lo usa para mostrar
+        // qué publicista representa la cuenta y para filtrar el mini-dashboard.
+        publisherCampaignCode: user.publisherCampaignCode || null
       },
       token: freshToken
     });
@@ -2805,8 +2861,9 @@ app.post('/api/auth/login-otp-verify', authLimiter, async (req, res) => {
       { expiresIn: '90d' }
     );
 
-    // Set admin cookies if applicable
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    // Set admin cookies if applicable (incluye publisher_admin que también
+    // usa la UI del panel administrativo en /adminprivado2026, en vista limitada).
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
     if (adminRoles.includes(userObj.role)) {
       const adminCookieToken = jwt.sign(
         { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
@@ -7439,6 +7496,585 @@ app.get('/api/admin/campaigns/:code/users', authMiddleware, adminMiddleware, asy
 });
 
 // ============================================
+// PUBLISHER_ADMIN — endpoints dedicados
+// ============================================
+// Estos endpoints son los ÚNICOS (junto con auth/users/me/admin/me) que un
+// publisher_admin puede tocar. El lockdown lo aplica authMiddleware en base a
+// PUBLISHER_ADMIN_ALLOWED_PATHS — acá sólo agregamos el chequeo de rol con
+// publisherAdminMiddleware para defensa en profundidad.
+
+// POST /api/admin/publisher-admin/create-user
+// El publisher_admin crea un usuario para SU publicista. El código de campaña
+// no se elige en el body: se toma automáticamente del campo publisherCampaignCode
+// de la cuenta logueada.
+app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdminMiddleware, async (req, res) => {
+  try {
+    const { username, password, email, phone } = req.body || {};
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Usuario y contraseña son requeridos' });
+    }
+    if (!validateUsername(username)) {
+      return res.status(400).json({ error: 'Usuario inválido. Usá 3-30 caracteres: letras, números, punto, guion o guion bajo.' });
+    }
+    if (!validatePassword(password)) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 100 caracteres' });
+    }
+
+    // Cargar la cuenta del publisher_admin desde la DB para obtener su campaña asociada.
+    const employee = await User.findOne({ id: req.user.userId }).lean();
+    if (!employee || employee.role !== 'publisher_admin') {
+      return res.status(403).json({ error: 'Cuenta no válida' });
+    }
+    if (!employee.publisherCampaignCode) {
+      return res.status(400).json({
+        error: 'Tu cuenta no tiene un publicista asignado. Contactá al administrador general.'
+      });
+    }
+
+    // Validar que la campaña sigue existiendo y activa (un admin podría haberla
+    // desactivado después de crear este publisher_admin).
+    const campaign = await Campaign.findOne({ code: employee.publisherCampaignCode }).lean();
+    if (!campaign) {
+      return res.status(400).json({ error: 'La campaña asociada a tu cuenta ya no existe. Contactá al administrador general.' });
+    }
+    if (campaign.isActive === false) {
+      return res.status(400).json({ error: 'Tu publicista está desactivado. Contactá al administrador general.' });
+    }
+
+    // Username único, case-insensitive (mismo criterio que el resto del sistema).
+    const existingUser = await User.findOne({
+      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
+    });
+    if (existingUser) {
+      return res.status(400).json({ error: 'El usuario ya existe' });
+    }
+
+    const newUserId = uuidv4();
+    const newUser = await User.create({
+      id: newUserId,
+      username,
+      password,
+      email: email || null,
+      phone: phone || null,
+      role: 'user',
+      accountNumber: generateAccountNumber(),
+      balance: 0,
+      createdAt: new Date(),
+      lastLogin: null,
+      isActive: true,
+      jugayganaUserId: null,
+      jugayganaUsername: null,
+      jugayganaSyncStatus: 'pending',
+      // Atribución automática al publicista del empleado logueado.
+      acquisitionCampaign: campaign.code,
+      acquisitionSource: 'manual',
+      acquiredAt: new Date(),
+      createdByEmployeeId: employee.id,
+      createdByEmployeeUsername: employee.username
+    });
+
+    // Crear chat status para que el usuario pueda chatear con un agente.
+    await ChatStatus.create({
+      userId: newUserId,
+      username: username,
+      status: 'open',
+      category: 'cargas'
+    });
+
+    // Sincronizar con JUGAYGANA en background (mismo patrón que POST /api/users).
+    jugaygana.syncUserToPlatform({
+      username: newUser.username,
+      password: password
+    }).then(async (result) => {
+      if (result.success) {
+        await User.updateOne(
+          { id: newUserId },
+          {
+            jugayganaUserId: result.jugayganaUserId || result.user?.user_id,
+            jugayganaUsername: result.jugayganaUsername || result.user?.user_name,
+            jugayganaSyncStatus: result.alreadyExists ? 'linked' : 'synced'
+          }
+        );
+      } else {
+        logger.warn(`[publisher_admin create-user] JUGAYGANA sync falló para ${username}: ${result.error}`);
+      }
+    }).catch(err => {
+      logger.warn(`[publisher_admin create-user] JUGAYGANA sync excepción para ${username}: ${err.message}`);
+    });
+
+    logger.info(
+      `[publisher_admin] ${employee.username} (campaign=${campaign.code}) creó usuario ${username}`
+    );
+
+    res.status(201).json({
+      message: 'Usuario creado exitosamente',
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        accountNumber: newUser.accountNumber,
+        acquisitionCampaign: newUser.acquisitionCampaign,
+        createdAt: newUser.createdAt
+      }
+    });
+  } catch (err) {
+    logger.error(`[publisher_admin create-user] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/publisher-admin/my-stats
+// Devuelve métricas SOLO de los usuarios que este publisher_admin creó.
+// No expone otros publicistas ni otros agentes; cada cuenta ve sus propios números.
+app.get('/api/admin/publisher-admin/my-stats', authMiddleware, publisherAdminMiddleware, async (req, res) => {
+  try {
+    const employee = await User.findOne({ id: req.user.userId }).lean();
+    if (!employee || employee.role !== 'publisher_admin') {
+      return res.status(403).json({ error: 'Cuenta no válida' });
+    }
+    if (!employee.publisherCampaignCode) {
+      return res.json({
+        publisher: null,
+        totals: { users: 0, deposits: 0, withdrawals: 0, netRevenue: 0 },
+        recentUsers: []
+      });
+    }
+
+    const campaign = await Campaign.findOne({ code: employee.publisherCampaignCode }).lean();
+
+    // Sólo contamos usuarios creados POR esta cuenta (acquisitionSource='manual'
+    // y createdByEmployeeId == el ID del empleado logueado). Esto evita mezclar
+    // los orgánicos del link de pauta si la campaña también está activa allí.
+    const baseQuery = {
+      acquisitionCampaign: employee.publisherCampaignCode,
+      acquisitionSource: 'manual',
+      createdByEmployeeId: employee.id
+    };
+
+    const users = await User.find(baseQuery).select('id username').lean();
+    const usernames = users.map(u => u.username);
+
+    let totalDeposits = 0;
+    let totalWithdrawals = 0;
+    if (usernames.length > 0) {
+      const GIFT_SOURCES = ['install_bonus', 'welcome_gift'];
+      const [depAgg, witAgg] = await Promise.all([
+        Transaction.aggregate([
+          { $match: {
+              type: 'deposit',
+              username: { $in: usernames },
+              $or: [
+                { 'metadata.source': { $exists: false } },
+                { 'metadata.source': { $nin: GIFT_SOURCES } }
+              ]
+          }},
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]),
+        Transaction.aggregate([
+          { $match: { type: 'withdrawal', username: { $in: usernames } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ])
+      ]);
+      totalDeposits = depAgg[0]?.total || 0;
+      totalWithdrawals = witAgg[0]?.total || 0;
+    }
+
+    // Últimos 20 usuarios creados (sólo username y fecha para mostrar en el panel).
+    const recentUsers = await User.find(baseQuery)
+      .select('username createdAt')
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    res.json({
+      publisher: campaign ? { code: campaign.code, name: campaign.name, publisher: campaign.publisher } : null,
+      totals: {
+        users: users.length,
+        deposits: totalDeposits,
+        withdrawals: totalWithdrawals,
+        netRevenue: totalDeposits - totalWithdrawals
+      },
+      recentUsers
+    });
+  } catch (err) {
+    logger.error(`[publisher_admin my-stats] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// PUBLISHER_ADMINS — CRUD para el admin general
+// ============================================
+// Sólo role==='admin' (admin general) puede crear/gestionar cuentas publisher_admin.
+// Los agentes depositor/withdrawer no pueden — esto se asegura con el chequeo
+// explícito req.user.role !== 'admin' (no basta adminMiddleware que también
+// admite depositor/withdrawer).
+
+// POST /api/admin/publisher-admins — crear una cuenta publisher_admin asociada
+// a una Campaign existente y activa.
+app.post('/api/admin/publisher-admins', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Sólo el administrador general puede crear publisher_admins' });
+    }
+    const { username, password, campaignCode, email, phone } = req.body || {};
+    if (!username || !password || !campaignCode) {
+      return res.status(400).json({ error: 'username, password y campaignCode son requeridos' });
+    }
+    if (!validateUsername(username)) {
+      return res.status(400).json({ error: 'Usuario inválido. Usá 3-30 caracteres: letras, números, punto, guion o guion bajo.' });
+    }
+    if (!validatePassword(password)) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 100 caracteres' });
+    }
+
+    const normalizedCode = String(campaignCode).toUpperCase().trim();
+    const campaign = await Campaign.findOne({ code: normalizedCode }).lean();
+    if (!campaign) {
+      return res.status(400).json({ error: 'No existe una campaña con ese código' });
+    }
+    if (campaign.isActive === false) {
+      return res.status(400).json({ error: 'La campaña está desactivada — reactivala antes de asignar una cuenta' });
+    }
+
+    const existing = await User.findOne({
+      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
+    });
+    if (existing) {
+      return res.status(400).json({ error: 'Ya existe un usuario con ese username' });
+    }
+
+    const newId = uuidv4();
+    const newPa = await User.create({
+      id: newId,
+      username,
+      password,
+      email: email || null,
+      phone: phone || null,
+      role: 'publisher_admin',
+      publisherCampaignCode: normalizedCode,
+      accountNumber: generateAccountNumber(),
+      balance: 0,
+      createdAt: new Date(),
+      lastLogin: null,
+      isActive: true,
+      jugayganaSyncStatus: 'not_applicable'
+    });
+
+    logger.info(
+      `[admin] ${req.user.username} creó publisher_admin ${username} para campaña ${normalizedCode}`
+    );
+
+    res.status(201).json({
+      message: 'Publisher_admin creado',
+      publisherAdmin: {
+        id: newPa.id,
+        username: newPa.username,
+        publisherCampaignCode: newPa.publisherCampaignCode,
+        campaign: { code: campaign.code, publisher: campaign.publisher, name: campaign.name },
+        isActive: newPa.isActive,
+        createdAt: newPa.createdAt
+      }
+    });
+  } catch (err) {
+    logger.error(`[admin/publisher-admins POST] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/publisher-admins — listar todas las cuentas publisher_admin
+// con info de la campaña asociada y stats básicas (cuántos usuarios crearon).
+app.get('/api/admin/publisher-admins', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const list = await User.find({ role: 'publisher_admin' })
+      .select('id username publisherCampaignCode isActive createdAt lastLogin email phone')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (list.length === 0) return res.json({ publisherAdmins: [] });
+
+    // Resolver datos de la campaña asociada a cada uno.
+    const codes = Array.from(new Set(list.map(p => p.publisherCampaignCode).filter(Boolean)));
+    const campaigns = await Campaign.find({ code: { $in: codes } })
+      .select('code publisher name isActive')
+      .lean();
+    const campaignByCode = Object.fromEntries(campaigns.map(c => [c.code, c]));
+
+    // Contar usuarios creados por cada uno (sólo los manuales atribuidos a este empleado).
+    const ids = list.map(p => p.id);
+    const userCountAgg = await User.aggregate([
+      { $match: {
+          createdByEmployeeId: { $in: ids },
+          acquisitionSource: 'manual'
+      }},
+      { $group: { _id: '$createdByEmployeeId', count: { $sum: 1 } } }
+    ]);
+    const userCountByEmployeeId = Object.fromEntries(userCountAgg.map(x => [x._id, x.count]));
+
+    const enriched = list.map(p => ({
+      id: p.id,
+      username: p.username,
+      email: p.email,
+      phone: p.phone,
+      isActive: p.isActive,
+      createdAt: p.createdAt,
+      lastLogin: p.lastLogin,
+      publisherCampaignCode: p.publisherCampaignCode,
+      campaign: campaignByCode[p.publisherCampaignCode] || null,
+      usersCreatedCount: userCountByEmployeeId[p.id] || 0
+    }));
+
+    res.json({ publisherAdmins: enriched });
+  } catch (err) {
+    logger.error(`[admin/publisher-admins GET] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// PUT /api/admin/publisher-admins/:id — modificar una cuenta publisher_admin.
+// Permite: cambiar la campaña asociada, activar/desactivar, resetear contraseña.
+// NO permite cambiar el role (un publisher_admin no se "promueve" a admin acá).
+app.put('/api/admin/publisher-admins/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Sólo el administrador general puede modificar publisher_admins' });
+    }
+    const { id } = req.params;
+    const { campaignCode, isActive, password, email, phone } = req.body || {};
+
+    const target = await User.findOne({ id, role: 'publisher_admin' });
+    if (!target) return res.status(404).json({ error: 'Publisher_admin no encontrado' });
+
+    if (campaignCode !== undefined) {
+      const normalizedCode = String(campaignCode).toUpperCase().trim();
+      const campaign = await Campaign.findOne({ code: normalizedCode }).lean();
+      if (!campaign) return res.status(400).json({ error: 'No existe una campaña con ese código' });
+      if (campaign.isActive === false) {
+        return res.status(400).json({ error: 'La campaña está desactivada' });
+      }
+      target.publisherCampaignCode = normalizedCode;
+    }
+    if (typeof isActive === 'boolean') target.isActive = isActive;
+    if (typeof email === 'string') target.email = email.trim() || null;
+    if (typeof phone === 'string') target.phone = phone.trim() || null;
+    if (password) {
+      if (!validatePassword(password)) {
+        return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 100 caracteres' });
+      }
+      target.password = password; // pre-save hook hashea
+      target.passwordChangedAt = new Date();
+      target.tokenVersion = (target.tokenVersion || 0) + 1; // invalida sesiones existentes
+    }
+
+    await target.save();
+
+    logger.info(`[admin] ${req.user.username} modificó publisher_admin ${target.username}`);
+    res.json({
+      message: 'Publisher_admin actualizado',
+      publisherAdmin: {
+        id: target.id,
+        username: target.username,
+        publisherCampaignCode: target.publisherCampaignCode,
+        isActive: target.isActive
+      }
+    });
+  } catch (err) {
+    logger.error(`[admin/publisher-admins PUT] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// DASHBOARD PUBLICISTAS — sólo admin general
+// ============================================
+// Agrega métricas por publicista (publisher), no por código de campaña: si un
+// publicista tiene varias Campaigns, suma todas.
+
+// GET /api/admin/publishers/dashboard?from=&to=
+// Devuelve una fila por publicista con totales (users, deposits, withdrawals, netRevenue).
+// Las fechas opcionales filtran por User.createdAt y Transaction.timestamp.
+app.get('/api/admin/publishers/dashboard', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const dateFilter = {};
+    if (from) {
+      const d = new Date(from);
+      if (!isNaN(d.getTime())) dateFilter.$gte = d;
+    }
+    if (to) {
+      const d = new Date(to);
+      if (!isNaN(d.getTime())) dateFilter.$lte = d;
+    }
+    const hasDateFilter = !!dateFilter.$gte || !!dateFilter.$lte;
+
+    // Todas las campañas activas o inactivas — necesitamos saber a qué publisher
+    // pertenece cada code para agrupar.
+    const campaigns = await Campaign.find().select('code publisher name isActive').lean();
+    const publisherByCode = Object.fromEntries(campaigns.map(c => [c.code, c.publisher]));
+
+    // Usuarios atribuidos a alguna campaña en el rango (si hay filtro).
+    const userQuery = { acquisitionCampaign: { $ne: null } };
+    if (hasDateFilter) userQuery.createdAt = dateFilter;
+    const users = await User.find(userQuery)
+      .select('username acquisitionCampaign acquisitionSource createdAt')
+      .lean();
+
+    // Acumulador por publisher.
+    const byPublisher = new Map();
+    function ensure(pub) {
+      if (!byPublisher.has(pub)) {
+        byPublisher.set(pub, {
+          publisher: pub,
+          campaignCodes: new Set(),
+          users: 0,
+          usersManual: 0,
+          usersOrganic: 0,
+          deposits: 0,
+          withdrawals: 0
+        });
+      }
+      return byPublisher.get(pub);
+    }
+
+    const usernamesByPublisher = new Map();
+    for (const u of users) {
+      const pub = publisherByCode[u.acquisitionCampaign] || 'Sin publicista';
+      const row = ensure(pub);
+      row.users += 1;
+      if (u.acquisitionSource === 'manual') row.usersManual += 1;
+      else row.usersOrganic += 1;
+      row.campaignCodes.add(u.acquisitionCampaign);
+      if (!usernamesByPublisher.has(pub)) usernamesByPublisher.set(pub, []);
+      usernamesByPublisher.get(pub).push(u.username);
+    }
+
+    // Para cada publisher, sumar deposits y withdrawals de sus usernames.
+    const GIFT_SOURCES = ['install_bonus', 'welcome_gift'];
+    const txDateFilter = {};
+    if (hasDateFilter) txDateFilter.timestamp = dateFilter;
+
+    for (const [pub, usernames] of usernamesByPublisher) {
+      if (usernames.length === 0) continue;
+      const [depAgg, witAgg] = await Promise.all([
+        Transaction.aggregate([
+          { $match: {
+              ...txDateFilter,
+              type: 'deposit',
+              username: { $in: usernames },
+              $or: [
+                { 'metadata.source': { $exists: false } },
+                { 'metadata.source': { $nin: GIFT_SOURCES } }
+              ]
+          }},
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]),
+        Transaction.aggregate([
+          { $match: { ...txDateFilter, type: 'withdrawal', username: { $in: usernames } } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ])
+      ]);
+      const row = ensure(pub);
+      row.deposits = depAgg[0]?.total || 0;
+      row.withdrawals = witAgg[0]?.total || 0;
+    }
+
+    const rows = Array.from(byPublisher.values()).map(r => ({
+      publisher: r.publisher,
+      campaignCodes: Array.from(r.campaignCodes),
+      users: r.users,
+      usersManual: r.usersManual,
+      usersOrganic: r.usersOrganic,
+      deposits: r.deposits,
+      withdrawals: r.withdrawals,
+      netRevenue: r.deposits - r.withdrawals
+    })).sort((a, b) => b.deposits - a.deposits);
+
+    res.json({
+      from: from || null,
+      to: to || null,
+      publishers: rows
+    });
+  } catch (err) {
+    logger.error(`[admin/publishers/dashboard] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/publishers/:publisher/users?from=&to=
+// Drill-down: lista los usuarios atribuidos a un publicista específico, con
+// detalle de cargas/retiros individuales.
+app.get('/api/admin/publishers/:publisher/users', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const publisher = String(req.params.publisher).trim();
+    if (!publisher) return res.status(400).json({ error: 'publisher requerido' });
+
+    const { from, to } = req.query;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
+
+    const campaigns = await Campaign.find({ publisher }).select('code').lean();
+    const codes = campaigns.map(c => c.code);
+    if (codes.length === 0) return res.json({ publisher, users: [] });
+
+    const userQuery = { acquisitionCampaign: { $in: codes } };
+    if (from || to) {
+      userQuery.createdAt = {};
+      if (from) {
+        const d = new Date(from);
+        if (!isNaN(d.getTime())) userQuery.createdAt.$gte = d;
+      }
+      if (to) {
+        const d = new Date(to);
+        if (!isNaN(d.getTime())) userQuery.createdAt.$lte = d;
+      }
+    }
+
+    const users = await User.find(userQuery)
+      .select('id username phone acquisitionCampaign acquisitionSource createdByEmployeeUsername createdAt acquiredAt balance')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    // Sumar deposits/withdrawals por usuario.
+    const usernames = users.map(u => u.username);
+    let depByUser = {};
+    let witByUser = {};
+    if (usernames.length > 0) {
+      const GIFT_SOURCES = ['install_bonus', 'welcome_gift'];
+      const [depAgg, witAgg] = await Promise.all([
+        Transaction.aggregate([
+          { $match: {
+              type: 'deposit',
+              username: { $in: usernames },
+              $or: [
+                { 'metadata.source': { $exists: false } },
+                { 'metadata.source': { $nin: GIFT_SOURCES } }
+              ]
+          }},
+          { $group: { _id: '$username', total: { $sum: '$amount' } } }
+        ]),
+        Transaction.aggregate([
+          { $match: { type: 'withdrawal', username: { $in: usernames } } },
+          { $group: { _id: '$username', total: { $sum: '$amount' } } }
+        ])
+      ]);
+      depByUser = Object.fromEntries(depAgg.map(x => [x._id, x.total]));
+      witByUser = Object.fromEntries(witAgg.map(x => [x._id, x.total]));
+    }
+
+    const enriched = users.map(u => ({
+      ...u,
+      deposits: depByUser[u.username] || 0,
+      withdrawals: witByUser[u.username] || 0
+    }));
+
+    res.json({ publisher, users: enriched });
+  } catch (err) {
+    logger.error(`[admin/publishers/:publisher/users] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
 // CONFIGURACIÓN DEL SISTEMA (CBU, COMANDOS)
 // ============================================
 
@@ -8306,7 +8942,15 @@ app.post('/api/admin/change-password', authMiddleware, adminMiddleware, async (r
 });
 
 // Cambiar contraseña propia del admin logueado (sin tocar JUGAYGANA)
-app.post('/api/admin/change-own-password', authMiddleware, adminMiddleware, async (req, res) => {
+app.post('/api/admin/change-own-password', authMiddleware, async (req, res) => {
+  // Cualquier rol staff (admin / depositor / withdrawer / publisher_admin) puede
+  // cambiar SU propia contraseña con este endpoint. No se usa adminMiddleware
+  // porque ése rechaza publisher_admin — y publisher_admin también necesita
+  // cambiar su contraseña desde el panel.
+  const STAFF_ROLES = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
+  if (!STAFF_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Acceso denegado.' });
+  }
   try {
     const { currentPassword, newPassword } = req.body;
     const adminUserId = req.user.userId;

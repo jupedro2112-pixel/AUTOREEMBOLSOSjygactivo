@@ -58,10 +58,20 @@ const userSchema = new mongoose.Schema({
     default: false,
     index: true
   },
-  role: { 
-    type: String, 
-    enum: ['user', 'admin', 'depositor', 'withdrawer'], 
+  role: {
+    type: String,
+    enum: ['user', 'admin', 'depositor', 'withdrawer', 'publisher_admin'],
     default: 'user',
+    index: true
+  },
+  // Para cuentas con role='publisher_admin': código de la Campaign a la que
+  // están atadas permanentemente. Todo usuario que crean queda atribuido a
+  // este código. Ignorado en cualquier otro rol.
+  publisherCampaignCode: {
+    type: String,
+    default: null,
+    uppercase: true,
+    trim: true,
     index: true
   },
   accountNumber: { 
@@ -243,6 +253,28 @@ const userSchema = new mongoose.Schema({
   },
   acquiredAt: {
     type: Date,
+    default: null
+  },
+  // 'organic' = el usuario llegó solo por link de pauta (?p=CODE o vanity URL).
+  // 'manual'  = lo creó un publisher_admin desde el panel.
+  // El default es 'organic' por compatibilidad con usuarios pre-existentes y
+  // con el flujo de registro público que no toca este campo.
+  acquisitionSource: {
+    type: String,
+    enum: ['organic', 'manual'],
+    default: 'organic',
+    index: true
+  },
+  // Sólo se llena cuando acquisitionSource='manual': identifica al
+  // publisher_admin (o admin futuro) que creó el usuario desde el panel.
+  // Permite reportes de "cuántos usuarios trajo cada cuenta publicista".
+  createdByEmployeeId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  createdByEmployeeUsername: {
+    type: String,
     default: null
   },
   // Identificadores de Meta Ads capturados en el registro del usuario.

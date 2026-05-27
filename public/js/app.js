@@ -12,6 +12,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     setupEventListeners();
 
+    // Welcome del publicista: se muestra PRE-AUTH si el visitante llegó por
+    // una vanity URL (/CODE o /publisher-slug) o ?p=CODE. localStorage guarda
+    // si ya lo vio para no repetir en este dispositivo.
+    if (VIP.publisherWelcome && typeof VIP.publisherWelcome.maybeShow === 'function') {
+        // Pequeño delay para que campaign.js termine de inicializar y exponer
+        // VIP.campaign.getActive() — ese es el fallback cuando no hay
+        // window.__VIP_CAMPAIGN_CODE__ inyectado (caso ?p=CODE).
+        setTimeout(() => VIP.publisherWelcome.maybeShow(), 100);
+    }
+
     // Auto-fill referral code from URL ?ref=CODE
     const urlParams = new URLSearchParams(window.location.search);
     const refCode   = urlParams.get('ref');

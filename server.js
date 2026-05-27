@@ -495,7 +495,7 @@ app.use(xss());
 // Fields exposed to the authenticated user about their own profile.
 // Keep this list minimal – internal fields (jugaygana IDs, FCM tokens, etc.)
 // are excluded intentionally to reduce accidental data exposure.
-const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign acquisitionSource publisherWelcomeSeenAt notificationPlan';
+const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificationPending whatsapp accountNumber role balance isActive referralCode referredByUserId referralStatus createdAt lastLogin mustChangePassword acquisitionCampaign acquisitionSource notificationPlan';
 
 // Admin roles are internal VIPCARGAS accounts that have NO counterpart in
 // JUGAYGANA. They must never be routed through any JUGAYGANA sync, default-
@@ -729,32 +729,69 @@ app.use('/adminprivado2026/', adminHostCheck, (req, res) => {
   res.status(404).send('Not found');
 });
 
-// Vanity URL para links de pauta: https://vipcargas.com/MI_CODIGO sirve la home
-// con la atribución a esa campaña ya activa (sin necesidad de ?p=). Si el path
-// no parece un código de campaña válido, llamamos next() para que express.static
-// lo intente servir como recurso estático y caigamos al 404 si no existe.
+// Slugifier para matching de vanity URL contra publisher names. Convierte
+// "Juan Pérez" → "juan-perez". Quita acentos, espacios → guion, normaliza
+// case y limpia caracteres especiales. Idempotente.
+function _slugifyPublisher(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // quitar acentos
+    .replace(/\s+/g, '-')                              // espacios → guiones
+    .replace(/[^a-z0-9_-]/g, '')                       // sólo seguros
+    .replace(/-+/g, '-')                               // colapsar guiones
+    .replace(/^-+|-+$/g, '');                          // trim guiones
+}
+
+// Vanity URL para links de pauta:
+//   - https://vipcargas.com/MI_CODIGO          (matchea por Campaign.code)
+//   - https://vipcargas.com/juan-perez         (matchea por slug del publisher)
+//
+// Ambos sirven la home con atribución activa. Si el path no matchea ninguno,
+// next() para que express.static lo intente servir o caiga al 404.
 app.get('/:code', async (req, res, next) => {
   const candidate = req.params.code || '';
-  // Sólo procesar si parece un código de campaña: 3-40 chars, letras/números/_/-
+  // Sólo procesar si parece un código/slug válido: 3-40 chars, letras/números/_/-
   if (!/^[A-Za-z0-9_-]{3,40}$/.test(candidate)) return next();
   // Excluir extensiones de archivo (favicons, etc.) y nombres conocidos del SW
   if (/\.(html|css|js|png|jpg|jpeg|ico|svg|json|webp|woff2?|map|txt|xml)$/i.test(candidate)) return next();
   if (['robots', 'sitemap', 'favicon', 'manifest'].includes(candidate.toLowerCase())) return next();
 
   try {
+    // Match 1: por código exacto (uppercase). Comportamiento legacy.
     const normalizedCode = candidate.toUpperCase();
-    const campaign = await Campaign.findOne({ code: normalizedCode, isActive: true }).lean();
+    let campaign = await Campaign.findOne({ code: normalizedCode, isActive: true }).lean();
+
+    // Match 2: si no hay code, probar slug del publisher. Permite links
+    // amigables tipo /juan-perez sin tener que crear un code con ese nombre.
+    if (!campaign) {
+      const candidateSlug = _slugifyPublisher(candidate);
+      if (candidateSlug) {
+        // Buscar campañas activas y filtrar por slug del publisher en memoria
+        // (no hay un campo slug indexado; la cantidad de campañas es chica).
+        // Si hay varias, elegimos la creada más recientemente — asumimos que
+        // es la activa del publicista.
+        const candidates = await Campaign.find({ isActive: true })
+          .select('code publisher name createdAt')
+          .lean();
+        const matches = candidates.filter(c => _slugifyPublisher(c.publisher) === candidateSlug);
+        if (matches.length > 0) {
+          matches.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+          campaign = matches[0];
+        }
+      }
+    }
+
     if (!campaign) return next();
 
-    const rendered = renderIndexHtml({ campaignCode: normalizedCode });
+    const rendered = renderIndexHtml({ campaignCode: campaign.code });
     if (!rendered) return res.status(500).send('Error loading page');
     res.setHeader('Content-Type', 'text/html');
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     // Persistir la pauta en una cookie: en las cargas siguientes (home / recarga)
-    // el server reinyecta el código aunque la URL ya no sea /santinopauta.
-    res.setHeader('Set-Cookie', buildCampaignCookieHeader(normalizedCode));
+    // el server reinyecta el código aunque la URL ya no sea /juan-perez.
+    res.setHeader('Set-Cookie', buildCampaignCookieHeader(campaign.code));
     res.send(rendered);
   } catch (err) {
     logger.warn(`[vanity /:code] error: ${err.message}`);
@@ -1410,6 +1447,34 @@ app.post('/api/campaigns/track-click', campaignTrackLimiter, async (req, res) =>
   } catch (err) {
     logger.warn(`[track-click] error: ${err.message}`);
     res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+// GET /api/campaigns/public/:code
+// Endpoint público (sin auth) que devuelve sólo los datos no-sensibles de una
+// campaña activa: code, publisher y name. Lo usa el frontend para personalizar
+// el welcome modal con el nombre del publicista cuando el cliente entra por la
+// vanity URL. NUNCA expone creds, notas, comisiones ni datos internos.
+app.get('/api/campaigns/public/:code', async (req, res) => {
+  try {
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    if (!/^[A-Z0-9_-]{3,40}$/.test(normalizedCode)) {
+      return res.status(400).json({ error: 'Código inválido' });
+    }
+    const campaign = await Campaign.findOne({ code: normalizedCode, isActive: true })
+      .select('code publisher name')
+      .lean();
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaña no encontrada' });
+    }
+    res.json({
+      code: campaign.code,
+      publisher: campaign.publisher,
+      name: campaign.name
+    });
+  } catch (err) {
+    logger.warn(`[campaigns/public] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
   }
 });
 
@@ -2379,27 +2444,6 @@ app.get('/api/users/me', authMiddleware, async (req, res) => {
     res.json({ ...user, metaMatching });
   } catch (error) {
     console.error('Error obteniendo usuario:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-// POST /api/users/me/publisher-welcome-seen
-// Marca que el usuario ya leyó y aceptó el welcome de 2 pasos que se muestra
-// a quienes vinieron de una campaña/publicista. Idempotente: si ya está marcado,
-// devuelve OK sin tocar la fecha (preserva el primer registro).
-app.post('/api/users/me/publisher-welcome-seen', authMiddleware, async (req, res) => {
-  try {
-    const result = await User.updateOne(
-      { id: req.user.userId, publisherWelcomeSeenAt: null },
-      { $set: { publisherWelcomeSeenAt: new Date() } }
-    );
-    res.json({
-      success: true,
-      // alreadySeen: ya estaba marcado de antes (idempotencia)
-      alreadySeen: result.matchedCount === 0
-    });
-  } catch (err) {
-    logger.error(`[publisher-welcome-seen] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

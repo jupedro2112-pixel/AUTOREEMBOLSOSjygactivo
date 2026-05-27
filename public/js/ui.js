@@ -106,19 +106,14 @@ VIP.ui = (function () {
             VIP.installBonus.init();
         }
 
-        // Publisher welcome: bienvenida de 2 pasos para usuarios que vinieron
-        // de un publicista (acquisitionCampaign set). Se muestra ANTES de la
-        // encuesta de notificaciones porque es contextual al onboarding —
-        // explica qué es VIPCARGAS antes de pedirle decisiones al usuario.
-        if (VIP.publisherWelcome && typeof VIP.publisherWelcome.maybeShow === 'function') {
-            VIP.publisherWelcome.maybeShow();
-        }
-
         // Encuesta de notificaciones: aparece una sola vez para que el
         // usuario elija su grupo (suave / normal / activo / solo reembolsos).
         if (VIP.notifSurvey && typeof VIP.notifSurvey.maybeShow === 'function') {
             VIP.notifSurvey.maybeShow();
         }
+        // NOTA: el welcome del publicista NO se muestra acá. Se muestra
+        // pre-auth desde app.js al cargar la página si el visitante llegó
+        // por una vanity URL / ?p=CODE. Ver public/js/publisherwelcome.js.
     }
 
     // ---- Layout ----

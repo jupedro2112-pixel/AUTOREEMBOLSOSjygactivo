@@ -1,29 +1,92 @@
 // =====================================================================
-// PUBLISHER WELCOME — bienvenida en 2 pasos para usuarios atribuidos a
-// una campaña/publicista.
+// PUBLISHER WELCOME — bienvenida en 2 pasos para visitantes que entran
+// por un link de publicista.
 //
 // Cuándo se muestra:
-//   - currentUser.acquisitionCampaign !== null  (vino de una campaña)
-//   - currentUser.publisherWelcomeSeenAt === null  (todavía no aceptó el welcome)
-//   - currentUser.mustChangePassword !== true  (cambio de pass tiene prioridad)
-//   - currentUser.passwordChangePending !== true  (idem)
+//   - El visitante llegó por una vanity URL (/CODE o /publisher-slug) o por
+//     ?p=CODE, y el server inyectó window.__VIP_CAMPAIGN_CODE__ o el JS de
+//     campaign.js lo derivó.
+//   - localStorage no tiene la flag de "ya lo vi en este dispositivo".
+//
+// Se muestra PRE-AUTH (apenas carga la página, antes de login/register).
+// Una vez aceptado, se guarda en localStorage para no volver a aparecer en
+// este dispositivo.
 //
 // Flujo:
-//   Paso 1 (bienvenida) → [Siguiente] → Paso 2 (beneficios)
-//   Paso 2: tildar checkbox habilita [COMENZAR A JUGAR]
-//   Al tocar COMENZAR: POST /api/users/me/publisher-welcome-seen, cierra modal.
-//
-// Una vez marcado, el modal nunca vuelve a aparecer (publisherWelcomeSeenAt
-// queda con timestamp en la DB).
+//   Paso 1 (bienvenida con nombre del publicista) → [Siguiente]
+//   Paso 2 (beneficios + checkbox obligatorio) → [COMENZAR A JUGAR]
+//   Cierra el modal y el usuario sigue con su flujo normal (registro / login).
 // =====================================================================
 window.VIP = window.VIP || {};
 
 VIP.publisherWelcome = (function () {
 
+    const LS_FLAG = 'vip_publisherWelcomeSeen';
+    const PLACEHOLDER_MARK = 'PLACEHOLDER';
+
+    // Detecta el código de campaña presente en el dispositivo, en este orden:
+    //   1. window.__VIP_CAMPAIGN_CODE__ (server-injected al servir el HTML)
+    //   2. VIP.campaign.getActive() (campaign.js que ya lee URL + localStorage)
+    // Devuelve string o null.
+    function _detectCampaignCode() {
+        try {
+            const injected = window.__VIP_CAMPAIGN_CODE__;
+            if (injected && typeof injected === 'string' && injected.indexOf(PLACEHOLDER_MARK) === -1) {
+                return String(injected).toUpperCase().trim();
+            }
+        } catch (e) {}
+        try {
+            if (VIP.campaign && typeof VIP.campaign.getActive === 'function') {
+                const att = VIP.campaign.getActive();
+                if (att && att.code) return String(att.code).toUpperCase().trim();
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    function _alreadySeen() {
+        try { return localStorage.getItem(LS_FLAG) === '1'; } catch (e) { return false; }
+    }
+
+    function _markSeen() {
+        try { localStorage.setItem(LS_FLAG, '1'); } catch (e) {}
+    }
+
+    // Trae info pública (publisher + name) para personalizar el modal.
+    // Si falla la red, mostramos el modal genérico igual — no es bloqueante.
+    async function _fetchPublisherInfo(code) {
+        try {
+            const r = await fetch(`${VIP.config.API_URL}/api/campaigns/public/${encodeURIComponent(code)}`);
+            if (!r.ok) return null;
+            return await r.json();
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function _renderHeader(info) {
+        const titleEl = document.querySelector('#publisherWelcomeStep1 .modal-header h2');
+        const subtitleEl = document.querySelector('#publisherWelcomeStep1 .modal-header p');
+        if (info && info.publisher) {
+            if (titleEl) titleEl.textContent = 'BIENVENIDO A VIPCARGAS';
+            if (!subtitleEl) {
+                // Si no había <p> debajo del h2, lo agregamos para mostrar al publicista.
+                const hdr = document.querySelector('#publisherWelcomeStep1 .modal-header');
+                if (hdr) {
+                    const p = document.createElement('p');
+                    p.style.cssText = 'color:#aaa;font-size:13px;margin:6px 0 0;';
+                    p.textContent = 'Llegaste de parte de ' + info.publisher;
+                    hdr.appendChild(p);
+                }
+            } else {
+                subtitleEl.textContent = 'Llegaste de parte de ' + info.publisher;
+            }
+        }
+    }
+
     function _open() {
         const modal = document.getElementById('publisherWelcomeModal');
         if (!modal) return;
-        // Reset al paso 1 cada vez que se abre (por si quedó algo del último render).
         const s1 = document.getElementById('publisherWelcomeStep1');
         const s2 = document.getElementById('publisherWelcomeStep2');
         if (s1) s1.style.display = '';
@@ -39,17 +102,13 @@ VIP.publisherWelcome = (function () {
     }
 
     function _goToStep2() {
-        const s1 = document.getElementById('publisherWelcomeStep1');
-        const s2 = document.getElementById('publisherWelcomeStep2');
-        if (s1) s1.style.display = 'none';
-        if (s2) s2.style.display = '';
+        document.getElementById('publisherWelcomeStep1').style.display = 'none';
+        document.getElementById('publisherWelcomeStep2').style.display = '';
     }
 
     function _goToStep1() {
-        const s1 = document.getElementById('publisherWelcomeStep1');
-        const s2 = document.getElementById('publisherWelcomeStep2');
-        if (s1) s1.style.display = '';
-        if (s2) s2.style.display = 'none';
+        document.getElementById('publisherWelcomeStep1').style.display = '';
+        document.getElementById('publisherWelcomeStep2').style.display = 'none';
     }
 
     function _onCheckChange() {
@@ -61,53 +120,25 @@ VIP.publisherWelcome = (function () {
         btn.style.opacity = ok ? '1' : '0.5';
     }
 
-    async function _finish() {
+    function _finish() {
         const chk = document.getElementById('publisherWelcomeAcceptCheck');
         if (!chk || !chk.checked) return;
-        const btn = document.getElementById('publisherWelcomeFinishBtn');
-        if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
-        try {
-            const r = await fetch(`${VIP.config.API_URL}/api/users/me/publisher-welcome-seen`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${VIP.state.currentToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            // Aún si el endpoint falla por red transitoria, no trabamos al
-            // usuario. Marcamos local (sesión) y dejamos pasar. La próxima
-            // vez que recargue, si la DB no se actualizó, vuelve a aparecer.
-            if (VIP.state.currentUser) {
-                VIP.state.currentUser.publisherWelcomeSeenAt = new Date().toISOString();
-            }
-            try { sessionStorage.setItem('vip_publisherWelcomeSeen', '1'); } catch (e) {}
-            if (!r.ok) {
-                console.warn('[publisherWelcome] endpoint devolvió error, cerrando igual', r.status);
-            }
-        } catch (e) {
-            console.warn('[publisherWelcome] error marcando como visto:', e.message);
-        } finally {
-            VIP.ui.hideModal('publisherWelcomeModal');
-            if (btn) { btn.disabled = false; btn.textContent = '🎮 COMENZAR A JUGAR'; }
-        }
+        _markSeen();
+        VIP.ui.hideModal('publisherWelcomeModal');
     }
 
-    // Trigger desde ui.js. Muestra el modal sólo si corresponde.
-    function maybeShow() {
-        const u = VIP.state && VIP.state.currentUser;
-        if (!u) return;
-        // No bloquear al usuario si tiene cambio de contraseña pendiente —
-        // ese flujo tiene prioridad y nuestro endpoint sería rechazado.
-        if (u.mustChangePassword === true || u.needsPasswordChange === true) return;
-        if (VIP.state.passwordChangePending) return;
-        // Sólo si vino de una campaña/publicista.
-        if (!u.acquisitionCampaign) return;
-        // Si ya lo vio (DB o sessionStorage local), no repetir.
-        if (u.publisherWelcomeSeenAt) return;
-        try {
-            if (sessionStorage.getItem('vip_publisherWelcomeSeen') === '1') return;
-        } catch (e) {}
+    // Trigger principal. Se llama desde app.js al cargar la página, ANTES de
+    // que el usuario se loguee/registre. Si corresponde, muestra el modal.
+    async function maybeShow() {
+        if (_alreadySeen()) return;
+        const code = _detectCampaignCode();
+        if (!code) return; // no vino por un link de publicista — no mostrar
+        // Fetch en paralelo con la apertura del modal. Si la API responde rápido
+        // ya está cuando se ve el paso 1; si tarda, se enriquece después.
+        const infoPromise = _fetchPublisherInfo(code);
         _open();
+        const info = await infoPromise;
+        if (info) _renderHeader(info);
     }
 
     // Bind events. Se llama una sola vez desde app.js.

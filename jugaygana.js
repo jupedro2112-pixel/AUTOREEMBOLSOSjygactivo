@@ -315,8 +315,25 @@ async function lookupUserOrError(username) {
     });
 
     let data = parsePossiblyWrappedJson(resp.data);
+
+    // Auto-retry transparente cuando JuegayGana responde HTML (Cloudflare
+    // challenge / rate limit / mantenimiento). Una sola reintentona con 3s
+    // de espera resuelve la mayoría de los bloqueos transitorios sin que el
+    // admin se entere. Si persiste, devolvemos el error como antes.
     if (isHtmlBlocked(data)) {
-      return { status: 'error', error: 'API bloqueada (HTML)' };
+      console.warn(`⚠️  lookupUserOrError: HTML detectado para ${username}, reintentando en 3s...`);
+      await new Promise(r => setTimeout(r, 3000));
+      resp = await client.post('', buildBody(), {
+        headers: buildHeaders(),
+        validateStatus: () => true,
+        maxRedirects: 0
+      });
+      data = parsePossiblyWrappedJson(resp.data);
+      if (isHtmlBlocked(data)) {
+        console.error(`❌ lookupUserOrError: HTML persiste tras retry para ${username} → admin ve error`);
+        return { status: 'error', error: 'API bloqueada (HTML)' };
+      }
+      console.log(`✅ lookupUserOrError: ${username} OK en retry tras HTML`);
     }
 
     // Sesión inválida: renovar y reintentar una vez.

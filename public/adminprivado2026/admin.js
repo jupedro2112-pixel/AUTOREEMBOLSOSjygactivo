@@ -3235,6 +3235,7 @@ function switchSection(section) {
     if (section === 'centralIngresos') loadCentralIngresos();
     if (section === 'centralAppUsers') loadCentralAppUsers();
     if (section === 'centralWelcomeBonus') loadCentralWelcomeBonus();
+    if (section === 'suspiciousAccounts') loadSuspiciousAccounts();
     if (section === 'reembolsos') loadReembolsos();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
@@ -7535,6 +7536,154 @@ async function loadCentralWelcomeBonus() {
         body.innerHTML = html;
     } catch (e) {
         body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+
+// --- Cuentas sospechosas (anti-multicuenta) ---
+let _suspiciousData = { byPhone: [], byIp: [], byFcmToken: [], summary: {} };
+let _suspiciousTab = 'phone';
+
+async function loadSuspiciousAccounts() {
+    const body = document.getElementById('suspiciousAccountsBody');
+    if (!body) return;
+    body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
+    try {
+        const bonusOnly = document.getElementById('suspiciousBonusOnly');
+        const qs = bonusOnly && bonusOnly.checked ? '?bonusOnly=1' : '';
+        const r = await authFetch('/api/admin/suspicious-accounts' + qs);
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        _suspiciousData = {
+            byPhone: j.byPhone || [],
+            byIp: j.byIp || [],
+            byFcmToken: j.byFcmToken || [],
+            summary: j.summary || {}
+        };
+        renderSuspiciousAccounts();
+    } catch (e) {
+        body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+
+function switchSuspiciousTab(tab) {
+    _suspiciousTab = tab;
+    document.querySelectorAll('[data-suspicious-tab]').forEach(function (btn) {
+        const active = btn.dataset.suspiciousTab === tab;
+        btn.style.background = active ? 'rgba(212,175,55,0.18)' : 'rgba(255,255,255,0.05)';
+        btn.style.color = active ? '#d4af37' : '#bbb';
+        btn.style.borderColor = active ? 'rgba(212,175,55,0.40)' : 'rgba(255,255,255,0.15)';
+    });
+    renderSuspiciousAccounts();
+}
+
+function renderSuspiciousAccounts() {
+    const body = document.getElementById('suspiciousAccountsBody');
+    if (!body) return;
+    const s = _suspiciousData.summary || {};
+
+    let html = '<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
+    html += _centStatCard('👥', _centNum(s.totalUsersAffected), 'Cuentas en grupos', '#ff5050');
+    html += _centStatCard('📱', _centNum(s.groupsByPhone), 'Grupos por teléfono', '#2196f3');
+    html += _centStatCard('🌐', _centNum(s.groupsByIp), 'Grupos por IP', '#ff9800');
+    html += _centStatCard('📲', _centNum(s.groupsByFcmToken), 'Grupos por dispositivo', '#d4af37');
+    html += '</div>';
+
+    let groups, keyLabel, keyField;
+    if (_suspiciousTab === 'phone') {
+        groups = _suspiciousData.byPhone;
+        keyLabel = '📱 Teléfono';
+        keyField = 'phone';
+    } else if (_suspiciousTab === 'ip') {
+        groups = _suspiciousData.byIp;
+        keyLabel = '🌐 IP de registro';
+        keyField = 'registrationIp';
+    } else {
+        groups = _suspiciousData.byFcmToken;
+        keyLabel = '📲 Token FCM (dispositivo)';
+        keyField = 'fcmToken';
+    }
+
+    if (!groups || !groups.length) {
+        html += '<div class="empty-state"><p>✅ Sin grupos sospechosos para este criterio.</p></div>';
+        body.innerHTML = html;
+        return;
+    }
+
+    groups.forEach(function (g) {
+        html += _suspiciousGroupCard(g, keyLabel, keyField);
+    });
+    body.innerHTML = html;
+}
+
+function _suspiciousGroupCard(g, keyLabel, keyField) {
+    const keyVal = g[keyField];
+    const fullVal = g.fcmTokenFull || keyVal;
+    const users = g.users || [];
+    const bonusCount = g.bonusClaimedCount || 0;
+    const dangerColor = bonusCount >= 2 ? '#ff5050' : (bonusCount === 1 ? '#ff9800' : '#888');
+
+    let usersHtml = '<table class="data-table" style="margin-top:8px;">'
+        + '<thead><tr>'
+        + '<th>Usuario</th>'
+        + '<th>Teléfono</th>'
+        + '<th>Registrado</th>'
+        + '<th>Bono</th>'
+        + '<th>Estado</th>'
+        + '<th></th>'
+        + '</tr></thead><tbody>';
+    users.forEach(function (u) {
+        const bonusCell = u.installBonusClaimed
+            ? '<span style="color:#ff9800;font-weight:700;">🎁 ' + _centDate(u.installBonusClaimedAt) + '</span>'
+            : '<span style="color:#666;">—</span>';
+        const statusCell = u.isBlocked
+            ? '<span style="color:#ff5050;font-weight:700;">🚫 Bloqueado</span>'
+            : '<span style="color:#4caf50;">✅ Activo</span>';
+        usersHtml += '<tr>'
+            + '<td><strong style="color:#fff;">' + _centEsc(u.username) + '</strong></td>'
+            + '<td style="color:#bbb;">' + _centEsc(u.phone || '—') + '</td>'
+            + '<td style="color:#888;font-size:11px;">' + _centDate(u.createdAt) + '</td>'
+            + '<td>' + bonusCell + '</td>'
+            + '<td>' + statusCell + '</td>'
+            + '<td><button onclick="_suspiciousOpenUser(\'' + _centEsc(u.username) + '\')" style="background:rgba(212,175,55,0.15);color:#d4af37;border:1px solid rgba(212,175,55,0.40);border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;cursor:pointer;">Ver chat</button></td>'
+            + '</tr>';
+    });
+    usersHtml += '</tbody></table>';
+
+    const keyDisplay = keyVal ? _centEsc(keyVal) : '<em style="color:#666;">sin dato</em>';
+    const copyBtn = fullVal
+        ? '<button onclick="_suspiciousCopy(this, \'' + _centEsc(String(fullVal).replace(/'/g, "\\'")) + '\')" style="margin-left:8px;background:rgba(212,175,55,0.15);color:#d4af37;border:1px solid rgba(212,175,55,0.40);border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;cursor:pointer;">📋 Copiar</button>'
+        : '';
+
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid ' + dangerColor + '55;border-radius:9px;padding:13px;margin-bottom:10px;">'
+        + '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;">'
+        + '<span style="background:rgba(255,80,80,0.18);color:' + dangerColor + ';font-size:11px;font-weight:800;padding:3px 9px;border-radius:8px;">' + g.count + ' cuentas</span>'
+        + '<span style="background:rgba(255,152,0,0.18);color:#ff9800;font-size:11px;font-weight:800;padding:3px 9px;border-radius:8px;">🎁 ' + bonusCount + ' cobraron bono</span>'
+        + '<span style="color:#888;font-size:11px;">' + keyLabel + ':</span>'
+        + '<code style="color:#d4af37;font-family:monospace;font-size:11px;word-break:break-all;">' + keyDisplay + '</code>'
+        + copyBtn
+        + '</div>'
+        + usersHtml
+        + '</div>';
+}
+
+function _suspiciousCopy(btnEl, value) {
+    try {
+        navigator.clipboard.writeText(value);
+        const orig = btnEl.innerText;
+        btnEl.innerText = '✅ Copiado';
+        setTimeout(function () { btnEl.innerText = orig; }, 1500);
+    } catch (e) {
+        showToast('No se pudo copiar', 'error');
+    }
+}
+
+function _suspiciousOpenUser(username) {
+    // Mueve al panel de chats abriendo el chat de ese usuario si existe la función.
+    if (typeof openChatByUsername === 'function') {
+        openChatByUsername(username);
+    } else if (typeof switchSection === 'function') {
+        switchSection('users');
+        showToast('Buscá "' + username + '" en la lista de usuarios.', 'info');
     }
 }
 

@@ -104,6 +104,10 @@
                     <span>🎁</span>
                     <span>Bono $5.000</span>
                 </a>
+                <a href="#" class="nav-item" data-section="suspiciousAccounts">
+                    <span>🕵️</span>
+                    <span>Cuentas sospechosas</span>
+                </a>
                 <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#d4af37;text-transform:uppercase;opacity:.7;">Reembolsos</div>
                 <a href="#" class="nav-item" data-section="reembolsos">
                     <span>💸</span>
@@ -809,6 +813,33 @@
                     <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Usuarios que reclamaron el bono de $5.000 por instalar la app (one-time). Mostramos el estado actual de su app y notificaciones para detectar quién la desinstaló después de cobrar.</p>
                 </div>
                 <div id="centralWelcomeBonusBody">
+                    <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 CUENTAS SOSPECHOSAS — grupos por phone / IP / fcmToken
+                 ============================================================ -->
+            <section id="suspiciousAccountsSection" class="section">
+                <div class="panel-header">
+                    <h2>🕵️ Cuentas sospechosas</h2>
+                    <button class="refresh-btn" onclick="loadSuspiciousAccounts()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Posibles multicuentas agrupadas por <strong>mismo teléfono</strong>, <strong>misma IP de registro</strong> o <strong>mismo token FCM (dispositivo)</strong>. Solo muestra grupos con 2+ cuentas. La IP de registro se captura desde el deploy del fix anti-multicuenta — usuarios viejos saldrán sin ese dato.</p>
+                </div>
+                <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+                    <label style="color:#bbb;font-size:11.5px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="suspiciousBonusOnly" onchange="loadSuspiciousAccounts()" style="cursor:pointer;">
+                        Solo cuentas que ya cobraron el bono
+                    </label>
+                    <div style="margin-left:auto;display:flex;gap:5px;">
+                        <button class="tab-btn active" data-suspicious-tab="phone" onclick="switchSuspiciousTab('phone')" style="background:rgba(212,175,55,0.18);color:#d4af37;border:1px solid rgba(212,175,55,0.40);border-radius:6px;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;">📱 Por teléfono</button>
+                        <button class="tab-btn" data-suspicious-tab="ip" onclick="switchSuspiciousTab('ip')" style="background:rgba(255,255,255,0.05);color:#bbb;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;">🌐 Por IP</button>
+                        <button class="tab-btn" data-suspicious-tab="fcmToken" onclick="switchSuspiciousTab('fcmToken')" style="background:rgba(255,255,255,0.05);color:#bbb;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:5px 11px;font-size:11px;font-weight:700;cursor:pointer;">📲 Por dispositivo</button>
+                    </div>
+                </div>
+                <div id="suspiciousAccountsBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
             </section>

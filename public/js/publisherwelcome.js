@@ -48,6 +48,20 @@ VIP.publisherWelcome = (function () {
         try { return localStorage.getItem(LS_FLAG) === '1'; } catch (e) { return false; }
     }
 
+    // Detecta si el visitante llegó por un link de referido (?ref=CODE en URL).
+    // Si es así, el referido tiene PRIORIDAD sobre cualquier atribución de
+    // publicista persistida en localStorage/cookie: el welcome no se muestra
+    // y el login NO se customiza (registerBtn queda visible para que el
+    // referido se pueda registrar).
+    function _isReferralVisit() {
+        try {
+            const qs = window.location.search || '';
+            return /[?&]ref=[^&]+/i.test(qs);
+        } catch (e) {
+            return false;
+        }
+    }
+
     function _markSeen() {
         try { localStorage.setItem(LS_FLAG, '1'); } catch (e) {}
     }
@@ -100,6 +114,11 @@ VIP.publisherWelcome = (function () {
     // El modal es genérico — no muestra el nombre del publicista para no
     // exponer la atribución comercial al usuario final.
     function maybeShow() {
+        // Si la URL trae ?ref=CODE, el visitante viene por referido — no le
+        // mostramos el welcome del publicista aunque tenga atribución vieja
+        // persistida. Ese visitante tiene que poder ver el flujo de registro
+        // con código de referido normalmente.
+        if (_isReferralVisit()) return;
         if (_alreadySeen()) return;
         const code = _detectCampaignCode();
         if (!code) return; // no vino por un link de publicista — no mostrar
@@ -118,6 +137,9 @@ VIP.publisherWelcome = (function () {
     //     "completá los datos que te dieron por WhatsApp" cuando falten campos.
     // Idempotente: si se llama varias veces no duplica nada.
     function applyLoginCustomizations() {
+        // Referido tiene prioridad: si vino por ?ref=CODE no le aplicamos nada,
+        // sino se le ocultaría el botón Registrarse y no podría crear cuenta.
+        if (_isReferralVisit()) return;
         const code = _detectCampaignCode();
         if (!code) return;
 

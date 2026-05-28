@@ -75,6 +75,15 @@
 - Panel "Dashboard Publicistas": ranking con score + modal de análisis con segmentos +
   botón "Recuperar" (push FCM a en-riesgo/perdidos).
 
+### 9. Análisis DIARIO por publicista (FTD / ROAS / recargas mismo día)
+- `getDailyBreakdown(publisher, from, to)` en publisherAnalyticsService. Por día ART:
+  - **FTD** (primera carga histórica de cada cliente): count + monto → para ROAS diario.
+  - Total de cargas: count + monto.
+  - **Clientes nuevos que recargaron el MISMO día** (ej: cargó 15hs y volvió 20hs):
+    count de clientes + count de recargas (2da en adelante) + monto de recargas.
+- Endpoint `GET /api/admin/publishers/:publisher/daily?from=&to=` (default últimos 30 días).
+- Frontend: tabla diaria dentro del modal de análisis (sección "📅 Análisis diario").
+
 ## Pendientes / ideas mencionadas (NO hechas)
 - Mensaje de fueguito editable: hoy se arma del lado del cliente (fire.js →
   sendSystemMessage). Requiere mover la generación al backend.

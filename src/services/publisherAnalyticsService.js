@@ -270,10 +270,140 @@ async function getSegmentUsernames(publisher, segment) {
   return acc.clients[segment].map(c => c.username);
 }
 
+// Argentina es UTC-3 todo el año (sin DST). Día ART de un timestamp UTC.
+const ART_OFFSET_MS = 3 * 60 * 60 * 1000;
+function _artDay(ts) {
+  return new Date(new Date(ts).getTime() - ART_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * Breakdown DIARIO de un publicista, enfocado en primera carga (FTD) y recargas
+ * del mismo día de clientes nuevos.
+ *
+ * Por cada día (en hora Argentina) devuelve:
+ *   - ftdCount / ftdAmount : clientes cuya PRIMERA carga histórica fue ese día,
+ *     y la suma de esa primera carga. Es lo que se usa para el ROAS diario
+ *     (FTD revenue vs. gasto de pauta de ese día).
+ *   - totalDeposits / totalAmount : TODAS las cargas de ese día (de clientes
+ *     de este publicista).
+ *   - newReloadedClients : clientes nuevos (FTD ese día) que cargaron 2+ veces
+ *     el MISMO día (ej: cargó a las 15hs y volvió a cargar a las 20hs).
+ *   - newReloadDeposits / newReloadAmount : cuántas cargas de recarga (la 2da en
+ *     adelante) hicieron esos clientes nuevos ese día, y su monto.
+ *
+ * @param {string} publisher
+ * @param {string|null} fromStr  YYYY-MM-DD ART (default: hace 30 días)
+ * @param {string|null} toStr    YYYY-MM-DD ART (default: hoy)
+ */
+async function getDailyBreakdown(publisher, fromStr = null, toStr = null) {
+  const campaigns = await Campaign.find({ publisher }).select('code').lean();
+  if (campaigns.length === 0) return null;
+  const codes = campaigns.map(c => c.code);
+
+  const users = await User.find({ acquisitionCampaign: { $in: codes } }).select('username').lean();
+  const totalsEmpty = { ftdCount: 0, ftdAmount: 0, totalDeposits: 0, totalAmount: 0, newReloadedClients: 0, newReloadDeposits: 0, newReloadAmount: 0 };
+  if (users.length === 0) return { publisher, from: fromStr, to: toStr, days: [], totals: totalsEmpty };
+  const usernames = users.map(u => u.username);
+
+  // Todas las cargas reales (sin regalos) de los clientes del publicista, asc.
+  // Sin filtro de fecha: necesitamos la PRIMERA carga histórica de cada user
+  // para saber en qué día fue "nuevo", aunque sea anterior al rango pedido.
+  const deposits = await Transaction.find({
+    type: 'deposit',
+    username: { $in: usernames },
+    $or: [
+      { 'metadata.source': { $exists: false } },
+      { 'metadata.source': { $nin: GIFT_SOURCES } }
+    ]
+  }).select('username amount timestamp').sort({ timestamp: 1 }).lean();
+
+  const firstDepositDay = Object.create(null); // user → día ART de su 1ra carga histórica
+  const perDay = new Map();
+  const getDay = (day) => {
+    if (!perDay.has(day)) {
+      perDay.set(day, {
+        date: day,
+        totalDeposits: 0,
+        totalAmount: 0,
+        ftdCount: 0,
+        ftdAmount: 0,
+        // user → { count, total, first } de las cargas de clientes nuevos ESE día
+        newClientDay: new Map()
+      });
+    }
+    return perDay.get(day);
+  };
+
+  for (const tx of deposits) {
+    const day = _artDay(tx.timestamp);
+    const amount = tx.amount || 0;
+    const acc = getDay(day);
+    acc.totalDeposits++;
+    acc.totalAmount += amount;
+
+    const isFirstEver = firstDepositDay[tx.username] === undefined;
+    if (isFirstEver) {
+      firstDepositDay[tx.username] = day;
+      acc.ftdCount++;
+      acc.ftdAmount += amount;
+    }
+
+    // ¿Esta carga es de un cliente cuya FTD fue este mismo día? (cliente nuevo del día)
+    if (firstDepositDay[tx.username] === day) {
+      const m = acc.newClientDay;
+      const prev = m.get(tx.username);
+      if (!prev) m.set(tx.username, { count: 1, total: amount, first: amount });
+      else { prev.count++; prev.total += amount; }
+    }
+  }
+
+  // Finalizar cada día.
+  const rows = [];
+  for (const acc of perDay.values()) {
+    let newReloadedClients = 0, newReloadDeposits = 0, newReloadAmount = 0;
+    for (const stat of acc.newClientDay.values()) {
+      if (stat.count >= 2) {
+        newReloadedClients++;
+        newReloadDeposits += (stat.count - 1);
+        newReloadAmount += (stat.total - stat.first);
+      }
+    }
+    rows.push({
+      date: acc.date,
+      ftdCount: acc.ftdCount,
+      ftdAmount: Math.round(acc.ftdAmount),
+      totalDeposits: acc.totalDeposits,
+      totalAmount: Math.round(acc.totalAmount),
+      newReloadedClients,
+      newReloadDeposits,
+      newReloadAmount: Math.round(newReloadAmount)
+    });
+  }
+
+  // Rango por defecto: últimos 30 días.
+  const todayArt = _artDay(Date.now());
+  const defFrom = _artDay(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const from = fromStr || defFrom;
+  const to = toStr || todayArt;
+
+  const filtered = rows.filter(r => r.date >= from && r.date <= to).sort((a, b) => b.date.localeCompare(a.date));
+
+  const totals = filtered.reduce((t, r) => {
+    t.ftdCount += r.ftdCount; t.ftdAmount += r.ftdAmount;
+    t.totalDeposits += r.totalDeposits; t.totalAmount += r.totalAmount;
+    t.newReloadedClients += r.newReloadedClients;
+    t.newReloadDeposits += r.newReloadDeposits; t.newReloadAmount += r.newReloadAmount;
+    return t;
+  }, { ...totalsEmpty });
+
+  return { publisher, from, to, days: filtered, totals };
+}
+
 module.exports = {
   getRanking,
   getPublisherAnalysis,
   getSegmentUsernames,
+  getDailyBreakdown,
   // Exportados por si se quieren testear / ajustar
   ACTIVE_DAYS,
   AT_RISK_DAYS,

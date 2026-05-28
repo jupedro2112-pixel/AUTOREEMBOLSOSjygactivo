@@ -9700,6 +9700,10 @@ async function openPublisherAnalysis(publisher) {
                 ${card('TICKET PROM.', fmt(m.avgTicket), '#aaa')}
                 ${card('NETO', fmt(m.netRevenue), m.netRevenue >= 0 ? '#fff' : '#ff6666')}
             </div>
+            <div id="paDailyContainer" style="background:#0d0d1a;border:1px solid rgba(108,170,255,0.25);border-radius:10px;padding:14px;margin-bottom:10px;">
+                <div style="color:#6cf;font-weight:700;margin-bottom:8px;">📅 Análisis diario (FTD / ROAS / recargas)</div>
+                <div id="paDailyBody"><span style="color:#888;font-size:12px;">Cargando…</span></div>
+            </div>
             ${segBlock('🟡 EN RIESGO — se están yendo', '#ffb300', data.segments.atRisk, 'atRisk')}
             ${segBlock('🔴 PERDIDOS — recuperar', '#ff6666', data.segments.lost, 'lost')}
             ${segBlock('🟢 ACTIVOS', '#4caf50', data.segments.active, 'active')}
@@ -9707,8 +9711,73 @@ async function openPublisherAnalysis(publisher) {
             ${segBlock('👑 FIELES (muchas cargas)', '#d4af37', data.loyal, 'loyal')}
             ${segBlock('⚪ NUNCA CARGARON', '#888', data.segments.never, 'never')}
         `;
+        // Cargar el breakdown diario aparte (no bloquea el render de arriba).
+        loadPublisherDaily(publisher);
     } catch (e) {
         bodyEl.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+    }
+}
+
+async function loadPublisherDaily(publisher) {
+    const box = document.getElementById('paDailyBody');
+    if (!box) return;
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/daily`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) { box.innerHTML = '<span style="color:#ff6666;font-size:12px;">Error cargando diario</span>'; return; }
+        const data = await r.json();
+        const days = data.days || [];
+        const t = data.totals || {};
+        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+        if (days.length === 0) {
+            box.innerHTML = '<span style="color:#888;font-size:12px;">Sin cargas en el rango (últimos 30 días).</span>';
+            return;
+        }
+        box.innerHTML = `
+            <div style="color:#888;font-size:11px;margin-bottom:8px;">Rango: ${data.from} → ${data.to} · FTD = primera carga histórica de cada cliente (para ROAS).</div>
+            <div style="overflow-x:auto;max-height:320px;overflow-y:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead><tr style="background:#15152a;color:#6cf;text-align:left;position:sticky;top:0;">
+                        <th style="padding:7px;">Día (ART)</th>
+                        <th style="padding:7px;text-align:right;">FTD (1ra carga)</th>
+                        <th style="padding:7px;text-align:right;">Monto FTD</th>
+                        <th style="padding:7px;text-align:right;">Cargas totales</th>
+                        <th style="padding:7px;text-align:right;">Monto total</th>
+                        <th style="padding:7px;text-align:right;">Nuevos que recargaron</th>
+                        <th style="padding:7px;text-align:right;">Recargas (mismo día)</th>
+                        <th style="padding:7px;text-align:right;">Monto recargas</th>
+                    </tr></thead>
+                    <tbody>
+                        ${days.map(d => `
+                            <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                                <td style="padding:7px;color:#fff;">${d.date}</td>
+                                <td style="padding:7px;text-align:right;color:#6cf;font-weight:bold;">${d.ftdCount}</td>
+                                <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(d.ftdAmount)}</td>
+                                <td style="padding:7px;text-align:right;color:#aaa;">${d.totalDeposits}</td>
+                                <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(d.totalAmount)}</td>
+                                <td style="padding:7px;text-align:right;color:#d4af37;">${d.newReloadedClients}</td>
+                                <td style="padding:7px;text-align:right;color:#d4af37;font-weight:bold;">${d.newReloadDeposits}</td>
+                                <td style="padding:7px;text-align:right;color:#aaa;">${fmt(d.newReloadAmount)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                    <tfoot>
+                        <tr style="border-top:2px solid rgba(108,170,255,0.3);font-weight:bold;">
+                            <td style="padding:7px;color:#6cf;">TOTAL</td>
+                            <td style="padding:7px;text-align:right;color:#6cf;">${t.ftdCount || 0}</td>
+                            <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(t.ftdAmount)}</td>
+                            <td style="padding:7px;text-align:right;color:#aaa;">${t.totalDeposits || 0}</td>
+                            <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(t.totalAmount)}</td>
+                            <td style="padding:7px;text-align:right;color:#d4af37;">${t.newReloadedClients || 0}</td>
+                            <td style="padding:7px;text-align:right;color:#d4af37;">${t.newReloadDeposits || 0}</td>
+                            <td style="padding:7px;text-align:right;color:#aaa;">${fmt(t.newReloadAmount)}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>`;
+    } catch (e) {
+        box.innerHTML = '<span style="color:#ff6666;font-size:12px;">Error de conexión</span>';
     }
 }
 
@@ -9763,6 +9832,7 @@ async function submitRecover() {
 
 window.loadPublishersRanking = loadPublishersRanking;
 window.openPublisherAnalysis = openPublisherAnalysis;
+window.loadPublisherDaily = loadPublisherDaily;
 window.closePublisherAnalysisModal = closePublisherAnalysisModal;
 window.openRecoverModal = openRecoverModal;
 window.closeRecoverModal = closeRecoverModal;

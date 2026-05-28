@@ -8614,6 +8614,24 @@ app.get('/api/admin/publishers/ranking', authMiddleware, adminMiddleware, async 
   }
 });
 
+// GET /api/admin/publishers/:publisher/daily?from=&to=
+// Breakdown diario: primera carga (FTD) para ROAS, total de cargas, y recargas
+// del mismo día de clientes nuevos. Fechas en hora Argentina (YYYY-MM-DD).
+app.get('/api/admin/publishers/:publisher/daily', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const publisher = String(req.params.publisher).trim();
+    if (!publisher) return res.status(400).json({ error: 'publisher requerido' });
+    const from = req.query.from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
+    const to = req.query.to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+    const result = await publisherAnalytics.getDailyBreakdown(publisher, from, to);
+    if (!result) return res.status(404).json({ error: 'Publicista sin clientes o inexistente' });
+    res.json(result);
+  } catch (err) {
+    logger.error(`[admin/publishers/:publisher/daily] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // GET /api/admin/publishers/:publisher/analysis
 // Análisis detallado de un publicista: métricas + segmentos (activos / en riesgo
 // / perdidos / nunca cargaron) + clientes valiosos (ticket alto, fieles).

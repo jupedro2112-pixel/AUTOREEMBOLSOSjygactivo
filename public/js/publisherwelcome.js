@@ -106,6 +106,39 @@ VIP.publisherWelcome = (function () {
         _open();
     }
 
+    // Texto llamativo del botón de login cuando el visitante viene de publicista.
+    // auth.js lo respeta en todos los puntos donde reescribe el textContent del
+    // botón (estado idle / estado "Ingresando..." vuelve a este texto).
+    const PUBLISHER_LOGIN_BTN_TEXT = '⚡ Entrá YA y enviá tu comprobante de carga';
+
+    // Aplica las customizaciones del login screen para visitantes de publicista:
+    //   - reemplaza el texto del botón submit y lo estiliza llamativamente
+    //   - oculta el bloque "¿No tenés cuenta? / Registrarse"
+    //   - setea window._isPublisherLink para que auth.js muestre el mensaje
+    //     "completá los datos que te dieron por WhatsApp" cuando falten campos.
+    // Idempotente: si se llama varias veces no duplica nada.
+    function applyLoginCustomizations() {
+        const code = _detectCampaignCode();
+        if (!code) return;
+
+        window._isPublisherLink = true;
+        // Exponer el texto para que auth.js lo use al restaurar el botón post-click.
+        window._publisherLoginBtnText = PUBLISHER_LOGIN_BTN_TEXT;
+
+        const loginBtn = document.querySelector('#loginForm button[type="submit"]');
+        if (loginBtn) {
+            loginBtn.textContent = PUBLISHER_LOGIN_BTN_TEXT;
+            loginBtn.classList.add('publisher-cta');
+        }
+
+        // Ocultar el bloque "¿No tienes cuenta? — Registrarse". Este público ya
+        // recibió usuario+contraseña por WhatsApp, no debería registrarse.
+        const registerBtn = document.getElementById('registerBtn');
+        if (registerBtn && registerBtn.parentElement) {
+            registerBtn.parentElement.style.display = 'none';
+        }
+    }
+
     // Bind events. Se llama una sola vez desde app.js.
     function init() {
         const nextBtn = document.getElementById('publisherWelcomeNextBtn');
@@ -118,5 +151,9 @@ VIP.publisherWelcome = (function () {
         if (chk) chk.addEventListener('change', _onCheckChange);
     }
 
-    return { init: init, maybeShow: maybeShow };
+    return {
+        init: init,
+        maybeShow: maybeShow,
+        applyLoginCustomizations: applyLoginCustomizations
+    };
 })();

@@ -189,14 +189,29 @@ VIP.auth = (function () {
         const errorDiv = document.getElementById('errorMessage');
         const loginBtn = document.querySelector('#loginForm button[type="submit"]');
 
+        // Mensaje contextual cuando el visitante llegó por un link de publicista:
+        // el publicista ya le mandó usuario+contraseña por WhatsApp, así que el
+        // error tiene que recordarle eso en vez del genérico "Ingresá tu usuario".
+        const isPublisher = window._isPublisherLink === true;
+        const whatsappMissingMsg = '⚠️ Completá el usuario y la contraseña que te dieron por WhatsApp para entrar.';
+
         if (loginMode === 'phone' && (!phoneNumber || phoneNumber.replace(/\D/g, '').length < 7)) {
-            errorDiv.textContent = 'Ingresá un número de celular válido';
+            errorDiv.textContent = isPublisher ? whatsappMissingMsg : 'Ingresá un número de celular válido';
             errorDiv.classList.add('show');
             return;
         }
 
         if (loginMode === 'username' && !username) {
-            errorDiv.textContent = 'Ingresá tu usuario';
+            errorDiv.textContent = isPublisher ? whatsappMissingMsg : 'Ingresá tu usuario';
+            errorDiv.classList.add('show');
+            return;
+        }
+
+        // Para visitantes de publicista también validamos password vacío
+        // explícitamente (el flujo normal lo deja pasar y deja que el server
+        // responda 401 — peor UX cuando el problema es no haber cargado nada).
+        if (isPublisher && loginMode === 'username' && !password) {
+            errorDiv.textContent = whatsappMissingMsg;
             errorDiv.classList.add('show');
             return;
         }
@@ -207,13 +222,18 @@ VIP.auth = (function () {
             return;
         }
 
+        // Texto del botón cuando NO está en estado idle (cargando, timeout, etc.).
+        // En modo publicista mantenemos el texto custom para que el usuario nunca
+        // vea "Ingresar a la Sala" — el flujo es coherente con la copy del welcome.
+        const idleLoginBtnText = window._publisherLoginBtnText || 'Ingresar a la Sala';
+
         if (loginBtn) { loginBtn.textContent = 'Ingresando...'; loginBtn.disabled = true; }
         errorDiv.classList.remove('show');
 
         const loginTimeout = setTimeout(() => {
             errorDiv.textContent = 'Tiempo de espera agotado. Intenta nuevamente.';
             errorDiv.classList.add('show');
-            if (loginBtn) { loginBtn.textContent = 'Ingresar a la Sala'; loginBtn.disabled = false; }
+            if (loginBtn) { loginBtn.textContent = idleLoginBtnText; loginBtn.disabled = false; }
         }, 15000);
 
         try {
@@ -331,7 +351,12 @@ VIP.auth = (function () {
             errorDiv.classList.add('show');
         } finally {
             if (loginBtn) {
-                loginBtn.textContent = window._phoneLoginMode === 'otp' && loginMode === 'phone' ? '📱 Enviar código SMS' : 'Ingresar a la Sala';
+                // En modo publicista el botón mantiene su texto llamativo
+                // ("Entrá YA..."). En modo OTP por SMS, el botón cambia para
+                // reflejar el siguiente paso. En el resto, vuelve al default.
+                const idleText = window._publisherLoginBtnText
+                    || (window._phoneLoginMode === 'otp' && loginMode === 'phone' ? '📱 Enviar código SMS' : 'Ingresar a la Sala');
+                loginBtn.textContent = idleText;
                 loginBtn.disabled = false;
             }
         }

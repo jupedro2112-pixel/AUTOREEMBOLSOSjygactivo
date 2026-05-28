@@ -19,7 +19,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // Pequeño delay para que campaign.js termine de inicializar y exponer
         // VIP.campaign.getActive() — ese es el fallback cuando no hay
         // window.__VIP_CAMPAIGN_CODE__ inyectado (caso ?p=CODE).
-        setTimeout(() => VIP.publisherWelcome.maybeShow(), 100);
+        setTimeout(() => {
+            VIP.publisherWelcome.maybeShow();
+            // Personaliza el login screen para visitantes de publicista:
+            // botón llamativo "Entrá YA..." + oculta Registrarse. Se aplica
+            // SIEMPRE que haya atribución activa, no sólo la primera visita
+            // (un visitante que ya vio el welcome igual debe ver el login
+            // personalizado al volver al sitio).
+            if (typeof VIP.publisherWelcome.applyLoginCustomizations === 'function') {
+                VIP.publisherWelcome.applyLoginCustomizations();
+            }
+        }, 100);
     }
 
     // Auto-fill referral code from URL ?ref=CODE

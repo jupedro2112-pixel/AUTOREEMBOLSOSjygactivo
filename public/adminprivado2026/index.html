@@ -1527,24 +1527,79 @@
                 <div class="panel-header">
                     <h2>📊 DASHBOARD PUBLICISTAS</h2>
                 </div>
-                <div style="padding:16px;display:grid;gap:16px;">
-                    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;">
-                        <div>
-                            <label style="color:#aaa;font-size:12px;display:block;">Desde</label>
-                            <input type="date" id="dashFrom" style="padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                <div style="padding:16px;display:grid;gap:20px;">
+
+                    <!-- ===== RANKING DE EFECTIVIDAD ===== -->
+                    <div style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.25);border-radius:12px;padding:16px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px;">
+                            <h3 style="margin:0;color:#d4af37;font-size:16px;">🏆 Ranking de publicistas (mejor → peor)</h3>
+                            <button onclick="loadPublishersRanking()" style="padding:6px 12px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">↻ Actualizar</button>
                         </div>
-                        <div>
-                            <label style="color:#aaa;font-size:12px;display:block;">Hasta</label>
-                            <input type="date" id="dashTo" style="padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
-                        </div>
-                        <button onclick="loadPublishersDashboard()" class="btn-primary btn-small">Actualizar</button>
-                        <button onclick="clearDashboardFilters()" style="padding:8px 14px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">Limpiar filtros</button>
+                        <p style="color:#888;font-size:11.5px;margin:0 0 12px;">
+                            Score 0–100 = 40% retención de clientes que cargan + 30% conversión a carga + 30% fuerza del ticket promedio.
+                            Tocá <strong style="color:#d4af37;">Ver análisis</strong> para ver activos / en riesgo / perdidos y recuperar clientes.
+                        </p>
+                        <div id="publishersRankingBody"><span style="color:#888;">Cargando ranking…</span></div>
                     </div>
-                    <div id="publishersDashboardBody">
-                        <span style="color:#888;">Cargando…</span>
+
+                    <!-- ===== TOTALES (cargas/retiros por fecha) ===== -->
+                    <div style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:16px;">
+                        <h3 style="margin:0 0 12px;color:#aaa;font-size:14px;">💵 Totales por publicista (cargas / retiros)</h3>
+                        <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:12px;">
+                            <div>
+                                <label style="color:#aaa;font-size:12px;display:block;">Desde</label>
+                                <input type="date" id="dashFrom" style="padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                            </div>
+                            <div>
+                                <label style="color:#aaa;font-size:12px;display:block;">Hasta</label>
+                                <input type="date" id="dashTo" style="padding:8px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;">
+                            </div>
+                            <button onclick="loadPublishersDashboard()" class="btn-primary btn-small">Actualizar</button>
+                            <button onclick="clearDashboardFilters()" style="padding:8px 14px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">Limpiar filtros</button>
+                        </div>
+                        <div id="publishersDashboardBody">
+                            <span style="color:#888;">Cargando…</span>
+                        </div>
                     </div>
                 </div>
             </section>
+
+            <!-- Modal: análisis detallado de un publicista (segmentos + clientes) -->
+            <div id="publisherAnalysisModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:1000px;width:96%;max-height:92vh;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                        <h2 id="paAnalysisTitle" style="margin:0;color:#d4af37;">Análisis del publicista</h2>
+                        <button onclick="closePublisherAnalysisModal()" style="background:none;border:none;color:#888;font-size:24px;cursor:pointer;">✕</button>
+                    </div>
+                    <div id="paAnalysisBody" style="color:#fff;">Cargando…</div>
+                </div>
+            </div>
+
+            <!-- Modal: enviar push de recuperación a un segmento -->
+            <div id="publisherRecoverModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10000;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:480px;width:92%;">
+                    <h2 style="margin:0 0 6px;color:#d4af37;">📣 Recuperar clientes</h2>
+                    <p id="recoverSubtitle" style="color:#aaa;font-size:13px;margin:0 0 16px;"></p>
+                    <input type="hidden" id="recoverPublisher" value="">
+                    <input type="hidden" id="recoverSegment" value="">
+                    <div style="display:grid;gap:12px;">
+                        <div>
+                            <label style="color:#aaa;font-size:12px;">Título del push</label>
+                            <input type="text" id="recoverTitle" maxlength="120" placeholder="🎁 ¡Te extrañamos!" style="width:100%;padding:10px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="color:#aaa;font-size:12px;">Mensaje</label>
+                            <textarea id="recoverBody" rows="3" maxlength="500" placeholder="Volvé y reclamá un bono especial. ¡Te esperamos!" style="width:100%;padding:10px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;resize:vertical;"></textarea>
+                        </div>
+                        <div id="recoverError" style="color:#ff6666;font-size:13px;display:none;"></div>
+                        <div id="recoverResult" style="color:#4caf50;font-size:13px;display:none;"></div>
+                    </div>
+                    <div style="display:flex;gap:10px;margin-top:18px;">
+                        <button onclick="closeRecoverModal()" style="flex:1;padding:10px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;">Cancelar</button>
+                        <button id="recoverSendBtn" onclick="submitRecover()" style="flex:1;padding:10px;background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Enviar push</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- Modal: drill-down de usuarios de un publicista -->
             <div id="publisherUsersModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;align-items:center;justify-content:center;">

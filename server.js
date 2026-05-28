@@ -274,6 +274,8 @@ const jugayganaService = require('./src/services/jugayganaService');
 // Pool de sesiones JUGAYGANA por publicista — se usa cuando un publisher_admin
 // crea un usuario y la campaña tiene credenciales propias configuradas.
 const jugayganaPublisherSessions = require('./src/services/jugayganaPublisherSessions');
+// Analítica de clientes por publicista (segmentación churn, ranking, recuperación).
+const publisherAnalytics = require('./src/services/publisherAnalyticsService');
 const refunds = require('./models/refunds');
 const referralRevenueService = require('./src/services/referralRevenueService');
 const { resolveJugayganaUserId } = require('./src/services/jugayganaUserLinkService');
@@ -839,7 +841,7 @@ const notificationRoutes = require('./src/routes/notificationRoutes');
 app.use('/api/notifications', notificationRoutes);
 notificationRoutes.setIo(io);
 
-const { sendNotificationToUser: _sendPushToUser, pruneInvalidFcmTokens, sendNotificationToAllUsers } = require('./src/services/notificationService');
+const { sendNotificationToUser: _sendPushToUser, pruneInvalidFcmTokens, sendNotificationToAllUsers, sendNotificationToUsernames } = require('./src/services/notificationService');
 
 // ============================================
 // CRON DIARIO: LIMPIEZA DE TOKENS FCM MUERTOS
@@ -8590,6 +8592,87 @@ app.get('/api/admin/publishers/:publisher/users', authMiddleware, adminMiddlewar
     res.json({ publisher, users: enriched });
   } catch (err) {
     logger.error(`[admin/publishers/:publisher/users] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// ANALÍTICA DE CLIENTES POR PUBLICISTA
+// ============================================
+
+// GET /api/admin/publishers/ranking
+// Ranking de todos los publicistas por score de efectividad (mejor → peor).
+// IMPORTANTE: declarado ANTES de las rutas /:publisher/* — "ranking" es un
+// único segmento, así que no colisiona, pero lo dejamos arriba por claridad.
+app.get('/api/admin/publishers/ranking', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const ranking = await publisherAnalytics.getRanking();
+    res.json({ ranking });
+  } catch (err) {
+    logger.error(`[admin/publishers/ranking] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/publishers/:publisher/analysis
+// Análisis detallado de un publicista: métricas + segmentos (activos / en riesgo
+// / perdidos / nunca cargaron) + clientes valiosos (ticket alto, fieles).
+app.get('/api/admin/publishers/:publisher/analysis', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const publisher = String(req.params.publisher).trim();
+    if (!publisher) return res.status(400).json({ error: 'publisher requerido' });
+    const analysis = await publisherAnalytics.getPublisherAnalysis(publisher);
+    if (!analysis) return res.status(404).json({ error: 'Publicista sin clientes o inexistente' });
+    res.json(analysis);
+  } catch (err) {
+    logger.error(`[admin/publishers/:publisher/analysis] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/publishers/:publisher/recover
+// Manda un push de recuperación a un segmento de un publicista. Recalcula los
+// usernames del segmento server-side (no confía en una lista del cliente).
+// Sólo el admin general (no depositor/withdrawer) puede disparar push masivo.
+app.post('/api/admin/publishers/:publisher/recover', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Sólo el administrador general puede enviar push de recuperación' });
+    }
+    const publisher = String(req.params.publisher).trim();
+    const { segment, title, body } = req.body || {};
+    if (!publisher) return res.status(400).json({ error: 'publisher requerido' });
+    if (!segment || !['active', 'atRisk', 'lost', 'never'].includes(segment)) {
+      return res.status(400).json({ error: 'segment inválido (active|atRisk|lost|never)' });
+    }
+    if (!title || !body) {
+      return res.status(400).json({ error: 'title y body son requeridos' });
+    }
+
+    const usernames = await publisherAnalytics.getSegmentUsernames(publisher, segment);
+    if (usernames.length === 0) {
+      return res.json({ success: true, sent: 0, message: 'No hay clientes en ese segmento para notificar.' });
+    }
+
+    const result = await sendNotificationToUsernames(
+      User,
+      usernames,
+      String(title).slice(0, 120),
+      String(body).slice(0, 500),
+      { kind: 'publisher_recovery', publisher, segment }
+    );
+
+    logger.info(`[publishers/recover] admin=${req.user.username} publisher=${publisher} segment=${segment} target=${usernames.length} ok=${result && result.success}`);
+
+    res.json({
+      success: true,
+      segment,
+      targeted: usernames.length,
+      delivered: (result && (result.successCount ?? result.sent ?? null)),
+      detail: result || null
+    });
+  } catch (err) {
+    logger.error(`[publishers/recover] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

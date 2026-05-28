@@ -3441,6 +3441,7 @@ function switchSection(section) {
             showToast('No tienes permiso para acceder a esta sección', 'error');
             return;
         }
+        loadPublishersRanking();
         loadPublishersDashboard();
     }
     if (section === 'sms') {
@@ -9542,3 +9543,227 @@ window.loadPublishersDashboard = loadPublishersDashboard;
 window.clearDashboardFilters = clearDashboardFilters;
 window.openPublisherUsersModal = openPublisherUsersModal;
 window.closePublisherUsersModal = closePublisherUsersModal;
+
+// ============================================
+// ANÁLISIS / RANKING / RECUPERACIÓN DE PUBLICISTAS
+// ============================================
+
+function _scoreColor(score) {
+    if (score >= 70) return '#4caf50';
+    if (score >= 45) return '#d4af37';
+    if (score >= 25) return '#ff9800';
+    return '#ff5050';
+}
+
+async function loadPublishersRanking() {
+    const body = document.getElementById('publishersRankingBody');
+    if (!body) return;
+    body.innerHTML = '<span style="color:#888;">Cargando ranking…</span>';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publishers/ranking`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) { body.innerHTML = '<span style="color:#ff6666;">Error cargando ranking</span>'; return; }
+        const data = await r.json();
+        const rows = data.ranking || [];
+        if (rows.length === 0) {
+            body.innerHTML = '<div style="color:#888;padding:14px;text-align:center;border:1px dashed rgba(255,255,255,0.1);border-radius:8px;">No hay publicistas con clientes todavía.</div>';
+            return;
+        }
+        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+        body.innerHTML = `
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+                    <thead>
+                        <tr style="background:#15152a;color:#d4af37;text-align:left;">
+                            <th style="padding:9px;">#</th>
+                            <th style="padding:9px;">Publicista</th>
+                            <th style="padding:9px;text-align:center;">Score</th>
+                            <th style="padding:9px;text-align:right;">Clientes</th>
+                            <th style="padding:9px;text-align:right;">🟢 Activos</th>
+                            <th style="padding:9px;text-align:right;">🟡 Riesgo</th>
+                            <th style="padding:9px;text-align:right;">🔴 Perdidos</th>
+                            <th style="padding:9px;text-align:right;">💎 Ticket alto</th>
+                            <th style="padding:9px;text-align:right;">Ticket prom.</th>
+                            <th style="padding:9px;text-align:right;">Neto</th>
+                            <th style="padding:9px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.map((p, i) => `
+                            <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                                <td style="padding:9px;color:#888;">${i + 1}</td>
+                                <td style="padding:9px;color:#fff;font-weight:600;">${_safe(p.publisher)}</td>
+                                <td style="padding:9px;text-align:center;">
+                                    <span style="display:inline-block;min-width:34px;padding:3px 8px;border-radius:12px;font-weight:bold;color:#000;background:${_scoreColor(p.score)};">${p.score}</span>
+                                </td>
+                                <td style="padding:9px;text-align:right;color:#fff;">${p.totalClients}</td>
+                                <td style="padding:9px;text-align:right;color:#4caf50;">${p.active}</td>
+                                <td style="padding:9px;text-align:right;color:#ffb300;">${p.atRisk}</td>
+                                <td style="padding:9px;text-align:right;color:#ff6666;">${p.lost}</td>
+                                <td style="padding:9px;text-align:right;color:#d4af37;">${p.highTicketCount}</td>
+                                <td style="padding:9px;text-align:right;color:#aaa;">${fmt(p.avgTicket)}</td>
+                                <td style="padding:9px;text-align:right;color:${p.netRevenue >= 0 ? '#fff' : '#ff6666'};font-weight:bold;">${fmt(p.netRevenue)}</td>
+                                <td style="padding:9px;text-align:right;">
+                                    <button onclick="openPublisherAnalysis('${_safe(p.publisher)}')" style="padding:5px 10px;background:rgba(212,175,55,0.15);border:1px solid #d4af37;color:#d4af37;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;">Ver análisis</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+    } catch (e) {
+        console.error('loadPublishersRanking:', e);
+        body.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+    }
+}
+
+function _renderClientRows(clients) {
+    if (!clients || clients.length === 0) {
+        return '<div style="color:#666;font-size:12px;padding:8px;">— sin clientes en este segmento —</div>';
+    }
+    const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+    return `
+        <div style="overflow-x:auto;max-height:280px;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#aaa;text-align:left;position:sticky;top:0;">
+                    <th style="padding:6px;">Usuario</th>
+                    <th style="padding:6px;text-align:right;">Total cargado</th>
+                    <th style="padding:6px;text-align:right;">Cargas</th>
+                    <th style="padding:6px;text-align:right;">Ticket prom.</th>
+                    <th style="padding:6px;text-align:right;">Últ. carga</th>
+                    <th style="padding:6px;"></th>
+                </tr></thead>
+                <tbody>
+                    ${clients.map(c => `
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                            <td style="padding:6px;color:#fff;">${_safe(c.username)}${c.highTicket ? ' 💎' : ''}${c.loyal ? ' 👑' : ''}</td>
+                            <td style="padding:6px;text-align:right;color:#4caf50;">${fmt(c.totalDeposited)}</td>
+                            <td style="padding:6px;text-align:right;color:#aaa;">${c.depositCount}</td>
+                            <td style="padding:6px;text-align:right;color:#aaa;">${fmt(c.avgTicket)}</td>
+                            <td style="padding:6px;text-align:right;color:#888;">${c.daysSinceLastDeposit == null ? '—' : ('hace ' + c.daysSinceLastDeposit + 'd')}</td>
+                            <td style="padding:6px;"></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>`;
+}
+
+async function openPublisherAnalysis(publisher) {
+    const titleEl = document.getElementById('paAnalysisTitle');
+    const bodyEl = document.getElementById('paAnalysisBody');
+    if (titleEl) titleEl.textContent = '📊 ' + publisher;
+    if (bodyEl) bodyEl.innerHTML = 'Cargando…';
+    showModal('publisherAnalysisModal');
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/analysis`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) {
+            const e = await r.json().catch(() => ({}));
+            bodyEl.innerHTML = `<span style="color:#ff6666;">${_safe(e.error || 'Error cargando análisis')}</span>`;
+            return;
+        }
+        const data = await r.json();
+        const m = data.metrics;
+        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+        const card = (label, val, color) => `
+            <div style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center;">
+                <div style="color:#888;font-size:10px;letter-spacing:.5px;">${label}</div>
+                <div style="font-size:20px;font-weight:bold;color:${color};">${val}</div>
+            </div>`;
+
+        const segBlock = (titulo, color, clients, segKey) => `
+            <details style="background:#0d0d1a;border:1px solid ${color}33;border-radius:10px;padding:0;margin-bottom:10px;" ${segKey === 'atRisk' || segKey === 'lost' ? 'open' : ''}>
+                <summary style="cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:${color};font-weight:700;">${titulo} (${clients.length})</span>
+                    ${(segKey === 'atRisk' || segKey === 'lost') && clients.length > 0
+                        ? `<button onclick="event.preventDefault();openRecoverModal('${_safe(publisher)}','${segKey}','${clients.length}')" style="padding:5px 12px;background:${color};color:#000;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:bold;">📣 Recuperar</button>`
+                        : ''}
+                </summary>
+                <div style="padding:0 14px 14px;">${_renderClientRows(clients)}</div>
+            </details>`;
+
+        bodyEl.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:16px;">
+                ${card('SCORE', m.score, _scoreColor(m.score))}
+                ${card('CLIENTES', m.totalClients, '#fff')}
+                ${card('🟢 ACTIVOS', m.active, '#4caf50')}
+                ${card('🟡 EN RIESGO', m.atRisk, '#ffb300')}
+                ${card('🔴 PERDIDOS', m.lost, '#ff6666')}
+                ${card('⚪ NUNCA', m.never, '#888')}
+                ${card('✨ NUEVOS', m.newClients, '#6cf')}
+                ${card('💎 TICKET ALTO', m.highTicketCount, '#d4af37')}
+                ${card('👑 FIELES', m.loyalCount, '#d4af37')}
+                ${card('RETENCIÓN', m.retentionRate + '%', '#4caf50')}
+                ${card('TICKET PROM.', fmt(m.avgTicket), '#aaa')}
+                ${card('NETO', fmt(m.netRevenue), m.netRevenue >= 0 ? '#fff' : '#ff6666')}
+            </div>
+            ${segBlock('🟡 EN RIESGO — se están yendo', '#ffb300', data.segments.atRisk, 'atRisk')}
+            ${segBlock('🔴 PERDIDOS — recuperar', '#ff6666', data.segments.lost, 'lost')}
+            ${segBlock('🟢 ACTIVOS', '#4caf50', data.segments.active, 'active')}
+            ${segBlock('💎 TICKET ALTO (clientes fuertes)', '#d4af37', data.highTicket, 'highTicket')}
+            ${segBlock('👑 FIELES (muchas cargas)', '#d4af37', data.loyal, 'loyal')}
+            ${segBlock('⚪ NUNCA CARGARON', '#888', data.segments.never, 'never')}
+        `;
+    } catch (e) {
+        bodyEl.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+    }
+}
+
+function closePublisherAnalysisModal() { hideModal('publisherAnalysisModal'); }
+
+function openRecoverModal(publisher, segment, count) {
+    document.getElementById('recoverPublisher').value = publisher;
+    document.getElementById('recoverSegment').value = segment;
+    const segLabel = segment === 'atRisk' ? 'EN RIESGO' : segment === 'lost' ? 'PERDIDOS' : segment;
+    document.getElementById('recoverSubtitle').textContent = `Push a ${count} cliente(s) "${segLabel}" de ${publisher}`;
+    document.getElementById('recoverTitle').value = '';
+    document.getElementById('recoverBody').value = '';
+    document.getElementById('recoverError').style.display = 'none';
+    document.getElementById('recoverResult').style.display = 'none';
+    showModal('publisherRecoverModal');
+}
+
+function closeRecoverModal() { hideModal('publisherRecoverModal'); }
+
+async function submitRecover() {
+    const publisher = document.getElementById('recoverPublisher').value;
+    const segment = document.getElementById('recoverSegment').value;
+    const title = document.getElementById('recoverTitle').value.trim();
+    const body = document.getElementById('recoverBody').value.trim();
+    const errEl = document.getElementById('recoverError');
+    const okEl = document.getElementById('recoverResult');
+    const btn = document.getElementById('recoverSendBtn');
+    errEl.style.display = 'none'; okEl.style.display = 'none';
+    if (!title || !body) {
+        errEl.textContent = 'Completá título y mensaje'; errEl.style.display = 'block'; return;
+    }
+    btn.disabled = true; btn.textContent = 'Enviando...';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/recover`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ segment, title, body })
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            errEl.textContent = data.error || 'Error enviando'; errEl.style.display = 'block'; return;
+        }
+        okEl.textContent = `✓ Push enviado. Objetivo: ${data.targeted || 0} cliente(s)${data.delivered != null ? ', entregados: ' + data.delivered : ''}.`;
+        okEl.style.display = 'block';
+        setTimeout(() => closeRecoverModal(), 2500);
+    } catch (e) {
+        errEl.textContent = 'Error de conexión'; errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = 'Enviar push';
+    }
+}
+
+window.loadPublishersRanking = loadPublishersRanking;
+window.openPublisherAnalysis = openPublisherAnalysis;
+window.closePublisherAnalysisModal = closePublisherAnalysisModal;
+window.openRecoverModal = openRecoverModal;
+window.closeRecoverModal = closeRecoverModal;
+window.submitRecover = submitRecover;

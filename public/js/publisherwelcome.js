@@ -52,38 +52,6 @@ VIP.publisherWelcome = (function () {
         try { localStorage.setItem(LS_FLAG, '1'); } catch (e) {}
     }
 
-    // Trae info pública (publisher + name) para personalizar el modal.
-    // Si falla la red, mostramos el modal genérico igual — no es bloqueante.
-    async function _fetchPublisherInfo(code) {
-        try {
-            const r = await fetch(`${VIP.config.API_URL}/api/campaigns/public/${encodeURIComponent(code)}`);
-            if (!r.ok) return null;
-            return await r.json();
-        } catch (e) {
-            return null;
-        }
-    }
-
-    function _renderHeader(info) {
-        const titleEl = document.querySelector('#publisherWelcomeStep1 .modal-header h2');
-        const subtitleEl = document.querySelector('#publisherWelcomeStep1 .modal-header p');
-        if (info && info.publisher) {
-            if (titleEl) titleEl.textContent = 'BIENVENIDO A VIPCARGAS';
-            if (!subtitleEl) {
-                // Si no había <p> debajo del h2, lo agregamos para mostrar al publicista.
-                const hdr = document.querySelector('#publisherWelcomeStep1 .modal-header');
-                if (hdr) {
-                    const p = document.createElement('p');
-                    p.style.cssText = 'color:#aaa;font-size:13px;margin:6px 0 0;';
-                    p.textContent = 'Llegaste de parte de ' + info.publisher;
-                    hdr.appendChild(p);
-                }
-            } else {
-                subtitleEl.textContent = 'Llegaste de parte de ' + info.publisher;
-            }
-        }
-    }
-
     function _open() {
         const modal = document.getElementById('publisherWelcomeModal');
         if (!modal) return;
@@ -129,16 +97,13 @@ VIP.publisherWelcome = (function () {
 
     // Trigger principal. Se llama desde app.js al cargar la página, ANTES de
     // que el usuario se loguee/registre. Si corresponde, muestra el modal.
-    async function maybeShow() {
+    // El modal es genérico — no muestra el nombre del publicista para no
+    // exponer la atribución comercial al usuario final.
+    function maybeShow() {
         if (_alreadySeen()) return;
         const code = _detectCampaignCode();
         if (!code) return; // no vino por un link de publicista — no mostrar
-        // Fetch en paralelo con la apertura del modal. Si la API responde rápido
-        // ya está cuando se ve el paso 1; si tarda, se enriquece después.
-        const infoPromise = _fetchPublisherInfo(code);
         _open();
-        const info = await infoPromise;
-        if (info) _renderHeader(info);
     }
 
     // Bind events. Se llama una sola vez desde app.js.

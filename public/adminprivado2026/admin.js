@@ -2285,8 +2285,18 @@ async function handleDeposit() {
         if (!response.ok) {
             throw new Error(data.error || 'Error al realizar depósito');
         }
-        
-        showToast(`Depósito de ${formatMoney(amount + bonus)} realizado`, 'success');
+
+        // Si el backend reporta que el bonus se solicitó pero no se aplicó
+        // en JUGAYGANA, mostramos un toast destacado al agente para que sepa
+        // que tiene que reintentar el bonus manualmente. La carga sí entró.
+        if (data.bonusRequested === true && data.bonusApplied === false) {
+            showToast(
+                `⚠️ Carga $${amount} OK, pero BONUS $${bonus} NO se aplicó (${data.bonusError || 'JUGAYGANA intermitente'}). Reintentá el bonus desde el botón "Bonus".`,
+                'error'
+            );
+        } else {
+            showToast(`Depósito de ${formatMoney(amount + bonus)} realizado`, 'success');
+        }
         hideModal('depositModal');
         
         // Reset deposit form

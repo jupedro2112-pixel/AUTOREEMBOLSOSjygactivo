@@ -632,7 +632,7 @@ async function checkClaimedToday(username) {
 // ============================================
 
 async function creditUserBalance(username, amount) {
-  console.log(`💰 Cargando $${amount} a ${username}`);
+  console.log(`💰 Cargando $${amount} a ${username} (individual_bonus)`);
 
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
@@ -640,63 +640,90 @@ async function creditUserBalance(username, amount) {
   const userInfo = await getUserInfoByName(username);
   if (!userInfo) return { success: false, error: 'Usuario no encontrado' };
 
-  try {
-    const amountCents = Math.round(parseFloat(amount) * 100);
+  const amountCents = Math.round(parseFloat(amount) * 100);
 
-    const body = toFormUrlEncoded({
-      action: 'DepositMoney',
-      token: SESSION_TOKEN,
-      childid: userInfo.id,
-      amount: amountCents,
-      currency: 'ARS',
-      deposit_type: 'individual_bonus'
-    });
+  // Builders re-evaluables (SESSION_TOKEN puede cambiar entre intentos si
+  // renovamos la sesión a mitad de camino).
+  const buildBody = () => toFormUrlEncoded({
+    action: 'DepositMoney',
+    token: SESSION_TOKEN,
+    childid: userInfo.id,
+    amount: amountCents,
+    currency: 'ARS',
+    deposit_type: 'individual_bonus'
+  });
+  const buildHeaders = () => {
+    const h = {};
+    if (SESSION_COOKIE) h.Cookie = SESSION_COOKIE;
+    return h;
+  };
 
-    const headers = {};
-    if (SESSION_COOKIE) headers.Cookie = SESSION_COOKIE;
+  // Bug histórico: este endpoint solía tener UN solo intento + un retry de
+  // sesión inválida. Si JUGAYGANA respondía HTML/Cloudflare puntualmente, el
+  // bonus se perdía mientras la carga principal sí pasaba. Ahora hacemos 3
+  // intentos con backoff (igual patrón que depositToUser/createPlatformUser).
+  let lastError = 'desconocido';
 
-    const resp = await client.post('', body, { headers });
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      let resp = await client.post('', buildBody(), { headers: buildHeaders() });
+      let data = parsePossiblyWrappedJson(resp.data);
 
-    let data = parsePossiblyWrappedJson(resp.data);
-    if (isHtmlBlocked(data)) {
-      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
+      // HTML/Cloudflare transitorio: esperamos 5s y reintentamos UNA vez
+      // dentro del mismo intento antes de pasar al backoff del loop.
+      if (isHtmlBlocked(data)) {
+        console.warn(`⚠️ creditUserBalance(${username}) intento ${attempt}: HTML, esperando 5s y reintentando...`);
+        await new Promise(r => setTimeout(r, 5000));
+        resp = await client.post('', buildBody(), { headers: buildHeaders() });
+        data = parsePossiblyWrappedJson(resp.data);
+        if (isHtmlBlocked(data)) {
+          lastError = 'JUGAYGANA respondió HTML/Cloudflare';
+        }
+      }
+
+      // Sesión inválida: renovar y reintentar inline.
+      if (isSessionError(data, resp.status)) {
+        console.error(`🔄 creditUserBalance(${username}) intento ${attempt}: sesión inválida, renovando...`);
+        invalidateSession();
+        const renewed = await ensureSession();
+        if (renewed) {
+          resp = await client.post('', buildBody(), { headers: buildHeaders() });
+          data = parsePossiblyWrappedJson(resp.data);
+          if (isHtmlBlocked(data)) {
+            lastError = 'JUGAYGANA respondió HTML tras renovar sesión';
+          }
+        } else {
+          lastError = 'No se pudo renovar la sesión';
+        }
+      }
+
+      if (data && data.success) {
+        if (attempt > 1) {
+          console.log(`✅ creditUserBalance(${username}) OK en intento ${attempt}/3`);
+        } else {
+          console.log(`✅ creditUserBalance(${username}) OK`);
+        }
+        return { success: true, data: data };
+      }
+
+      // Si llegamos acá, no fue success. Capturamos el error de la API para
+      // el último mensaje en caso de que todos los reintentos fallen.
+      lastError = (data && (data.error || data.message)) || lastError || 'API Error';
+      console.error(`❌ creditUserBalance(${username}) intento ${attempt}/3 falló: ${typeof data === 'string' ? data.slice(0,200) : JSON.stringify(data).slice(0,200)}`);
+    } catch (err) {
+      lastError = err.message;
+      console.error(`❌ creditUserBalance(${username}) intento ${attempt}/3 excepción: ${err.message} (code=${err.code || 'n/a'})`);
     }
 
-    // Detectar sesión inválida y reintentar una vez
-    if (isSessionError(data, resp.status)) {
-      console.error('🔄 creditUserBalance: sesión inválida detectada, renovando...');
-      invalidateSession();
-      const renewed = await ensureSession();
-      if (!renewed) return { success: false, error: 'No se pudo renovar la sesión' };
-      const retryUserInfo = await getUserInfoByName(username);
-      if (!retryUserInfo) return { success: false, error: 'Usuario no encontrado tras renovar sesión' };
-      const retryBody = toFormUrlEncoded({
-        action: 'DepositMoney',
-        token: SESSION_TOKEN,
-        childid: retryUserInfo.id,
-        amount: amountCents,
-        currency: 'ARS',
-        deposit_type: 'individual_bonus'
-      });
-      const retryHeaders = {};
-      if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
-      const retryResp = await client.post('', retryBody, { headers: retryHeaders });
-      data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
+    // Backoff progresivo entre intentos: 2s, 4s.
+    if (attempt < 3) {
+      const backoffMs = 2000 * attempt;
+      await new Promise(r => setTimeout(r, backoffMs));
     }
-
-    console.log("📩 Resultado DepositMoney:", JSON.stringify(data));
-
-    if (data && data.success) {
-      return { success: true, data: data };
-    } else {
-      console.error(`❌ creditUserBalance(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
-      return { success: false, error: (data && data.error) || 'API Error' };
-    }
-  } catch (err) {
-    console.error(`❌ creditUserBalance(${username}, $${amount}) excepción: ${err.message} (code=${err.code || 'n/a'})`);
-    return { success: false, error: err.message };
   }
+
+  console.error(`❌ creditUserBalance(${username}, $${amount}) AGOTÓ 3 intentos. Último error: ${lastError}`);
+  return { success: false, error: lastError };
 }
 
 // ============================================

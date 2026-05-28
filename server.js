@@ -5177,14 +5177,26 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
     }
     
     const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description);
-    
+
     if (result.success) {
-      // Si hay bonus, acreditarlo en JUGAYGANA como individual_bonus en operación separada
+      // Si hay bonus, acreditarlo en JUGAYGANA como individual_bonus en operación separada.
+      // Pausa de 700ms entre la carga principal y el bonus para evitar el rate-limit
+      // interno de JUGAYGANA sobre operaciones consecutivas sobre el mismo user
+      // (causa documentada del bug "carga sí, bonus no": dos DepositMoney en <100ms
+      // disparaban HTML/Cloudflare en la segunda llamada).
+      const bonusRequested = parseFloat(bonus) > 0;
       let bonusJgResult = null;
-      if (parseFloat(bonus) > 0) {
+      let bonusActuallyApplied = false;
+
+      if (bonusRequested) {
+        await new Promise(r => setTimeout(r, 700));
         bonusJgResult = await jugaygana.creditUserBalance(user.username, parseFloat(bonus));
-        if (!bonusJgResult.success) {
-          console.error('Error al acreditar bonus en JUGAYGANA:', bonusJgResult.error);
+        bonusActuallyApplied = !!(bonusJgResult && bonusJgResult.success);
+        if (!bonusActuallyApplied) {
+          logger.error(
+            `[deposit] BONUS FALLÓ user=${user.username} amount=$${amount} bonus=$${bonus} ` +
+            `agent=${req.user?.username || '?'} error=${bonusJgResult?.error || 'sin detalle'}`
+          );
         }
       }
 
@@ -5227,12 +5239,20 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       const depositCmdName = parseFloat(bonus) > 0 ? '/sys_deposit_bonus' : '/sys_deposit';
       const depositCmd = await Command.findOne({ name: depositCmdName, isActive: true });
       let messageContent;
+      // El mensaje al usuario refleja el OUTCOME REAL, no lo que se pidió:
+      //   - Si bonus solicitado + acreditado OK → menciona ambos
+      //   - Si bonus solicitado + falló → mensaje sólo de carga (no engañamos
+      //     al usuario diciendo que recibió un bonus que no entró)
+      //   - Si no había bonus → mensaje de carga normal
+      // El agente recibe un aviso aparte (más abajo) cuando el bonus falla
+      // para que lo aplique manualmente.
+      const includeBonusInMessage = bonusRequested && bonusActuallyApplied;
       if (depositCmd && depositCmd.response) {
         messageContent = depositCmd.response
           .replace(/\{amount\}/g, amount)
-          .replace(/\{bonus\}/g, bonus)
+          .replace(/\{bonus\}/g, includeBonusInMessage ? bonus : 0)
           .replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose');
-      } else if (bonus > 0) {
+      } else if (includeBonusInMessage) {
         messageContent = `🔒💰 Depósito de $${amount} (incluye $${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥`;
       } else {
         messageContent = `🔒💰 Depósito de $${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥`;
@@ -5276,6 +5296,46 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         userId: user.id,
         username: user.username
       });
+
+      // Si el bonus se solicitó pero falló en JUGAYGANA tras los 3 reintentos,
+      // crear un mensaje admin-only en el chat avisando al agente que tiene
+      // que reintentar el bonus manualmente. El cliente NO ve este mensaje.
+      if (bonusRequested && !bonusActuallyApplied) {
+        try {
+          const alertContent = `⚠️ BONUS NO APLICADO en JUGAYGANA\n\n• Carga: $${amount} ✅ acreditada\n• Bonus pedido: $${bonus} ❌ NO acreditado\n• Motivo: ${bonusJgResult?.error || 'desconocido'}\n\nReintentá el bonus desde el botón "Bonus". El cliente NO fue informado del bonus.`;
+          const alertMsg = await Message.create({
+            id: uuidv4(),
+            senderId: 'admin',
+            senderUsername: req.user.username,
+            senderRole: 'admin',
+            receiverId: user.id,
+            receiverRole: 'user',
+            content: alertContent,
+            type: 'system',
+            adminOnly: true, // <- clave: sólo visible para admins en el chat
+            timestamp: new Date(),
+            read: false
+          });
+          const alertData = {
+            id: alertMsg.id,
+            senderId: 'admin',
+            senderUsername: req.user.username,
+            senderRole: 'admin',
+            receiverId: user.id,
+            receiverRole: 'user',
+            content: alertContent,
+            timestamp: new Date(),
+            type: 'system',
+            adminOnly: true
+          };
+          // Sólo emitimos a la sala del chat (admins lo ven) — NO a user_<id>
+          // para que el cliente no reciba este aviso técnico.
+          io.to(`chat_${user.id}`).emit('new_message', alertData);
+          notifyAdmins('new_message', { message: alertData, userId: user.id, username: user.username });
+        } catch (alertErr) {
+          logger.warn(`[deposit bonus-failed alert] no se pudo crear mensaje: ${alertErr.message}`);
+        }
+      }
 
       // Segundo mensaje recordatorio
       const reminderCmd = await Command.findOne({ name: '/sys_reminder', isActive: true });
@@ -5357,11 +5417,11 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         userSocket.emit('balance_updated', { balance: newBalance });
       }
 
-      // Push FCM para usuarios offline: enviar si tiene token registrado.
-      // El mensaje ya se entregó por Socket.IO a usuarios online; FCM cubre offline/background.
+      // Push FCM para usuarios offline. El título/body reflejan el outcome REAL
+      // (si el bonus falló, no mencionamos bonus — mismo principio que en el
+      // mensaje del chat, no engañamos al usuario sobre lo que recibió).
       {
-        const depositBonus = parseFloat(bonus) || 0;
-        const depositPushTitle = depositBonus > 0
+        const depositPushTitle = (bonusRequested && bonusActuallyApplied)
           ? `💰 Depósito + bonus acreditado`
           : `💰 Depósito acreditado`;
         const depositPushBody = newBalance !== null
@@ -5371,12 +5431,16 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           logger.warn(`[FCM] sendPushIfOffline (deposit) falló para ${user.username}: ${e.message}`);
         });
       }
-      
+
+      // Transaction de la carga principal. El campo bonus refleja lo que se
+      // acreditó realmente, no lo que se pidió: si el bonus falló queda en 0.
+      // Esto mantiene la consistencia con la Transaction tipo 'bonus' separada
+      // (más abajo) que sólo se crea si el bonus efectivamente entró.
       await Transaction.create({
         id: uuidv4(),
         type: 'deposit',
         amount: parseFloat(amount),
-        bonus: parseFloat(bonus),
+        bonus: bonusActuallyApplied ? parseFloat(bonus) : 0,
         username: user.username,
         userId: user.id,
         description: description || 'Depósito realizado',
@@ -5384,6 +5448,12 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         adminUsername: req.user?.username,
         adminRole: req.user?.role || 'admin',
         transactionId: result.data?.transfer_id || result.data?.transferId,
+        metadata: bonusRequested && !bonusActuallyApplied ? {
+          // Trazabilidad: agente pidió bonus pero no entró. Sirve para reportes
+          // de discrepancias y para que el admin sepa que hubo intento fallido.
+          requestedBonus: parseFloat(bonus),
+          bonusFailureReason: bonusJgResult?.error || 'desconocido'
+        } : null,
         timestamp: new Date()
       });
 
@@ -5425,13 +5495,24 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // Webhook a fb-ads: conversión Purchase para aprendizaje por anuncio.
       fbAdsWebhook.notify('Purchase', user, { value: parseFloat(amount), currency: 'ARS' });
 
-      logger.info(`[deposit] OK admin=${req.user?.username} user=${user.username} amount=$${amount} bonus=$${bonus || 0} transferId=${result.data?.transfer_id || result.data?.transferId || 'n/a'} balanceLookup=${balanceResult.success ? 'ok' : 'failed'}`);
+      logger.info(
+        `[deposit] OK admin=${req.user?.username} user=${user.username} amount=$${amount} ` +
+        `bonusRequested=$${bonus || 0} bonusApplied=${bonusActuallyApplied} ` +
+        `transferId=${result.data?.transfer_id || result.data?.transferId || 'n/a'} ` +
+        `balanceLookup=${balanceResult.success ? 'ok' : 'failed'}`
+      );
 
       res.json({
         success: true,
-        message: 'Depósito realizado correctamente',
+        message: bonusRequested && !bonusActuallyApplied
+          ? 'Depósito acreditado, pero el bonus FALLÓ en JUGAYGANA. Reintentá el bonus manualmente.'
+          : 'Depósito realizado correctamente',
         newBalance: newBalance,
-        transactionId: result.data?.transfer_id || result.data?.transferId
+        transactionId: result.data?.transfer_id || result.data?.transferId,
+        // Banderas explícitas para que el panel admin sepa exactamente qué pasó.
+        bonusRequested: bonusRequested,
+        bonusApplied: bonusActuallyApplied,
+        bonusError: bonusRequested && !bonusActuallyApplied ? bonusJgResult?.error : null
       });
     } else {
       logger.error(`[deposit] FAIL admin=${req.user?.username} user=${user.username} amount=$${amount} bonus=$${bonus || 0} error=${result.error || 'sin error'}`);

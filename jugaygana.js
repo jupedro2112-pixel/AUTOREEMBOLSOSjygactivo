@@ -631,14 +631,24 @@ async function checkClaimedToday(username) {
 // DEPOSITAR BONUS (reembolso)
 // ============================================
 
-async function creditUserBalance(username, amount) {
-  console.log(`💰 Cargando $${amount} a ${username} (individual_bonus)`);
+async function creditUserBalance(username, amount, jugayganaUserId = null) {
+  console.log(`💰 Cargando $${amount} a ${username} (individual_bonus)${jugayganaUserId ? ' [usando ID guardado]' : ''}`);
 
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
 
-  const userInfo = await getUserInfoByName(username);
-  if (!userInfo) return { success: false, error: 'Usuario no encontrado' };
+  // Si nos pasaron el jugayganaUserId desde la DB local, lo usamos directo y
+  // nos salteamos el lookup. Esto evita el modo de falla "user not found"
+  // por paginación de ShowUsers o por jerarquía de sub-agentes que el master
+  // no ve en su tree (causa documentada del bug "carga sí, bonus no" en
+  // determinados usuarios específicos). Si no viene ID, fallback al lookup
+  // tradicional para mantener compatibilidad con cualquier caller legacy.
+  let childId = jugayganaUserId;
+  if (!childId) {
+    const userInfo = await getUserInfoByName(username);
+    if (!userInfo) return { success: false, error: 'Usuario no encontrado' };
+    childId = userInfo.id;
+  }
 
   const amountCents = Math.round(parseFloat(amount) * 100);
 
@@ -647,7 +657,7 @@ async function creditUserBalance(username, amount) {
   const buildBody = () => toFormUrlEncoded({
     action: 'DepositMoney',
     token: SESSION_TOKEN,
-    childid: userInfo.id,
+    childid: childId,
     amount: amountCents,
     currency: 'ARS',
     deposit_type: 'individual_bonus'

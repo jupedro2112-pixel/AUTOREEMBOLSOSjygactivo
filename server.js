@@ -5190,12 +5190,21 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
 
       if (bonusRequested) {
         await new Promise(r => setTimeout(r, 700));
-        bonusJgResult = await jugaygana.creditUserBalance(user.username, parseFloat(bonus));
+        // Pasamos jugayganaUserId si lo tenemos guardado: bypasea el lookup en
+        // ShowUsers (causa documentada de fallas por paginación / scoping de
+        // sub-agentes). Si el usuario no tiene jugayganaUserId persistido
+        // (legacy), creditUserBalance cae al lookup tradicional.
+        bonusJgResult = await jugaygana.creditUserBalance(
+          user.username,
+          parseFloat(bonus),
+          user.jugayganaUserId || null
+        );
         bonusActuallyApplied = !!(bonusJgResult && bonusJgResult.success);
         if (!bonusActuallyApplied) {
           logger.error(
-            `[deposit] BONUS FALLÓ user=${user.username} amount=$${amount} bonus=$${bonus} ` +
-            `agent=${req.user?.username || '?'} error=${bonusJgResult?.error || 'sin detalle'}`
+            `[deposit] BONUS FALLÓ user=${user.username} jgId=${user.jugayganaUserId || 'null'} ` +
+            `amount=$${amount} bonus=$${bonus} agent=${req.user?.username || '?'} ` +
+            `error=${bonusJgResult?.error || 'sin detalle'}`
           );
         }
       }
@@ -5695,37 +5704,44 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
   try {
     const { username: rawUsername, userId: rawUserId, amount } = req.body;
 
-    // Resolver username: puede venir como username directo o como userId
+    // Resolver username + cargar el user completo para obtener jugayganaUserId.
     // Rechazar cualquier userId que no sea string primitivo (previene inyección NoSQL)
-    let resolvedUsername = rawUsername && typeof rawUsername === 'string' ? rawUsername.trim() : null;
-    if (!resolvedUsername && rawUserId) {
+    let bonusUser = null;
+    if (rawUsername && typeof rawUsername === 'string') {
+      bonusUser = await User.findOne({ username: rawUsername.trim() });
+    } else if (rawUserId) {
       if (typeof rawUserId !== 'string') {
         return res.status(400).json({ error: 'userId inválido' });
       }
-      const safeUserId = rawUserId.trim();
-      const user = await User.findOne({ id: safeUserId });
-      if (!user) {
-        return res.status(404).json({ error: 'Usuario no encontrado' });
-      }
-      resolvedUsername = user.username;
+      bonusUser = await User.findOne({ id: rawUserId.trim() });
     }
+    if (!bonusUser) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    const resolvedUsername = bonusUser.username;
 
     if (!resolvedUsername || !amount) {
       return res.status(400).json({ error: 'Usuario y monto requeridos' });
     }
-    
+
     const bonusAmount = parseFloat(amount);
     if (isNaN(bonusAmount) || bonusAmount <= 0) {
       return res.status(400).json({ error: 'Monto de bonificación inválido' });
     }
-    
-    const depositResult = await jugaygana.creditUserBalance(resolvedUsername, bonusAmount);
+
+    // Pasamos jugayganaUserId guardado para saltearse el lookup en ShowUsers.
+    // Bypasea el bug "user not found" por paginación / scoping de sub-agentes.
+    const depositResult = await jugaygana.creditUserBalance(
+      resolvedUsername,
+      bonusAmount,
+      bonusUser.jugayganaUserId || null
+    );
 
     if (depositResult.success) {
-      // Buscar usuario para obtener su id (necesario para el mensaje)
-      const bonusUser = await User.findOne({ username: resolvedUsername });
+      // bonusUser ya lo resolvimos arriba con findOne — no hace falta repetir
+      // el query (mismo efecto, una llamada menos a la DB).
 
-      logger.info(`[bonus] OK admin=${req.user?.username} user=${resolvedUsername} amount=$${bonusAmount} transferId=${depositResult.data?.transfer_id || depositResult.data?.transferId || 'n/a'}`);
+      logger.info(`[bonus] OK admin=${req.user?.username} user=${resolvedUsername} jgId=${bonusUser.jugayganaUserId || 'null'} amount=$${bonusAmount} transferId=${depositResult.data?.transfer_id || depositResult.data?.transferId || 'n/a'}`);
 
       await Transaction.create({
         id: uuidv4(),

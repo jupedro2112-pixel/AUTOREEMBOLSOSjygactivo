@@ -10,7 +10,9 @@
 > y pusheá a GitHub para que la próxima sesión pueda seguir donde se dejó. Esta regla
 > aplica siempre, sin que el owner tenga que pedirlo cada vez.
 >
-> Al iniciar una sesión nueva: leé `WORKLOG.md` para reconstruir el estado actual.
+> Al iniciar una sesión nueva: leé `WORKLOG.md` (estado actual) y, antes de modificar
+> un flujo central, leé `docs/ARCHITECTURE.md` (mapa de modelos, flujos y trampas) +
+> el código puntual del área. El código es la verdad; los docs son el mapa.
 
 ---
 

@@ -1014,6 +1014,31 @@ async function changePasswordByPhone(phone, newPassword) {
   return { success: true, username: user.username };
 }
 
+// Renderiza el texto de un mensaje automático editable desde la sección COMANDOS.
+// Busca el Command por nombre; si existe y está activo usa su `response`, sino
+// usa el `fallback` hardcodeado. Reemplaza variables {clave} por su valor.
+//
+// Convención de variables (igual que los comandos /sys_deposit existentes):
+//   - Montos: el template escribe "${amount}" y acá reemplazamos "{amount}" por
+//     el número → queda "$50000" (el $ es el signo de peso literal del template).
+//   - Texto (username, bank, etc.): el template escribe "{username}" sin $ y se
+//     reemplaza por el valor.
+// Nunca lanza: ante cualquier error devuelve el fallback ya renderizado.
+async function renderSystemCommand(name, fallback, vars = {}) {
+  let template = fallback;
+  try {
+    const cmd = await Command.findOne({ name, isActive: true }).lean();
+    if (cmd && cmd.response) template = cmd.response;
+  } catch (e) {
+    logger.warn(`[renderSystemCommand] ${name}: ${e.message} — usando fallback`);
+  }
+  let out = template;
+  for (const [k, v] of Object.entries(vars)) {
+    out = out.replace(new RegExp('\\{' + k + '\\}', 'g'), v == null ? '' : String(v));
+  }
+  return out;
+}
+
 // Agregar usuario externo
 async function addExternalUser(userData) {
   try {
@@ -1280,10 +1305,14 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
     }
     
     const timestamp = new Date();
-    
-    // 1. Mensaje completo con todos los datos
-    const fullMessage = `💳 *Datos para transferir:*\n\n🏦 Banco: ${cbuConfig.bank}\n👤 Titular: ${cbuConfig.titular}\n🔢 CBU: ${cbuConfig.number}\n📱 Alias: ${cbuConfig.alias}\n\n✅ Una vez realizada la transferencia, envianos el comprobante por aquí.`;
-    
+
+    // 1. Mensaje completo con todos los datos (editable desde COMANDOS /sys_cbu)
+    const fullMessage = await renderSystemCommand(
+      '/sys_cbu',
+      '💳 *Datos para transferir:*\n\n🏦 Banco: {bank}\n👤 Titular: {titular}\n🔢 CBU: {cbu}\n📱 Alias: {alias}\n\n✅ Una vez realizada la transferencia, envianos el comprobante por aquí.',
+      { bank: cbuConfig.bank, titular: cbuConfig.titular, cbu: cbuConfig.number, alias: cbuConfig.alias }
+    );
+
     await Message.create({
       id: uuidv4(),
       senderId: req.user.userId,
@@ -3529,9 +3558,13 @@ app.post('/api/cbu/request', authMiddleware, async (req, res) => {
       read: false
     });
     
-    // 2. Mensaje completo con CBU
-    const fullMessage = `💳 *Datos para transferir:*\n\n🏦 Banco: ${cbuConfig.bank}\n👤 Titular: ${cbuConfig.titular}\n🔢 CBU: ${cbuConfig.number}\n📱 Alias: ${cbuConfig.alias}\n\n✅ Una vez realizada la transferencia, envianos el comprobante por aquí.`;
-    
+    // 2. Mensaje completo con CBU (editable desde COMANDOS /sys_cbu)
+    const fullMessage = await renderSystemCommand(
+      '/sys_cbu',
+      '💳 *Datos para transferir:*\n\n🏦 Banco: {bank}\n👤 Titular: {titular}\n🔢 CBU: {cbu}\n📱 Alias: {alias}\n\n✅ Una vez realizada la transferencia, envianos el comprobante por aquí.',
+      { bank: cbuConfig.bank, titular: cbuConfig.titular, cbu: cbuConfig.number, alias: cbuConfig.alias }
+    );
+
     await Message.create({
       id: uuidv4(),
       senderId: 'system',
@@ -3619,20 +3652,12 @@ app.post('/api/messages/welcome', authMiddleware, async (req, res) => {
       if (cbuConfig && cbuConfig.number) cbuNumber = cbuConfig.number;
     } catch (e) { /* sin CBU configurado */ }
 
-    const welcomeContent = `🎉 ¡Bienvenido a la Sala de Juegos, ${username}!
-
-🎁 Beneficios exclusivos:
-• Reembolso DIARIO del 20%
-• Reembolso SEMANAL del 10%
-• Reembolso MENSUAL del 5%
-• Fueguito diario con recompensas
-• Atención 24/7
-
-💬 Escribe aquí para hablar con un agente.
-
-Link de pagina: https://www.jugaygana44.bet/
-
-CBU activo: ${cbuNumber}`;
+    // Texto editable desde COMANDOS (/sys_welcome). Fallback al texto original.
+    const welcomeContent = await renderSystemCommand(
+      '/sys_welcome',
+      `🎉 ¡Bienvenido a la Sala de Juegos, {username}!\n\n🎁 Beneficios exclusivos:\n• Reembolso DIARIO del 20%\n• Reembolso SEMANAL del 10%\n• Reembolso MENSUAL del 5%\n• Fueguito diario con recompensas\n• Atención 24/7\n\n💬 Escribe aquí para hablar con un agente.\n\nLink de pagina: https://www.jugaygana44.bet/\n\nCBU activo: {cbu}`,
+      { username, cbu: cbuNumber }
+    );
 
     // Helper para crear + emitir un mensaje de sistema (lado admin).
     const createSystemMessage = async (content, isWelcomeMarker) => {
@@ -6702,6 +6727,36 @@ async function initializeData() {
       description: 'Mensaje recordatorio enviado después de cada depósito (sin variables de monto por defecto).',
       type: 'message',
       response: '🎮 ¡Recuerda!\nPara cargar o cobrar, ingresa a 🌐 www.vipcargas.com.\n🔥 ¡Ya tienes el acceso guardado, así que te queda más fácil y rápido cada vez que entres!  \n🕹️ ¡No olvides guardarla y mantenerla a mano!\n\nwww.vipcargas.com'
+    },
+    {
+      name: '/sys_install_app',
+      description: 'Mensaje "instalá la app" que se envía tras un depósito si el usuario no tiene la app instalada. Variables: ${amount}, ${balance}',
+      type: 'message',
+      response: '🎁━━━━━━━━━━━━━━━🎁\n📲 INSTALÁ LA APP\n   Y GANÁ $5.000 🎁\n🎁━━━━━━━━━━━━━━━🎁\n\n¿Todavía no instalaste la app? ¡Hacelo ahora y reclamá tu BONO DE $5.000! 🤑\n\n✅ Te avisamos al toque de tus bonos y reembolsos\n✅ Entrás más rápido y no perdés tu cuenta\n\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, elegí "Agregar a pantalla de inicio".\n\n🎁 Una vez instalada, abrí la app y tocá el botón "🎁 Reclamar $5.000" que vas a ver arriba del chat. ¡El bono se acredita al instante!'
+    },
+    {
+      name: '/sys_welcome',
+      description: 'Mensaje de bienvenida que se envía cuando el usuario ingresa por primera vez (cada 24h). Variables: {username}, {cbu}',
+      type: 'message',
+      response: '🎉 ¡Bienvenido a la Sala de Juegos, {username}!\n\n🎁 Beneficios exclusivos:\n• Reembolso DIARIO del 20%\n• Reembolso SEMANAL del 10%\n• Reembolso MENSUAL del 5%\n• Fueguito diario con recompensas\n• Atención 24/7\n\n💬 Escribe aquí para hablar con un agente.\n\nLink de pagina: https://www.jugaygana44.bet/\n\nCBU activo: {cbu}'
+    },
+    {
+      name: '/sys_cbu',
+      description: 'Mensaje con los datos de transferencia (CBU) que se envía al solicitar el CBU. Variables: {bank}, {titular}, {cbu}, {alias}',
+      type: 'message',
+      response: '💳 *Datos para transferir:*\n\n🏦 Banco: {bank}\n👤 Titular: {titular}\n🔢 CBU: {cbu}\n📱 Alias: {alias}\n\n✅ Una vez realizada la transferencia, envianos el comprobante por aquí.'
+    },
+    {
+      name: '/sys_withdrawal_request',
+      description: 'Confirmación automática cuando el usuario pide un retiro autogestionado. Variables: ${amount}',
+      type: 'message',
+      response: '⏳ Recibimos tu solicitud de retiro de ${amount}.\nUn agente la está procesando y te confirma la transferencia en breve. ¡Gracias!'
+    },
+    {
+      name: '/sys_install_bonus',
+      description: 'Mensaje de felicitación cuando el usuario reclama el bono por instalar la app. Variables: {username}, ${amount}',
+      type: 'message',
+      response: '🎁 ¡Felicitaciones {username}! Te acreditamos tu BONO DE ${amount} por instalar la app. ¡Gracias por sumarte! 🥳'
     }
   ];
   for (const cmd of systemCmds) {
@@ -7013,7 +7068,14 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       read: false
     });
 
-    // 2. Confirmación automática del sistema hacia el usuario.
+    // 2. Confirmación automática del sistema hacia el usuario (editable /sys_withdrawal_request).
+    // El template usa "${amount}" y reemplazamos {amount} por el monto ya
+    // formateado con separador de miles, SIN el signo $ (el $ va en el template).
+    const withdrawConfirmContent = await renderSystemCommand(
+      '/sys_withdrawal_request',
+      '⏳ Recibimos tu solicitud de retiro de ${amount}.\nUn agente la está procesando y te confirma la transferencia en breve. ¡Gracias!',
+      { amount: amountNum.toLocaleString('es-AR') }
+    );
     const withdrawConfirmMsg = await Message.create({
       id: uuidv4(),
       senderId: 'system',
@@ -7021,9 +7083,7 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       senderRole: 'admin',
       receiverId: req.user.userId,
       receiverRole: 'user',
-      content:
-        `⏳ Recibimos tu solicitud de retiro de ${amountFmt}.\n` +
-        `Un agente la está procesando y te confirma la transferencia en breve. ¡Gracias!`,
+      content: withdrawConfirmContent,
       type: 'text',
       timestamp: new Date(),
       read: false
@@ -7211,9 +7271,14 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       logger.warn(`[install-bonus] no se pudo registrar Transaction para ${user.username}: ${txErr.message}`);
     }
 
-    const amountFmt = '$' + INSTALL_BONUS_AMOUNT.toLocaleString('es-AR');
-
-    // Mensaje de confirmación en el chat.
+    // Mensaje de confirmación en el chat (editable desde COMANDOS /sys_install_bonus).
+    // Template usa "${amount}"; reemplazamos {amount} por el monto formateado
+    // sin el signo $ (el $ va en el template).
+    const installBonusContent = await renderSystemCommand(
+      '/sys_install_bonus',
+      '🎁 ¡Felicitaciones {username}! Te acreditamos tu BONO DE ${amount} por instalar la app. ¡Gracias por sumarte! 🥳',
+      { username: user.username, amount: INSTALL_BONUS_AMOUNT.toLocaleString('es-AR') }
+    );
     await Message.create({
       id: uuidv4(),
       senderId: 'system',
@@ -7221,7 +7286,7 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       senderRole: 'admin',
       receiverId: user.id,
       receiverRole: 'user',
-      content: `🎁 ¡Felicitaciones ${user.username}! Te acreditamos tu BONO DE ${amountFmt} por instalar la app. ¡Gracias por sumarte! 🥳`,
+      content: installBonusContent,
       type: 'system',
       timestamp: new Date(),
       read: false

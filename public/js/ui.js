@@ -210,44 +210,29 @@ VIP.ui = (function () {
             return;
         }
 
-        const username = VIP.state.currentUser?.username || 'Usuario';
-
-        let cbuNumber = 'No disponible';
+        // La bienvenida ahora la genera el BACKEND como mensaje de sistema
+        // (lado admin), no el cliente. Antes se mandaba con el token del
+        // usuario vía sendSystemMessage → quedaba registrada con
+        // senderRole='user' y aparecía como si la hubiera escrito el propio
+        // usuario. El endpoint /api/messages/welcome la crea con
+        // senderRole='admin' y tiene su propio throttle de 24h server-side.
         try {
-            const response = await fetch(`${VIP.config.API_URL}/api/config/cbu`, {
-                headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
+            const response = await fetch(`${VIP.config.API_URL}/api/messages/welcome`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${VIP.state.currentToken}`
+                }
             });
             if (response.ok) {
-                const cbuData = await response.json();
-                cbuNumber = cbuData.number || 'No disponible';
+                // Refrescar el chat para mostrar los mensajes recién creados.
+                setTimeout(() => { try { VIP.chat.loadMessages(); } catch (e) {} }, 300);
+                localStorage.setItem(welcomeKey, Date.now().toString());
+                console.log('✅ Bienvenida solicitada al backend (lado admin)');
             }
         } catch (error) {
-            console.log('No se pudo obtener CBU para bienvenida:', error);
+            console.log('No se pudo enviar la bienvenida:', error);
         }
-
-        const welcomeMessage = `🎉 ¡Bienvenido a la Sala de Juegos, ${username}!
-
-🎁 Beneficios exclusivos:
-• Reembolso DIARIO del 20%
-• Reembolso SEMANAL del 10%
-• Reembolso MENSUAL del 5%
-• Fueguito diario con recompensas
-• Atención 24/7
-
-💬 Escribe aquí para hablar con un agente.
-
-Link de pagina: https://www.jugaygana44.bet/
-
-CBU activo: ${cbuNumber}`;
-
-        await VIP.chat.sendSystemMessage(welcomeMessage);
-
-        if (cbuNumber && cbuNumber !== 'No disponible') {
-            await VIP.chat.sendSystemMessage(cbuNumber);
-        }
-
-        localStorage.setItem(welcomeKey, Date.now().toString());
-        console.log('✅ Mensaje de bienvenida enviado con CBU:', cbuNumber);
     }
 
     // ---- CBU ----

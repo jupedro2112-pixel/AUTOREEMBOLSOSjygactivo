@@ -3586,6 +3586,98 @@ app.post('/api/cbu/request', authMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/messages/welcome
+// Crea los mensajes de bienvenida del lado del ADMIN/sistema (no del usuario).
+// Antes el cliente los mandaba vía /api/messages/send con su propio token, lo
+// que los registraba con senderRole='user' → aparecían como si los hubiera
+// escrito el propio usuario. Ahora se crean server-side como mensajes de
+// sistema (senderRole:'admin') igual que el flujo de CBU/depósito.
+//
+// Throttle server-side: no reenvía si ya se mandó una bienvenida a este user
+// en las últimas 24h (marca metadata.kind='welcome'). Robusto aunque el
+// cliente pierda su flag de localStorage o entre desde varios dispositivos.
+app.post('/api/messages/welcome', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const username = req.user.username || 'Usuario';
+
+    // Throttle: ¿ya hubo bienvenida en las últimas 24h?
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentWelcome = await Message.findOne({
+      receiverId: userId,
+      'metadata.kind': 'welcome',
+      timestamp: { $gte: cutoff }
+    }).lean();
+    if (recentWelcome) {
+      return res.json({ success: true, alreadySent: true });
+    }
+
+    // CBU activo (puede no estar configurado).
+    let cbuNumber = 'No disponible';
+    try {
+      const cbuConfig = await getConfig('cbu');
+      if (cbuConfig && cbuConfig.number) cbuNumber = cbuConfig.number;
+    } catch (e) { /* sin CBU configurado */ }
+
+    const welcomeContent = `🎉 ¡Bienvenido a la Sala de Juegos, ${username}!
+
+🎁 Beneficios exclusivos:
+• Reembolso DIARIO del 20%
+• Reembolso SEMANAL del 10%
+• Reembolso MENSUAL del 5%
+• Fueguito diario con recompensas
+• Atención 24/7
+
+💬 Escribe aquí para hablar con un agente.
+
+Link de pagina: https://www.jugaygana44.bet/
+
+CBU activo: ${cbuNumber}`;
+
+    // Helper para crear + emitir un mensaje de sistema (lado admin).
+    const createSystemMessage = async (content, isWelcomeMarker) => {
+      const msg = await Message.create({
+        id: uuidv4(),
+        senderId: 'system',
+        senderUsername: 'Sistema',
+        senderRole: 'admin',
+        receiverId: userId,
+        receiverRole: 'user',
+        content,
+        type: 'text',
+        timestamp: new Date(),
+        read: false,
+        // Sólo el primer mensaje lleva el marcador de throttle.
+        metadata: isWelcomeMarker ? { kind: 'welcome' } : null
+      });
+      const data = {
+        id: msg.id,
+        senderId: 'system',
+        senderUsername: 'Sistema',
+        senderRole: 'admin',
+        receiverId: userId,
+        receiverRole: 'user',
+        content,
+        timestamp: msg.timestamp,
+        type: 'text'
+      };
+      io.to(`user_${userId}`).emit('new_message', data);
+      io.to(`chat_${userId}`).emit('new_message', data);
+      notifyAdmins('new_message', { message: data, userId, username });
+    };
+
+    await createSystemMessage(welcomeContent, true);
+    if (cbuNumber && cbuNumber !== 'No disponible') {
+      await createSystemMessage(cbuNumber, false);
+    }
+
+    res.json({ success: true, alreadySent: false });
+  } catch (error) {
+    console.error('Error enviando bienvenida:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // RUTAS DE USUARIOS (ADMIN)
 // ============================================

@@ -2008,10 +2008,10 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
           jugayganaUsername: jgUser.username,
           jugayganaSyncStatus: 'linked',
           source: 'jugaygana',
-          tokenVersion: 0,
-          // Auto-imported JUGAYGANA users start with the default password
-          // "asd123"; force them to change it before they can use the app.
-          mustChangePassword: true
+          tokenVersion: 0
+          // Nota: ya NO forzamos cambio de contraseña por la default "asd123".
+          // Los usuarios importados de JUGAYGANA pueden usar la app con su
+          // contraseña inicial. Removido a pedido.
         });
         
         // Crear chat status
@@ -2070,14 +2070,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Error de configuración de usuario. Contacta al administrador.' });
     }
     
-    // Verificar si el usuario necesita cambiar la contraseña.
-    // Admin roles (admin/depositor/withdrawer) are internal VIPCARGAS accounts and
-    // must NEVER enter the mustChangePassword flow — even if their password is
-    // "asd123". Only role=user is subject to this check.
+    // Cambio de contraseña obligatorio por contraseña default "asd123": REMOVIDO.
+    // Los usuarios de JUGAYGANA pueden usar la app con su contraseña inicial sin
+    // estar obligados a cambiarla. El único caso que todavía fuerza un cambio es
+    // el reset MANUAL hecho por un admin (POST /api/admin/users/:id/reset-password),
+    // que setea mustChangePassword:true sobre una contraseña nueva — ese flag se
+    // respeta más abajo a través de user.mustChangePassword.
     const isDefaultPassword = password === 'asd123';
-    const needsPasswordChange = isAdminRole(userObj.role)
-      ? false
-      : ((!userObj.passwordChangedAt && userObj.source === 'jugaygana') || isDefaultPassword);
+    const needsPasswordChange = false;
     
     let isValidPassword = false;
 
@@ -2131,17 +2131,15 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     
     // Actualizar lastLogin usando el modelo de Mongoose
     user.lastLogin = new Date();
-    // Persist mustChangePassword only for non-admin roles. Admins are internal
-    // VIPCARGAS accounts and are never blocked by the JUGAYGANA default-password
-    // flow — even if their password happens to be "asd123".
-    if (needsPasswordChange && !isAdminRole(user.role) && user.mustChangePassword !== true) {
-      user.mustChangePassword = true;
-    }
-    // Self-heal: admins must NEVER carry mustChangePassword. If a stale flag
-    // from before the role-isolation fix is still in DB, clear it on next login.
-    if (isAdminRole(user.role) && user.mustChangePassword === true) {
+    // Self-heal del flag mustChangePassword:
+    //  - Admins NUNCA deben llevarlo (cuenta interna, sin contraparte JUGAYGANA).
+    //  - Usuarios que quedaron marcados por la vieja lógica del default "asd123"
+    //    y están logueando justamente con "asd123": limpiamos el flag para que no
+    //    queden trabados. NO afecta los resets manuales de admin, porque ésos
+    //    setean una contraseña nueva distinta de "asd123".
+    if (user.mustChangePassword === true && (isAdminRole(user.role) || isDefaultPassword)) {
       user.mustChangePassword = false;
-      logger.info(`[login] Cleared stale mustChangePassword for admin ${user.username}`);
+      logger.info(`[login] Auto-limpieza de mustChangePassword para ${user.username} (${isAdminRole(user.role) ? 'admin' : 'default-password'})`);
     }
 
     // Atribución last-touch: si el visitante vuelve por un anuncio nuevo, el
@@ -2231,9 +2229,10 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         balance: userObj.balance,
         jugayganaLinked: !!userObj.jugayganaUserId,
         needsPasswordChange: needsPasswordChange,
-        mustChangePassword: isAdminRole(userObj.role)
-          ? false
-          : (needsPasswordChange || userObj.mustChangePassword === true),
+        // Leemos del doc vivo `user` (no del snapshot `userObj`) para reflejar
+        // la auto-limpieza recién hecha. Sólo queda true si un admin reseteó
+        // manualmente la contraseña a una nueva (distinta de "asd123").
+        mustChangePassword: isAdminRole(user.role) ? false : (user.mustChangePassword === true),
         metaMatching: isAdminRole(userObj.role) ? null : metaCapi.buildAdvancedMatching({
           email: userObj.email,
           phone: userObj.phone,
@@ -6434,6 +6433,34 @@ async function initializeData() {
     }
   } catch (e) {
     logger.error(`[startup-migration] Failed to clear admin mustChangePassword: ${e.message}`);
+  }
+
+  // One-shot migration (guardada con flag en Config para que corra UNA sola vez):
+  // limpia el backlog de mustChangePassword que dejó la vieja lógica del default
+  // "asd123". Removimos ese forzado, pero los usuarios que YA estaban marcados
+  // (y posiblemente con sesión activa) seguirían bloqueados por authMiddleware
+  // hasta re-loguear. Esto los destraba a todos de una.
+  //
+  // CLAVE: corre sólo una vez. Si corriera en cada arranque, borraría también
+  // los resets MANUALES de admin (POST /reset-password) que setean el flag a
+  // propósito — esos se siguen respetando porque el flag de migración impide
+  // que esta limpieza vuelva a ejecutarse.
+  try {
+    const flag = await Config.findOne({ key: 'migration_clear_asd123_mustchange_done' }).lean();
+    if (!flag || flag.value !== true) {
+      const result = await User.updateMany(
+        { mustChangePassword: true },
+        { $set: { mustChangePassword: false } }
+      );
+      logger.info(`[startup-migration] mustChangePassword (default asd123): limpiadas ${result.modifiedCount} cuentas (one-shot)`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_clear_asd123_mustchange_done' },
+        { key: 'migration_clear_asd123_mustchange_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] Falló limpieza one-shot de mustChangePassword: ${e.message}`);
   }
   
   if (process.env.PROXY_URL) {

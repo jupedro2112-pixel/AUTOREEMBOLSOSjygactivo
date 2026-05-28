@@ -76,6 +76,34 @@ async function calculateCommissionsForPeriod(periodKey, options = {}) {
     referrerMap.set(u.id, u);
   }
 
+  // ── Pre-fetch de revenues en PARALELO (batches) ──────────────────────────
+  // Antes el cálculo consultaba JUGAYGANA secuencialmente (1 llamada por
+  // referido dentro del loop). Con muchos referidos (ej. 59) eso eran 59
+  // llamadas en serie → minutos de espera → el proxy/ALB cortaba con un 504
+  // HTML y el frontend reventaba con "JSON.parse: unexpected character".
+  //
+  // Ahora pre-cargamos todos los revenues con concurrencia limitada (5 a la vez)
+  // y el loop principal los lee de un Map (O(1)). Reduce el tiempo total ~5x y
+  // mantiene la carga sobre JUGAYGANA acotada para no disparar su rate-limit.
+  const REVENUE_CONCURRENCY = 5;
+  const revenueByReferredId = new Map();
+  const usersNeedingRevenue = referredUsers.filter(u => !u.excludedFromReferral);
+  for (let i = 0; i < usersNeedingRevenue.length; i += REVENUE_CONCURRENCY) {
+    const batch = usersNeedingRevenue.slice(i, i + REVENUE_CONCURRENCY);
+    const settled = await Promise.all(batch.map(async (u) => {
+      const jgUsername = u.jugayganaUsername || u.username;
+      const jgUserId = u.jugayganaUserId || null;
+      try {
+        const r = await referralRevenueService.getUserRevenueForPeriod(jgUsername, periodKey, jgUserId);
+        return [u.id, r];
+      } catch (err) {
+        return [u.id, { success: false, error: err.message }];
+      }
+    }));
+    for (const [id, r] of settled) revenueByReferredId.set(id, r);
+  }
+  logger.info(`[ReferralCalc] Pre-fetch revenues completado | period=${periodKey} usuarios=${usersNeedingRevenue.length} concurrency=${REVENUE_CONCURRENCY}`);
+
   for (const [referrerId, usersReferredByThisReferrer] of referrers) {
     const referrer = referrerMap.get(referrerId);
     if (!referrer) {
@@ -253,16 +281,16 @@ async function calculateCommissionsForPeriod(periodKey, options = {}) {
 
       providerCallsCount++;
       logger.info(
-        `[ReferralCalc] Consultando revenue | mode=${mode} referido=${referredUser.username} referredUserId=${jugayganaUserId} ` +
+        `[ReferralCalc] Revenue (pre-fetch) | mode=${mode} referido=${referredUser.username} referredUserId=${jugayganaUserId} ` +
         `jugayganaUsername=${jugayganaUsername} período=${periodKey} providerCallsCount=${providerCallsCount} ` +
         `revenueScope=perUser commissionCalculationMode=individual_revenue`
       );
 
-      const revenueResult = await referralRevenueService.getUserRevenueForPeriod(
-        jugayganaUsername,
-        periodKey,
-        jugayganaUserId
-      );
+      // El revenue ya se consultó en paralelo en el pre-fetch de arriba; lo
+      // leemos del Map. Fallback defensivo por si el usuario no estaba en el
+      // batch (no debería pasar para no-excluidos).
+      const revenueResult = revenueByReferredId.get(referredUser.id)
+        || await referralRevenueService.getUserRevenueForPeriod(jugayganaUsername, periodKey, jugayganaUserId);
 
       if (!revenueResult.success) {
         const authDetail = revenueResult.authDetail || null;

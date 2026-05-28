@@ -6358,6 +6358,22 @@ function renderReferralCalcError(message, container) {
     </div>`;
 }
 
+// Lee la respuesta de un endpoint de referidos de forma segura. Si el body no
+// es JSON (típicamente porque el balanceador devolvió un 504/502 HTML al
+// cortar una operación que tardó demasiado), tira un error claro en vez del
+// críptico "JSON.parse: unexpected character at line 1 column 1".
+async function parseReferralJson(res) {
+    const text = await res.text();
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        if (res.status === 504 || res.status === 502 || res.status === 408) {
+            throw new Error('La operación tardó demasiado y el servidor cortó la conexión (timeout). Reintentá, o probá calculando un referidor específico.');
+        }
+        throw new Error(`El servidor respondió en un formato inesperado (HTTP ${res.status || '?'}). Suele ser un timeout — reintentá en un momento.`);
+    }
+}
+
 async function adminReferralPreview() {
     const period = document.getElementById('referralPeriodInput')?.value?.trim();
     if (!period || !/^\d{4}-\d{2}$/.test(period)) {
@@ -6371,7 +6387,7 @@ async function adminReferralPreview() {
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
             body: JSON.stringify({ periodKey: period })
         });
-        const data = await res.json();
+        const data = await parseReferralJson(res);
         if (!res.ok || data.status !== 'success') {
             renderReferralCalcError(data.message || data.error || `HTTP ${res.status}`, resultDiv);
             return;
@@ -6396,7 +6412,7 @@ async function adminReferralCalculate() {
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
             body: JSON.stringify({ periodKey: period })
         });
-        const data = await res.json();
+        const data = await parseReferralJson(res);
         if (!res.ok || data.status !== 'success') {
             renderReferralCalcError(data.message || data.error || `HTTP ${res.status}`, resultDiv);
             showToast('❌ Error en cálculo', 'error');
@@ -6424,7 +6440,7 @@ async function adminReferralPayout() {
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
             body: JSON.stringify({ periodKey: period })
         });
-        const data = await res.json();
+        const data = await parseReferralJson(res);
         const result = (data && data.data) || {};
         const created = result.payoutsCreated || 0;
         const failed = result.payoutsFailed || 0;

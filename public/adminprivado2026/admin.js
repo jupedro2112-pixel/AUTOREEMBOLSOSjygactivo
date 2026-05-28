@@ -9597,7 +9597,7 @@ async function loadPublishersRanking() {
                                 <td style="padding:9px;text-align:center;">
                                     <span style="display:inline-block;min-width:34px;padding:3px 8px;border-radius:12px;font-weight:bold;color:#000;background:${_scoreColor(p.score)};">${p.score}</span>
                                 </td>
-                                <td style="padding:9px;text-align:right;color:#fff;">${p.totalClients}</td>
+                                <td style="padding:9px;text-align:right;color:#fff;">${p.clients}${p.neverDeposited ? `<span style="color:#666;font-size:10px;"> (+${p.neverDeposited} sin cargar)</span>` : ''}</td>
                                 <td style="padding:9px;text-align:right;color:#4caf50;">${p.active}</td>
                                 <td style="padding:9px;text-align:right;color:#ffb300;">${p.atRisk}</td>
                                 <td style="padding:9px;text-align:right;color:#ff6666;">${p.lost}</td>
@@ -9650,135 +9650,242 @@ function _renderClientRows(clients) {
         </div>`;
 }
 
+// Estado del análisis abierto (para los tabs y el render diferido del diario).
+let _analysisState = { publisher: null, analysis: null, daily: null };
+
 async function openPublisherAnalysis(publisher) {
     const titleEl = document.getElementById('paAnalysisTitle');
     const bodyEl = document.getElementById('paAnalysisBody');
     if (titleEl) titleEl.textContent = '📊 ' + publisher;
-    if (bodyEl) bodyEl.innerHTML = 'Cargando…';
+    if (bodyEl) bodyEl.innerHTML = '<span style="color:#888;">Cargando…</span>';
+    _analysisState = { publisher, analysis: null, daily: null };
     showModal('publisherAnalysisModal');
     try {
-        const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/analysis`, {
-            headers: { 'Authorization': `Bearer ${currentToken}` }
-        });
-        if (!r.ok) {
-            const e = await r.json().catch(() => ({}));
+        // Traemos análisis y diario en paralelo.
+        const [aRes, dRes] = await Promise.all([
+            fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/analysis`, { headers: { 'Authorization': `Bearer ${currentToken}` } }),
+            fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/daily`, { headers: { 'Authorization': `Bearer ${currentToken}` } })
+        ]);
+        if (!aRes.ok) {
+            const e = await aRes.json().catch(() => ({}));
             bodyEl.innerHTML = `<span style="color:#ff6666;">${_safe(e.error || 'Error cargando análisis')}</span>`;
             return;
         }
-        const data = await r.json();
-        const m = data.metrics;
-        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
-        const card = (label, val, color) => `
-            <div style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center;">
-                <div style="color:#888;font-size:10px;letter-spacing:.5px;">${label}</div>
-                <div style="font-size:20px;font-weight:bold;color:${color};">${val}</div>
-            </div>`;
-
-        const segBlock = (titulo, color, clients, segKey) => `
-            <details style="background:#0d0d1a;border:1px solid ${color}33;border-radius:10px;padding:0;margin-bottom:10px;" ${segKey === 'atRisk' || segKey === 'lost' ? 'open' : ''}>
-                <summary style="cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;">
-                    <span style="color:${color};font-weight:700;">${titulo} (${clients.length})</span>
-                    ${(segKey === 'atRisk' || segKey === 'lost') && clients.length > 0
-                        ? `<button onclick="event.preventDefault();openRecoverModal('${_safe(publisher)}','${segKey}','${clients.length}')" style="padding:5px 12px;background:${color};color:#000;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:bold;">📣 Recuperar</button>`
-                        : ''}
-                </summary>
-                <div style="padding:0 14px 14px;">${_renderClientRows(clients)}</div>
-            </details>`;
-
-        bodyEl.innerHTML = `
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:16px;">
-                ${card('SCORE', m.score, _scoreColor(m.score))}
-                ${card('CLIENTES', m.totalClients, '#fff')}
-                ${card('🟢 ACTIVOS', m.active, '#4caf50')}
-                ${card('🟡 EN RIESGO', m.atRisk, '#ffb300')}
-                ${card('🔴 PERDIDOS', m.lost, '#ff6666')}
-                ${card('⚪ NUNCA', m.never, '#888')}
-                ${card('✨ NUEVOS', m.newClients, '#6cf')}
-                ${card('💎 TICKET ALTO', m.highTicketCount, '#d4af37')}
-                ${card('👑 FIELES', m.loyalCount, '#d4af37')}
-                ${card('RETENCIÓN', m.retentionRate + '%', '#4caf50')}
-                ${card('TICKET PROM.', fmt(m.avgTicket), '#aaa')}
-                ${card('NETO', fmt(m.netRevenue), m.netRevenue >= 0 ? '#fff' : '#ff6666')}
-            </div>
-            <div id="paDailyContainer" style="background:#0d0d1a;border:1px solid rgba(108,170,255,0.25);border-radius:10px;padding:14px;margin-bottom:10px;">
-                <div style="color:#6cf;font-weight:700;margin-bottom:8px;">📅 Análisis diario (FTD / ROAS / recargas)</div>
-                <div id="paDailyBody"><span style="color:#888;font-size:12px;">Cargando…</span></div>
-            </div>
-            ${segBlock('🟡 EN RIESGO — se están yendo', '#ffb300', data.segments.atRisk, 'atRisk')}
-            ${segBlock('🔴 PERDIDOS — recuperar', '#ff6666', data.segments.lost, 'lost')}
-            ${segBlock('🟢 ACTIVOS', '#4caf50', data.segments.active, 'active')}
-            ${segBlock('💎 TICKET ALTO (clientes fuertes)', '#d4af37', data.highTicket, 'highTicket')}
-            ${segBlock('👑 FIELES (muchas cargas)', '#d4af37', data.loyal, 'loyal')}
-            ${segBlock('⚪ NUNCA CARGARON', '#888', data.segments.never, 'never')}
-        `;
-        // Cargar el breakdown diario aparte (no bloquea el render de arriba).
-        loadPublisherDaily(publisher);
+        _analysisState.analysis = await aRes.json();
+        _analysisState.daily = dRes.ok ? await dRes.json() : { days: [], totals: {} };
+        _renderAnalysisShell();
+        switchAnalysisTab('new'); // arranca en "Usuarios nuevos"
     } catch (e) {
         bodyEl.innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
     }
 }
 
-async function loadPublisherDaily(publisher) {
-    const box = document.getElementById('paDailyBody');
-    if (!box) return;
-    try {
-        const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/daily`, {
-            headers: { 'Authorization': `Bearer ${currentToken}` }
-        });
-        if (!r.ok) { box.innerHTML = '<span style="color:#ff6666;font-size:12px;">Error cargando diario</span>'; return; }
-        const data = await r.json();
-        const days = data.days || [];
-        const t = data.totals || {};
-        const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
-        if (days.length === 0) {
-            box.innerHTML = '<span style="color:#888;font-size:12px;">Sin cargas en el rango (últimos 30 días).</span>';
-            return;
-        }
-        box.innerHTML = `
-            <div style="color:#888;font-size:11px;margin-bottom:8px;">Rango: ${data.from} → ${data.to} · FTD = primera carga histórica de cada cliente (para ROAS).</div>
-            <div style="overflow-x:auto;max-height:320px;overflow-y:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:12px;">
-                    <thead><tr style="background:#15152a;color:#6cf;text-align:left;position:sticky;top:0;">
-                        <th style="padding:7px;">Día (ART)</th>
-                        <th style="padding:7px;text-align:right;">FTD (1ra carga)</th>
-                        <th style="padding:7px;text-align:right;">Monto FTD</th>
-                        <th style="padding:7px;text-align:right;">Cargas totales</th>
-                        <th style="padding:7px;text-align:right;">Monto total</th>
-                        <th style="padding:7px;text-align:right;">Nuevos que recargaron</th>
-                        <th style="padding:7px;text-align:right;">Recargas (mismo día)</th>
-                        <th style="padding:7px;text-align:right;">Monto recargas</th>
-                    </tr></thead>
-                    <tbody>
-                        ${days.map(d => `
-                            <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
-                                <td style="padding:7px;color:#fff;">${d.date}</td>
-                                <td style="padding:7px;text-align:right;color:#6cf;font-weight:bold;">${d.ftdCount}</td>
-                                <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(d.ftdAmount)}</td>
-                                <td style="padding:7px;text-align:right;color:#aaa;">${d.totalDeposits}</td>
-                                <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(d.totalAmount)}</td>
-                                <td style="padding:7px;text-align:right;color:#d4af37;">${d.newReloadedClients}</td>
-                                <td style="padding:7px;text-align:right;color:#d4af37;font-weight:bold;">${d.newReloadDeposits}</td>
-                                <td style="padding:7px;text-align:right;color:#aaa;">${fmt(d.newReloadAmount)}</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                    <tfoot>
-                        <tr style="border-top:2px solid rgba(108,170,255,0.3);font-weight:bold;">
-                            <td style="padding:7px;color:#6cf;">TOTAL</td>
-                            <td style="padding:7px;text-align:right;color:#6cf;">${t.ftdCount || 0}</td>
-                            <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(t.ftdAmount)}</td>
-                            <td style="padding:7px;text-align:right;color:#aaa;">${t.totalDeposits || 0}</td>
-                            <td style="padding:7px;text-align:right;color:#4caf50;">${fmt(t.totalAmount)}</td>
-                            <td style="padding:7px;text-align:right;color:#d4af37;">${t.newReloadedClients || 0}</td>
-                            <td style="padding:7px;text-align:right;color:#d4af37;">${t.newReloadDeposits || 0}</td>
-                            <td style="padding:7px;text-align:right;color:#aaa;">${fmt(t.newReloadAmount)}</td>
-                        </tr>
-                    </tfoot>
-                </table>
-            </div>`;
-    } catch (e) {
-        box.innerHTML = '<span style="color:#ff6666;font-size:12px;">Error de conexión</span>';
-    }
+// Cabecera (cards resumen) + barra de tabs + 3 contenedores de pestaña.
+function _renderAnalysisShell() {
+    const bodyEl = document.getElementById('paAnalysisBody');
+    const { analysis } = _analysisState;
+    const m = analysis.metrics;
+    const fmt = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+    const card = (label, val, color, sub) => `
+        <div style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;text-align:center;">
+            <div style="color:#888;font-size:10px;letter-spacing:.5px;">${label}</div>
+            <div style="font-size:20px;font-weight:bold;color:${color};">${val}</div>
+            ${sub ? `<div style="color:#666;font-size:10px;">${sub}</div>` : ''}
+        </div>`;
+
+    const tabBtn = (key, label) => `
+        <button class="pa-tab-btn" data-tab="${key}" onclick="switchAnalysisTab('${key}')"
+            style="flex:1;padding:11px 8px;background:#0d0d1a;color:#aaa;border:1px solid rgba(255,255,255,0.08);border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">${label}</button>`;
+
+    bodyEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:14px;">
+            ${card('SCORE', m.score, _scoreColor(m.score))}
+            ${card('CLIENTES', m.clients, '#fff', m.neverDeposited ? (m.neverDeposited + ' reg. sin cargar') : 'cargaron al menos 1 vez')}
+            ${card('TICKET PROM.', fmt(m.avgTicket), '#d4af37')}
+            ${card('NETO', fmt(m.netRevenue), m.netRevenue >= 0 ? '#4caf50' : '#ff6666')}
+            ${card('RETENCIÓN', m.retentionRate + '%', '#4caf50')}
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:14px;">
+            ${tabBtn('new', '✨ Usuarios nuevos')}
+            ${tabBtn('loads', '💰 Cargas totales')}
+            ${tabBtn('retention', '🔄 Retención')}
+        </div>
+        <div id="paTabContent"></div>
+    `;
+}
+
+function switchAnalysisTab(tab) {
+    // Resaltar el botón activo.
+    document.querySelectorAll('.pa-tab-btn').forEach(b => {
+        const active = b.dataset.tab === tab;
+        b.style.background = active ? 'rgba(212,175,55,0.18)' : '#0d0d1a';
+        b.style.color = active ? '#d4af37' : '#aaa';
+        b.style.borderColor = active ? '#d4af37' : 'rgba(255,255,255,0.08)';
+    });
+    const c = document.getElementById('paTabContent');
+    if (!c) return;
+    if (tab === 'new') c.innerHTML = _renderTabNuevos();
+    else if (tab === 'loads') c.innerHTML = _renderTabCargas();
+    else if (tab === 'retention') c.innerHTML = _renderTabRetencion();
+}
+
+const _fmtMoney = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+
+// ----- Tab 1: Usuarios nuevos (FTD / ROAS) -----
+function _renderTabNuevos() {
+    const { daily, analysis } = _analysisState;
+    const m = analysis.metrics;
+    const days = daily.days || [];
+    const t = daily.totals || {};
+    const head = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px;">
+            <div style="background:#0d0d1a;border:1px solid rgba(108,170,255,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">CLIENTES NUEVOS (rango)</div>
+                <div style="font-size:22px;font-weight:bold;color:#6cf;">${t.ftdCount || 0}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">$ PRIMERAS CARGAS (FTD)</div>
+                <div style="font-size:22px;font-weight:bold;color:#4caf50;">${_fmtMoney(t.ftdAmount)}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">NUEVOS QUE RECARGARON MISMO DÍA</div>
+                <div style="font-size:22px;font-weight:bold;color:#d4af37;">${t.newReloadedClients || 0}</div>
+            </div>
+        </div>
+        <p style="color:#888;font-size:11.5px;margin:0 0 10px;">FTD = primera carga histórica de cada cliente. Útil para el ROAS (comparar contra tu gasto de pauta diario). Rango: ${daily.from || '—'} → ${daily.to || '—'}.</p>`;
+    if (days.length === 0) return head + '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">Sin cargas en el rango (últimos 30 días).</div>';
+    return head + `
+        <div style="overflow-x:auto;max-height:340px;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#6cf;text-align:left;position:sticky;top:0;">
+                    <th style="padding:8px;">Día (ART)</th>
+                    <th style="padding:8px;text-align:right;">Clientes nuevos (FTD)</th>
+                    <th style="padding:8px;text-align:right;">$ FTD</th>
+                    <th style="padding:8px;text-align:right;">Nuevos que recargaron</th>
+                    <th style="padding:8px;text-align:right;">Recargas mismo día</th>
+                    <th style="padding:8px;text-align:right;">$ recargas</th>
+                </tr></thead>
+                <tbody>
+                    ${days.map(d => `
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                            <td style="padding:8px;color:#fff;">${d.date}</td>
+                            <td style="padding:8px;text-align:right;color:#6cf;font-weight:bold;">${d.ftdCount}</td>
+                            <td style="padding:8px;text-align:right;color:#4caf50;">${_fmtMoney(d.ftdAmount)}</td>
+                            <td style="padding:8px;text-align:right;color:#d4af37;">${d.newReloadedClients}</td>
+                            <td style="padding:8px;text-align:right;color:#d4af37;font-weight:bold;">${d.newReloadDeposits}</td>
+                            <td style="padding:8px;text-align:right;color:#aaa;">${_fmtMoney(d.newReloadAmount)}</td>
+                        </tr>`).join('')}
+                </tbody>
+                <tfoot><tr style="border-top:2px solid rgba(108,170,255,0.3);font-weight:bold;">
+                    <td style="padding:8px;color:#6cf;">TOTAL</td>
+                    <td style="padding:8px;text-align:right;color:#6cf;">${t.ftdCount || 0}</td>
+                    <td style="padding:8px;text-align:right;color:#4caf50;">${_fmtMoney(t.ftdAmount)}</td>
+                    <td style="padding:8px;text-align:right;color:#d4af37;">${t.newReloadedClients || 0}</td>
+                    <td style="padding:8px;text-align:right;color:#d4af37;">${t.newReloadDeposits || 0}</td>
+                    <td style="padding:8px;text-align:right;color:#aaa;">${_fmtMoney(t.newReloadAmount)}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+}
+
+// ----- Tab 2: Cargas totales -----
+function _renderTabCargas() {
+    const { daily, analysis } = _analysisState;
+    const m = analysis.metrics;
+    const days = daily.days || [];
+    const t = daily.totals || {};
+    const head = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:12px;">
+            <div style="background:#0d0d1a;border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">CARGAS TOTALES</div>
+                <div style="font-size:22px;font-weight:bold;color:#4caf50;">${m.depositCount || 0}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">$ TOTAL CARGADO</div>
+                <div style="font-size:22px;font-weight:bold;color:#4caf50;">${_fmtMoney(m.deposits)}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(255,102,102,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">$ RETIRADO</div>
+                <div style="font-size:22px;font-weight:bold;color:#ff6666;">${_fmtMoney(m.withdrawals)}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">NETO</div>
+                <div style="font-size:22px;font-weight:bold;color:${m.netRevenue >= 0 ? '#fff' : '#ff6666'};">${_fmtMoney(m.netRevenue)}</div>
+            </div>
+        </div>`;
+    const dailyTable = days.length === 0
+        ? '<div style="color:#888;font-size:13px;padding:10px;">Sin cargas en el rango.</div>'
+        : `<div style="overflow-x:auto;max-height:240px;overflow-y:auto;margin-bottom:14px;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#4caf50;text-align:left;position:sticky;top:0;">
+                    <th style="padding:8px;">Día (ART)</th>
+                    <th style="padding:8px;text-align:right;">Cargas</th>
+                    <th style="padding:8px;text-align:right;">$ Monto</th>
+                </tr></thead>
+                <tbody>${days.map(d => `
+                    <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                        <td style="padding:8px;color:#fff;">${d.date}</td>
+                        <td style="padding:8px;text-align:right;color:#aaa;">${d.totalDeposits}</td>
+                        <td style="padding:8px;text-align:right;color:#4caf50;">${_fmtMoney(d.totalAmount)}</td>
+                    </tr>`).join('')}</tbody>
+                <tfoot><tr style="border-top:2px solid rgba(76,175,80,0.3);font-weight:bold;">
+                    <td style="padding:8px;color:#4caf50;">TOTAL</td>
+                    <td style="padding:8px;text-align:right;color:#aaa;">${t.totalDeposits || 0}</td>
+                    <td style="padding:8px;text-align:right;color:#4caf50;">${_fmtMoney(t.totalAmount)}</td>
+                </tr></tfoot>
+            </table></div>`;
+    const valued = `
+        <details style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.25);border-radius:10px;margin-bottom:10px;" open>
+            <summary style="cursor:pointer;padding:12px 14px;color:#d4af37;font-weight:700;">💎 Clientes ticket alto (${analysis.highTicket.length})</summary>
+            <div style="padding:0 14px 14px;">${_renderClientRows(analysis.highTicket)}</div>
+        </details>
+        <details style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.25);border-radius:10px;">
+            <summary style="cursor:pointer;padding:12px 14px;color:#d4af37;font-weight:700;">👑 Clientes fieles — muchas cargas (${analysis.loyal.length})</summary>
+            <div style="padding:0 14px 14px;">${_renderClientRows(analysis.loyal)}</div>
+        </details>`;
+    return head + dailyTable + valued;
+}
+
+// ----- Tab 3: Retención -----
+function _renderTabRetencion() {
+    const { analysis, publisher } = _analysisState;
+    const m = analysis.metrics;
+    const seg = analysis.segments;
+    const pub = _analysisState.publisher;
+    const segBlock = (titulo, color, clients, segKey, recover) => `
+        <details style="background:#0d0d1a;border:1px solid ${color}33;border-radius:10px;margin-bottom:10px;" ${segKey === 'atRisk' || segKey === 'lost' ? 'open' : ''}>
+            <summary style="cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:${color};font-weight:700;">${titulo} (${clients.length})</span>
+                ${recover && clients.length > 0
+                    ? `<button onclick="event.preventDefault();openRecoverModal('${_safe(pub)}','${segKey}','${clients.length}')" style="padding:5px 12px;background:${color};color:#000;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:bold;">📣 Recuperar</button>`
+                    : ''}
+            </summary>
+            <div style="padding:0 14px 14px;">${_renderClientRows(clients)}</div>
+        </details>`;
+    return `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px;">
+            <div style="background:#0d0d1a;border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">🟢 ACTIVOS</div>
+                <div style="font-size:22px;font-weight:bold;color:#4caf50;">${m.active}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(255,179,0,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">🟡 EN RIESGO</div>
+                <div style="font-size:22px;font-weight:bold;color:#ffb300;">${m.atRisk}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(255,102,102,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">🔴 PERDIDOS</div>
+                <div style="font-size:22px;font-weight:bold;color:#ff6666;">${m.lost}</div>
+            </div>
+            <div style="background:#0d0d1a;border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:12px;text-align:center;">
+                <div style="color:#888;font-size:11px;">RETENCIÓN</div>
+                <div style="font-size:22px;font-weight:bold;color:#4caf50;">${m.retentionRate}%</div>
+            </div>
+        </div>
+        <p style="color:#888;font-size:11.5px;margin:0 0 10px;">Activo ≤7d desde última carga · En riesgo 8-21d · Perdido +21d. Mandá un push a "en riesgo" y "perdidos" para recuperarlos.</p>
+        ${segBlock('🟡 EN RIESGO — se están yendo', '#ffb300', seg.atRisk, 'atRisk', true)}
+        ${segBlock('🔴 PERDIDOS — recuperar', '#ff6666', seg.lost, 'lost', true)}
+        ${segBlock('🟢 ACTIVOS', '#4caf50', seg.active, 'active', false)}
+        ${m.neverDeposited ? `<div style="color:#666;font-size:12px;padding:8px 4px;">⚪ ${m.neverDeposited} registrado(s) todavía sin cargar (no cuentan como clientes).</div>` : ''}`;
 }
 
 function closePublisherAnalysisModal() { hideModal('publisherAnalysisModal'); }
@@ -9832,7 +9939,7 @@ async function submitRecover() {
 
 window.loadPublishersRanking = loadPublishersRanking;
 window.openPublisherAnalysis = openPublisherAnalysis;
-window.loadPublisherDaily = loadPublisherDaily;
+window.switchAnalysisTab = switchAnalysisTab;
 window.closePublisherAnalysisModal = closePublisherAnalysisModal;
 window.openRecoverModal = openRecoverModal;
 window.closeRecoverModal = closeRecoverModal;

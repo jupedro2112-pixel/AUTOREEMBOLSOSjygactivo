@@ -98,28 +98,33 @@ function _emptyAcc(publisher) {
 }
 
 function _finalizeMetrics(acc) {
-  const depositors = acc.counts.active + acc.counts.atRisk + acc.counts.lost;
-  const retentionRate = depositors > 0 ? acc.counts.active / depositors : 0;
-  const conversionRate = acc.totalClients > 0 ? depositors / acc.totalClients : 0;
+  // "Cliente" = alguien que cargó al menos una vez. Los que nunca cargaron NO
+  // cuentan como clientes (sólo como "registrados sin cargar", dato secundario).
+  const clients = acc.counts.active + acc.counts.atRisk + acc.counts.lost; // = depositores
+  const registered = acc.totalClients;          // todos los atribuidos (incluye sin cargar)
+  const neverDeposited = acc.counts.never;       // registrados que todavía no cargaron
+  const retentionRate = clients > 0 ? acc.counts.active / clients : 0;
+  const conversionRate = registered > 0 ? clients / registered : 0; // registrados → clientes
   const avgTicket = acc.depositCount > 0 ? acc.deposits / acc.depositCount : 0;
   const ticketScore = Math.min(avgTicket / 50000, 1); // cap a $50k
   const netRevenue = acc.deposits - acc.withdrawals;
-  // Score 0–100: 40% retención de quienes cargaron + 30% conversión a carga +
-  // 30% fuerza del ticket promedio. Explica "qué tan bueno es el publicista".
+  // Score 0–100: 40% retención de clientes + 30% conversión (registrado→cliente)
+  // + 30% fuerza del ticket promedio.
   const score = Math.round(40 * retentionRate + 30 * conversionRate + 30 * ticketScore);
   return {
     publisher: acc.publisher,
-    totalClients: acc.totalClients,
-    depositors,
+    clients,                 // <- "CLIENTES" mostrado = sólo los que cargaron
+    registered,              // total atribuidos (para contexto)
+    neverDeposited,          // registrados aún sin cargar (dato secundario)
     active: acc.counts.active,
     atRisk: acc.counts.atRisk,
     lost: acc.counts.lost,
-    never: acc.counts.never,
     newClients: acc.newCount,
     highTicketCount: acc.highTicketCount,
     loyalCount: acc.loyalCount,
     deposits: acc.deposits,
     withdrawals: acc.withdrawals,
+    depositCount: acc.depositCount,
     netRevenue,
     avgTicket: Math.round(avgTicket),
     retentionRate: Math.round(retentionRate * 100),   // %

@@ -82,7 +82,18 @@
   - **Clientes nuevos que recargaron el MISMO día** (ej: cargó 15hs y volvió 20hs):
     count de clientes + count de recargas (2da en adelante) + monto de recargas.
 - Endpoint `GET /api/admin/publishers/:publisher/daily?from=&to=` (default últimos 30 días).
-- Frontend: tabla diaria dentro del modal de análisis (sección "📅 Análisis diario").
+
+### 10. "Cliente" = sólo los que cargaron + modal de análisis en 3 pestañas
+- **DECISIÓN:** un "cliente" ahora es SÓLO quien cargó al menos 1 vez. Los que nunca
+  cargaron NO cuentan como clientes (antes "CLIENTES 11" con 5 sin cargar; ahora "6").
+  El métrico expone `clients` (depositores), `registered` (todos), `neverDeposited`.
+  conversionRate = clients/registered (registrado→cliente).
+- Modal de análisis reorganizado en 3 pestañas (más claro/elegante):
+  - **✨ Usuarios nuevos**: FTD diario (count+monto para ROAS) + nuevos que recargaron mismo día.
+  - **💰 Cargas totales**: total cargado/retirado/neto + tabla diaria de cargas + 💎 ticket alto + 👑 fieles.
+  - **🔄 Retención**: activos/en riesgo/perdidos + botón Recuperar (push). Los "nunca cargaron"
+    aparecen sólo como nota ("X registrados sin cargar"), no como clientes.
+- Ranking: columna Clientes = depositores (muestra "+N sin cargar" en gris).
 
 ## Pendientes / ideas mencionadas (NO hechas)
 - Mensaje de fueguito editable: hoy se arma del lado del cliente (fire.js →

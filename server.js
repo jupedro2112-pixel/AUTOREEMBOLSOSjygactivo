@@ -3671,6 +3671,16 @@ CBU activo: ${cbuNumber}`;
       await createSystemMessage(cbuNumber, false);
     }
 
+    // Crear/actualizar el ChatStatus recién ahora — cuando el usuario ingresa y
+    // recibe la bienvenida. Los usuarios creados (por publisher_admin o admin)
+    // que nunca ingresaron NO tienen ChatStatus, así que no aparecen como chats
+    // vacíos en el panel. lastMessageAt=now hace que el chat aparezca arriba.
+    await ChatStatus.findOneAndUpdate(
+      { userId },
+      { userId, username, lastMessageAt: new Date() },
+      { upsert: true }
+    );
+
     res.json({ success: true, alreadySent: false });
   } catch (error) {
     console.error('Error enviando bienvenida:', error);
@@ -3750,14 +3760,10 @@ app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
       jugayganaSyncStatus: role === 'user' ? 'pending' : 'not_applicable'
     });
 
-    // Crear chat status
-    await ChatStatus.create({
-      userId: userId,
-      username: username,
-      status: 'open',
-      category: 'cargas'
-    });
-    
+    // NO creamos ChatStatus acá: se crea recién cuando el usuario ingresa
+    // (welcome) o envía su primer mensaje, para no mostrar chats vacíos de
+    // usuarios que nunca entraron.
+
     // Sincronizar con JUGAYGANA solo si es usuario normal
     if (role === 'user') {
       jugaygana.syncUserToPlatform({
@@ -6554,7 +6560,43 @@ async function initializeData() {
   } catch (e) {
     logger.error(`[startup-migration] Falló limpieza one-shot de mustChangePassword: ${e.message}`);
   }
-  
+
+  // One-shot migration (guardada con flag): borra los ChatStatus vacíos que se
+  // crearon junto con el usuario antes de este cambio. Condición DOBLE para ser
+  // seguros:
+  //   1) El usuario nunca ingresó (lastLogin null), Y
+  //   2) No tiene NINGÚN mensaje asociado.
+  // Las dos juntas evitan borrar conversaciones legítimas cuyos mensajes hayan
+  // expirado por el TTL de 3 días (esos usuarios sí tienen lastLogin). Si un
+  // usuario purgado ingresa más tarde, /api/messages/welcome recrea su ChatStatus.
+  try {
+    const flag = await Config.findOne({ key: 'migration_purge_empty_chatstatus_done' }).lean();
+    if (!flag || flag.value !== true) {
+      const neverLoggedIn = await User.find({ lastLogin: null }).select('id').lean();
+      const candidateIds = neverLoggedIn.map(u => u.id).filter(Boolean);
+      let deleted = 0;
+      if (candidateIds.length > 0) {
+        // De los candidatos, excluir a los que tengan al menos un mensaje.
+        const sendersWithMsg = await Message.distinct('senderId', { senderId: { $in: candidateIds } });
+        const receiversWithMsg = await Message.distinct('receiverId', { receiverId: { $in: candidateIds } });
+        const hasMessages = new Set([...sendersWithMsg, ...receiversWithMsg]);
+        const toDelete = candidateIds.filter(id => !hasMessages.has(id));
+        if (toDelete.length > 0) {
+          const result = await ChatStatus.deleteMany({ userId: { $in: toDelete } });
+          deleted = result.deletedCount || 0;
+        }
+      }
+      logger.info(`[startup-migration] ChatStatus vacíos borrados (sin ingresar + sin mensajes): ${deleted} (one-shot)`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_purge_empty_chatstatus_done' },
+        { key: 'migration_purge_empty_chatstatus_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] Falló purga one-shot de ChatStatus vacíos: ${e.message}`);
+  }
+
   if (process.env.PROXY_URL) {
     console.log('🔍 Verificando IP pública...');
     await jugaygana.logProxyIP();
@@ -7941,13 +7983,10 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
       createdByEmployeeUsername: employee.username
     });
 
-    // Crear chat status para que el usuario pueda chatear con un agente.
-    await ChatStatus.create({
-      userId: newUserId,
-      username: username,
-      status: 'open',
-      category: 'cargas'
-    });
+    // NO creamos ChatStatus acá. Si lo hiciéramos, el usuario aparecería como
+    // un "chat vacío" en el panel aunque nunca haya ingresado. El ChatStatus se
+    // crea recién cuando el usuario ingresa (endpoint /api/messages/welcome) o
+    // cuando envía su primer mensaje (upsert en /api/messages/send).
 
     // Sincronizar con JUGAYGANA en background. Si la campaña tiene credenciales
     // propias (sub-agente del publicista), el CREATEUSER se rutea por la sesión
@@ -9895,16 +9934,10 @@ app.post('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =
       jugayganaSyncStatus: role === 'user' ? 'pending' : 'not_applicable'
     });
     
-    // Si es usuario normal, crear chat status
-    if (role === 'user') {
-      await ChatStatus.create({
-        userId: userId,
-        username: username,
-        status: 'open',
-        category: 'cargas'
-      });
-    }
-    
+    // NO creamos ChatStatus acá (ver nota en publisher-admin/create-user):
+    // se crea recién cuando el usuario ingresa o envía su primer mensaje, para
+    // no llenar el panel de chats vacíos de usuarios que nunca entraron.
+
     res.status(201).json({
       success: true,
       message: role === 'user' ? 'Usuario creado correctamente' : 'Administrador creado correctamente',

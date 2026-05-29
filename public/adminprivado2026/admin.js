@@ -573,8 +573,17 @@ function setupRoleBasedUI() {
         // Ajustar layout del main para que ocupe todo (sidebar oculto).
         const main = document.querySelector('.main-content');
         if (main) main.style.marginLeft = '0';
-        // Cargar stats iniciales.
+        // Cargar stats iniciales + lista de usuarios paginada.
         loadPublisherAdminStats();
+        loadPaUsers(1, '');
+        // Búsqueda al apretar Enter en el input.
+        const searchInput = document.getElementById('paUsersSearch');
+        if (searchInput && !searchInput.dataset.bound) {
+            searchInput.dataset.bound = '1';
+            searchInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); paUsersSearchSubmit(); }
+            });
+        }
         return;
     }
 
@@ -680,23 +689,136 @@ async function loadPublisherAdminStats() {
         if (elWit) elWit.textContent = fmt(data.totals.withdrawals);
         if (elNet) elNet.textContent = fmt(data.totals.netRevenue);
 
-        // Recent users
-        const recentBox = document.getElementById('paRecentUsers');
-        if (!recentBox) return;
-        if (!data.recentUsers || data.recentUsers.length === 0) {
-            recentBox.innerHTML = '<span style="color:#888;font-size:13px;">Todavía no creaste usuarios.</span>';
-        } else {
-            recentBox.innerHTML = data.recentUsers.map(u => {
-                const safe = (s) => String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-                const dateStr = new Date(u.createdAt).toLocaleString('es-AR');
-                return `<div style="display:flex;justify-content:space-between;padding:10px 12px;background:#1a1a2e;border-radius:6px;font-size:13px;">
-                    <span style="color:#fff;font-weight:600;">${safe(u.username)}</span>
-                    <span style="color:#888;">${safe(dateStr)}</span>
-                </div>`;
-            }).join('');
-        }
+        // La lista de usuarios ahora la maneja loadPaUsers (paginada + búsqueda).
     } catch (e) {
         console.error('[publisher_admin] loadPublisherAdminStats:', e);
+    }
+}
+
+// ============================================
+// PUBLISHER_ADMIN — Mis usuarios (lista paginada + búsqueda + cambio contraseña)
+// ============================================
+let _paUsersPage = 1;
+let _paUsersSearch = '';
+
+function _paSafe(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadPaUsers(page = 1, search = '') {
+    _paUsersPage = page;
+    _paUsersSearch = search;
+    const listEl = document.getElementById('paUsersList');
+    const pagEl = document.getElementById('paUsersPagination');
+    if (!listEl) return;
+    listEl.innerHTML = '<span style="color:#888;font-size:13px;">Cargando…</span>';
+    if (pagEl) pagEl.innerHTML = '';
+    try {
+        const qs = new URLSearchParams({ page: String(page) });
+        if (search) qs.set('search', search);
+        const r = await fetch(`${API_URL}/api/admin/publisher-admin/users?${qs.toString()}`, {
+            credentials: 'include',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) {
+            listEl.innerHTML = '<span style="color:#ff6666;font-size:13px;">Error cargando usuarios</span>';
+            return;
+        }
+        const data = await r.json();
+        const users = data.users || [];
+        if (users.length === 0) {
+            listEl.innerHTML = search
+                ? `<span style="color:#888;font-size:13px;">No hay usuarios que coincidan con "${_paSafe(search)}".</span>`
+                : '<span style="color:#888;font-size:13px;">Todavía no creaste usuarios.</span>';
+            return;
+        }
+        listEl.innerHTML = users.map(u => {
+            const dateStr = new Date(u.createdAt).toLocaleString('es-AR');
+            return `<div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:10px 12px;background:#1a1a2e;border-radius:6px;font-size:13px;">
+                <span style="color:#fff;font-weight:600;">${_paSafe(u.username)}</span>
+                <span style="color:#888;font-size:11px;white-space:nowrap;">${_paSafe(dateStr)}</span>
+                <button onclick="openPaChangePwdModal('${_paSafe(u.id)}','${_paSafe(u.username)}')" style="padding:6px 12px;background:rgba(212,175,55,0.15);border:1px solid #d4af37;color:#d4af37;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;">🔑 Contraseña</button>
+            </div>`;
+        }).join('');
+
+        // Paginación
+        const totalPages = data.totalPages || 0;
+        if (pagEl && totalPages > 1) {
+            const mk = (label, targetPage, disabled) => `<button onclick="loadPaUsers(${targetPage}, _paUsersSearch)" ${disabled ? 'disabled' : ''} style="padding:6px 12px;background:${disabled ? '#1a1a2e' : '#2a2a3a'};color:${disabled ? '#444' : '#fff'};border:none;border-radius:6px;cursor:${disabled ? 'not-allowed' : 'pointer'};font-size:12px;">${label}</button>`;
+            pagEl.innerHTML = `
+                ${mk('← Anterior', page - 1, page <= 1)}
+                <span style="color:#aaa;font-size:12px;">Página ${page} de ${totalPages} <span style="color:#666;">(${data.total} usuarios)</span></span>
+                ${mk('Siguiente →', page + 1, page >= totalPages)}
+            `;
+        } else if (pagEl && data.total > 0) {
+            pagEl.innerHTML = `<span style="color:#666;font-size:11px;">${data.total} usuario(s)</span>`;
+        }
+    } catch (e) {
+        listEl.innerHTML = '<span style="color:#ff6666;font-size:13px;">Error de conexión</span>';
+    }
+}
+
+function paUsersSearchSubmit() {
+    const input = document.getElementById('paUsersSearch');
+    const search = input ? input.value.trim() : '';
+    loadPaUsers(1, search);
+}
+
+function paUsersClearSearch() {
+    const input = document.getElementById('paUsersSearch');
+    if (input) input.value = '';
+    loadPaUsers(1, '');
+}
+
+function openPaChangePwdModal(userId, username) {
+    document.getElementById('paChangePwdUserId').value = userId;
+    document.getElementById('paChangePwdSubtitle').textContent = 'Vas a cambiar la contraseña de: ' + username;
+    document.getElementById('paChangePwdNew').value = '';
+    document.getElementById('paChangePwdError').style.display = 'none';
+    document.getElementById('paChangePwdOk').style.display = 'none';
+    showModal('paChangePwdModal');
+}
+
+function closePaChangePwdModal() {
+    hideModal('paChangePwdModal');
+}
+
+async function submitPaChangePwd() {
+    const userId = document.getElementById('paChangePwdUserId').value;
+    const newPassword = document.getElementById('paChangePwdNew').value;
+    const errEl = document.getElementById('paChangePwdError');
+    const okEl = document.getElementById('paChangePwdOk');
+    const btn = document.getElementById('paChangePwdBtn');
+    errEl.style.display = 'none';
+    okEl.style.display = 'none';
+    if (!newPassword || newPassword.length < 6) {
+        errEl.textContent = 'La contraseña debe tener al menos 6 caracteres';
+        errEl.style.display = 'block';
+        return;
+    }
+    btn.disabled = true; btn.textContent = 'Cambiando...';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admin/users/${encodeURIComponent(userId)}/change-password`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ newPassword })
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            errEl.textContent = data.error || 'Error cambiando contraseña';
+            errEl.style.display = 'block';
+            return;
+        }
+        okEl.textContent = '✓ Contraseña cambiada. Pasale la nueva al cliente por WhatsApp.';
+        okEl.style.display = 'block';
+        document.getElementById('paChangePwdNew').value = '';
+        setTimeout(() => closePaChangePwdModal(), 2200);
+    } catch (e) {
+        errEl.textContent = 'Error de conexión';
+        errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = 'Cambiar';
     }
 }
 
@@ -750,8 +872,11 @@ async function paCreateUser() {
         usernameEl.value = '';
         passwordEl.value = '';
         phoneEl.value = '';
-        // Recargar stats para reflejar el nuevo usuario
+        // Recargar stats + la lista (volver a página 1 sin búsqueda activa).
         loadPublisherAdminStats();
+        loadPaUsers(1, '');
+        const searchInput = document.getElementById('paUsersSearch');
+        if (searchInput) searchInput.value = '';
     } catch (e) {
         if (errBox) {
             errBox.textContent = 'Error de conexión';
@@ -763,6 +888,12 @@ async function paCreateUser() {
 }
 // Exponer al global scope para los onclick="" del HTML
 window.paCreateUser = paCreateUser;
+window.loadPaUsers = loadPaUsers;
+window.paUsersSearchSubmit = paUsersSearchSubmit;
+window.paUsersClearSearch = paUsersClearSearch;
+window.openPaChangePwdModal = openPaChangePwdModal;
+window.closePaChangePwdModal = closePaChangePwdModal;
+window.submitPaChangePwd = submitPaChangePwd;
 
 // Actualizar botones de acción según la pestaña actual
 function updateActionButtonsByTab() {

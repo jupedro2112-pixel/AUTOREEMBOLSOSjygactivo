@@ -8224,6 +8224,94 @@ app.get('/api/admin/publisher-admin/my-stats', authMiddleware, publisherAdminMid
   }
 });
 
+// GET /api/admin/publisher-admin/users?page=&search=
+// Lista paginada (10 por página) de los usuarios creados por este publisher_admin.
+// Orden: más recientes primero. Soporta búsqueda por substring de username.
+// Sólo devuelve users con acquisitionSource='manual' Y createdByEmployeeId=mi.id
+// (la misma combinación que cuenta para sus stats — evita ver clientes orgánicos
+// del mismo publicista que NO creó él).
+app.get('/api/admin/publisher-admin/users', authMiddleware, publisherAdminMiddleware, async (req, res) => {
+  try {
+    const employee = await User.findOne({ id: req.user.userId }).lean();
+    if (!employee || !employee.publisherCampaignCode) {
+      return res.json({ users: [], total: 0, page: 1, totalPages: 0, perPage: 10 });
+    }
+    const PER_PAGE = 10;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const search = String(req.query.search || '').trim().slice(0, 60);
+
+    const baseQuery = {
+      acquisitionCampaign: employee.publisherCampaignCode,
+      acquisitionSource: 'manual',
+      createdByEmployeeId: employee.id
+    };
+    if (search) {
+      // case-insensitive substring, escapado para no romper el regex.
+      baseQuery.username = { $regex: escapeRegex(search), $options: 'i' };
+    }
+
+    const total = await User.countDocuments(baseQuery);
+    const totalPages = total === 0 ? 0 : Math.ceil(total / PER_PAGE);
+    const users = await User.find(baseQuery)
+      .select('id username createdAt phone email')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * PER_PAGE)
+      .limit(PER_PAGE)
+      .lean();
+
+    res.json({ users, total, page, totalPages, perPage: PER_PAGE });
+  } catch (err) {
+    logger.error(`[publisher_admin users] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/publisher-admin/users/:userId/change-password
+// El publisher_admin puede cambiar la contraseña de los usuarios que ÉL creó.
+// Doble check de seguridad: target.createdByEmployeeId === employee.id Y
+// target.role === 'user'. Sincroniza a JUGAYGANA en background (best-effort).
+app.post('/api/admin/publisher-admin/users/:userId/change-password', authMiddleware, publisherAdminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { newPassword } = req.body || {};
+    if (!newPassword || typeof newPassword !== 'string' || !validatePassword(newPassword)) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 100 caracteres' });
+    }
+    const employee = await User.findOne({ id: req.user.userId }).lean();
+    if (!employee || !employee.publisherCampaignCode) {
+      return res.status(403).json({ error: 'Cuenta no válida' });
+    }
+    const target = await User.findOne({ id: userId });
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // SEGURIDAD: sólo usuarios que vos creaste.
+    if (target.createdByEmployeeId !== employee.id) {
+      return res.status(403).json({ error: 'Sólo podés cambiar la contraseña de usuarios que vos creaste' });
+    }
+    if (target.role !== 'user') {
+      return res.status(403).json({ error: 'No se puede cambiar la contraseña de cuentas que no son de usuario final' });
+    }
+
+    target.password = newPassword; // pre-save hook hashea
+    target.passwordChangedAt = new Date();
+    target.tokenVersion = (target.tokenVersion || 0) + 1; // invalida sesiones existentes del cliente
+    target.mustChangePassword = false; // por si tenía el flag de antes
+    await target.save();
+
+    // Sincronizar a JUGAYGANA en background — el helper tiene 3 reintentos y
+    // crea un aviso admin-only en el chat si falla del todo.
+    syncPasswordToJugaygana(target, newPassword, `publisher_admin ${employee.username}`).catch(err => {
+      logger.warn(`[publisher_admin change-password] sync JUGAYGANA falló ${target.username}: ${err.message}`);
+    });
+
+    logger.info(`[publisher_admin] ${employee.username} cambió contraseña de ${target.username}`);
+    res.json({ success: true, message: 'Contraseña cambiada exitosamente' });
+  } catch (err) {
+    logger.error(`[publisher_admin change-password] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // PUBLISHER_ADMINS — CRUD para el admin general
 // ============================================

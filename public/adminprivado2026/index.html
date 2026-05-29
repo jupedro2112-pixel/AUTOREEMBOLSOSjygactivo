@@ -1793,15 +1793,41 @@
                         </div>
                     </div>
 
-                    <!-- Recent users -->
+                    <!-- Mis usuarios — buscador + tabla paginada (10 por página) -->
                     <div style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:20px;">
-                        <h3 style="margin:0 0 16px;color:#d4af37;font-size:16px;">📋 Últimos usuarios creados</h3>
-                        <div id="paRecentUsers" style="display:grid;gap:6px;">
+                        <h3 style="margin:0 0 12px;color:#d4af37;font-size:16px;">📋 Mis usuarios</h3>
+                        <div style="display:flex;gap:8px;margin-bottom:12px;">
+                            <input type="text" id="paUsersSearch" placeholder="🔍 Buscar por usuario..." autocomplete="off" maxlength="60" style="flex:1;padding:10px;background:#1a1a2e;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;font-size:13px;">
+                            <button id="paUsersSearchBtn" onclick="paUsersSearchSubmit()" style="padding:10px 16px;background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:13px;">Buscar</button>
+                            <button onclick="paUsersClearSearch()" style="padding:10px 14px;background:#2a2a3a;color:#aaa;border:none;border-radius:6px;cursor:pointer;font-size:12px;">Limpiar</button>
+                        </div>
+                        <div id="paUsersList" style="display:grid;gap:6px;">
                             <span style="color:#888;font-size:13px;">Cargando…</span>
                         </div>
+                        <div id="paUsersPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:14px;"></div>
                     </div>
                 </div>
             </section>
+
+            <!-- Modal: cambiar contraseña de un usuario (sólo de los que creó el propio publisher_admin) -->
+            <div id="paChangePwdModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10000;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:420px;width:92%;">
+                    <h2 style="margin:0 0 6px;color:#d4af37;font-size:18px;">🔑 Cambiar contraseña</h2>
+                    <p id="paChangePwdSubtitle" style="color:#aaa;font-size:13px;margin:0 0 16px;"></p>
+                    <input type="hidden" id="paChangePwdUserId" value="">
+                    <div>
+                        <label style="color:#aaa;font-size:12px;display:block;margin-bottom:4px;">Nueva contraseña</label>
+                        <input type="text" id="paChangePwdNew" maxlength="100" placeholder="mínimo 6 caracteres" autocomplete="off" style="width:100%;padding:10px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;">
+                        <small style="color:#888;font-size:11px;">Después de cambiarla, pasale la nueva contraseña al cliente por WhatsApp.</small>
+                    </div>
+                    <div id="paChangePwdError" style="color:#ff6666;font-size:13px;display:none;margin-top:10px;background:rgba(255,102,102,0.1);padding:8px 10px;border-radius:6px;"></div>
+                    <div id="paChangePwdOk" style="color:#4caf50;font-size:13px;display:none;margin-top:10px;background:rgba(76,175,80,0.1);padding:8px 10px;border-radius:6px;"></div>
+                    <div style="display:flex;gap:10px;margin-top:18px;">
+                        <button onclick="closePaChangePwdModal()" style="flex:1;padding:10px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;">Cancelar</button>
+                        <button id="paChangePwdBtn" onclick="submitPaChangePwd()" style="flex:1;padding:10px;background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Cambiar</button>
+                    </div>
+                </div>
+            </div>
 
         </main>
     </div>

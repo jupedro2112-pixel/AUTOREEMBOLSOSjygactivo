@@ -83,6 +83,21 @@
     count de clientes + count de recargas (2da en adelante) + monto de recargas.
 - Endpoint `GET /api/admin/publishers/:publisher/daily?from=&to=` (default últimos 30 días).
 
+### 11. Publisher_admin: buscador + paginación + cambiar contraseña
+- Reemplazada la sección "Últimos usuarios creados" por "📋 Mis usuarios" con:
+  - Buscador (substring case-insensitive sobre username, Enter o botón Buscar).
+  - Tabla paginada: **10 usuarios por página**, orden por createdAt desc (más
+    recientes primero), controles Anterior / Página X de N / Siguiente.
+  - Botón 🔑 Cambiar contraseña por fila (sólo de usuarios que ÉL creó).
+- Endpoints nuevos:
+  - `GET /api/admin/publisher-admin/users?page=&search=` (10 por página, sort
+    desc, filtra por createdByEmployeeId=mi.id + acquisitionSource=manual).
+  - `POST /api/admin/publisher-admin/users/:userId/change-password` con doble
+    check de seguridad (target.createdByEmployeeId === mi.id Y role==='user'),
+    bumpea tokenVersion (invalida sesiones del cliente), sincroniza la nueva
+    contraseña a JUGAYGANA en background vía syncPasswordToJugaygana.
+- Refresh automático de la lista tras crear un usuario.
+
 ### 10. "Cliente" = sólo los que cargaron + modal de análisis en 3 pestañas
 - **DECISIÓN:** un "cliente" ahora es SÓLO quien cargó al menos 1 vez. Los que nunca
   cargaron NO cuentan como clientes (antes "CLIENTES 11" con 5 sin cargar; ahora "6").

@@ -83,6 +83,18 @@
     count de clientes + count de recargas (2da en adelante) + monto de recargas.
 - Endpoint `GET /api/admin/publishers/:publisher/daily?from=&to=` (default últimos 30 días).
 
+### 12. Fix bug "cambié creds JUGAYGANA pero los usuarios siguen yendo al sub-agente viejo"
+- Causa: el pool de sesiones JUGAYGANA por publicista (`jugayganaPublisherSessions.js`)
+  cachea las sesiones en memoria por 20 min. En deploys multi-instancia (AWS EB
+  con auto-scaling), la invalidación tras editar la campaña corría solo en la
+  instancia que recibió el PUT — las otras instancias seguían reusando la sesión
+  vieja (token del sub-agente anterior) hasta que expirara.
+- Fix: en `_ensureSession`, antes de reutilizar la sesión cacheada, cargamos las
+  creds actuales de la DB y comparamos `credsSignature` (sha1 sobre user|pass)
+  contra la firma que se guardó al loguear. Si cambiaron → descartar la sesión
+  y re-loguear con las nuevas. MongoDB es la fuente de verdad compartida entre
+  todas las instancias. Costo: 1 query chica por createUser.
+
 ### 11. Publisher_admin: buscador + paginación + cambiar contraseña
 - Reemplazada la sección "Últimos usuarios creados" por "📋 Mis usuarios" con:
   - Buscador (substring case-insensitive sobre username, Enter o botón Buscar).

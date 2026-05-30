@@ -21,9 +21,20 @@
  * curso para no duplicar.
  */
 const axios = require('axios');
+const crypto = require('crypto');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const logger = require('../utils/logger');
 const Campaign = require('../models/Campaign');
+
+// Firma de las creds (sha1 sobre username|password) usada para detectar cambios.
+// Se guarda junto a la sesión cacheada; antes de reutilizarla comparamos contra
+// las creds actuales de la DB y, si cambiaron, re-logueamos. Esto resuelve el
+// bug "cambié las creds en el panel pero los nuevos usuarios siguen yendo al
+// sub-agente viejo" en despliegues multi-instancia (cada instancia tiene su
+// propio pool en memoria; MongoDB es la única fuente de verdad compartida).
+function _credsSignature(username, password) {
+  return crypto.createHash('sha1').update(String(username) + '|' + String(password)).digest('hex');
+}
 
 const API_URL = process.env.JUGAYGANA_API_URL || 'https://admin.agentesadmin.bet/api/admin/';
 const PROXY_URL = process.env.PROXY_URL || '';
@@ -137,7 +148,8 @@ async function _doLogin(campaignCode, username, password) {
 
     const parentId = data?.user?.user_id ?? null;
     logger.info(`[PublisherSessions] Login exitoso ${campaignCode} (parentId=${parentId})`);
-    return { token, cookie, parentId, lastLogin: Date.now(), loginInProgress: null };
+    // credsSignature se setea en _ensureSession (que conoce las creds que se pasaron).
+    return { token, cookie, parentId, lastLogin: Date.now(), loginInProgress: null, credsSignature: null };
   } catch (err) {
     logger.error(`[PublisherSessions] Login ${campaignCode}: excepción ${err.message}`);
     return null;
@@ -158,19 +170,31 @@ async function _ensureSession(campaignCode) {
     return sessions.get(campaignCode) || null;
   }
 
-  if (existing && existing.token) {
-    const expired = Date.now() - existing.lastLogin > TOKEN_TTL_MINUTES * 60 * 1000;
-    if (!expired) return existing;
-  }
-
-  // Necesita login fresco.
+  // Cargamos las creds actuales SIEMPRE: las necesitamos para (a) validar que
+  // la sesión cacheada sigue usando las mismas creds que están en la DB hoy,
+  // y (b) si hay que loguear de nuevo.
   const creds = await _loadCreds(campaignCode);
   if (!creds) return null;
+  const curSig = _credsSignature(creds.username, creds.password);
+
+  if (existing && existing.token) {
+    const expired = Date.now() - existing.lastLogin > TOKEN_TTL_MINUTES * 60 * 1000;
+    if (!expired && existing.credsSignature === curSig) {
+      // Sesión válida y las creds no cambiaron desde el login → reusar.
+      return existing;
+    }
+    // Expiró o las creds cambiaron en la DB → descartar y re-loguear.
+    if (existing.credsSignature && existing.credsSignature !== curSig) {
+      logger.info(`[PublisherSessions] ${campaignCode}: creds cambiaron en la DB → re-login con las nuevas`);
+    }
+    sessions.delete(campaignCode);
+  }
 
   const inProgressPromise = (async () => {
     for (let attempt = 1; attempt <= 3; attempt++) {
       const state = await _doLogin(campaignCode, creds.username, creds.password);
       if (state) {
+        state.credsSignature = curSig;
         sessions.set(campaignCode, state);
         return state;
       }
@@ -184,7 +208,7 @@ async function _ensureSession(campaignCode) {
   // Marcamos como "en progreso" para coordinar concurrencia.
   sessions.set(campaignCode, {
     token: null, cookie: null, parentId: null, lastLogin: 0,
-    loginInProgress: inProgressPromise
+    loginInProgress: inProgressPromise, credsSignature: null
   });
 
   try {

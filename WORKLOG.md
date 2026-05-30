@@ -83,6 +83,18 @@
     count de clientes + count de recargas (2da en adelante) + monto de recargas.
 - Endpoint `GET /api/admin/publishers/:publisher/daily?from=&to=` (default últimos 30 días).
 
+### 13. Fix lookup demasiado estricto ("API respondió sin formato esperado")
+- En commit 596bf0f endurecí lookupUserOrError: si la respuesta era 2xx + JSON
+  pero SIN array `users`/`data` → devolvía error directo. Eso rompía el caso
+  legítimo donde JUGAYGANA responde algo tipo `{success:true}` SIN el campo
+  `users` cuando la búsqueda no encuentra match.
+- Fix: si 2xx + JSON sin array → asumir lista VACÍA → not_found. El caller
+  (deposit/withdraw) tiene su propio recovery (CREATEUSER + manejo de
+  "already existing"). Mantengo el rechazo a 4xx/5xx y a HTML — esos sí eran
+  el bug original que quería evitar. Agregado log con preview de la respuesta
+  cuando se cae a este caso, para investigar si pasa seguido.
+- También se acepta ahora `data.result[]` además de `users[]`/`data[]`.
+
 ### 12. Fix bug "cambié creds JUGAYGANA pero los usuarios siguen yendo al sub-agente viejo"
 - Causa: el pool de sesiones JUGAYGANA por publicista (`jugayganaPublisherSessions.js`)
   cachea las sesiones en memoria por 20 min. En deploys multi-instancia (AWS EB

@@ -365,18 +365,28 @@ async function lookupUserOrError(username) {
       return { status: 'error', error: `Status ${resp.status} de la API` };
     }
 
-    // Validación de shape: si la respuesta es 2xx pero no tiene la forma esperada
-    // (ni users[] ni data[] ni array), la API contestó pero no devolvió el catálogo.
-    // Tratar como error en lugar de asumir "no existe" — evita el mismo bug.
-    let list;
-    if (Array.isArray(data?.users)) {
-      list = data.users;
-    } else if (Array.isArray(data?.data)) {
-      list = data.data;
-    } else if (Array.isArray(data)) {
-      list = data;
-    } else {
-      return { status: 'error', error: 'API respondió sin el formato esperado (sin lista de usuarios)' };
+    // Buscamos el array de usuarios en los lugares conocidos. Si la respuesta es
+    // 2xx + JSON pero NO trae array (ej: JUGAYGANA responde `{success:true}` sin
+    // el campo `users` cuando no encontró match), tratamos como lista vacía →
+    // not_found. El caller tiene su propio recovery (CREATEUSER + manejo de
+    // "already existing") para distinguir si el usuario realmente existe.
+    //
+    // Antes esto devolvía error directo, lo que rompía el flujo de depósito con
+    // "API respondió sin el formato esperado" en casos legítimos donde la API
+    // simplemente no incluía el campo.
+    let list = null;
+    if (Array.isArray(data?.users)) list = data.users;
+    else if (Array.isArray(data?.data)) list = data.data;
+    else if (Array.isArray(data?.result)) list = data.result;
+    else if (Array.isArray(data)) list = data;
+
+    if (list === null) {
+      // Loguear qué nos devolvió para investigar si pasa seguido (preview corto).
+      const preview = typeof data === 'string'
+        ? data.slice(0, 200)
+        : JSON.stringify(data || {}).slice(0, 200);
+      console.warn(`⚠️ lookupUserOrError(${username}): respuesta 2xx sin array de usuarios. Asumiendo vacía → not_found. Preview: ${preview}`);
+      list = [];
     }
 
     const found = list.find(u =>

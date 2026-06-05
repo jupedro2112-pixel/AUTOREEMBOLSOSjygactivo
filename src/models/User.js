@@ -277,6 +277,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  // Sub-atribución por influencer DENTRO de un publicista. Se setea cuando un
+  // publisher_admin crea el usuario y elige un influencer de la lista fija de su
+  // campaña (Campaign.influencers). Guarda el NOMBRE del influencer (la lista es
+  // gestionada → sin typos). Es sólo para desglosar la analítica del publicista
+  // por influencer; no tiene link ni creds propias.
+  acquisitionInfluencer: {
+    type: String,
+    default: null,
+    trim: true,
+    index: true
+  },
   // Identificadores de Meta Ads capturados en el registro del usuario.
   // Permiten atribuir conversiones server-side vía Conversions API — en
   // particular el evento Purchase, que se dispara desde el endpoint de admin

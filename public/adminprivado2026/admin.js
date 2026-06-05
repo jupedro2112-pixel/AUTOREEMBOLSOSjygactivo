@@ -573,9 +573,10 @@ function setupRoleBasedUI() {
         // Ajustar layout del main para que ocupe todo (sidebar oculto).
         const main = document.querySelector('.main-content');
         if (main) main.style.marginLeft = '0';
-        // Cargar stats iniciales + lista de usuarios paginada.
+        // Cargar stats iniciales + lista de usuarios paginada + influencers.
         loadPublisherAdminStats();
         loadPaUsers(1, '');
+        loadPaInfluencers();
         // Búsqueda al apretar Enter en el input.
         const searchInput = document.getElementById('paUsersSearch');
         if (searchInput && !searchInput.dataset.bound) {
@@ -734,8 +735,11 @@ async function loadPaUsers(page = 1, search = '') {
         }
         listEl.innerHTML = users.map(u => {
             const dateStr = new Date(u.createdAt).toLocaleString('es-AR');
+            const infBadge = u.acquisitionInfluencer
+                ? `<span style="color:#6cf;font-size:10px;background:rgba(108,170,255,0.12);padding:1px 6px;border-radius:4px;margin-left:6px;white-space:nowrap;">🎬 ${_paSafe(u.acquisitionInfluencer)}</span>`
+                : '';
             return `<div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:10px 12px;background:#1a1a2e;border-radius:6px;font-size:13px;">
-                <span style="color:#fff;font-weight:600;">${_paSafe(u.username)}</span>
+                <span style="color:#fff;font-weight:600;">${_paSafe(u.username)}${infBadge}</span>
                 <span style="color:#888;font-size:11px;white-space:nowrap;">${_paSafe(dateStr)}</span>
                 <button onclick="openPaChangePwdModal('${_paSafe(u.id)}','${_paSafe(u.username)}')" style="padding:6px 12px;background:rgba(212,175,55,0.15);border:1px solid #d4af37;color:#d4af37;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;">🔑 Contraseña</button>
             </div>`;
@@ -822,10 +826,40 @@ async function submitPaChangePwd() {
     }
 }
 
+// Carga los influencers activos de la campaña del publisher_admin y puebla el
+// desplegable del form de crear usuario. Si la campaña no tiene influencers
+// cargados, oculta el selector (flujo igual al de antes).
+let _paInfluencers = [];
+async function loadPaInfluencers() {
+    const wrap = document.getElementById('paNewInfluencerWrap');
+    const sel = document.getElementById('paNewInfluencer');
+    if (!wrap || !sel) return;
+    try {
+        const r = await fetch(`${API_URL}/api/admin/publisher-admin/influencers`, {
+            credentials: 'include',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = r.ok ? await r.json() : { influencers: [] };
+        _paInfluencers = data.influencers || [];
+    } catch (e) {
+        _paInfluencers = [];
+    }
+    if (_paInfluencers.length === 0) {
+        wrap.style.display = 'none';
+        sel.innerHTML = '';
+        return;
+    }
+    sel.innerHTML = '<option value="">— Elegí un influencer —</option>' +
+        _paInfluencers.map(n => `<option value="${_paSafe(n)}">${_paSafe(n)}</option>`).join('');
+    wrap.style.display = 'block';
+}
+window.loadPaInfluencers = loadPaInfluencers;
+
 async function paCreateUser() {
     const usernameEl = document.getElementById('paNewUsername');
     const passwordEl = document.getElementById('paNewPassword');
     const phoneEl = document.getElementById('paNewPhone');
+    const influencerEl = document.getElementById('paNewInfluencer');
     const errBox = document.getElementById('paCreateError');
     const okBox = document.getElementById('paCreateSuccess');
     const btn = document.getElementById('paCreateBtn');
@@ -836,10 +870,20 @@ async function paCreateUser() {
     const username = usernameEl?.value.trim();
     const password = passwordEl?.value;
     const phone = phoneEl?.value.trim();
+    // El selector sólo está visible si la campaña tiene influencers cargados.
+    const influencerRequired = _paInfluencers.length > 0;
+    const influencer = influencerRequired ? (influencerEl?.value || '') : '';
 
     if (!username || !password) {
         if (errBox) {
             errBox.textContent = 'Usuario y contraseña son obligatorios';
+            errBox.style.display = 'block';
+        }
+        return;
+    }
+    if (influencerRequired && !influencer) {
+        if (errBox) {
+            errBox.textContent = 'Elegí el influencer de este usuario';
             errBox.style.display = 'block';
         }
         return;
@@ -855,7 +899,7 @@ async function paCreateUser() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({ username, password, phone: phone || null })
+            body: JSON.stringify({ username, password, phone: phone || null, influencer: influencer || undefined })
         });
         const data = await r.json();
         if (!r.ok) {
@@ -872,6 +916,7 @@ async function paCreateUser() {
         usernameEl.value = '';
         passwordEl.value = '';
         phoneEl.value = '';
+        if (influencerEl) influencerEl.value = '';
         // Recargar stats + la lista (volver a página 1 sin búsqueda activa).
         loadPublisherAdminStats();
         loadPaUsers(1, '');
@@ -7114,6 +7159,58 @@ function _resetCampaignCredsForm(hasCreds) {
     window._campaignFormClearCreds = false;
 }
 
+// === Editor de influencers de la campaña ===
+// Lista en memoria mientras el modal está abierto: [{ name, isActive }].
+function _renderCampaignInfluencers() {
+    const listEl = document.getElementById('campaignFormInfluencersList');
+    const countEl = document.getElementById('campaignFormInfluencersCount');
+    const arr = window._campaignFormInfluencers || [];
+    if (countEl) countEl.textContent = arr.length ? `· ${arr.length} cargado(s)` : '· ninguno';
+    if (!listEl) return;
+    if (arr.length === 0) {
+        listEl.innerHTML = '<span style="color:#888;font-size:11.5px;">Sin influencers cargados.</span>';
+        return;
+    }
+    listEl.innerHTML = arr.map((inf, i) => `
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#1a1a2e;border-radius:6px;">
+            <span style="flex:1;color:${inf.isActive ? '#fff' : '#666'};font-size:13px;${inf.isActive ? '' : 'text-decoration:line-through;'}">${_safe(inf.name)}</span>
+            <label style="display:flex;align-items:center;gap:4px;color:#888;font-size:11px;cursor:pointer;white-space:nowrap;">
+                <input type="checkbox" ${inf.isActive ? 'checked' : ''} onchange="toggleCampaignInfluencer(${i})"> activo
+            </label>
+            <button type="button" onclick="removeCampaignInfluencer(${i})" style="padding:3px 8px;background:#3a1a1a;color:#ff6666;border:1px solid rgba(255,80,80,0.3);border-radius:5px;cursor:pointer;font-size:11px;">✕</button>
+        </div>`).join('');
+}
+
+function addCampaignInfluencer() {
+    const input = document.getElementById('campaignFormInfluencerInput');
+    const name = (input.value || '').trim().slice(0, 80);
+    if (!name) return;
+    const arr = window._campaignFormInfluencers || (window._campaignFormInfluencers = []);
+    if (arr.some(x => x.name.toLowerCase() === name.toLowerCase())) {
+        showToast('Ese influencer ya está en la lista', 'error');
+        return;
+    }
+    arr.push({ name, isActive: true });
+    input.value = '';
+    _renderCampaignInfluencers();
+}
+
+function removeCampaignInfluencer(idx) {
+    const arr = window._campaignFormInfluencers || [];
+    arr.splice(idx, 1);
+    _renderCampaignInfluencers();
+}
+
+function toggleCampaignInfluencer(idx) {
+    const arr = window._campaignFormInfluencers || [];
+    if (arr[idx]) arr[idx].isActive = !arr[idx].isActive;
+    _renderCampaignInfluencers();
+}
+
+window.addCampaignInfluencer = addCampaignInfluencer;
+window.removeCampaignInfluencer = removeCampaignInfluencer;
+window.toggleCampaignInfluencer = toggleCampaignInfluencer;
+
 function showCreateCampaignModal() {
     document.getElementById('campaignFormTitle').textContent = 'Nueva campaña';
     document.getElementById('campaignFormMode').value = 'create';
@@ -7128,6 +7225,8 @@ function showCreateCampaignModal() {
     document.getElementById('campaignFormActiveRow').style.display = 'none';
     document.getElementById('campaignFormError').style.display = 'none';
     _resetCampaignCredsForm(false);
+    window._campaignFormInfluencers = [];
+    _renderCampaignInfluencers();
     showModal('campaignFormModal');
     document.getElementById('campaignFormModal').style.display = 'flex';
 }
@@ -7154,6 +7253,10 @@ function editCampaign(code) {
     if (campaign.jugayganaUsername) {
         document.getElementById('campaignFormJgUsername').value = campaign.jugayganaUsername;
     }
+    window._campaignFormInfluencers = (campaign.influencers || []).map(x => ({
+        name: x.name, isActive: x.isActive !== false
+    }));
+    _renderCampaignInfluencers();
     showModal('campaignFormModal');
     document.getElementById('campaignFormModal').style.display = 'flex';
 }
@@ -7229,6 +7332,11 @@ async function submitCampaignForm() {
     }
 
     const body = { publisher, name, commissionType, commissionValue, notes };
+
+    // Influencers del publicista (lista completa → reemplaza la guardada).
+    body.influencers = (window._campaignFormInfluencers || []).map(x => ({
+        name: x.name, isActive: x.isActive !== false
+    }));
 
     // Creds JUGAYGANA del publicista (opcionales).
     const jgUsername = document.getElementById('campaignFormJgUsername').value.trim();
@@ -9789,7 +9897,7 @@ async function openPublisherAnalysis(publisher) {
     const bodyEl = document.getElementById('paAnalysisBody');
     if (titleEl) titleEl.textContent = '📊 ' + publisher;
     if (bodyEl) bodyEl.innerHTML = '<span style="color:#888;">Cargando…</span>';
-    _analysisState = { publisher, analysis: null, daily: null };
+    _analysisState = { publisher, analysis: null, daily: null, influencers: null };
     showModal('publisherAnalysisModal');
     try {
         // Traemos análisis y diario en paralelo.
@@ -9840,6 +9948,7 @@ function _renderAnalysisShell() {
             ${tabBtn('new', '✨ Usuarios nuevos')}
             ${tabBtn('loads', '💰 Cargas totales')}
             ${tabBtn('retention', '🔄 Retención')}
+            ${tabBtn('influencers', '🎬 Por influencer')}
         </div>
         <div id="paTabContent"></div>
     `;
@@ -9858,6 +9967,56 @@ function switchAnalysisTab(tab) {
     if (tab === 'new') c.innerHTML = _renderTabNuevos();
     else if (tab === 'loads') c.innerHTML = _renderTabCargas();
     else if (tab === 'retention') c.innerHTML = _renderTabRetencion();
+    else if (tab === 'influencers') _renderTabInfluencers(c);
+}
+
+// ----- Tab 4: Por influencer (se trae a demanda; no viene en el análisis base) -----
+async function _renderTabInfluencers(container) {
+    const { publisher } = _analysisState;
+    if (!_analysisState.influencers) {
+        container.innerHTML = '<span style="color:#888;font-size:13px;">Cargando…</span>';
+        try {
+            const r = await fetch(`${API_URL}/api/admin/publishers/${encodeURIComponent(publisher)}/influencers`, {
+                headers: { 'Authorization': `Bearer ${currentToken}` }
+            });
+            _analysisState.influencers = r.ok ? await r.json() : { influencers: [] };
+        } catch (e) {
+            container.innerHTML = '<span style="color:#ff6666;">Error cargando influencers</span>';
+            return;
+        }
+    }
+    const rows = _analysisState.influencers.influencers || [];
+    if (rows.length === 0) {
+        container.innerHTML = '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">Este publicista no tiene influencers cargados.<br>Agregalos desde <strong>Publicistas y pautas → Editar campaña</strong> para ver el desglose.</div>';
+        return;
+    }
+    container.innerHTML = `
+        <p style="color:#888;font-size:11.5px;margin:0 0 10px;">Clientes del publicista desglosados por el influencer que los trajo. "Sin influencer" = usuarios sin asignar (orgánicos del link o creados antes de cargar la lista).</p>
+        <div style="overflow-x:auto;max-height:360px;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#6cf;text-align:left;position:sticky;top:0;">
+                    <th style="padding:8px;">Influencer</th>
+                    <th style="padding:8px;text-align:right;">Clientes</th>
+                    <th style="padding:8px;text-align:right;">Registr.</th>
+                    <th style="padding:8px;text-align:right;">$ Cargado</th>
+                    <th style="padding:8px;text-align:right;">$ Neto</th>
+                    <th style="padding:8px;text-align:right;">Ticket prom.</th>
+                    <th style="padding:8px;text-align:right;">Retención</th>
+                </tr></thead>
+                <tbody>
+                    ${rows.map(r => `
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
+                            <td style="padding:8px;color:#fff;font-weight:600;">${_safe(r.influencer)}</td>
+                            <td style="padding:8px;text-align:right;color:#fff;">${r.clients}${r.neverDeposited ? `<span style="color:#666;"> +${r.neverDeposited}</span>` : ''}</td>
+                            <td style="padding:8px;text-align:right;color:#aaa;">${r.registered}</td>
+                            <td style="padding:8px;text-align:right;color:#4caf50;">${_fmtMoney(r.deposits)}</td>
+                            <td style="padding:8px;text-align:right;color:${r.netRevenue >= 0 ? '#fff' : '#ff6666'};">${_fmtMoney(r.netRevenue)}</td>
+                            <td style="padding:8px;text-align:right;color:#d4af37;">${_fmtMoney(r.avgTicket)}</td>
+                            <td style="padding:8px;text-align:right;color:#4caf50;">${r.retentionRate}%</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>`;
 }
 
 const _fmtMoney = n => '$' + (Number(n) || 0).toLocaleString('es-AR');

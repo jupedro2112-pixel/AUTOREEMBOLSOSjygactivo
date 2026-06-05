@@ -7778,6 +7778,30 @@ app.get('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res
   }
 });
 
+// Normaliza el array de influencers de una campaña que viene en el body del admin.
+// Acepta strings ('Juan') u objetos ({ name, isActive }). Devuelve
+// [{ name, isActive }] con nombres trim/recortados y deduplicados case-insensitive
+// (gana la primera aparición). Devuelve null si el campo viene ausente (= no tocar).
+// Lanza Error con mensaje de usuario si el formato es inválido.
+function normalizeInfluencers(raw) {
+  if (raw == null) return null; // ausente → no modificar la lista existente
+  if (!Array.isArray(raw)) throw new Error('influencers debe ser una lista');
+  const out = [];
+  const seen = new Set();
+  for (const item of raw) {
+    const name = String(typeof item === 'string' ? item : (item && item.name) || '').trim().slice(0, 80);
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const isActive = (item && typeof item === 'object' && typeof item.isActive === 'boolean')
+      ? item.isActive : true;
+    out.push({ name, isActive });
+  }
+  if (out.length > 100) throw new Error('Demasiados influencers (máximo 100)');
+  return out;
+}
+
 // Crear nueva campaña. Soporta opcionalmente creds JUGAYGANA del publicista
 // (jugayganaUsername + jugayganaPassword en plano → se cifra antes de guardar).
 app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, res) => {
@@ -7808,6 +7832,10 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
       jgPassword = String(jugayganaPassword);
     }
 
+    let influencers = [];
+    try { influencers = normalizeInfluencers(req.body.influencers) || []; }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+
     const existing = await Campaign.findOne({ code: normalizedCode }).lean();
     if (existing) {
       return res.status(409).json({ error: 'Ya existe una campaña con ese código' });
@@ -7824,7 +7852,8 @@ app.post('/api/admin/campaigns', authMiddleware, adminMiddleware, async (req, re
       createdBy: req.user.username,
       isActive: true,
       jugayganaUsername: jgUsername,
-      jugayganaPassword: jgPassword
+      jugayganaPassword: jgPassword,
+      influencers
     });
 
     // Nunca devolver el password en la respuesta. select:false en el schema lo
@@ -7857,6 +7886,17 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
     if (Number.isFinite(parseFloat(commissionValue))) update.commissionValue = parseFloat(commissionValue);
     if (typeof isActive === 'boolean') update.isActive = isActive;
     if (typeof notes === 'string') update.notes = notes.slice(0, 2000);
+
+    // === Influencers ===
+    // Si viene el campo (aunque sea []) reemplazamos la lista entera. Ausente = no tocar.
+    if ('influencers' in (req.body || {})) {
+      try {
+        const inf = normalizeInfluencers(req.body.influencers);
+        if (inf !== null) update.influencers = inf;
+      } catch (e) {
+        return res.status(400).json({ error: e.message });
+      }
+    }
 
     // === Creds JUGAYGANA ===
     if (clearJugayganaCreds === true) {
@@ -8018,6 +8058,21 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
       return res.status(400).json({ error: 'Tu publicista está desactivado. Contactá al administrador general.' });
     }
 
+    // Sub-atribución por influencer. Si la campaña tiene influencers ACTIVOS, el
+    // publisher_admin DEBE elegir uno (la elección viene en body.influencer y se
+    // matchea case-insensitive contra la lista, guardando el nombre canónico). Si
+    // la campaña no tiene influencers cargados, se ignora (flujo igual al de antes).
+    const activeInfluencers = (campaign.influencers || []).filter(i => i.isActive).map(i => i.name);
+    let chosenInfluencer = null;
+    if (activeInfluencers.length > 0) {
+      const raw = typeof req.body.influencer === 'string' ? req.body.influencer.trim() : '';
+      const match = activeInfluencers.find(n => n.toLowerCase() === raw.toLowerCase());
+      if (!match) {
+        return res.status(400).json({ error: 'Elegí un influencer válido de la lista.' });
+      }
+      chosenInfluencer = match;
+    }
+
     // Username único, case-insensitive (mismo criterio que el resto del sistema).
     const existingUser = await User.findOne({
       username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
@@ -8047,7 +8102,8 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
       acquisitionSource: 'manual',
       acquiredAt: new Date(),
       createdByEmployeeId: employee.id,
-      createdByEmployeeUsername: employee.username
+      createdByEmployeeUsername: employee.username,
+      acquisitionInfluencer: chosenInfluencer
     });
 
     // NO creamos ChatStatus acá. Si lo hiciéramos, el usuario aparecería como
@@ -8126,7 +8182,8 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
     })();
 
     logger.info(
-      `[publisher_admin] ${employee.username} (campaign=${campaign.code}, creds=${!!campaign.jugayganaUsername}) creó usuario ${username}`
+      `[publisher_admin] ${employee.username} (campaign=${campaign.code}, creds=${!!campaign.jugayganaUsername}` +
+      `${chosenInfluencer ? `, influencer=${chosenInfluencer}` : ''}) creó usuario ${username}`
     );
 
     res.status(201).json({
@@ -8136,11 +8193,34 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
         username: newUser.username,
         accountNumber: newUser.accountNumber,
         acquisitionCampaign: newUser.acquisitionCampaign,
+        acquisitionInfluencer: newUser.acquisitionInfluencer,
         createdAt: newUser.createdAt
       }
     });
   } catch (err) {
     logger.error(`[publisher_admin create-user] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/publisher-admin/influencers
+// Devuelve los influencers ACTIVOS de la campaña de este publisher_admin, para
+// poblar el desplegable del form de crear usuario. Si la campaña no tiene
+// influencers cargados devuelve lista vacía (el front oculta el selector).
+app.get('/api/admin/publisher-admin/influencers', authMiddleware, publisherAdminMiddleware, async (req, res) => {
+  try {
+    const employee = await User.findOne({ id: req.user.userId }).lean();
+    if (!employee || !employee.publisherCampaignCode) {
+      return res.json({ influencers: [] });
+    }
+    const campaign = await Campaign.findOne({ code: employee.publisherCampaignCode })
+      .select('influencers').lean();
+    const influencers = (campaign?.influencers || [])
+      .filter(i => i.isActive)
+      .map(i => i.name);
+    res.json({ influencers });
+  } catch (err) {
+    logger.error(`[publisher_admin influencers] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -8240,6 +8320,8 @@ app.get('/api/admin/publisher-admin/users', authMiddleware, publisherAdminMiddle
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const search = String(req.query.search || '').trim().slice(0, 60);
 
+    const influencerFilter = String(req.query.influencer || '').trim().slice(0, 80);
+
     const baseQuery = {
       acquisitionCampaign: employee.publisherCampaignCode,
       acquisitionSource: 'manual',
@@ -8249,11 +8331,14 @@ app.get('/api/admin/publisher-admin/users', authMiddleware, publisherAdminMiddle
       // case-insensitive substring, escapado para no romper el regex.
       baseQuery.username = { $regex: escapeRegex(search), $options: 'i' };
     }
+    if (influencerFilter) {
+      baseQuery.acquisitionInfluencer = influencerFilter;
+    }
 
     const total = await User.countDocuments(baseQuery);
     const totalPages = total === 0 ? 0 : Math.ceil(total / PER_PAGE);
     const users = await User.find(baseQuery)
-      .select('id username createdAt phone email')
+      .select('id username createdAt phone email acquisitionInfluencer')
       .sort({ createdAt: -1 })
       .skip((page - 1) * PER_PAGE)
       .limit(PER_PAGE)
@@ -8732,6 +8817,23 @@ app.get('/api/admin/publishers/:publisher/analysis', authMiddleware, adminMiddle
     res.json(analysis);
   } catch (err) {
     logger.error(`[admin/publishers/:publisher/analysis] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/publishers/:publisher/influencers
+// Desglose de las métricas del publicista por influencer (sub-atribución que
+// pone el publisher_admin al crear usuarios). Mismas métricas que el análisis
+// general pero agrupadas por User.acquisitionInfluencer.
+app.get('/api/admin/publishers/:publisher/influencers', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const publisher = String(req.params.publisher).trim();
+    if (!publisher) return res.status(400).json({ error: 'publisher requerido' });
+    const result = await publisherAnalytics.getInfluencerBreakdown(publisher);
+    if (!result) return res.status(404).json({ error: 'Publicista inexistente' });
+    res.json(result);
+  } catch (err) {
+    logger.error(`[admin/publishers/:publisher/influencers] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

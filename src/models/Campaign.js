@@ -96,6 +96,20 @@ const campaignSchema = new mongoose.Schema({
     type: String,
     default: null,
     select: false
+  },
+  // === Influencers del publicista (sub-atribución para analítica) ===
+  // Lista fija, gestionada por el admin general. Cuando un publisher_admin crea
+  // un usuario, elige uno de estos influencers y el nombre queda en
+  // User.acquisitionInfluencer para poder desglosar las estadísticas por
+  // influencer. NO tiene link propio ni creds: es puramente una etiqueta para
+  // segmentar la analítica de este publicista.
+  // `name` es único case-insensitive dentro de la campaña (se valida al guardar).
+  influencers: {
+    type: [{
+      name: { type: String, required: true, trim: true, maxlength: 80 },
+      isActive: { type: Boolean, default: true }
+    }],
+    default: []
   }
 }, {
   timestamps: true

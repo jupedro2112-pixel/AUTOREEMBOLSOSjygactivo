@@ -43,7 +43,9 @@ Todos los modelos canónicos viven en `src/models/`. `config/database.js` los re
   - JUGAYGANA: `jugayganaUserId` (ID numérico del proveedor — clave para operar sin
     depender del lookup), `jugayganaUsername`, `jugayganaSyncStatus`, `source`.
   - Atribución: `acquisitionCampaign` (= Campaign.code), `acquisitionSource`
-    ('organic'|'manual'), `createdByEmployeeId/Username`, `acquiredAt`.
+    ('organic'|'manual'), `createdByEmployeeId/Username`, `acquiredAt`,
+    `acquisitionInfluencer` (sub-etiqueta dentro del publicista; sólo se setea
+    cuando un publisher_admin elige un influencer de la lista de su campaña).
   - publisher_admin: `publisherCampaignCode` (la Campaign que representa).
   - FCM: `fcmToken` (legacy/último) + `fcmTokens[]` (multi-dispositivo).
   - Referidos: `referralCode`, `referredByUserId`, `referralStatus`.
@@ -55,8 +57,10 @@ Todos los modelos canónicos viven en `src/models/`. `config/database.js` los re
   `metadata.source` = 'install_bonus'|'welcome_gift' para excluir regalos de los reportes
   de carga real). **Fuente de la analítica de clientes.**
 - **Campaign** (`Campaign.js`) — publicista/pauta. `code` (inmutable, en la URL),
-  `publisher`, `name`, comisión, `isActive`, y creds JUGAYGANA del sub-agente
-  (`jugayganaUsername`, `jugayganaPassword` con `select:false`, texto plano).
+  `publisher`, `name`, comisión, `isActive`, creds JUGAYGANA del sub-agente
+  (`jugayganaUsername`, `jugayganaPassword` con `select:false`, texto plano), y
+  `influencers: [{ name, isActive }]` — lista fija (sub-atribución por influencer,
+  sólo para desglosar la analítica del publicista; sin link ni creds propias).
 - **CampaignClick** — clics de links de pauta (TTL 90 días).
 - **ChatStatus** (`ChatStatus.js`) — estado de la conversación (open/closed/payments),
   category (cargas/pagos), `lastMessageAt`, `assignedTo`. La lista de Chats del panel se

@@ -4,7 +4,45 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-05-28**
+> **Última actualización: 2026-06-05**
+
+## Sesión 2026-06-05
+
+### 14. Sub-atribución por INFLUENCER dentro de un publicista
+- **Caso:** un publicista trabaja con varios influencers y quiere medir cuál
+  rinde, sin crear una cuenta/campaña por cada uno. Solución: el influencer es una
+  **sub-etiqueta** del publicista (lista fija gestionada), sólo para analítica.
+  NO tiene link propio ni creds JUGAYGANA (decisión acordada con el owner).
+- **Modelo:**
+  - `Campaign.influencers: [{ name, isActive }]` — lista fija por campaña,
+    gestionada por el admin general. `name` único case-insensitive (se dedup al
+    normalizar en el backend).
+  - `User.acquisitionInfluencer` (string, indexado) — guarda el NOMBRE del
+    influencer elegido al crear el usuario (lista gestionada → sin typos).
+- **Flujo:** el publisher_admin, al crear un usuario, elige un influencer de un
+  desplegable. Si la campaña tiene influencers activos → **obligatorio**; si no
+  tiene ninguno → el selector se oculta y crea sin influencer (idéntico a antes).
+- **Backend:**
+  - Helper `normalizeInfluencers(raw)` (server.js) — valida/dedup el array;
+    usado por POST y PUT `/api/admin/campaigns` (PUT reemplaza la lista entera).
+  - `create-user` valida el influencer contra la lista activa (match
+    case-insensitive, guarda el nombre canónico) y lo setea en `acquisitionInfluencer`.
+  - `GET /api/admin/publisher-admin/influencers` — lista activa para el desplegable.
+  - `GET /api/admin/publisher-admin/users` ahora devuelve `acquisitionInfluencer`
+    + acepta `?influencer=` para filtrar.
+  - `publisherAnalyticsService.getInfluencerBreakdown(publisher)` — agrupa los
+    usuarios del publicista por `acquisitionInfluencer` (bucket "Sin influencer"
+    para los no asignados) y calcula las mismas métricas que el análisis general.
+    Endpoint `GET /api/admin/publishers/:publisher/influencers`.
+- **Frontend (adminprivado2026):**
+  - Modal de campaña ("Publicidad"): editor de influencers (input + Agregar →
+    chips con toggle activo y borrar). Se manda el array completo al guardar.
+  - Panel publisher_admin: desplegable de influencer en crear-usuario + badge
+    🎬 en "Mis usuarios".
+  - Modal "Dashboard Publicistas": nueva pestaña **🎬 Por influencer** (tabla con
+    clientes/cargas/neto/ticket/retención por influencer; se trae a demanda).
+- **Nota / pendiente:** si renombrás un influencer, los usuarios viejos quedan con
+  el nombre anterior (no hay migración de rename). Agregar si el owner lo pide.
 
 ## Features grandes construidas (sesión 2026-05-27 / 28)
 

@@ -275,6 +275,80 @@ async function getSegmentUsernames(publisher, segment) {
   return acc.clients[segment].map(c => c.username);
 }
 
+/**
+ * Desglose por INFLUENCER dentro de un publicista. Agrupa los usuarios
+ * atribuidos al publicista por su `acquisitionInfluencer` (sub-etiqueta que pone
+ * el publisher_admin al crear el usuario) y calcula las mismas métricas que el
+ * análisis por publicista (clientes, cargas, retención, ticket, score…).
+ *
+ * - Los usuarios sin influencer (orgánicos del link, o creados antes de cargar
+ *   la lista) caen en el bucket "Sin influencer".
+ * - Se siembran TODOS los influencers conocidos de la campaña (aunque todavía no
+ *   hayan traído clientes) para que aparezcan en cero.
+ *
+ * @param {string} publisher
+ * @returns {{ publisher, influencers: Array<metrics & { influencer }> } | null}
+ */
+async function getInfluencerBreakdown(publisher) {
+  const campaigns = await Campaign.find({ publisher }).select('code influencers').lean();
+  if (campaigns.length === 0) return null;
+  const codes = campaigns.map(c => c.code);
+
+  // Nombres conocidos (sembrar buckets en cero aunque no tengan clientes aún).
+  const knownInfluencers = new Set();
+  for (const c of campaigns) {
+    for (const inf of (c.influencers || [])) {
+      if (inf && inf.name) knownInfluencers.add(inf.name);
+    }
+  }
+
+  const users = await User.find({ acquisitionCampaign: { $in: codes } })
+    .select('username acquisitionInfluencer createdAt').lean();
+
+  const usernames = users.map(u => u.username);
+  const { depByUser, witByUser } = await _loadTxStats(usernames.length ? usernames : []);
+
+  const now = Date.now();
+  const map = new Map();
+  const ensure = (name) => {
+    if (!map.has(name)) map.set(name, _emptyAcc(name));
+    return map.get(name);
+  };
+  for (const n of knownInfluencers) ensure(n);
+
+  for (const u of users) {
+    const name = (u.acquisitionInfluencer && String(u.acquisitionInfluencer).trim()) || 'Sin influencer';
+    const acc = ensure(name);
+
+    const dep = depByUser[u.username];
+    const total = dep ? dep.total : 0;
+    const count = dep ? dep.count : 0;
+    const last = dep ? dep.last : null;
+    const avg = count > 0 ? total / count : 0;
+    const wit = witByUser[u.username] || 0;
+    const daysSinceLast = last ? (now - new Date(last).getTime()) / DAY_MS : null;
+    const isNew = (now - new Date(u.createdAt).getTime()) / DAY_MS <= NEW_DAYS;
+    const segment = _classifySegment(count, daysSinceLast);
+
+    acc.totalClients++;
+    acc.deposits += total;
+    acc.withdrawals += wit;
+    acc.depositCount += count;
+    acc.counts[segment]++;
+    if (isNew) acc.newCount++;
+    if (avg >= HIGH_TICKET_ARS) acc.highTicketCount++;
+    if (count >= LOYAL_MIN_DEPOSITS) acc.loyalCount++;
+  }
+
+  const rows = Array.from(map.values())
+    .map(_finalizeMetrics)
+    .map(m => ({ influencer: m.publisher, ...m }));
+  // Orden: más facturación neta primero, luego más registrados.
+  rows.sort((a, b) => b.netRevenue - a.netRevenue || b.registered - a.registered);
+
+  return { publisher, influencers: rows };
+}
+
 // Argentina es UTC-3 todo el año (sin DST). Día ART de un timestamp UTC.
 const ART_OFFSET_MS = 3 * 60 * 60 * 1000;
 function _artDay(ts) {
@@ -409,6 +483,7 @@ module.exports = {
   getPublisherAnalysis,
   getSegmentUsernames,
   getDailyBreakdown,
+  getInfluencerBreakdown,
   // Exportados por si se quieren testear / ajustar
   ACTIVE_DAYS,
   AT_RISK_DAYS,

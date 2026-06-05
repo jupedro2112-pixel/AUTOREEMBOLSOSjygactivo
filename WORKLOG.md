@@ -8,6 +8,35 @@
 
 ## Sesión 2026-06-05
 
+### 15. Seguimiento de HISTORIAS por influencer (costo / ROAS por publicación)
+- **Caso:** el influencer cobra POR HISTORIA (arranca ~20hs). El owner quiere
+  cargar el precio de cada historia y ver cuántos registros/cargas trajo, CPA,
+  ROAS, y si conviene repetir; comparar historia 1 vs 2, etc. Solo admin general.
+- **Modelo nuevo `InfluencerStory`** (`src/models/InfluencerStory.js`): `{ campaignCode,
+  influencer, postedAt (fecha+hora), cost, label }`. Registrado en `src/models/index.js`
+  y requerido en server.js. Colección nueva, sin migración.
+- **Atribución por VENTANA HORARIA** (no se persiste el vínculo, se calcula a
+  demanda): las historias se ordenan por `postedAt` asc y cada una se queda con
+  los usuarios (acquisitionCampaign+acquisitionInfluencer) cuyo `createdAt` cae en
+  [postedAt_i, postedAt_{i+1}). La última agarra todo hasta ahora. Los usuarios
+  creados ANTES de la 1ra historia van a un bucket `before` aparte.
+- **Métricas por historia** (`publisherAnalyticsService.getInfluencerStoryAnalysis`):
+  registros, clientes (cargaron ≥1), cargas (BRUTO lifetime de la cohorte, sin
+  regalos), retiros, neto, FTD; CPA = costo/registros (y costo/cliente), ROAS =
+  neto/costo (y bruto/costo). Devuelve filas por historia numeradas + `before` + totales.
+- **Umbrales de "rentable" en el FRONT** (ajustables en vivo, no recalcula): ROAS
+  objetivo (default 1) Ó CPA objetivo (default $10.000). Verdict 🟢/🔴 por historia.
+  - Nota: la cohorte usa cargas LIFETIME, así que el ROAS de una historia sube con
+    el tiempo (una historia puede volverse rentable más adelante).
+- **Endpoints** (admin): `GET /api/admin/influencer-stories?campaign=&influencer=`
+  (lista + métricas), `POST` (crear), `PUT /:id`, `DELETE /:id`.
+  `getInfluencerBreakdown` ahora devuelve `campaignCode` por fila (la UI lo necesita).
+- **UI:** en la pestaña "Por influencer" del análisis, botón **📖 Historias** por
+  fila → modal `influencerStoriesModal`: form de carga (fecha + hora default 20:00 +
+  costo + nota), inputs de umbral ROAS/CPA en vivo, tabla de historias (#1, #2…)
+  con CPA/ROAS/veredicto + editar/borrar, fila TOTAL y "Antes de la 1ª historia".
+  La hora se manda como instante absoluto (ISO) construido en la TZ del navegador.
+
 ### 14. Sub-atribución por INFLUENCER dentro de un publicista
 - **Caso:** un publicista trabaja con varios influencers y quiere medir cuál
   rinde, sin crear una cuenta/campaña por cada uno. Solución: el influencer es una

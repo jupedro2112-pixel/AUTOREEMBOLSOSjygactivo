@@ -19,7 +19,7 @@
  * Fuente de datos: Transaction (deposits/withdrawals). Se excluyen los regalos
  * (metadata.source in install_bonus / welcome_gift) del cómputo de cargas reales.
  */
-const { User, Transaction, Campaign } = require('../models');
+const { User, Transaction, Campaign, InfluencerStory } = require('../models');
 
 // === Umbrales de negocio (confirmados con el owner) ===
 const ACTIVE_DAYS = 7;        // ≤7d desde última carga = activo
@@ -294,16 +294,21 @@ async function getInfluencerBreakdown(publisher) {
   if (campaigns.length === 0) return null;
   const codes = campaigns.map(c => c.code);
 
-  // Nombres conocidos (sembrar buckets en cero aunque no tengan clientes aún).
+  // Nombres conocidos (sembrar buckets en cero aunque no tengan clientes aún) y
+  // mapa influencer→campaignCode (para que la UI pueda pedir las historias).
   const knownInfluencers = new Set();
+  const codeByInfluencer = Object.create(null);
   for (const c of campaigns) {
     for (const inf of (c.influencers || [])) {
-      if (inf && inf.name) knownInfluencers.add(inf.name);
+      if (inf && inf.name) {
+        knownInfluencers.add(inf.name);
+        if (!codeByInfluencer[inf.name]) codeByInfluencer[inf.name] = c.code;
+      }
     }
   }
 
   const users = await User.find({ acquisitionCampaign: { $in: codes } })
-    .select('username acquisitionInfluencer createdAt').lean();
+    .select('username acquisitionInfluencer acquisitionCampaign createdAt').lean();
 
   const usernames = users.map(u => u.username);
   const { depByUser, witByUser } = await _loadTxStats(usernames.length ? usernames : []);
@@ -319,6 +324,9 @@ async function getInfluencerBreakdown(publisher) {
   for (const u of users) {
     const name = (u.acquisitionInfluencer && String(u.acquisitionInfluencer).trim()) || 'Sin influencer';
     const acc = ensure(name);
+    if (name !== 'Sin influencer' && !codeByInfluencer[name]) {
+      codeByInfluencer[name] = u.acquisitionCampaign;
+    }
 
     const dep = depByUser[u.username];
     const total = dep ? dep.total : 0;
@@ -342,11 +350,149 @@ async function getInfluencerBreakdown(publisher) {
 
   const rows = Array.from(map.values())
     .map(_finalizeMetrics)
-    .map(m => ({ influencer: m.publisher, ...m }));
+    .map(m => ({ influencer: m.publisher, campaignCode: codeByInfluencer[m.publisher] || null, ...m }));
   // Orden: más facturación neta primero, luego más registrados.
   rows.sort((a, b) => b.netRevenue - a.netRevenue || b.registered - a.registered);
 
   return { publisher, influencers: rows };
+}
+
+/**
+ * Seguimiento por HISTORIA de un influencer: costo, registros, clientes, ROAS.
+ *
+ * Atribución por ventana horaria: las historias se ordenan por `postedAt` asc y
+ * cada una se queda con los usuarios (acquisitionCampaign=code, acquisitionInfluencer
+ * =influencer) cuyo `createdAt` cae en [postedAt_i, postedAt_{i+1}). La última se
+ * queda con todo hasta ahora. Los usuarios creados ANTES de la 1ra historia van a
+ * un bucket `before` aparte (no ensucia el ROAS de las historias).
+ *
+ * Por historia computa (cargas = lifetime de la cohorte, sin regalos):
+ *   - registros (usuarios), clientes (cargaron ≥1), depositCount
+ *   - deposits (bruto), withdrawals, net, ftdCount, ftdAmount (1ra carga)
+ *   - cpaPerRegistro = costo / registros, cpaPerCliente = costo / clientes
+ *   - roasNet = net / costo, roasGross = deposits / costo
+ * Los umbrales de "rentable" (ROAS objetivo, CPA objetivo) se aplican en el front
+ * para que el owner los pueda mover sin recalcular.
+ *
+ * @param {string} campaignCode
+ * @param {string} influencer
+ */
+async function getInfluencerStoryAnalysis(campaignCode, influencer) {
+  const code = String(campaignCode || '').toUpperCase().trim();
+  const name = String(influencer || '').trim();
+  if (!code || !name) return null;
+
+  const campaign = await Campaign.findOne({ code }).select('publisher').lean();
+  if (!campaign) return null;
+
+  const stories = await InfluencerStory.find({ campaignCode: code, influencer: name })
+    .sort({ postedAt: 1 }).lean();
+
+  const users = await User.find({ acquisitionCampaign: code, acquisitionInfluencer: name })
+    .select('username createdAt').lean();
+  const usernames = users.map(u => u.username);
+
+  // Cargas (sin regalos) y retiros de toda la vida de esos usuarios.
+  const depByUser = Object.create(null);
+  const witByUser = Object.create(null);
+  if (usernames.length) {
+    const deposits = await Transaction.find({
+      type: 'deposit',
+      username: { $in: usernames },
+      $or: [
+        { 'metadata.source': { $exists: false } },
+        { 'metadata.source': { $nin: GIFT_SOURCES } }
+      ]
+    }).select('username amount timestamp').sort({ timestamp: 1 }).lean();
+    for (const tx of deposits) {
+      const a = tx.amount || 0;
+      let d = depByUser[tx.username];
+      if (!d) { depByUser[tx.username] = { total: a, count: 1, first: a }; }
+      else { d.total += a; d.count += 1; }
+    }
+    const witAgg = await Transaction.aggregate([
+      { $match: { type: 'withdrawal', username: { $in: usernames } } },
+      { $group: { _id: '$username', total: { $sum: '$amount' } } }
+    ]);
+    for (const w of witAgg) witByUser[w._id] = w.total;
+  }
+
+  const mkBucket = () => ({ registros: 0, clientes: 0, depositCount: 0, deposits: 0, withdrawals: 0, ftdCount: 0, ftdAmount: 0 });
+  const buckets = stories.map(() => mkBucket());
+  const before = mkBucket();
+  const postedMs = stories.map(s => new Date(s.postedAt).getTime());
+
+  // Índice de la última historia cuyo postedAt <= createdAt (-1 = antes de todas).
+  const assignIndex = (createdMs) => {
+    let idx = -1;
+    for (let i = 0; i < postedMs.length; i++) {
+      if (postedMs[i] <= createdMs) idx = i; else break;
+    }
+    return idx;
+  };
+
+  for (const u of users) {
+    const idx = assignIndex(new Date(u.createdAt).getTime());
+    const b = idx === -1 ? before : buckets[idx];
+    const dep = depByUser[u.username];
+    b.registros += 1;
+    if (dep && dep.count > 0) {
+      b.clientes += 1;
+      b.depositCount += dep.count;
+      b.deposits += dep.total;
+      b.ftdCount += 1;
+      b.ftdAmount += dep.first;
+    }
+    b.withdrawals += (witByUser[u.username] || 0);
+  }
+
+  const finalize = (b, story, i) => {
+    const cost = story ? (story.cost || 0) : 0;
+    const net = b.deposits - b.withdrawals;
+    return {
+      storyId: story ? story.id : null,
+      number: story ? (i + 1) : null,
+      postedAt: story ? story.postedAt : null,
+      label: story ? (story.label || '') : '',
+      cost,
+      registros: b.registros,
+      clientes: b.clientes,
+      depositCount: b.depositCount,
+      deposits: Math.round(b.deposits),
+      withdrawals: Math.round(b.withdrawals),
+      net: Math.round(net),
+      ftdCount: b.ftdCount,
+      ftdAmount: Math.round(b.ftdAmount),
+      cpaPerRegistro: b.registros > 0 ? Math.round(cost / b.registros) : null,
+      cpaPerCliente: b.clientes > 0 ? Math.round(cost / b.clientes) : null,
+      roasNet: cost > 0 ? net / cost : null,
+      roasGross: cost > 0 ? b.deposits / cost : null
+    };
+  };
+
+  const storyRows = stories.map((s, i) => finalize(buckets[i], s, i));
+  const beforeRow = before.registros > 0 ? finalize(before, null, -1) : null;
+
+  const totals = storyRows.reduce((t, r) => {
+    t.cost += r.cost; t.registros += r.registros; t.clientes += r.clientes;
+    t.depositCount += r.depositCount; t.deposits += r.deposits;
+    t.withdrawals += r.withdrawals; t.net += r.net;
+    t.ftdCount += r.ftdCount; t.ftdAmount += r.ftdAmount;
+    return t;
+  }, { cost: 0, registros: 0, clientes: 0, depositCount: 0, deposits: 0, withdrawals: 0, net: 0, ftdCount: 0, ftdAmount: 0 });
+  totals.cpaPerRegistro = totals.registros > 0 ? Math.round(totals.cost / totals.registros) : null;
+  totals.cpaPerCliente = totals.clientes > 0 ? Math.round(totals.cost / totals.clientes) : null;
+  totals.roasNet = totals.cost > 0 ? totals.net / totals.cost : null;
+  totals.roasGross = totals.cost > 0 ? totals.deposits / totals.cost : null;
+
+  return {
+    campaignCode: code,
+    publisher: campaign.publisher,
+    influencer: name,
+    stories: storyRows,
+    before: beforeRow,
+    totals
+  };
 }
 
 // Argentina es UTC-3 todo el año (sin DST). Día ART de un timestamp UTC.
@@ -484,6 +630,7 @@ module.exports = {
   getSegmentUsernames,
   getDailyBreakdown,
   getInfluencerBreakdown,
+  getInfluencerStoryAnalysis,
   // Exportados por si se quieren testear / ajustar
   ACTIVE_DAYS,
   AT_RISK_DAYS,

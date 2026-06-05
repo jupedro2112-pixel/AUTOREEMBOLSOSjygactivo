@@ -1590,6 +1590,55 @@
                 </div>
             </div>
 
+            <!-- Modal: historias de un influencer (costo / ROAS por publicación) -->
+            <div id="influencerStoriesModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:10001;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(108,170,255,0.35);border-radius:12px;padding:22px;max-width:1040px;width:97%;max-height:93vh;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h2 id="isTitle" style="margin:0;color:#6cf;font-size:19px;">🎬 Historias del influencer</h2>
+                        <button onclick="closeInfluencerStoriesModal()" style="background:none;border:none;color:#888;font-size:24px;cursor:pointer;">✕</button>
+                    </div>
+                    <p id="isSubtitle" style="color:#888;font-size:12px;margin:0 0 14px;"></p>
+                    <input type="hidden" id="isCampaign" value="">
+                    <input type="hidden" id="isInfluencer" value="">
+
+                    <!-- Cargar una historia -->
+                    <div style="background:#0d0d1a;border:1px solid rgba(108,170,255,0.2);border-radius:10px;padding:14px;margin-bottom:14px;">
+                        <h3 style="margin:0 0 10px;color:#6cf;font-size:14px;">➕ Cargar historia</h3>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;align-items:end;">
+                            <div>
+                                <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Fecha *</label>
+                                <input type="date" id="isNewDate" style="width:100%;padding:8px;background:#1a1a2e;color:#fff;border:1px solid rgba(108,170,255,0.3);border-radius:6px;box-sizing:border-box;">
+                            </div>
+                            <div>
+                                <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Hora (arranca ~20hs)</label>
+                                <input type="time" id="isNewTime" value="20:00" style="width:100%;padding:8px;background:#1a1a2e;color:#fff;border:1px solid rgba(108,170,255,0.3);border-radius:6px;box-sizing:border-box;">
+                            </div>
+                            <div>
+                                <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Costo $ *</label>
+                                <input type="number" id="isNewCost" min="0" step="any" placeholder="100000" style="width:100%;padding:8px;background:#1a1a2e;color:#fff;border:1px solid rgba(108,170,255,0.3);border-radius:6px;box-sizing:border-box;">
+                            </div>
+                            <div>
+                                <label style="color:#aaa;font-size:11px;display:block;margin-bottom:3px;">Nota (opcional)</label>
+                                <input type="text" id="isNewLabel" maxlength="200" placeholder="ej: con sorteo" style="width:100%;padding:8px;background:#1a1a2e;color:#fff;border:1px solid rgba(108,170,255,0.3);border-radius:6px;box-sizing:border-box;">
+                            </div>
+                            <button id="isAddBtn" onclick="submitNewStory()" style="padding:9px 14px;background:linear-gradient(135deg,#6cf,#39f);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:13px;">Agregar</button>
+                        </div>
+                        <div id="isFormError" style="color:#ff6666;font-size:12px;display:none;margin-top:8px;"></div>
+                    </div>
+
+                    <!-- Umbrales de rentabilidad (ajustables en vivo) -->
+                    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:12px;background:#0d0d1a;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px 14px;">
+                        <span style="color:#888;font-size:12px;">Rentable si:</span>
+                        <label style="color:#aaa;font-size:12px;display:flex;align-items:center;gap:6px;">ROAS ≥ <input type="number" id="isRoasTarget" value="1" min="0" step="0.1" oninput="renderStoriesTable()" style="width:64px;padding:5px;background:#1a1a2e;color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:5px;"></label>
+                        <span style="color:#666;">ó</span>
+                        <label style="color:#aaa;font-size:12px;display:flex;align-items:center;gap:6px;">CPA ≤ $<input type="number" id="isCpaTarget" value="10000" min="0" step="any" oninput="renderStoriesTable()" style="width:90px;padding:5px;background:#1a1a2e;color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:5px;"></label>
+                        <span style="color:#666;font-size:11px;">(CPA = costo ÷ registros · ROAS = neto ÷ costo)</span>
+                    </div>
+
+                    <div id="isTableWrap" style="color:#fff;">Cargando…</div>
+                </div>
+            </div>
+
             <!-- Modal: enviar push de recuperación a un segmento -->
             <div id="publisherRecoverModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10000;align-items:center;justify-content:center;">
                 <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:480px;width:92%;">

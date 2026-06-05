@@ -10002,6 +10002,7 @@ async function _renderTabInfluencers(container) {
                     <th style="padding:8px;text-align:right;">$ Neto</th>
                     <th style="padding:8px;text-align:right;">Ticket prom.</th>
                     <th style="padding:8px;text-align:right;">Retención</th>
+                    <th style="padding:8px;text-align:center;">Historias</th>
                 </tr></thead>
                 <tbody>
                     ${rows.map(r => `
@@ -10013,6 +10014,9 @@ async function _renderTabInfluencers(container) {
                             <td style="padding:8px;text-align:right;color:${r.netRevenue >= 0 ? '#fff' : '#ff6666'};">${_fmtMoney(r.netRevenue)}</td>
                             <td style="padding:8px;text-align:right;color:#d4af37;">${_fmtMoney(r.avgTicket)}</td>
                             <td style="padding:8px;text-align:right;color:#4caf50;">${r.retentionRate}%</td>
+                            <td style="padding:8px;text-align:center;">${r.campaignCode
+                                ? `<button onclick="openInfluencerStories('${_safe(r.campaignCode)}','${_safe(String(r.influencer).replace(/'/g, "\\'"))}')" style="padding:5px 10px;background:rgba(108,170,255,0.15);border:1px solid #6cf;color:#6cf;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;">📖 Historias</button>`
+                                : '<span style="color:#555;">—</span>'}</td>
                         </tr>`).join('')}
                 </tbody>
             </table>
@@ -10177,6 +10181,234 @@ function _renderTabRetencion() {
         ${segBlock('🟢 ACTIVOS', '#4caf50', seg.active, 'active', false)}
         ${m.neverDeposited ? `<div style="color:#666;font-size:12px;padding:8px 4px;">⚪ ${m.neverDeposited} registrado(s) todavía sin cargar (no cuentan como clientes).</div>` : ''}`;
 }
+
+// ============================================
+// HISTORIAS DE INFLUENCER — costo / ROAS por publicación
+// ============================================
+let _storiesState = null;     // respuesta del backend para el influencer abierto
+let _editingStoryId = null;   // id de historia en edición (null = alta nueva)
+
+function _isFmtMoney(n) { return '$' + (Number(n) || 0).toLocaleString('es-AR'); }
+
+async function openInfluencerStories(campaign, influencer) {
+    document.getElementById('isCampaign').value = campaign;
+    document.getElementById('isInfluencer').value = influencer;
+    document.getElementById('isTitle').textContent = '🎬 ' + influencer;
+    document.getElementById('isSubtitle').textContent = 'Campaña ' + campaign + ' · seguimiento de costo y ROAS por historia';
+    _editingStoryId = null;
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    document.getElementById('isNewDate').value = `${yyyy}-${mm}-${dd}`;
+    document.getElementById('isNewTime').value = '20:00';
+    document.getElementById('isNewCost').value = '';
+    document.getElementById('isNewLabel').value = '';
+    document.getElementById('isAddBtn').textContent = 'Agregar';
+    document.getElementById('isFormError').style.display = 'none';
+    document.getElementById('isTableWrap').innerHTML = 'Cargando…';
+    showModal('influencerStoriesModal');
+    await loadInfluencerStories();
+}
+
+async function loadInfluencerStories() {
+    const campaign = document.getElementById('isCampaign').value;
+    const influencer = document.getElementById('isInfluencer').value;
+    try {
+        const qs = new URLSearchParams({ campaign, influencer });
+        const r = await fetch(`${API_URL}/api/admin/influencer-stories?${qs.toString()}`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        _storiesState = r.ok ? await r.json() : null;
+        if (!_storiesState) {
+            document.getElementById('isTableWrap').innerHTML = '<span style="color:#ff6666;">Error cargando historias</span>';
+            return;
+        }
+    } catch (e) {
+        document.getElementById('isTableWrap').innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+        return;
+    }
+    renderStoriesTable();
+}
+
+function renderStoriesTable() {
+    if (!_storiesState) return;
+    const wrap = document.getElementById('isTableWrap');
+    const roasTarget = parseFloat(document.getElementById('isRoasTarget').value) || 0;
+    const cpaParsed = parseFloat(document.getElementById('isCpaTarget').value);
+    const cpaT = Number.isFinite(cpaParsed) ? cpaParsed : Infinity;
+    const stories = _storiesState.stories || [];
+    const t = _storiesState.totals || {};
+    const before = _storiesState.before;
+
+    const roasTxt = v => v == null ? '—' : (v.toFixed(2) + 'x');
+    const roasColor = v => v == null ? '#888' : (v >= roasTarget ? '#4caf50' : '#ff6666');
+    const verdict = (r) => {
+        if (!r.cost || r.cost <= 0) return '<span style="color:#888;">sin costo</span>';
+        const ok = (r.roasNet != null && r.roasNet >= roasTarget) || (r.cpaPerRegistro != null && r.cpaPerRegistro <= cpaT);
+        return ok
+            ? '<span style="color:#4caf50;font-weight:bold;">🟢 Rentable</span>'
+            : '<span style="color:#ff6666;font-weight:bold;">🔴 No</span>';
+    };
+    const fmtDate = (d) => d ? new Date(d).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+
+    if (stories.length === 0 && !before) {
+        wrap.innerHTML = '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">Todavía no cargaste historias para este influencer. Cargá la primera arriba ☝️</div>';
+        return;
+    }
+
+    const row = (r) => `
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:8px;color:#fff;white-space:nowrap;">${r.number ? '<b>#' + r.number + '</b> ' : ''}${fmtDate(r.postedAt)}${r.label ? `<div style="color:#888;font-size:10px;">${_safe(r.label)}</div>` : ''}</td>
+            <td style="padding:8px;text-align:right;color:#d4af37;white-space:nowrap;">${_isFmtMoney(r.cost)}</td>
+            <td style="padding:8px;text-align:right;color:#fff;">${r.registros}</td>
+            <td style="padding:8px;text-align:right;color:#fff;">${r.clientes}</td>
+            <td style="padding:8px;text-align:right;color:${r.cpaPerRegistro != null && r.cpaPerRegistro <= cpaT ? '#4caf50' : '#aaa'};white-space:nowrap;">${r.cpaPerRegistro == null ? '—' : _isFmtMoney(r.cpaPerRegistro)}${r.cpaPerCliente != null ? `<div style="color:#666;font-size:10px;">cli: ${_isFmtMoney(r.cpaPerCliente)}</div>` : ''}</td>
+            <td style="padding:8px;text-align:right;color:#4caf50;white-space:nowrap;">${_isFmtMoney(r.deposits)}</td>
+            <td style="padding:8px;text-align:right;color:${r.net >= 0 ? '#fff' : '#ff6666'};white-space:nowrap;">${_isFmtMoney(r.net)}</td>
+            <td style="padding:8px;text-align:right;font-weight:bold;color:${roasColor(r.roasNet)};">${roasTxt(r.roasNet)}</td>
+            <td style="padding:8px;text-align:center;white-space:nowrap;">${verdict(r)}</td>
+            <td style="padding:8px;text-align:center;white-space:nowrap;">
+                <button onclick="editStory('${r.storyId}')" style="padding:3px 7px;background:#2a2a3a;color:#6cf;border:none;border-radius:4px;cursor:pointer;font-size:11px;">✎</button>
+                <button onclick="deleteStory('${r.storyId}')" style="padding:3px 7px;background:#3a1a1a;color:#ff6666;border:none;border-radius:4px;cursor:pointer;font-size:11px;">🗑</button>
+            </td>
+        </tr>`;
+
+    const beforeRow = before ? `
+        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);opacity:.7;">
+            <td style="padding:8px;color:#888;">Antes de la 1ª historia</td>
+            <td style="padding:8px;text-align:right;color:#666;">—</td>
+            <td style="padding:8px;text-align:right;color:#aaa;">${before.registros}</td>
+            <td style="padding:8px;text-align:right;color:#aaa;">${before.clientes}</td>
+            <td style="padding:8px;text-align:right;color:#666;">—</td>
+            <td style="padding:8px;text-align:right;color:#4caf50;">${_isFmtMoney(before.deposits)}</td>
+            <td style="padding:8px;text-align:right;color:${before.net >= 0 ? '#aaa' : '#ff6666'};">${_isFmtMoney(before.net)}</td>
+            <td style="padding:8px;text-align:right;color:#666;">—</td>
+            <td style="padding:8px;text-align:center;color:#666;">—</td>
+            <td style="padding:8px;"></td>
+        </tr>` : '';
+
+    wrap.innerHTML = `
+        <div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#6cf;text-align:left;position:sticky;top:0;">
+                    <th style="padding:8px;">Historia (fecha/hora)</th>
+                    <th style="padding:8px;text-align:right;">Costo</th>
+                    <th style="padding:8px;text-align:right;">Regist.</th>
+                    <th style="padding:8px;text-align:right;">Cargaron</th>
+                    <th style="padding:8px;text-align:right;">CPA</th>
+                    <th style="padding:8px;text-align:right;">$ Cargado</th>
+                    <th style="padding:8px;text-align:right;">$ Neto</th>
+                    <th style="padding:8px;text-align:right;">ROAS</th>
+                    <th style="padding:8px;text-align:center;">¿Rentable?</th>
+                    <th style="padding:8px;text-align:center;">Acc.</th>
+                </tr></thead>
+                <tbody>
+                    ${stories.map(row).join('')}
+                    ${beforeRow}
+                </tbody>
+                <tfoot><tr style="border-top:2px solid rgba(108,170,255,0.3);font-weight:bold;">
+                    <td style="padding:8px;color:#6cf;">TOTAL (${stories.length} historia/s)</td>
+                    <td style="padding:8px;text-align:right;color:#d4af37;">${_isFmtMoney(t.cost)}</td>
+                    <td style="padding:8px;text-align:right;color:#fff;">${t.registros || 0}</td>
+                    <td style="padding:8px;text-align:right;color:#fff;">${t.clientes || 0}</td>
+                    <td style="padding:8px;text-align:right;color:#aaa;">${t.cpaPerRegistro == null ? '—' : _isFmtMoney(t.cpaPerRegistro)}</td>
+                    <td style="padding:8px;text-align:right;color:#4caf50;">${_isFmtMoney(t.deposits)}</td>
+                    <td style="padding:8px;text-align:right;color:${(t.net || 0) >= 0 ? '#fff' : '#ff6666'};">${_isFmtMoney(t.net)}</td>
+                    <td style="padding:8px;text-align:right;color:${roasColor(t.roasNet)};">${roasTxt(t.roasNet)}</td>
+                    <td style="padding:8px;text-align:center;">${verdict(t)}</td>
+                    <td style="padding:8px;"></td>
+                </tr></tfoot>
+            </table>
+        </div>
+        <p style="color:#666;font-size:11px;margin:10px 0 0;">Atribución por horario: cada historia se queda con los registros desde que subió hasta la próxima. Cargas/neto son de toda la vida de esos clientes (cohorte), así que el ROAS puede seguir subiendo con el tiempo.</p>`;
+}
+
+async function submitNewStory() {
+    const campaign = document.getElementById('isCampaign').value;
+    const influencer = document.getElementById('isInfluencer').value;
+    const date = document.getElementById('isNewDate').value;
+    const time = document.getElementById('isNewTime').value || '20:00';
+    const cost = document.getElementById('isNewCost').value;
+    const label = document.getElementById('isNewLabel').value.trim();
+    const errEl = document.getElementById('isFormError');
+    const btn = document.getElementById('isAddBtn');
+    errEl.style.display = 'none';
+
+    if (!date) { errEl.textContent = 'Elegí la fecha de la historia'; errEl.style.display = 'block'; return; }
+    if (cost === '' || isNaN(parseFloat(cost)) || parseFloat(cost) < 0) { errEl.textContent = 'Cargá un costo válido'; errEl.style.display = 'block'; return; }
+
+    // Instante absoluto en la TZ del navegador (ART) → ISO UTC.
+    const postedAt = new Date(`${date}T${time}`).toISOString();
+    btn.disabled = true; btn.textContent = _editingStoryId ? 'Guardando…' : 'Agregando…';
+    try {
+        let r;
+        if (_editingStoryId) {
+            r = await fetch(`${API_URL}/api/admin/influencer-stories/${encodeURIComponent(_editingStoryId)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+                body: JSON.stringify({ postedAt, cost: parseFloat(cost), label })
+            });
+        } else {
+            r = await fetch(`${API_URL}/api/admin/influencer-stories`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+                body: JSON.stringify({ campaign, influencer, postedAt, cost: parseFloat(cost), label })
+            });
+        }
+        const data = await r.json();
+        if (!r.ok) { errEl.textContent = data.error || 'Error al guardar'; errEl.style.display = 'block'; return; }
+        _editingStoryId = null;
+        document.getElementById('isNewCost').value = '';
+        document.getElementById('isNewLabel').value = '';
+        document.getElementById('isAddBtn').textContent = 'Agregar';
+        await loadInfluencerStories();
+    } catch (e) {
+        errEl.textContent = 'Error de conexión'; errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        if (!_editingStoryId) btn.textContent = 'Agregar';
+    }
+}
+
+function editStory(id) {
+    const s = (_storiesState && _storiesState.stories || []).find(x => x.storyId === id);
+    if (!s) return;
+    _editingStoryId = id;
+    const d = new Date(s.postedAt);
+    const yyyy = d.getFullYear(), mm = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0'), mi = String(d.getMinutes()).padStart(2, '0');
+    document.getElementById('isNewDate').value = `${yyyy}-${mm}-${dd}`;
+    document.getElementById('isNewTime').value = `${hh}:${mi}`;
+    document.getElementById('isNewCost').value = s.cost;
+    document.getElementById('isNewLabel').value = s.label || '';
+    document.getElementById('isAddBtn').textContent = 'Guardar cambios';
+    document.getElementById('isFormError').style.display = 'none';
+    document.getElementById('isNewCost').focus();
+}
+
+async function deleteStory(id) {
+    if (!confirm('¿Borrar esta historia? Los registros se reasignan a la historia anterior (por ventana horaria).')) return;
+    try {
+        const r = await fetch(`${API_URL}/api/admin/influencer-stories/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!r.ok) { showToast('No se pudo borrar', 'error'); return; }
+        if (_editingStoryId === id) { _editingStoryId = null; document.getElementById('isAddBtn').textContent = 'Agregar'; }
+        await loadInfluencerStories();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function closeInfluencerStoriesModal() { hideModal('influencerStoriesModal'); _storiesState = null; }
+
+window.openInfluencerStories = openInfluencerStories;
+window.loadInfluencerStories = loadInfluencerStories;
+window.renderStoriesTable = renderStoriesTable;
+window.submitNewStory = submitNewStory;
+window.editStory = editStory;
+window.deleteStory = deleteStory;
+window.closeInfluencerStoriesModal = closeInfluencerStoriesModal;
 
 function closePublisherAnalysisModal() { hideModal('publisherAnalysisModal'); }
 

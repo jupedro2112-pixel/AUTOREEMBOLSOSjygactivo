@@ -20,6 +20,7 @@ const ReferralEvent = require('./ReferralEvent');
 const OtpCode = require('./OtpCode');
 const Campaign = require('./Campaign');
 const CampaignClick = require('./CampaignClick');
+const InfluencerStory = require('./InfluencerStory');
 
 
 /**
@@ -412,6 +413,7 @@ module.exports = {
   OtpCode,
   Campaign,
   CampaignClick,
+  InfluencerStory,
 
   // Funciones de conexión
   connectDB,

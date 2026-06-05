@@ -66,6 +66,7 @@ const {
 const ReferralEvent = require('./src/models/ReferralEvent');
 const Campaign = require('./src/models/Campaign');
 const CampaignClick = require('./src/models/CampaignClick');
+const InfluencerStory = require('./src/models/InfluencerStory');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -8834,6 +8835,106 @@ app.get('/api/admin/publishers/:publisher/influencers', authMiddleware, adminMid
     res.json(result);
   } catch (err) {
     logger.error(`[admin/publishers/:publisher/influencers] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// HISTORIAS DE INFLUENCER (seguimiento de costo / ROAS por publicación)
+// ============================================
+// Una "historia" = un placement del influencer (precio por historia, arranca
+// ~20hs). La atribución de registros a cada historia es por ventana horaria y se
+// calcula a demanda en getInfluencerStoryAnalysis. Sólo admin general.
+
+// GET /api/admin/influencer-stories?campaign=CODE&influencer=NAME
+// Lista las historias del influencer + métricas por historia (registros, clientes,
+// cargas, neto, CPA, ROAS) y totales. Devuelve también el bucket "antes de la 1ra".
+app.get('/api/admin/influencer-stories', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const campaign = String(req.query.campaign || '').trim();
+    const influencer = String(req.query.influencer || '').trim();
+    if (!campaign || !influencer) {
+      return res.status(400).json({ error: 'campaign e influencer son requeridos' });
+    }
+    const data = await publisherAnalytics.getInfluencerStoryAnalysis(campaign, influencer);
+    if (!data) return res.status(404).json({ error: 'Campaña/influencer inexistente' });
+    res.json(data);
+  } catch (err) {
+    logger.error(`[influencer-stories GET] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/influencer-stories
+// body: { campaign, influencer, postedAt (ISO), cost, label? }
+app.post('/api/admin/influencer-stories', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { campaign, influencer, postedAt, cost, label } = req.body || {};
+    const code = String(campaign || '').toUpperCase().trim();
+    const name = String(influencer || '').trim();
+    if (!code || !name) return res.status(400).json({ error: 'campaign e influencer son requeridos' });
+
+    const when = postedAt ? new Date(postedAt) : null;
+    if (!when || isNaN(when.getTime())) return res.status(400).json({ error: 'Fecha/hora de la historia inválida' });
+
+    const c = Number(cost);
+    if (!Number.isFinite(c) || c < 0) return res.status(400).json({ error: 'Costo inválido' });
+
+    const camp = await Campaign.findOne({ code }).select('code').lean();
+    if (!camp) return res.status(404).json({ error: 'La campaña no existe' });
+
+    const story = await InfluencerStory.create({
+      id: uuidv4(),
+      campaignCode: code,
+      influencer: name,
+      postedAt: when,
+      cost: c,
+      label: label ? String(label).slice(0, 200) : '',
+      createdBy: req.user.username
+    });
+    res.status(201).json({ story });
+  } catch (err) {
+    logger.error(`[influencer-stories POST] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// PUT /api/admin/influencer-stories/:id  → body: { postedAt?, cost?, label? }
+app.put('/api/admin/influencer-stories/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { postedAt, cost, label } = req.body || {};
+    const update = {};
+    if (postedAt !== undefined) {
+      const when = new Date(postedAt);
+      if (isNaN(when.getTime())) return res.status(400).json({ error: 'Fecha/hora inválida' });
+      update.postedAt = when;
+    }
+    if (cost !== undefined) {
+      const c = Number(cost);
+      if (!Number.isFinite(c) || c < 0) return res.status(400).json({ error: 'Costo inválido' });
+      update.cost = c;
+    }
+    if (typeof label === 'string') update.label = label.slice(0, 200);
+
+    const story = await InfluencerStory.findOneAndUpdate(
+      { id: req.params.id }, { $set: update }, { new: true }
+    ).lean();
+    if (!story) return res.status(404).json({ error: 'Historia no encontrada' });
+    res.json({ story });
+  } catch (err) {
+    logger.error(`[influencer-stories PUT] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// DELETE /api/admin/influencer-stories/:id
+app.delete('/api/admin/influencer-stories/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const r = await InfluencerStory.deleteOne({ id: req.params.id });
+    if (r.deletedCount === 0) return res.status(404).json({ error: 'Historia no encontrada' });
+    res.json({ success: true });
+  } catch (err) {
+    logger.error(`[influencer-stories DELETE] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

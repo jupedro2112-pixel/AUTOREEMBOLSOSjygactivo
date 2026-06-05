@@ -62,6 +62,12 @@ Todos los modelos canónicos viven en `src/models/`. `config/database.js` los re
   `influencers: [{ name, isActive }]` — lista fija (sub-atribución por influencer,
   sólo para desglosar la analítica del publicista; sin link ni creds propias).
 - **CampaignClick** — clics de links de pauta (TTL 90 días).
+- **InfluencerStory** (`InfluencerStory.js`) — una "historia"/placement de un
+  influencer: `{ campaignCode, influencer, postedAt, cost, label }`. Unidad de
+  seguimiento de costo/ROAS. La atribución de registros a cada historia es por
+  VENTANA HORARIA (createdAt del usuario ∈ [postedAt, postedAt de la próxima)) y se
+  calcula a demanda en `publisherAnalyticsService.getInfluencerStoryAnalysis` (no se
+  persiste el vínculo). Solo admin general. Endpoints `/api/admin/influencer-stories`.
 - **ChatStatus** (`ChatStatus.js`) — estado de la conversación (open/closed/payments),
   category (cargas/pagos), `lastMessageAt`, `assignedTo`. La lista de Chats del panel se
   arma desde acá. **Se crea recién cuando el usuario tiene actividad** (ingresa o manda

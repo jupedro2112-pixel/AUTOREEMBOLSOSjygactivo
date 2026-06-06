@@ -3133,41 +3133,55 @@ function incrementUnreadCount() {
 // ============================================
 // USERS SECTION
 // ============================================
-let allUsersCache = [];
+let allUsersCache = [];   // sólo la página actual (no toda la base)
+let usersPage = 1;
 
-async function loadUsers() {
+// Carga una página de usuarios desde el backend (10/20 por página + búsqueda
+// server-side). Antes traía TODOS los usuarios y filtraba/renderizaba todo junto,
+// lo que trababa el panel con muchas cuentas.
+async function loadUsers(page = 1) {
+    usersPage = page;
+    const searchInput = document.getElementById('searchUsers');
+    const search = searchInput ? searchInput.value.trim() : '';
     try {
-        const response = await fetch(`${API_URL}/api/admin/users`, {
+        const qs = new URLSearchParams({ page: String(page) });
+        if (search) qs.set('search', search);
+        const response = await fetch(`${API_URL}/api/admin/users?${qs.toString()}`, {
             headers: { 'Authorization': `Bearer ${currentToken}` }
         });
-        
+
         if (!response.ok) throw new Error('Failed to load users');
-        
+
         const data = await response.json();
         allUsersCache = data.users || [];
-        filterAndRenderUsers();
+        renderUsers(allUsersCache);
+        renderUsersPagination(data);
     } catch (error) {
         console.error('Error loading users:', error);
     }
 }
 
+// La búsqueda ahora recarga desde el backend (página 1). El backend filtra por
+// username / email / phone / id / accountNumber (mismo criterio que antes, pero
+// sin traer toda la base al navegador).
 function filterAndRenderUsers() {
-    const searchInput = document.getElementById('searchUsers');
-    const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
-    if (!query) {
-        renderUsers(allUsersCache);
+    loadUsers(1);
+}
+
+function renderUsersPagination(data) {
+    const el = document.getElementById('usersPagination');
+    if (!el) return;
+    const page = data.page || 1;
+    const totalPages = data.totalPages || 0;
+    const total = data.total || 0;
+    if (totalPages <= 1) {
+        el.innerHTML = total > 0 ? `<span style="color:#888;font-size:12px;">${total} usuario(s)</span>` : '';
         return;
     }
-    const filtered = allUsersCache.filter(u => {
-        return (
-            (u.username && u.username.toLowerCase().includes(query)) ||
-            (u.id && String(u.id).toLowerCase().includes(query)) ||
-            (u.accountId && String(u.accountId).toLowerCase().includes(query)) ||
-            (u.phone && u.phone.toLowerCase().includes(query)) ||
-            (u.email && u.email.toLowerCase().includes(query))
-        );
-    });
-    renderUsers(filtered);
+    const mk = (label, target, disabled) => `<button onclick="loadUsers(${target})" ${disabled ? 'disabled' : ''} style="padding:7px 14px;background:${disabled ? '#1a1a2e' : '#2a2a3a'};color:${disabled ? '#444' : '#fff'};border:none;border-radius:6px;cursor:${disabled ? 'not-allowed' : 'pointer'};font-size:13px;">${label}</button>`;
+    el.innerHTML = `${mk('← Anterior', page - 1, page <= 1)}
+        <span style="color:#aaa;font-size:13px;">Página ${page} de ${totalPages} <span style="color:#666;">(${total} usuarios)</span></span>
+        ${mk('Siguiente →', page + 1, page >= totalPages)}`;
 }
 
 // Exportar todos los usuarios a CSV (solo admin general)
@@ -3308,7 +3322,7 @@ function renderUsers(users) {
         return `
         <tr class="${isAdminUser ? 'admin-row' : ''}">
             <td>${escapeHtml(user.username)}</td>
-            <td>${escapeHtml(user.accountId || '-')}</td>
+            <td>${escapeHtml(user.accountNumber || user.accountId || '-')}</td>
             <td>${escapeHtml(user.email || '-')}</td>
             <td>${escapeHtml(user.phone || '-')}</td>
             <td><span class="role-badge ${user.role}">${getRoleLabel(user.role)}</span></td>
@@ -3587,8 +3601,18 @@ function switchSection(section) {
     });
     
     // Load section data
-    if (section === 'users') loadUsers();
-    if (section === 'transactions') loadTransactions();
+    if (section === 'users') loadUsers(1);
+    if (section === 'transactions') {
+        // La primera vez que se entra, el rango arranca en HOY (antes traía TODO
+        // desde el inicio de los tiempos → se trababa). Después respeta el filtro
+        // que el admin haya dejado puesto.
+        if (!window._txDefaultsSet) {
+            window._txDefaultsSet = true;
+            setTodayFilter();
+        } else {
+            loadTransactions(1);
+        }
+    }
     if (section === 'commands') loadCommands();
     if (section === 'datos') loadDatos();
     if (section === 'notifications') loadNotificationsPanel();
@@ -3866,12 +3890,18 @@ let transactionsFilter = 'all';
 let transactionDateFrom = '';
 let transactionDateTo = '';
 let transactionUsernameFilter = '';
+let transactionsPage = 1;
 
-async function loadTransactions() {
+// Carga una página de transacciones. El tipo, la fecha y el usuario se filtran en
+// el BACKEND (antes traía todo el rango y filtraba/renderizaba todo en el
+// navegador → se trababa). El resumen de tarjetas viene calculado por agregación
+// sobre todo el rango (todos los tipos), independiente del filtro de tipo.
+async function loadTransactions(page = 1) {
+    transactionsPage = page;
     try {
         let url = `${API_URL}/api/admin/transactions`;
-        const params = [];
-        
+        const params = [`page=${page}`];
+
         if (transactionDateFrom) {
             params.push(`from=${transactionDateFrom}`);
         }
@@ -3881,24 +3911,42 @@ async function loadTransactions() {
         if (transactionUsernameFilter) {
             params.push(`username=${encodeURIComponent(transactionUsernameFilter)}`);
         }
-        
-        if (params.length > 0) {
-            url += '?' + params.join('&');
+        if (transactionsFilter && transactionsFilter !== 'all') {
+            params.push(`type=${encodeURIComponent(transactionsFilter)}`);
         }
-        
+
+        url += '?' + params.join('&');
+
         const response = await fetch(url, {
             headers: { 'Authorization': `Bearer ${currentToken}` }
         });
-        
+
         if (!response.ok) throw new Error('Failed to load transactions');
-        
+
         const data = await response.json();
         transactionsData = data.transactions || [];
         renderTransactions(transactionsData);
         renderTransactionStats(data.summary || {});
+        renderTransactionsPagination(data);
     } catch (error) {
         console.error('Error loading transactions:', error);
     }
+}
+
+function renderTransactionsPagination(data) {
+    const el = document.getElementById('transactionsPagination');
+    if (!el) return;
+    const page = data.page || 1;
+    const totalPages = data.totalPages || 0;
+    const total = data.listTotal || 0;
+    if (totalPages <= 1) {
+        el.innerHTML = total > 0 ? `<span style="color:#888;font-size:12px;">${total} transacción(es)</span>` : '';
+        return;
+    }
+    const mk = (label, target, disabled) => `<button onclick="loadTransactions(${target})" ${disabled ? 'disabled' : ''} style="padding:7px 14px;background:${disabled ? '#1a1a2e' : '#2a2a3a'};color:${disabled ? '#444' : '#fff'};border:none;border-radius:6px;cursor:${disabled ? 'not-allowed' : 'pointer'};font-size:13px;">${label}</button>`;
+    el.innerHTML = `${mk('← Anterior', page - 1, page <= 1)}
+        <span style="color:#aaa;font-size:13px;">Página ${page} de ${totalPages} <span style="color:#666;">(${total} transacciones)</span></span>
+        ${mk('Siguiente →', page + 1, page >= totalPages)}`;
 }
 
 function renderTransactionStats(summary) {
@@ -4059,19 +4107,15 @@ function setMonthFilter() {
 
 function renderTransactions(transactions) {
     const tbody = document.getElementById('transactionsTableBody');
-    
-    // Filtrar transacciones
-    let filtered = transactions;
-    if (transactionsFilter !== 'all') {
-        filtered = transactions.filter(t => t.type === transactionsFilter);
-    }
-    
-    if (!filtered.length) {
+
+    // El filtro por tipo ya viene aplicado por el backend (junto con la fecha y el
+    // usuario). Acá sólo renderizamos la página recibida.
+    if (!transactions.length) {
         tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No hay transacciones</td></tr>';
         return;
     }
-    
-    tbody.innerHTML = filtered.map(t => `
+
+    tbody.innerHTML = transactions.map(t => `
         <tr>
             <td>${formatDateTime(t.timestamp || t.createdAt)}</td>
             <td>${escapeHtml(t.username)}</td>
@@ -4100,7 +4144,8 @@ function filterTransactions(type) {
     document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.filter === type);
     });
-    renderTransactions(transactionsData);
+    // Recarga server-side desde la página 1 (el backend filtra por tipo).
+    loadTransactions(1);
 }
 
 // ============================================

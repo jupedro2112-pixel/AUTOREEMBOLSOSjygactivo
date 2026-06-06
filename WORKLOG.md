@@ -6,6 +6,33 @@
 >
 > **Última actualización: 2026-06-05**
 
+## Sesión 2026-06-06
+
+### 16. Performance: paginación server-side en Transacciones y Usuarios
+- **Problema:** el panel se trababa al entrar a Transacciones (traía TODO desde el
+  inicio de los tiempos, sin límite, y renderizaba todas las filas) y a Usuarios
+  (traía TODOS los usuarios y filtraba/renderizaba en el navegador).
+- **Transacciones** (`GET /api/admin/transactions`):
+  - Ahora pagina (`page`, `limit` default 50). El **resumen de tarjetas** se calcula
+    por AGGREGATION sobre el rango (fecha+usuario, TODOS los tipos) → sigue mostrando
+    el desglose completo aunque haya un filtro de tipo activo. La **tabla** se filtra
+    por tipo+fecha+usuario en el BACKEND (antes el tipo se filtraba en el cliente).
+  - Se agregó `referrals` al resumen (antes la tarjeta "Referidos" quedaba en $0).
+  - Front: default **HOY** la primera vez que se entra (flag `window._txDefaultsSet`);
+    el filtro de tipo recarga server-side; controles de paginación bajo la tabla.
+- **Usuarios** (`GET /api/admin/users`):
+  - Ahora pagina (`page`, `limit` default 20) + **búsqueda server-side** (`search`)
+    sobre username/email/phone/id/accountNumber (mismo criterio que el filtro
+    client-side viejo). `allUsersCache` ahora guarda sólo la página actual.
+  - Front: el buscador (debounced 300ms) recarga desde el backend; controles de
+    paginación bajo la tabla. Columna "ID Cuenta" ahora usa `accountNumber`.
+- **Sin cambios de modelo** (los índices de Transaction/User ya cubrían timestamp/
+  type/username/role). **No rompe nada**: todas las acciones que recargaban listas
+  siguen llamando `loadUsers()`/`loadTransactions()` (vuelven a página 1).
+- **Pendiente (otros puntos pesados detectados, NO tocados):** `GET /api/admin/all-chats`
+  trae TODOS los mensajes+usuarios+chatStatus; `/api/admin/campaigns` sin límite.
+  Optimizar si el owner lo pide.
+
 ## Sesión 2026-06-05
 
 ### 15. Seguimiento de HISTORIAS por influencer (costo / ROAS por publicación)

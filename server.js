@@ -9080,95 +9080,98 @@ app.get('/api/admin/database', authMiddleware, adminMiddleware, async (req, res)
 app.get('/api/admin/transactions', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { from, to, type, username } = req.query;
-    
-    let query = {};
-    
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+
+    // baseQuery = fecha + username (SIN tipo). El resumen de tarjetas se calcula
+    // sobre baseQuery para mostrar SIEMPRE el desglose por tipo de todo el rango,
+    // independientemente del filtro de tipo que esté activo en la tabla.
+    const baseQuery = {};
+
     // Manejo de fechas — las fechas recibidas (YYYY-MM-DD) se interpretan en
     // horario argentino (ART = UTC-3, sin DST).
     // 00:00 ART = 03:00 UTC del mismo día.
     // 23:59:59 ART = 02:59:59 UTC del día siguiente.
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
     if (from || to) {
-      query.timestamp = {};
+      baseQuery.timestamp = {};
       if (from) {
         if (!DATE_RE.test(from)) return res.status(400).json({ error: 'Formato de fecha inválido para "from" (esperado YYYY-MM-DD)' });
         // Inicio del día en Argentina: 00:00 ART = 03:00 UTC
         const fromDate = new Date(from + 'T03:00:00.000Z');
-        query.timestamp.$gte = fromDate;
+        baseQuery.timestamp.$gte = fromDate;
       }
       if (to) {
         if (!DATE_RE.test(to)) return res.status(400).json({ error: 'Formato de fecha inválido para "to" (esperado YYYY-MM-DD)' });
         // Fin del día en Argentina: 23:59:59.999 ART = inicio del día siguiente 03:00 UTC - 1ms
         const toDate = new Date(to + 'T03:00:00.000Z');
         toDate.setTime(toDate.getTime() + 24 * 60 * 60 * 1000 - 1);
-        query.timestamp.$lte = toDate;
+        baseQuery.timestamp.$lte = toDate;
       }
     }
-    
-    if (type && type !== 'all') {
-      // Castear a String: sin esto un objeto ({"$ne":"x"}) se colaba como
-      // operador NoSQL en el query.
-      query.type = String(type);
-    }
 
-    // Req 8: Filtrar por username si se especifica
+    // Filtrar por username si se especifica
     if (username && username.trim()) {
       // Limitar longitud y escapar caracteres especiales de regex para evitar ReDoS / injection
       const rawUsername = username.trim().substring(0, 100);
       const safeUsername = rawUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      query.username = { $regex: safeUsername, $options: 'i' };
+      baseQuery.username = { $regex: safeUsername, $options: 'i' };
     }
-    
-    // Obtener todas las transacciones sin límite para el cierre
-    const transactions = await Transaction.find(query)
-      .sort({ timestamp: -1 })
-      .lean();
-    
-    // Calcular totales (req 7: incluir fire_reward en bonificaciones)
-    let deposits = 0;
-    let withdrawals = 0;
-    let bonuses = 0;
-    let refunds = 0;
-    let fireRewards = 0;
-    
-    transactions.forEach(t => {
-      const amount = t.amount || 0;
-      switch(t.type) {
-        case 'deposit':
-          deposits += amount;
-          break;
-        case 'withdrawal':
-          withdrawals += amount;
-          break;
-        case 'bonus':
-          bonuses += amount;
-          break;
-        case 'refund':
-          refunds += amount;
-          break;
-        case 'fire_reward':
-          fireRewards += amount;
-          break;
+
+    // listQuery = baseQuery + tipo (filtra SOLO la tabla, no el resumen).
+    const listQuery = { ...baseQuery };
+    if (type && type !== 'all') {
+      // Castear a String: sin esto un objeto ({"$ne":"x"}) se colaba como
+      // operador NoSQL en el query.
+      listQuery.type = String(type);
+    }
+
+    // Resumen por tipo vía aggregation sobre baseQuery (rápido, no trae documentos).
+    const sumAgg = await Transaction.aggregate([
+      { $match: baseQuery },
+      { $group: { _id: '$type', total: { $sum: '$amount' }, count: { $sum: 1 } } }
+    ]);
+    let deposits = 0, withdrawals = 0, bonuses = 0, refunds = 0, fireRewards = 0, referrals = 0, totalAll = 0;
+    for (const g of sumAgg) {
+      totalAll += g.count;
+      switch (g._id) {
+        case 'deposit': deposits = g.total; break;
+        case 'withdrawal': withdrawals = g.total; break;
+        case 'bonus': bonuses = g.total; break;
+        case 'refund': refunds = g.total; break;
+        case 'fire_reward': fireRewards = g.total; break;
+        case 'referral_commission': referrals = g.total; break;
       }
-    });
-    
+    }
+
     // Saldo neto = depósitos - retiros (bonos y reembolsos no afectan)
-    const netBalance = deposits - withdrawals;
-    
-    // Resumen completo
     const summary = {
       deposits,
       withdrawals,
       bonuses,
       refunds,
       fireRewards,
-      netBalance,
-      totalTransactions: transactions.length
+      referrals,
+      netBalance: deposits - withdrawals,
+      totalTransactions: totalAll
     };
-    
+
+    // Página de la tabla (filtrada por tipo). Sólo trae `limit` documentos.
+    const listTotal = await Transaction.countDocuments(listQuery);
+    const totalPages = listTotal === 0 ? 0 : Math.ceil(listTotal / limit);
+    const transactions = await Transaction.find(listQuery)
+      .sort({ timestamp: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
     res.json({
       transactions,
       summary,
+      page,
+      totalPages,
+      listTotal,
+      perPage: limit,
       dateRange: { from, to }
     });
   } catch (error) {
@@ -10324,7 +10327,7 @@ app.post('/api/admin/cbu', authMiddleware, adminMiddleware, async (req, res) => 
 app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const userRole = req.user.role;
-    
+
     // Construir query según rol
     let query = {};
     if (userRole !== 'admin') {
@@ -10332,9 +10335,36 @@ app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =>
       query.role = 'user';
     }
     // Admin general ve TODOS (usuarios y admins)
-    
-    const users = await User.find(query).select('-password').sort({ role: 1, username: 1 }).lean();
-    res.json({ users });
+
+    // Búsqueda server-side (substring case-insensitive) sobre los campos
+    // que antes se filtraban en el cliente: username, email, phone, id, accountNumber.
+    const search = String(req.query.search || '').trim().slice(0, 80);
+    if (search) {
+      const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = { $regex: safe, $options: 'i' };
+      query.$or = [
+        { username: rx },
+        { email: rx },
+        { phone: rx },
+        { id: rx },
+        { accountNumber: rx }
+      ];
+    }
+
+    // Paginación. Default 20 por página (antes traía TODO de una → trababa el panel).
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+
+    const total = await User.countDocuments(query);
+    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    const users = await User.find(query)
+      .select('-password')
+      .sort({ role: 1, username: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    res.json({ users, total, page, totalPages, perPage: limit });
   } catch (error) {
     console.error('Error obteniendo usuarios:', error);
     res.status(500).json({ error: 'Error del servidor' });

@@ -8,6 +8,29 @@
 
 ## Sesión 2026-06-06
 
+### 18. Ver usuarios por influencer + reasignar influencer (corregir errores del agente)
+- **Caso:** a veces el agente crea un usuario y le asigna el influencer equivocado;
+  se dan cuenta después al hacer el conteo (no en el momento, por eso no borran el
+  usuario). Querían poder ver los usuarios de cada influencer y reasignarlos.
+- **Clave de diseño:** la analítica por influencer/historia se calcula EN VIVO desde
+  `User.acquisitionInfluencer`. Con sólo cambiar ese campo, las cargas/retiros/
+  conteos del usuario se mueven solos al influencer correcto (no hay contadores
+  denormalizados que arreglar).
+- **Backend:**
+  - `publisherAnalyticsService.getInfluencerUsers(campaign, influencer, page)`:
+    lista paginada (20/pág) de los usuarios de ese influencer con sus stats
+    (cargas/retiros/neto) + la lista de influencers de la campaña (para el desplegable).
+  - `GET /api/admin/influencer-users?campaign=&influencer=&page=`.
+  - `POST /api/admin/users/:userId/change-influencer` body `{influencer}`: valida
+    que el nuevo influencer exista en la campaña del usuario (vacío = quitar),
+    setea `acquisitionInfluencer`. **Sólo admin general** (role==='admin').
+- **Frontend (pestaña "Por influencer"):** botón **👥 Usuarios** por fila → modal con
+  la lista (username, registrado, cargas, retiros, neto) + **✏️ Cambiar** por fila →
+  modal con desplegable de influencers de la campaña (+ "Sin influencer"). Al guardar,
+  recarga la lista y refresca el breakdown. Botones de la tabla pasados a índice
+  (`openInfluencerStoriesIdx`/`openInfluencerUsersIdx`) para no romper con nombres
+  que tengan comillas.
+
 ### 17. Formato de fecha unificado a DD/MM/YYYY en todo el panel admin
 - Helpers canónicos nuevos en `admin.js`: `fmtFechaAR(d)` → **DD/MM/YYYY** y
   `fmtFechaHoraAR(d)` → **DD/MM/YYYY HH:mm** (ambos en hora ART, día/mes con 2

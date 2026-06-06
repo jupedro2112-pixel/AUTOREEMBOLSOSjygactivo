@@ -10066,10 +10066,10 @@ async function _renderTabInfluencers(container) {
                     <th style="padding:8px;text-align:right;">$ Neto</th>
                     <th style="padding:8px;text-align:right;">Ticket prom.</th>
                     <th style="padding:8px;text-align:right;">Retención</th>
-                    <th style="padding:8px;text-align:center;">Historias</th>
+                    <th style="padding:8px;text-align:center;">Acciones</th>
                 </tr></thead>
                 <tbody>
-                    ${rows.map(r => `
+                    ${rows.map((r, i) => `
                         <tr style="border-bottom:1px solid rgba(255,255,255,0.04);">
                             <td style="padding:8px;color:#fff;font-weight:600;">${_safe(r.influencer)}</td>
                             <td style="padding:8px;text-align:right;color:#fff;">${r.clients}${r.neverDeposited ? `<span style="color:#666;"> +${r.neverDeposited}</span>` : ''}</td>
@@ -10078,8 +10078,9 @@ async function _renderTabInfluencers(container) {
                             <td style="padding:8px;text-align:right;color:${r.netRevenue >= 0 ? '#fff' : '#ff6666'};">${_fmtMoney(r.netRevenue)}</td>
                             <td style="padding:8px;text-align:right;color:#d4af37;">${_fmtMoney(r.avgTicket)}</td>
                             <td style="padding:8px;text-align:right;color:#4caf50;">${r.retentionRate}%</td>
-                            <td style="padding:8px;text-align:center;">${r.campaignCode
-                                ? `<button onclick="openInfluencerStories('${_safe(r.campaignCode)}','${_safe(String(r.influencer).replace(/'/g, "\\'"))}')" style="padding:5px 10px;background:rgba(108,170,255,0.15);border:1px solid #6cf;color:#6cf;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;">📖 Historias</button>`
+                            <td style="padding:8px;text-align:center;white-space:nowrap;">${r.campaignCode
+                                ? `<button onclick="openInfluencerStoriesIdx(${i})" style="padding:5px 9px;background:rgba(108,170,255,0.15);border:1px solid #6cf;color:#6cf;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;">📖 Historias</button>
+                                   <button onclick="openInfluencerUsersIdx(${i})" style="padding:5px 9px;background:rgba(212,175,55,0.15);border:1px solid #d4af37;color:#d4af37;border-radius:5px;cursor:pointer;font-size:11px;white-space:nowrap;margin-left:4px;">👥 Usuarios</button>`
                                 : '<span style="color:#555;">—</span>'}</td>
                         </tr>`).join('')}
                 </tbody>
@@ -10473,6 +10474,165 @@ window.submitNewStory = submitNewStory;
 window.editStory = editStory;
 window.deleteStory = deleteStory;
 window.closeInfluencerStoriesModal = closeInfluencerStoriesModal;
+
+// ----- Wrappers por índice (evitan escapar comillas del nombre en el onclick) -----
+function _influencerRowAt(i) {
+    const rows = (_analysisState && _analysisState.influencers && _analysisState.influencers.influencers) || [];
+    return rows[i] || null;
+}
+function openInfluencerStoriesIdx(i) {
+    const r = _influencerRowAt(i);
+    if (r && r.campaignCode) openInfluencerStories(r.campaignCode, r.influencer);
+}
+function openInfluencerUsersIdx(i) {
+    const r = _influencerRowAt(i);
+    if (r && r.campaignCode) openInfluencerUsers(r.campaignCode, r.influencer);
+}
+window.openInfluencerStoriesIdx = openInfluencerStoriesIdx;
+window.openInfluencerUsersIdx = openInfluencerUsersIdx;
+
+// ============================================
+// USUARIOS DE UN INFLUENCER — ver + reasignar (corregir errores del agente)
+// ============================================
+let _iuState = null;
+
+async function openInfluencerUsers(campaign, influencer) {
+    document.getElementById('iuCampaign').value = campaign;
+    document.getElementById('iuInfluencer').value = influencer;
+    document.getElementById('iuTitle').textContent = '👥 ' + influencer;
+    document.getElementById('iuSubtitle').textContent = 'Campaña ' + campaign + ' · usuarios asignados a este influencer';
+    document.getElementById('iuTableWrap').innerHTML = 'Cargando…';
+    document.getElementById('iuPagination').innerHTML = '';
+    showModal('influencerUsersModal');
+    await loadInfluencerUsers(1);
+}
+
+async function loadInfluencerUsers(page = 1) {
+    const campaign = document.getElementById('iuCampaign').value;
+    const influencer = document.getElementById('iuInfluencer').value;
+    try {
+        const qs = new URLSearchParams({ campaign, influencer, page: String(page) });
+        const r = await fetch(`${API_URL}/api/admin/influencer-users?${qs.toString()}`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        _iuState = r.ok ? await r.json() : null;
+        if (!_iuState) {
+            document.getElementById('iuTableWrap').innerHTML = '<span style="color:#ff6666;">Error cargando usuarios</span>';
+            return;
+        }
+    } catch (e) {
+        document.getElementById('iuTableWrap').innerHTML = '<span style="color:#ff6666;">Error de conexión</span>';
+        return;
+    }
+    renderInfluencerUsers();
+}
+
+function renderInfluencerUsers() {
+    if (!_iuState) return;
+    const wrap = document.getElementById('iuTableWrap');
+    const pag = document.getElementById('iuPagination');
+    const users = _iuState.users || [];
+    if (users.length === 0) {
+        wrap.innerHTML = '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">Este influencer no tiene usuarios asignados.</div>';
+        pag.innerHTML = '';
+        return;
+    }
+    wrap.innerHTML = `
+        <div style="overflow-x:auto;max-height:430px;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#d4af37;text-align:left;position:sticky;top:0;">
+                    <th style="padding:8px;">Usuario</th>
+                    <th style="padding:8px;">Registrado</th>
+                    <th style="padding:8px;text-align:right;">Cargas</th>
+                    <th style="padding:8px;text-align:right;">$ Cargado</th>
+                    <th style="padding:8px;text-align:right;">$ Retirado</th>
+                    <th style="padding:8px;text-align:right;">$ Neto</th>
+                    <th style="padding:8px;text-align:center;">Acción</th>
+                </tr></thead>
+                <tbody>
+                    ${users.map((u, i) => `
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                            <td style="padding:8px;color:#fff;font-weight:600;">${_safe(u.username)}</td>
+                            <td style="padding:8px;color:#888;white-space:nowrap;">${fmtFechaAR(u.createdAt)}</td>
+                            <td style="padding:8px;text-align:right;color:#aaa;">${u.depositCount}</td>
+                            <td style="padding:8px;text-align:right;color:#4caf50;">${_isFmtMoney(u.deposits)}</td>
+                            <td style="padding:8px;text-align:right;color:#ff6666;">${_isFmtMoney(u.withdrawals)}</td>
+                            <td style="padding:8px;text-align:right;color:${u.net >= 0 ? '#fff' : '#ff6666'};">${_isFmtMoney(u.net)}</td>
+                            <td style="padding:8px;text-align:center;white-space:nowrap;">
+                                <button onclick="openChangeInfluencerIdx(${i})" style="padding:4px 9px;background:#2a2a3a;color:#d4af37;border:1px solid rgba(212,175,55,0.4);border-radius:5px;cursor:pointer;font-size:11px;">✏️ Cambiar</button>
+                            </td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        <p style="color:#666;font-size:11px;margin:10px 0 0;">Si un usuario quedó mal asignado, "Cambiar" lo reasigna al influencer correcto. Las cargas, retiros y conteos se recalculan solos bajo el nuevo influencer.</p>`;
+
+    const page = _iuState.page || 1;
+    const totalPages = _iuState.totalPages || 0;
+    const total = _iuState.total || 0;
+    if (totalPages <= 1) {
+        pag.innerHTML = total > 0 ? `<span style="color:#888;font-size:12px;">${total} usuario(s)</span>` : '';
+    } else {
+        const mk = (label, target, disabled) => `<button onclick="loadInfluencerUsers(${target})" ${disabled ? 'disabled' : ''} style="padding:7px 14px;background:${disabled ? '#1a1a2e' : '#2a2a3a'};color:${disabled ? '#444' : '#fff'};border:none;border-radius:6px;cursor:${disabled ? 'not-allowed' : 'pointer'};font-size:13px;">${label}</button>`;
+        pag.innerHTML = `${mk('← Anterior', page - 1, page <= 1)}
+            <span style="color:#aaa;font-size:13px;">Página ${page} de ${totalPages} <span style="color:#666;">(${total})</span></span>
+            ${mk('Siguiente →', page + 1, page >= totalPages)}`;
+    }
+}
+
+function openChangeInfluencerIdx(i) {
+    const u = (_iuState && _iuState.users || [])[i];
+    if (!u) return;
+    document.getElementById('ciUserId').value = u.id;
+    document.getElementById('ciSubtitle').textContent = `Usuario: ${u.username} · actualmente en "${_iuState.influencer}"`;
+    const sel = document.getElementById('ciSelect');
+    const list = _iuState.availableInfluencers || [];
+    sel.innerHTML = '<option value="">— Sin influencer —</option>' +
+        list.map(inf => `<option value="${_safe(inf.name)}" ${inf.name === _iuState.influencer ? 'selected' : ''}>${_safe(inf.name)}${inf.isActive ? '' : ' (inactivo)'}</option>`).join('');
+    document.getElementById('ciError').style.display = 'none';
+    showModal('changeInfluencerModal');
+}
+
+async function submitChangeInfluencer() {
+    const userId = document.getElementById('ciUserId').value;
+    const influencer = document.getElementById('ciSelect').value;
+    const errEl = document.getElementById('ciError');
+    const btn = document.getElementById('ciSubmitBtn');
+    errEl.style.display = 'none';
+    btn.disabled = true; btn.textContent = 'Guardando…';
+    try {
+        const r = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/change-influencer`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ influencer })
+        });
+        const data = await r.json();
+        if (!r.ok) { errEl.textContent = data.error || 'Error al reasignar'; errEl.style.display = 'block'; return; }
+        hideModal('changeInfluencerModal');
+        showToast('Influencer reasignado', 'success');
+        // Recargar la lista del influencer actual (el usuario movido desaparece).
+        await loadInfluencerUsers(_iuState.page || 1);
+        // Invalidar el breakdown para que la pestaña "Por influencer" muestre números frescos.
+        if (_analysisState && document.getElementById('paTabContent')) {
+            _analysisState.influencers = null;
+            switchAnalysisTab('influencers');
+        }
+    } catch (e) {
+        errEl.textContent = 'Error de conexión'; errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = 'Guardar';
+    }
+}
+
+function closeInfluencerUsersModal() { hideModal('influencerUsersModal'); _iuState = null; }
+function closeChangeInfluencerModal() { hideModal('changeInfluencerModal'); }
+
+window.openInfluencerUsers = openInfluencerUsers;
+window.loadInfluencerUsers = loadInfluencerUsers;
+window.openChangeInfluencerIdx = openChangeInfluencerIdx;
+window.submitChangeInfluencer = submitChangeInfluencer;
+window.closeInfluencerUsersModal = closeInfluencerUsersModal;
+window.closeChangeInfluencerModal = closeChangeInfluencerModal;
 
 function closePublisherAnalysisModal() { hideModal('publisherAnalysisModal'); }
 

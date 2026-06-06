@@ -1641,6 +1641,37 @@
                 </div>
             </div>
 
+            <!-- Modal: usuarios de un influencer (ver + reasignar) -->
+            <div id="influencerUsersModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:10001;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.35);border-radius:12px;padding:22px;max-width:920px;width:97%;max-height:93vh;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h2 id="iuTitle" style="margin:0;color:#d4af37;font-size:19px;">👥 Usuarios del influencer</h2>
+                        <button onclick="closeInfluencerUsersModal()" style="background:none;border:none;color:#888;font-size:24px;cursor:pointer;">✕</button>
+                    </div>
+                    <p id="iuSubtitle" style="color:#888;font-size:12px;margin:0 0 14px;"></p>
+                    <input type="hidden" id="iuCampaign" value="">
+                    <input type="hidden" id="iuInfluencer" value="">
+                    <div id="iuTableWrap" style="color:#fff;">Cargando…</div>
+                    <div id="iuPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:14px;"></div>
+                </div>
+            </div>
+
+            <!-- Modal: cambiar el influencer asignado a un usuario -->
+            <div id="changeInfluencerModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:10002;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.4);border-radius:12px;padding:24px;max-width:420px;width:92%;">
+                    <h2 style="margin:0 0 6px;color:#d4af37;font-size:18px;">✏️ Cambiar influencer</h2>
+                    <p id="ciSubtitle" style="color:#aaa;font-size:13px;margin:0 0 16px;"></p>
+                    <input type="hidden" id="ciUserId" value="">
+                    <label style="color:#aaa;font-size:12px;display:block;margin-bottom:4px;">Nuevo influencer</label>
+                    <select id="ciSelect" style="width:100%;padding:10px;background:#0d0d1a;color:#fff;border:1px solid rgba(212,175,55,0.3);border-radius:6px;box-sizing:border-box;"></select>
+                    <div id="ciError" style="color:#ff6666;font-size:13px;display:none;margin-top:10px;"></div>
+                    <div style="display:flex;gap:10px;margin-top:18px;">
+                        <button onclick="closeChangeInfluencerModal()" style="flex:1;padding:10px;background:#2a2a3a;color:#fff;border:none;border-radius:6px;cursor:pointer;">Cancelar</button>
+                        <button id="ciSubmitBtn" onclick="submitChangeInfluencer()" style="flex:1;padding:10px;background:linear-gradient(135deg,#d4af37,#b8860b);color:#000;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Guardar</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Modal: enviar push de recuperación a un segmento -->
             <div id="publisherRecoverModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:10000;align-items:center;justify-content:center;">
                 <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.3);border-radius:12px;padding:24px;max-width:480px;width:92%;">

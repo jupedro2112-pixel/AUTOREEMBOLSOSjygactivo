@@ -8939,6 +8939,69 @@ app.delete('/api/admin/influencer-stories/:id', authMiddleware, adminMiddleware,
   }
 });
 
+// GET /api/admin/influencer-users?campaign=CODE&influencer=NAME&page=
+// Lista paginada de los usuarios atribuidos a ese influencer con sus stats de
+// cargas/retiros, para revisar y corregir asignaciones equivocadas.
+app.get('/api/admin/influencer-users', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const campaign = String(req.query.campaign || '').trim();
+    const influencer = String(req.query.influencer || '').trim();
+    if (!campaign || !influencer) {
+      return res.status(400).json({ error: 'campaign e influencer son requeridos' });
+    }
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const data = await publisherAnalytics.getInfluencerUsers(campaign, influencer, page, 20);
+    if (!data) return res.status(404).json({ error: 'Campaña/influencer inexistente' });
+    res.json(data);
+  } catch (err) {
+    logger.error(`[influencer-users GET] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// POST /api/admin/users/:userId/change-influencer  → body: { influencer }
+// Reasigna el influencer de un usuario (corrige errores del agente). El nuevo
+// influencer debe existir en la campaña del usuario; vacío = quitar influencer.
+// Como toda la analítica por influencer/historia se calcula EN VIVO desde
+// User.acquisitionInfluencer, con cambiar este campo las cargas/retiros/conteos
+// se recalculan solos bajo el influencer correcto. Sólo admin general.
+app.post('/api/admin/users/:userId/change-influencer', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Sólo el administrador general puede reasignar influencers' });
+    }
+    const { influencer } = req.body || {};
+    const user = await User.findOne({ id: req.params.userId });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!user.acquisitionCampaign) {
+      return res.status(400).json({ error: 'El usuario no está atribuido a ningún publicista' });
+    }
+
+    const campaign = await Campaign.findOne({ code: user.acquisitionCampaign }).select('influencers').lean();
+    if (!campaign) return res.status(400).json({ error: 'La campaña del usuario ya no existe' });
+
+    const raw = typeof influencer === 'string' ? influencer.trim() : '';
+    let newInfluencer = null; // vacío = quitar influencer
+    if (raw) {
+      const match = (campaign.influencers || []).find(i => i.name.toLowerCase() === raw.toLowerCase());
+      if (!match) {
+        return res.status(400).json({ error: 'Ese influencer no existe en la campaña del usuario' });
+      }
+      newInfluencer = match.name; // nombre canónico
+    }
+
+    const previous = user.acquisitionInfluencer || null;
+    user.acquisitionInfluencer = newInfluencer;
+    await user.save();
+
+    logger.info(`[change-influencer] ${req.user.username} reasignó ${user.username}: "${previous || '—'}" → "${newInfluencer || '—'}"`);
+    res.json({ success: true, username: user.username, from: previous, to: newInfluencer });
+  } catch (err) {
+    logger.error(`[change-influencer] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // POST /api/admin/publishers/:publisher/recover
 // Manda un push de recuperación a un segmento de un publicista. Recalcula los
 // usernames del segmento server-side (no confía en una lista del cliente).

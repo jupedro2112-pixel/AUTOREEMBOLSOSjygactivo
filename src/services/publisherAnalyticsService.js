@@ -495,6 +495,68 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
   };
 }
 
+/**
+ * Lista paginada de los usuarios atribuidos a un (campaña, influencer) con sus
+ * stats de cargas/retiros. Sirve para que el admin revise quién quedó bajo cada
+ * influencer y corrija errores de asignación. Devuelve también la lista de
+ * influencers de la campaña (para el desplegable de reasignación).
+ *
+ * @param {string} campaignCode
+ * @param {string} influencer
+ * @param {number} page
+ * @param {number} perPage
+ */
+async function getInfluencerUsers(campaignCode, influencer, page = 1, perPage = 20) {
+  const code = String(campaignCode || '').toUpperCase().trim();
+  const name = String(influencer || '').trim();
+  if (!code || !name) return null;
+
+  const campaign = await Campaign.findOne({ code }).select('publisher influencers').lean();
+  if (!campaign) return null;
+
+  const baseQuery = { acquisitionCampaign: code, acquisitionInfluencer: name };
+  const total = await User.countDocuments(baseQuery);
+  const totalPages = total === 0 ? 0 : Math.ceil(total / perPage);
+  const users = await User.find(baseQuery)
+    .select('id username createdAt acquisitionInfluencer')
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * perPage)
+    .limit(perPage)
+    .lean();
+
+  const usernames = users.map(u => u.username);
+  const { depByUser, witByUser } = await _loadTxStats(usernames.length ? usernames : []);
+
+  const rows = users.map(u => {
+    const dep = depByUser[u.username];
+    const deposits = dep ? dep.total : 0;
+    const depositCount = dep ? dep.count : 0;
+    const withdrawals = witByUser[u.username] || 0;
+    return {
+      id: u.id,
+      username: u.username,
+      createdAt: u.createdAt,
+      influencer: u.acquisitionInfluencer || null,
+      deposits: Math.round(deposits),
+      depositCount,
+      withdrawals: Math.round(withdrawals),
+      net: Math.round(deposits - withdrawals)
+    };
+  });
+
+  return {
+    campaignCode: code,
+    publisher: campaign.publisher,
+    influencer: name,
+    availableInfluencers: (campaign.influencers || []).map(i => ({ name: i.name, isActive: i.isActive !== false })),
+    users: rows,
+    total,
+    page,
+    totalPages,
+    perPage
+  };
+}
+
 // Argentina es UTC-3 todo el año (sin DST). Día ART de un timestamp UTC.
 const ART_OFFSET_MS = 3 * 60 * 60 * 1000;
 function _artDay(ts) {
@@ -631,6 +693,7 @@ module.exports = {
   getDailyBreakdown,
   getInfluencerBreakdown,
   getInfluencerStoryAnalysis,
+  getInfluencerUsers,
   // Exportados por si se quieren testear / ajustar
   ACTIVE_DAYS,
   AT_RISK_DAYS,

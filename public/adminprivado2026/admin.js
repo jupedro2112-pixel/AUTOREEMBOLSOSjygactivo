@@ -734,7 +734,7 @@ async function loadPaUsers(page = 1, search = '') {
             return;
         }
         listEl.innerHTML = users.map(u => {
-            const dateStr = new Date(u.createdAt).toLocaleString('es-AR');
+            const dateStr = fmtFechaHoraAR(u.createdAt);
             const infBadge = u.acquisitionInfluencer
                 ? `<span style="color:#6cf;font-size:10px;background:rgba(108,170,255,0.12);padding:1px 6px;border-radius:4px;margin-left:6px;white-space:nowrap;">🎬 ${_paSafe(u.acquisitionInfluencer)}</span>`
                 : '';
@@ -3522,7 +3522,7 @@ function applyBlockStateToChatHeader(user) {
             if (blockedBy) {
                 let byLine = `Bloqueado por: ${blockedBy}`;
                 if (blockedAt && !isNaN(blockedAt.getTime())) {
-                    byLine += ` — ${blockedAt.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' })}`;
+                    byLine += ` — ${fmtFechaHoraAR(blockedAt)}`;
                 }
                 lines.push(byLine);
             }
@@ -3769,10 +3769,34 @@ function formatMoney(amount) {
     });
 }
 
+// ============================================
+// FORMATO DE FECHA CANÓNICO DEL PANEL → DD/MM/YYYY (hora Argentina)
+// Usar SIEMPRE estos helpers para mostrar fechas, así todo el panel queda
+// consistente (día y mes con 2 dígitos, año con 4).
+// ============================================
+function fmtFechaAR(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('es-AR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        timeZone: 'America/Argentina/Buenos_Aires'
+    });
+}
+// DD/MM/YYYY HH:mm
+function fmtFechaHoraAR(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return '';
+    const t = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+    return fmtFechaAR(d) + ' ' + t;
+}
+window.fmtFechaAR = fmtFechaAR;
+window.fmtFechaHoraAR = fmtFechaHoraAR;
+
 function formatDate(date) {
     if (!date) return 'Nunca';
-    const d = new Date(date);
-    return d.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+    return fmtFechaAR(date);
 }
 
 function formatTime(date) {
@@ -3780,11 +3804,11 @@ function formatTime(date) {
     const d = new Date(date);
     const now = new Date();
     const diff = now - d;
-    
+
     if (diff < 60000) return 'Ahora';
     if (diff < 3600000) return Math.floor(diff / 60000) + 'm';
     if (diff < 86400000) return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
-    return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+    return fmtFechaAR(d);
 }
 
 function formatDateTime(date) {
@@ -3807,7 +3831,7 @@ function formatDateTime(date) {
     return d.toLocaleDateString('es-AR', {
         day: '2-digit',
         month: '2-digit',
-        year: '2-digit',
+        year: 'numeric',
         timeZone: 'America/Argentina/Buenos_Aires'
     }) + ' ' + time;
 }
@@ -5136,7 +5160,7 @@ function renderSchedules(list) {
     el.innerHTML = list.map(s => {
         let cuando;
         if (s.mode === 'once') {
-            cuando = 'Una vez — ' + (s.runAt ? new Date(s.runAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : '—');
+            cuando = 'Una vez — ' + (s.runAt ? fmtFechaHoraAR(s.runAt) : '—');
         } else if (s.mode === 'daily') {
             cuando = 'Todos los días a las ' + s.time;
         } else {
@@ -5400,10 +5424,10 @@ async function loadNotifUsers(page = 1, filter = 'all') {
                         : '<span style="color:#888;font-size:.85rem">📵 Sin app</span>'}
                 </td>
                 <td style="padding:.5rem .75rem;color:#888;font-size:.8rem">
-                    ${u.tokenUpdatedAt ? new Date(u.tokenUpdatedAt).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : '—'}
+                    ${u.tokenUpdatedAt ? fmtFechaAR(u.tokenUpdatedAt) : '—'}
                 </td>
                 <td style="padding:.5rem .75rem;color:#888;font-size:.8rem">
-                    ${u.lastLogin ? new Date(u.lastLogin).toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : '—'}
+                    ${u.lastLogin ? fmtFechaAR(u.lastLogin) : '—'}
                 </td>
             </tr>
         `).join('');
@@ -5971,8 +5995,7 @@ function fmtARS(n) {
 
 function fmtDate(d) {
     if (!d) return '—';
-    const dt = new Date(d);
-    return dt.toLocaleDateString('es-AR', { day:'2-digit', month:'2-digit', year:'numeric' });
+    return fmtFechaAR(d) || '—';
 }
 
 function fmtPeriod(pk) {
@@ -6080,7 +6103,7 @@ function renderReferrersTable(referrers) {
                     ${hasPending ? '<span style="color:#f7931e;font-size:10px;margin-left:4px;">●</span>' : ''}
                 </td>
                 <td style="padding:7px 6px;color:#b0b0b0;text-align:right;">${fmtARS(fs.totalGenerated || 0)}</td>
-                <td style="padding:7px 6px;color:#888;font-size:11px;">${fs.lastPayoutDate ? new Date(fs.lastPayoutDate).toLocaleDateString('es-AR') : '—'}</td>
+                <td style="padding:7px 6px;color:#888;font-size:11px;">${fs.lastPayoutDate ? fmtFechaAR(fs.lastPayoutDate) : '—'}</td>
                 <td style="padding:7px 6px;">${payoutStatusBadge(fs.latestPayoutStatus)}</td>
                 <td style="padding:7px 6px;"><button onclick="loadAdminUserReferrals('${r.id}')" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;">Ver detalle</button></td>
             </tr>`;
@@ -6200,7 +6223,7 @@ async function loadAdminReferralPayouts() {
                             <td style="padding:6px 6px;color:#d4af37;font-weight:bold;text-align:right;">${fmtARS(p.totalCommissionAmount || 0)}</td>
                             <td style="padding:6px 6px;color:#00ff88;text-align:center;">${p.referralCount || 0}</td>
                             <td style="padding:6px 6px;">${statusBadge(p.status, p.isDelta, p.payoutIndex || 1)}</td>
-                            <td style="padding:6px 6px;color:#888;font-size:11px;">${p.creditedAt ? new Date(p.creditedAt).toLocaleString('es-AR', {dateStyle:'short',timeStyle:'short'}) : '—'}</td>
+                            <td style="padding:6px 6px;color:#888;font-size:11px;">${p.creditedAt ? fmtFechaHoraAR(p.creditedAt) : '—'}</td>
                             <td style="padding:6px 6px;color:#444;font-size:10px;font-family:monospace;">${(p.id || '').substring(0, 8)}…</td>
                         </tr>`;
                     }).join('')}
@@ -7588,7 +7611,7 @@ async function loadCampaignUsers(code) {
         const rows = users.map((u) => {
             const fecha = u.acquiredAt || u.createdAt;
             const fechaStr = fecha
-                ? new Date(fecha).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                ? fmtFechaAR(fecha)
                 : '—';
             const phone = u.phone ? escapeHtml(u.phone) : '<span style="color:#888;">sin teléfono</span>';
             const verif = u.phoneVerified ? '✅' : (u.phoneVerificationPending ? '⏳' : '—');
@@ -7866,7 +7889,7 @@ async function loadRouletteAdmin() {
             html += '<th style="padding:8px 10px;font-weight:800;">tx / Acción</th>';
             html += '</tr></thead><tbody>';
             for (const it of items) {
-                const when = it.spunAt ? new Date(it.spunAt).toLocaleString('es-AR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+                const when = it.spunAt ? fmtFechaHoraAR(it.spunAt) : '—';
                 const statusBadge = {
                     no_prize:      '<span style="background:rgba(136,136,136,0.15);color:#aaa;border:1px solid #888;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">SIN PREMIO</span>',
                     won:           '<span style="background:rgba(255,170,102,0.15);color:#ffaa66;border:1px solid #ffaa66;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">⏳ PROCESANDO</span>',
@@ -7943,11 +7966,7 @@ function _centNum(n) {
 }
 function _centDate(d) {
     if (!d) return '—';
-    try {
-        return new Date(d).toLocaleString('es-AR', {
-            day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
-        });
-    } catch (e) { return '—'; }
+    return fmtFechaHoraAR(d) || '—';
 }
 function _centStatCard(icon, value, label, color) {
     return '<div class="stat-card" style="border-color:' + color + '">'
@@ -8440,7 +8459,7 @@ function _autoRenderRuleCard(r) {
         else if (cs.dayOfMonth != null) when = 'Día ' + cs.dayOfMonth + ' del mes ' + when;
         else when = 'Cada día ' + when;
     }
-    const lastFired = r.lastFiredAt ? new Date(r.lastFiredAt).toLocaleString('es-AR') : 'Nunca';
+    const lastFired = r.lastFiredAt ? fmtFechaHoraAR(r.lastFiredAt) : 'Nunca';
     const bonusBadge = (r.bonus && r.bonus.type !== 'none')
         ? '<span style="background:rgba(255,170,68,0.15);color:#ffaa44;font-size:10px;padding:2px 7px;border-radius:8px;font-weight:700;margin-left:5px;">💸 ' + r.bonus.type + ' $' + (r.bonus.amount || 0) + '</span>'
         : '';
@@ -8770,7 +8789,7 @@ function _reviewsRender() {
     }
     let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
     for (const r of _reviewsCache) {
-        const when = r.createdAt ? new Date(r.createdAt).toLocaleString('es-AR') : '';
+        const when = r.createdAt ? fmtFechaHoraAR(r.createdAt) : '';
         const bucketColor = r.bucket === 'bueno' ? '#25d366' : (r.bucket === 'regular' ? '#ffaa44' : '#ff5050');
         html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.08);border-left:3px solid ' + bucketColor + ';border-radius:9px;padding:11px;">';
         html += '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start;">';
@@ -9107,7 +9126,7 @@ function _encuestaRender(cfg, stats, cal, rep) {
             h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.07);border-radius:7px;padding:6px 9px;font-size:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
                 + '<span style="color:#fff;font-weight:700;">' + _escInac(v.username) + '</span>'
                 + '<span style="color:#c9a0ff;">' + (planEmoji[v.plan] || '') + ' ' + _escInac(v.plan) + '</span>'
-                + '<span style="color:#777;margin-left:auto;">' + (v.votedAt ? new Date(v.votedAt).toLocaleString('es-AR') : '') + '</span></div>';
+                + '<span style="color:#777;margin-left:auto;">' + (v.votedAt ? fmtFechaHoraAR(v.votedAt) : '') + '</span></div>';
         });
         h += '</div>';
     } else {
@@ -9377,7 +9396,7 @@ function _inactivosRender(cfg, stats) {
             h += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,255,255,0.07);border-radius:7px;padding:6px 9px;font-size:11px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
                 + '<span style="color:#fff;font-weight:700;">' + _escInac(u.username) + '</span>'
                 + '<span style="color:#c9a0ff;">+' + u.stepDias + 'd · ' + premio + '</span>'
-                + '<span style="color:#777;margin-left:auto;">' + (u.firedAt ? new Date(u.firedAt).toLocaleString('es-AR') : '') + '</span></div>';
+                + '<span style="color:#777;margin-left:auto;">' + (u.firedAt ? fmtFechaHoraAR(u.firedAt) : '') + '</span></div>';
         });
         h += '</div>';
     } else {
@@ -9470,7 +9489,7 @@ async function loadPublisherAdmins() {
             const campName = pa.campaign ? `${_safe(pa.campaign.publisher)} · ${_safe(pa.campaign.name)}` : '<span style="color:#ff6666;">Campaña no encontrada</span>';
             const inactiveBadge = !pa.isActive ? '<span style="background:#3a1a1a;color:#ff6666;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;">INACTIVA</span>' : '';
             const inactiveCamp = pa.campaign && pa.campaign.isActive === false ? '<span style="background:#3a1a1a;color:#ff6666;font-size:10px;padding:2px 6px;border-radius:4px;margin-left:6px;">CAMPAÑA INACTIVA</span>' : '';
-            const lastLogin = pa.lastLogin ? new Date(pa.lastLogin).toLocaleString('es-AR') : '<em style="color:#666;">nunca</em>';
+            const lastLogin = pa.lastLogin ? fmtFechaHoraAR(pa.lastLogin) : '<em style="color:#666;">nunca</em>';
             return `
                 <div style="background:#0d0d1a;border:1px solid rgba(212,175,55,0.2);border-radius:10px;padding:14px;display:grid;gap:8px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
@@ -9485,7 +9504,7 @@ async function loadPublisherAdmins() {
                     </div>
                     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;color:#aaa;font-size:11px;">
                         <div>👥 Usuarios creados: <strong style="color:#d4af37;">${pa.usersCreatedCount}</strong></div>
-                        <div>📅 Creada: ${new Date(pa.createdAt).toLocaleDateString('es-AR')}</div>
+                        <div>📅 Creada: ${fmtFechaAR(pa.createdAt)}</div>
                         <div>🔑 Último login: ${lastLogin}</div>
                         <div>🎯 Código: <code style="color:#d4af37;">${_safe(pa.publisherCampaignCode)}</code></div>
                     </div>
@@ -9803,7 +9822,7 @@ async function openPublisherUsersModal(publisher) {
                             <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
                                 <td style="padding:8px;color:#fff;">${_safe(u.username)}</td>
                                 <td style="padding:8px;color:${u.acquisitionSource === 'manual' ? '#d4af37' : '#aaa'};font-size:11px;">${u.acquisitionSource === 'manual' ? '👤 manual' : '🌐 orgánico'}</td>
-                                <td style="padding:8px;color:#888;">${new Date(u.createdAt).toLocaleDateString('es-AR')}</td>
+                                <td style="padding:8px;color:#888;">${fmtFechaAR(u.createdAt)}</td>
                                 <td style="padding:8px;color:#aaa;">${_safe(u.createdByEmployeeUsername || '—')}</td>
                                 <td style="padding:8px;text-align:right;color:#4caf50;">${fmt(u.deposits)}</td>
                                 <td style="padding:8px;text-align:right;color:#ff6666;">${fmt(u.withdrawals)}</td>
@@ -10295,7 +10314,7 @@ function renderStoriesTable() {
             ? '<span style="color:#4caf50;font-weight:bold;">🟢 Rentable</span>'
             : '<span style="color:#ff6666;font-weight:bold;">🔴 No</span>';
     };
-    const fmtDate = (d) => d ? new Date(d).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const fmtDate = (d) => d ? fmtFechaHoraAR(d) : '';
 
     if (stories.length === 0 && !before) {
         wrap.innerHTML = '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">Todavía no cargaste historias para este influencer. Cargá la primera arriba ☝️</div>';

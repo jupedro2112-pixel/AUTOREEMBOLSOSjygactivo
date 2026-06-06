@@ -8,6 +8,17 @@
 
 ## Sesión 2026-06-06
 
+### 17. Formato de fecha unificado a DD/MM/YYYY en todo el panel admin
+- Helpers canónicos nuevos en `admin.js`: `fmtFechaAR(d)` → **DD/MM/YYYY** y
+  `fmtFechaHoraAR(d)` → **DD/MM/YYYY HH:mm** (ambos en hora ART, día/mes con 2
+  dígitos, año con 4). Expuestos en `window`.
+- `formatDate`/`formatTime`/`formatDateTime` y los helpers locales `fmtDate` y
+  `_centDate` ahora enrutan a los canónicos. Se reemplazaron ~15 usos sueltos que
+  mostraban año de 2 dígitos (DD/MM/YY) o sin padding (6/6/2026).
+- Las etiquetas relativas "Hoy/Ayer" del chat y los separadores por día de semana
+  se mantienen (no son formato de fecha numérica).
+- Sólo afecta el panel `adminprivado2026`. La PWA del cliente (`public/js`) no se tocó.
+
 ### 16. Performance: paginación server-side en Transacciones y Usuarios
 - **Problema:** el panel se trababa al entrar a Transacciones (traía TODO desde el
   inicio de los tiempos, sin límite, y renderizaba todas las filas) y a Usuarios

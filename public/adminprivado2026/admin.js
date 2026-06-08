@@ -1029,8 +1029,7 @@ function initSocket() {
             incrementUnreadCount();
             playNotificationSound();
         }
-        conversationsCacheByTab.delete(currentTab);
-        loadConversations(true);
+        scheduleConversationsRefresh();
     });
     
     // CHAT MOVED TO PAYMENTS
@@ -1106,9 +1105,9 @@ function initSocket() {
     socket.on('chat_updated', (data) => {
         const convIndex = conversations.findIndex(c => c.userId === data.userId);
         if (convIndex === -1) {
-            // Conversación nueva o no visible: invalidar cache y recargar
-            conversationsCacheByTab.delete(currentTab);
-            loadConversations(true);
+            // Conversación nueva o no visible: refrescar coalescido (evita un
+            // reload por cada mensaje de chats fuera del tab actual).
+            scheduleConversationsRefresh();
             return;
         }
         const conv = conversations[convIndex];
@@ -1132,7 +1131,7 @@ function initSocket() {
             conversationsCacheByTab.set(currentTab, { data: [...conversations], timestamp: Date.now() });
             renderConversations();
         }
-        loadStats();
+        loadStatsThrottled();
     });
 
     // ADMIN MESSAGE SENT - Actualizar lista cuando otro admin envía un mensaje
@@ -1263,6 +1262,58 @@ function handleNewMessage(data) {
 let conversationsCacheByTab = new Map();
 const CONVERSATIONS_CACHE_TIME = 30000; // 30 segundos (actualizamos en tiempo real vía WebSocket)
 
+// ---- Anti-tormenta de requests (fix 429 "Demasiadas solicitudes") ----
+// El admin está en la sala `admins` y el backend hace notifyAdmins('new_message')
+// por CADA mensaje del sistema (todos los usuarios, incl. automáticos de
+// Fueguito/reembolso/depósito). Sin throttle, cada evento disparaba un
+// loadConversations(true) (4 requests: reload forzado + 3 prefetch) o un
+// loadStats(), agotando el límite global de 300 req/min por IP y devolviendo
+// 429 en todo el panel cuando hay muchos chats activos. Coalescemos esas
+// recargas de fondo: como mucho UNA cada few segundos.
+// Throttle con leading edge: si hace >=4s que no hubo recarga, refresca YA
+// (cero lag en uso normal). Solo bajo ráfaga de mensajes se limita a 1 cada 4s
+// con una recarga final (trailing), garantizando que nunca se "starve".
+let _lastConvRefreshAt = 0;
+let _convRefreshTimer = null;
+function scheduleConversationsRefresh() {
+    const MIN_GAP = 4000;
+    const doRefresh = () => {
+        _lastConvRefreshAt = Date.now();
+        conversationsCacheByTab.delete(currentTab);
+        loadConversations(true, { prefetch: false });
+    };
+    const elapsed = Date.now() - _lastConvRefreshAt;
+    if (elapsed >= MIN_GAP) {
+        doRefresh(); // leading edge: refrescar al instante
+    } else if (!_convRefreshTimer) {
+        _convRefreshTimer = setTimeout(() => {
+            _convRefreshTimer = null;
+            doRefresh();
+        }, MIN_GAP - elapsed);
+    }
+}
+
+// loadStats throttleado: la insignia de no leídos también se actualiza de forma
+// optimista y por el evento `stats` del socket, así que la llamada HTTP puede
+// limitarse (máx 1 cada 5s) sin perder exactitud visible.
+let _lastStatsAt = 0;
+let _statsTimer = null;
+function loadStatsThrottled() {
+    const MIN_GAP = 5000;
+    const now = Date.now();
+    const elapsed = now - _lastStatsAt;
+    if (elapsed >= MIN_GAP) {
+        _lastStatsAt = now;
+        loadStats();
+    } else if (!_statsTimer) {
+        _statsTimer = setTimeout(() => {
+            _statsTimer = null;
+            _lastStatsAt = Date.now();
+            loadStats();
+        }, MIN_GAP - elapsed);
+    }
+}
+
 /**
  * Actualización inteligente de una conversación en la lista (sin HTTP call).
  * Se llama cuando llega un mensaje nuevo de otro chat.
@@ -1275,9 +1326,9 @@ function updateConversationInList(message) {
     // Actualizar en el array conversations actual
     const convIndex = conversations.findIndex(c => c.userId === chatUserId);
     if (convIndex === -1) {
-        // Conversación nueva o no visible: invalidar cache y recargar
-        conversationsCacheByTab.delete(currentTab);
-        loadConversations(true);
+        // Conversación nueva o no visible: refrescar de forma coalescida
+        // (un solo reload aunque lleguen muchos mensajes de chats no listados).
+        scheduleConversationsRefresh();
         return;
     }
     
@@ -1305,8 +1356,11 @@ function updateConversationInList(message) {
     renderConversations();
 }
 
-// Cargar conversaciones con cache por pestaña
-async function loadConversations(forceRefresh = false) {
+// Cargar conversaciones con cache por pestaña.
+// opts.prefetch=false evita el prefetch de mensajes (se usa en recargas de
+// fondo disparadas por sockets, para no amplificar las requests).
+async function loadConversations(forceRefresh = false, opts = {}) {
+    const { prefetch = true } = opts;
     const now = Date.now();
     const tabCache = conversationsCacheByTab.get(currentTab);
     
@@ -1337,9 +1391,10 @@ async function loadConversations(forceRefresh = false) {
         conversationsCacheByTab.set(currentTab, { data: [...conversations], timestamp: Date.now() });
         
         renderConversations();
-        
+
         // PREFETCH: Cargar mensajes de los primeros 3 chats en background
-        prefetchMessages(conversations.slice(0, 3));
+        // (solo en cargas manuales; se omite en refrescos de fondo por socket).
+        if (prefetch) prefetchMessages(conversations.slice(0, 3));
     } catch (error) {
         console.error('Error loading conversations:', error);
     }
@@ -2286,8 +2341,9 @@ async function markMessagesAsRead(userId) {
             renderConversations();
         }
 
-        // Update unread count
-        loadStats();
+        // Update unread count (throttleado: se llama por cada mensaje entrante
+        // del chat activo, no debe golpear /api/admin/stats sin límite).
+        loadStatsThrottled();
     } catch (error) {
         console.error('Error marking messages as read:', error);
     }

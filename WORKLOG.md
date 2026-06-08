@@ -4,7 +4,45 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-05**
+> **Última actualización: 2026-06-08**
+
+## Sesión 2026-06-08
+
+### 19. Fix 429 "Demasiadas solicitudes" en chats del admin con muchos chats activos
+- **Síntoma:** con muchos chats activos, el panel admin tiraba "Demasiadas
+  solicitudes. Intenta más tarde." (429) al cargar la lista de chats y al
+  enviar mensajes; partes del panel dejaban de funcionar.
+- **Causa raíz (confirmada, no corazonada):** el admin está en la sala `admins`
+  y el backend hace `notifyAdmins('new_message', …)` por CADA mensaje del
+  sistema entero (todos los usuarios, incl. automáticos de Fueguito/reembolso/
+  depósito/bono). En el cliente, cada evento de socket disparaba requests SIN
+  throttle:
+  - mensaje de chat fuera del tab actual → `updateConversationInList` →
+    `loadConversations(true)` = **4 requests** (reload forzado que saltea cache
+    + 3 prefetch).
+  - mensaje del chat seleccionado → `markMessagesAsRead` → `loadStats()` = 2 req.
+  Con más chats activos = más throughput de mensajes en TODO el sistema = el
+  panel se autobombardeaba hasta agotar el límite global de **300 req/min por
+  IP** (`server.js:84`, `app.use('/api/', generalLimiter)`) → 429 en todo.
+- **Fix (100% cliente, `public/adminprivado2026/admin.js`):** se eliminó la
+  amplificación sin tocar el límite del server (subirlo habría enmascarado el bug):
+  - `scheduleConversationsRefresh()`: throttle con **leading edge** — si hace
+    >=4s que no hubo recarga refresca al instante (cero lag en uso normal);
+    solo bajo ráfaga se limita a 1 cada 4s con recarga trailing (sin starvation).
+    Ruteados a él: `updateConversationInList`, handler `chat_updated` (path no
+    listado) y `conversation_updated`. Los chats que YA están en la lista se
+    actualizan instantáneo en memoria (sin pasar por acá).
+  - `loadConversations(force, {prefetch})`: en refrescos de fondo se omite el
+    prefetch de mensajes (los 3 fetch extra).
+  - `loadStatsThrottled()`: `loadStats()` a **máx 1 cada 5s** en los paths
+    disparados por mensajes (`markMessagesAsRead`, handler `messages_read`).
+    La insignia de no leídos ya se actualiza optimista + por evento `stats` del
+    socket, así que no se pierde exactitud visible.
+- **Qué NO cambió:** los updates en vivo de chats que YA están en la lista
+  siguen instantáneos (path en memoria, sin HTTP). Solo chats nuevos/no listados
+  esperan el refresh coalescido (≤4s). Recargas de baja frecuencia
+  (`chat_closed`, `chat_moved`, `reconnect`) quedaron inmediatas.
+- **Validado:** `node --check` OK. Sin cambios de backend ni de modelo.
 
 ## Sesión 2026-06-06
 

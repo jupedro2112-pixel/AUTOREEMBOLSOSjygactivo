@@ -4647,7 +4647,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
     // SLA: si el cliente escribió, arrancar el reloj de demora de respuesta
     // (los agentes resuelven el reloj en la rama de comando o en el emit de admin).
     if (!isAdminRole) {
-      await delayClockOnUserMessage(req.user.userId, content, type);
+      delayClockOnUserMessage(req.user.userId, content, type).catch(() => {}); // fire-and-forget
     }
 
     // CORREGIDO: Procesar comandos si el mensaje empieza con /
@@ -4703,7 +4703,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
 
           // SLA: el comando del agente cuenta como respuesta al cliente.
           if (isAdminRole) {
-            await delayClockResolve(commandReceiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'command', queueHint: roleQueueHint(req.user.role) });
+            delayClockResolve(commandReceiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'command', queueHint: roleQueueHint(req.user.role) }).catch(() => {});
           }
 
           // NO emitir el mensaje original del comando, solo la respuesta
@@ -4745,8 +4745,8 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       io.to(`user_${req.user.userId}`).emit('message_sent', message);
     } else {
       // Admin enviando mensaje - notificar al usuario
-      // SLA: respuesta de texto del agente — resolver el reloj de demora.
-      await delayClockResolve(req.body.receiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message', queueHint: roleQueueHint(req.user.role) });
+      // SLA: respuesta de texto del agente — resolver el reloj de demora (fire-and-forget).
+      delayClockResolve(req.body.receiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message', queueHint: roleQueueHint(req.user.role) }).catch(() => {});
       const userSocket = connectedUsers.get(req.body.receiverId);
       const deliveredViaSocket = !!userSocket;
       if (userSocket) {
@@ -6303,7 +6303,7 @@ io.on('connection', (socket) => {
 
             // SLA: el comando del agente cuenta como respuesta al cliente.
             if (isAdminRole) {
-              await delayClockResolve(commandReceiverId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'command', queueHint: roleQueueHint(socket.role) });
+              delayClockResolve(commandReceiverId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'command', queueHint: roleQueueHint(socket.role) }).catch(() => {});
             }
 
             // IMPORTANTE: NO guardar el mensaje del comando (/cbu), solo la respuesta
@@ -6391,10 +6391,12 @@ io.on('connection', (socket) => {
           }
           // SLA: reloj de demora de respuesta. Si responde un agente, resolvemos
           // (y registramos si superó el umbral); si escribe el cliente, arrancamos.
+          // Fire-and-forget: el tracking de demoras corre en segundo plano y NO
+          // frena la entrega del mensaje (los helpers ya capturan sus errores).
           if (isAdminRole) {
-            await delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message', queueHint: roleQueueHint(socket.role) });
+            delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message', queueHint: roleQueueHint(socket.role) }).catch(() => {});
           } else {
-            await delayClockOnUserMessage(targetUserId, content, type);
+            delayClockOnUserMessage(targetUserId, content, type).catch(() => {});
           }
         } catch (csErr) {
           logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);

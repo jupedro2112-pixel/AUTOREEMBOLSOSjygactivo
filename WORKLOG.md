@@ -30,6 +30,17 @@
   - Nota: registros viejos de ChatDelay (pre-cambio) no tienen `category`.
 - **Validado:** `node --check` OK. Back necesita redeploy; front, recargar el panel.
 
+### 24c. Tracking de demoras fire-and-forget (cero impacto en velocidad del chat)
+- Las llamadas al tracking en los caminos de mensaje en TIEMPO REAL (socket
+  `send_message` normal + comando, HTTP `/api/messages/send` + comando) pasaron de
+  `await` a **fire-and-forget** (`.catch(()=>{})`): corren en segundo plano y NO
+  frenan la entrega del mensaje. La latencia de enviar/recibir vuelve a ser idéntica
+  a antes de la feature (el único `await` pre-emit que queda es el `lastMessageAt` de
+  ChatStatus, que ya existía).
+- Siguen `await` solo donde NO importa la latencia de chat: CBU/cerrar chat (botón)
+  y carga/retiro/bonus (que ya esperan a JUGAYGANA segundos).
+- Los helpers ya capturan sus errores internamente; el `.catch` es defensa extra.
+
 ### 24b. Ajuste de la cola: señales más fuertes + registros viejos no mienten
 - **Problema reportado:** un chat que estaba en pagos aparecía como "Cargas". Causa:
   esos registros eran ANTERIORES al deploy del cambio (sin campo `category`), y el

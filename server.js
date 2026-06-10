@@ -8067,6 +8067,23 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
       }
     }
 
+    // === Renombrado de influencers (migra los usuarios atribuidos) ===
+    // La analítica por influencer se calcula EN VIVO desde User.acquisitionInfluencer.
+    // Si se renombra un influencer hay que mover los usuarios del nombre viejo al
+    // nuevo, sino quedan colgados del nombre anterior y las stats se parten.
+    let renamedUsers = 0;
+    const renames = Array.isArray(req.body && req.body.renames) ? req.body.renames : [];
+    for (const rn of renames) {
+      const from = String((rn && rn.from) || '').trim();
+      const to = String((rn && rn.to) || '').trim().slice(0, 80);
+      if (!from || !to || from.toLowerCase() === to.toLowerCase()) continue;
+      const r = await User.updateMany(
+        { acquisitionCampaign: normalizedCode, acquisitionInfluencer: new RegExp('^' + escapeRegex(from) + '$', 'i') },
+        { $set: { acquisitionInfluencer: to } }
+      );
+      renamedUsers += (r.modifiedCount != null ? r.modifiedCount : (r.nModified || 0));
+    }
+
     const updated = await Campaign.findOneAndUpdate(
       { code: normalizedCode },
       { $set: update },
@@ -8083,7 +8100,7 @@ app.put('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async (re
 
     delete updated.jugayganaPassword;
     updated.hasJugayganaCreds = !!updated.jugayganaUsername;
-    res.json({ campaign: updated });
+    res.json({ campaign: updated, renamedUsers });
   } catch (err) {
     logger.error(`[admin/campaigns PUT] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -8127,6 +8144,41 @@ app.delete('/api/admin/campaigns/:code', authMiddleware, adminMiddleware, async 
     res.json({ ok: true, campaign: updated });
   } catch (err) {
     logger.error(`[admin/campaigns DELETE] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Borrado DEFINITIVO de una campaña (no es soft delete): elimina el documento de
+// la DB y sus historias de influencer. Los usuarios ya captados se conservan, pero
+// quedan sin referencia al publicista (acquisitionCampaign apunta a algo borrado).
+// Solo admin general. Pensado para limpiar campañas de prueba o cargadas por error.
+app.delete('/api/admin/campaigns/:code/permanent', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede borrar campañas definitivamente' });
+    }
+    const normalizedCode = String(req.params.code).toUpperCase().trim();
+    const campaign = await Campaign.findOne({ code: normalizedCode }).lean();
+    if (!campaign) return res.status(404).json({ error: 'Campaña no encontrada' });
+
+    // Cuántos usuarios quedan atribuidos (info para el log / respuesta).
+    const attributedUsers = await User.countDocuments({ acquisitionCampaign: normalizedCode });
+
+    await Campaign.deleteOne({ code: normalizedCode });
+    // Limpiar historias de influencer asociadas (referencian campaignCode).
+    let storiesDeleted = 0;
+    try {
+      const r = await InfluencerStory.deleteMany({ campaignCode: normalizedCode });
+      storiesDeleted = r.deletedCount || 0;
+    } catch (_) { /* colección puede no existir, ignorar */ }
+
+    // Invalidar cualquier sesión cacheada del pool para esta campaña.
+    try { jugayganaPublisherSessions.invalidateSession(normalizedCode); } catch (_) {}
+
+    logger.info(`[admin/campaigns PERMANENT DELETE] ${normalizedCode} por ${req.user.username} (usuarios atribuidos: ${attributedUsers}, historias: ${storiesDeleted})`);
+    res.json({ ok: true, deleted: normalizedCode, attributedUsers, storiesDeleted });
+  } catch (err) {
+    logger.error(`[admin/campaigns PERMANENT DELETE] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

@@ -8,6 +8,31 @@
 
 ## Sesión 2026-06-10
 
+### 23. Renombrar influencer (con migración de usuarios) + borrar campaña definitivamente
+- **Pedido:** poder corregir el nombre de un influencer cargado mal, y poder
+  borrar campañas/publicistas definitivamente (además de desactivar, que ya existía).
+- **Renombrar influencer:**
+  - La analítica por influencer se calcula EN VIVO desde `User.acquisitionInfluencer`,
+    así que renombrar SIN migrar los usuarios partiría las stats. Por eso el rename
+    arrastra los usuarios del nombre viejo al nuevo.
+  - **Front (editor de campaña):** botón ✏️ por influencer → `prompt` de nuevo nombre;
+    queda pendiente con indicador "✎ antes: X" y se aplica al **Guardar**. Al cargar
+    la campaña se taguea `orig` (nombre original) para detectar renombrados.
+  - **Back (`PUT /api/admin/campaigns/:code`):** acepta `renames: [{from,to}]` y hace
+    `User.updateMany({acquisitionCampaign, acquisitionInfluencer: /^from$/i}, {to})`
+    antes de reemplazar la lista. Devuelve `renamedUsers` (se muestra en el toast).
+- **Borrar campaña definitivamente** (lo que faltaba; el "DELETE" viejo era soft =
+  isActive:false, igual que "Desactivar"):
+  - **Back:** nuevo `DELETE /api/admin/campaigns/:code/permanent` (solo admin general):
+    `Campaign.deleteOne` + `InfluencerStory.deleteMany` de esa campaña + invalida la
+    sesión del pool. Los usuarios captados se CONSERVAN (quedan sin ref al publicista).
+    Devuelve `attributedUsers`/`storiesDeleted`.
+  - **Front:** botón "🗑️ Borrar definitivamente" en cada card de campaña, con doble
+    confirmación. "Desactivar" (soft) se mantiene como estaba.
+- **Pendiente/ofrecido:** las "Cuentas Publicistas" (publisher_admin) ya tienen
+  activar/desactivar; si se quiere borrado definitivo de esas cuentas, se agrega aparte.
+- **Validado:** `node --check` OK. El back necesita redeploy; el front, recargar el panel.
+
 ### 22. Fix 429 con MUCHOS admins a la vez (cupo por admin + no recargar fuera de Chats)
 - **Síntoma:** con varios agentes trabajando en simultáneo, aparecía de nuevo
   "Demasiadas solicitudes" (429); ej: un admin en la sección Demoras veía

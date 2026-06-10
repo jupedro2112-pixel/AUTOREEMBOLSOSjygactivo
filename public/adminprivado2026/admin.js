@@ -7278,6 +7278,7 @@ function renderCampaigns() {
                 <button onclick="viewCampaignStats('${escapeHtml(c.code)}')" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">📊 Ver detalle</button>
                 <button onclick="editCampaign('${escapeHtml(c.code)}')" style="background:rgba(99,102,241,0.1);border:1px solid #6366f1;color:#a5b4fc;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">✏️ Editar</button>
                 ${c.isActive ? `<button onclick="deactivateCampaign('${escapeHtml(c.code)}')" style="background:rgba(255,80,80,0.1);border:1px solid #ff5050;color:#ff8888;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">🛑 Desactivar</button>` : `<button onclick="reactivateCampaign('${escapeHtml(c.code)}')" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.4);color:#00ff88;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">✅ Reactivar</button>`}
+                <button onclick="deleteCampaignPermanent('${escapeHtml(c.code)}')" style="background:rgba(180,40,40,0.18);border:1px solid #b42828;color:#ff6b6b;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:11px;">🗑️ Borrar definitivamente</button>
             </div>
         </div>
     `).join('');
@@ -7325,14 +7326,19 @@ function _renderCampaignInfluencers() {
         listEl.innerHTML = '<span style="color:#888;font-size:11.5px;">Sin influencers cargados.</span>';
         return;
     }
-    listEl.innerHTML = arr.map((inf, i) => `
+    listEl.innerHTML = arr.map((inf, i) => {
+        const renamed = inf.orig && inf.orig.toLowerCase() !== inf.name.toLowerCase();
+        const hint = renamed ? `<span style="color:#d4af37;font-size:10px;white-space:nowrap;" title="Se renombrará al guardar y se reasignarán sus usuarios">✎ antes: ${_safe(inf.orig)}</span>` : '';
+        return `
         <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#1a1a2e;border-radius:6px;">
-            <span style="flex:1;color:${inf.isActive ? '#fff' : '#666'};font-size:13px;${inf.isActive ? '' : 'text-decoration:line-through;'}">${_safe(inf.name)}</span>
+            <span style="flex:1;color:${inf.isActive ? '#fff' : '#666'};font-size:13px;${inf.isActive ? '' : 'text-decoration:line-through;'}">${_safe(inf.name)} ${hint}</span>
             <label style="display:flex;align-items:center;gap:4px;color:#888;font-size:11px;cursor:pointer;white-space:nowrap;">
                 <input type="checkbox" ${inf.isActive ? 'checked' : ''} onchange="toggleCampaignInfluencer(${i})"> activo
             </label>
+            <button type="button" onclick="renameCampaignInfluencer(${i})" title="Renombrar" style="padding:3px 8px;background:#2a2a3e;color:#d4af37;border:1px solid rgba(212,175,55,0.3);border-radius:5px;cursor:pointer;font-size:11px;">✏️</button>
             <button type="button" onclick="removeCampaignInfluencer(${i})" style="padding:3px 8px;background:#3a1a1a;color:#ff6666;border:1px solid rgba(255,80,80,0.3);border-radius:5px;cursor:pointer;font-size:11px;">✕</button>
-        </div>`).join('');
+        </div>`;
+    }).join('');
 }
 
 function addCampaignInfluencer() {
@@ -7361,9 +7367,27 @@ function toggleCampaignInfluencer(idx) {
     _renderCampaignInfluencers();
 }
 
+// Renombrar un influencer (corregir un typo). El cambio queda pendiente y se
+// aplica al "Guardar": el backend migra los usuarios del nombre viejo al nuevo
+// (las stats por influencer se calculan en vivo sobre User.acquisitionInfluencer).
+function renameCampaignInfluencer(idx) {
+    const arr = window._campaignFormInfluencers || [];
+    const inf = arr[idx];
+    if (!inf) return;
+    const nuevo = (prompt(`Nuevo nombre para el influencer "${inf.name}":`, inf.name) || '').trim().slice(0, 80);
+    if (!nuevo || nuevo === inf.name) return;
+    if (arr.some((x, j) => j !== idx && x.name.toLowerCase() === nuevo.toLowerCase())) {
+        showToast('Ya existe otro influencer con ese nombre', 'error');
+        return;
+    }
+    inf.name = nuevo;
+    _renderCampaignInfluencers();
+}
+
 window.addCampaignInfluencer = addCampaignInfluencer;
 window.removeCampaignInfluencer = removeCampaignInfluencer;
 window.toggleCampaignInfluencer = toggleCampaignInfluencer;
+window.renameCampaignInfluencer = renameCampaignInfluencer;
 
 function showCreateCampaignModal() {
     document.getElementById('campaignFormTitle').textContent = 'Nueva campaña';
@@ -7408,7 +7432,7 @@ function editCampaign(code) {
         document.getElementById('campaignFormJgUsername').value = campaign.jugayganaUsername;
     }
     window._campaignFormInfluencers = (campaign.influencers || []).map(x => ({
-        name: x.name, isActive: x.isActive !== false
+        name: x.name, isActive: x.isActive !== false, orig: x.name
     }));
     _renderCampaignInfluencers();
     showModal('campaignFormModal');
@@ -7491,6 +7515,12 @@ async function submitCampaignForm() {
     body.influencers = (window._campaignFormInfluencers || []).map(x => ({
         name: x.name, isActive: x.isActive !== false
     }));
+    // Renombrados: influencers que ya existían y cambiaron de nombre → el backend
+    // migra sus usuarios (acquisitionInfluencer) del nombre viejo al nuevo.
+    const renames = (window._campaignFormInfluencers || [])
+        .filter(x => x.orig && x.orig.trim() && x.orig.toLowerCase() !== x.name.toLowerCase())
+        .map(x => ({ from: x.orig, to: x.name }));
+    if (renames.length) body.renames = renames;
 
     // Creds JUGAYGANA del publicista (opcionales).
     const jgUsername = document.getElementById('campaignFormJgUsername').value.trim();
@@ -7544,7 +7574,7 @@ async function submitCampaignForm() {
             errorDiv.style.display = '';
             return;
         }
-        showToast('Campaña guardada', 'success');
+        showToast(data.renamedUsers ? `Campaña guardada · ${data.renamedUsers} usuario(s) reasignado(s) al renombrar` : 'Campaña guardada', 'success');
         closeCampaignFormModal();
         loadCampaigns();
     } catch (err) {
@@ -7570,6 +7600,26 @@ async function deactivateCampaign(code) {
         showToast('Error de conexión', 'error');
     }
 }
+
+async function deleteCampaignPermanent(code) {
+    if (!confirm(`⚠️ ¿BORRAR DEFINITIVAMENTE la campaña ${code}?\n\nEsto la elimina de la base de datos (NO se puede deshacer) junto con sus historias de influencer. Los usuarios ya captados se conservan, pero pierden la referencia a este publicista.\n\nSi solo querés frenarla, usá "Desactivar".`)) return;
+    if (!confirm(`Confirmá una vez más: se borra ${code} para SIEMPRE.`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/campaigns/${encodeURIComponent(code)}/permanent`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            return showToast(data.error || 'Error al borrar', 'error');
+        }
+        showToast(`Campaña ${code} borrada definitivamente${data.attributedUsers ? ` (${data.attributedUsers} usuarios conservados)` : ''}`, 'success');
+        loadCampaigns();
+    } catch (err) {
+        showToast('Error de conexión', 'error');
+    }
+}
+window.deleteCampaignPermanent = deleteCampaignPermanent;
 
 async function reactivateCampaign(code) {
     try {

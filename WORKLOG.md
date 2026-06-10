@@ -8,6 +8,29 @@
 
 ## Sesión 2026-06-10
 
+### 24. Segundos en mensajes del chat + separar Demoras por cola (cargas/pagos)
+- **Segundos en el chat:** los timestamps de los mensajes (enviados/recibidos/
+  sistema) ahora muestran HH:mm:ss. Se creó `formatChatTime` (con segundos) y se usa
+  SOLO en los 3 puntos de render de mensajes (`addMessageToChat`,
+  `createMessageElement` regular + sistema). `formatDateTime` (sin segundos) se
+  mantiene en la tabla de Transacciones.
+- **Demoras separadas por cola cargas/pagos:** pagos tolera demoras largas
+  esperadas (~30 min para pagar), cargas no debería pasar de 2 min. Ahora:
+  - `ChatDelay.category` ('cargas'|'pagos'). La cola se deriva al resolver el reloj:
+    `status==='payments' || category==='pagos'` → pagos. Los cierres resuelven la
+    demora ANTES de poner status:'closed' (sino se perdía la cola real).
+  - **Umbrales separados y configurables:** `chatDelayThresholdSeconds` (cargas,
+    default 2 min) y `chatDelayThresholdPagosSeconds` (pagos, default 30 min). Cada
+    demora se registra solo si supera el umbral de SU cola.
+  - **Endpoint:** GET acepta `?category=`; "esperando ahora" ahora incluye chats
+    open Y payments y compara cada uno contra su umbral; devuelve ambos umbrales.
+    POST config acepta ambos.
+  - **Panel:** dos inputs de umbral (Cargas/Pagos), filtro de Cola (Todas/Cargas/
+    Pagos), columna "Cola" con badge en ambas tablas. Hint muestra los dos umbrales.
+  - Nota: registros viejos de ChatDelay (pre-cambio) no tienen `category` → se ven
+    como "Cargas" por default; los nuevos sí la traen.
+- **Validado:** `node --check` OK. Back necesita redeploy; front, recargar el panel.
+
 ### 23. Renombrar influencer (con migración de usuarios) + borrar campaña definitivamente
 - **Pedido:** poder corregir el nombre de un influencer cargado mal, y poder
   borrar campañas/publicistas definitivamente (además de desactivar, que ya existía).

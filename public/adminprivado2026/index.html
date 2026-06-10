@@ -887,12 +887,15 @@
                     <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Registra cuándo un cliente esperó más que el umbral entre que escribió y que un agente le respondió. Muestra los que <strong>están esperando ahora</strong> y el <strong>historial</strong> de demoras (respondidas y cerradas sin responder), con el mensaje, los minutos de demora y qué agente respondió.</p>
                 </div>
 
-                <!-- Configuración de umbral -->
+                <!-- Configuración de umbrales (cargas vs pagos) -->
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:14px;">
-                    <span style="color:#ddd;font-size:12.5px;font-weight:700;">Umbral de demora:</span>
-                    <input id="chatDelayThresholdInput" type="number" min="1" max="1440" step="1" style="width:80px;padding:7px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:13px;">
-                    <span style="color:#aaa;font-size:12px;">minutos</span>
-                    <button class="btn btn-secondary btn-sm" onclick="saveChatDelayThreshold()">Guardar umbral</button>
+                    <span style="color:#ddd;font-size:12.5px;font-weight:700;">Umbral 💳 Cargas:</span>
+                    <input id="chatDelayThresholdInput" type="number" min="1" max="1440" step="1" style="width:70px;padding:7px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:13px;">
+                    <span style="color:#aaa;font-size:12px;">min</span>
+                    <span style="color:#ddd;font-size:12.5px;font-weight:700;margin-left:8px;">Umbral 💸 Pagos:</span>
+                    <input id="chatDelayThresholdPagosInput" type="number" min="1" max="1440" step="1" style="width:70px;padding:7px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:13px;">
+                    <span style="color:#aaa;font-size:12px;">min</span>
+                    <button class="btn btn-secondary btn-sm" onclick="saveChatDelayThreshold()">Guardar umbrales</button>
                     <span id="chatDelayThresholdHint" style="color:#888;font-size:11px;"></span>
                 </div>
 
@@ -941,6 +944,14 @@
                     <div style="display:flex;flex-direction:column;gap:3px;">
                         <label style="color:#999;font-size:10.5px;">Hasta</label>
                         <input id="cdTo" type="date" style="padding:6px 8px;border-radius:7px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:12px;">
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <label style="color:#999;font-size:10.5px;">Cola</label>
+                        <select id="cdCategory" style="padding:6px 8px;border-radius:7px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:12px;">
+                            <option value="">Todas</option>
+                            <option value="cargas">💳 Cargas</option>
+                            <option value="pagos">💸 Pagos</option>
+                        </select>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:3px;">
                         <label style="color:#999;font-size:10.5px;">Estado</label>

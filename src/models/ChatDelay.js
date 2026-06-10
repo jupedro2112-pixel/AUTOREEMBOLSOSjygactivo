@@ -39,6 +39,15 @@ const chatDelaySchema = new mongoose.Schema({
     enum: ['responded', 'unanswered'],
     default: 'responded',
     index: true
+  },
+  // Cola a la que pertenecía el chat cuando se midió la demora. Pagos suele tener
+  // demoras largas esperadas (~30 min para pagar); cargas no debería pasar de pocos
+  // minutos. Se usa para separar el reporte y aplicar umbrales distintos.
+  category: {
+    type: String,
+    enum: ['cargas', 'pagos'],
+    default: 'cargas',
+    index: true
   }
 }, {
   timestamps: true

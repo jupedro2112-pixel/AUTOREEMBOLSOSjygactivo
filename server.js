@@ -1132,16 +1132,26 @@ function getArgentinaYesterday() {
 // guarda un registro permanente en ChatDelay (snapshot que sobrevive al TTL de
 // Message). TODO va envuelto en try/catch: una falla acá NUNCA debe romper la
 // entrega de un mensaje.
-const DEFAULT_CHAT_DELAY_THRESHOLD = 120; // 2 minutos, en segundos
+const DEFAULT_CHAT_DELAY_THRESHOLD = 120;        // cargas: 2 minutos
+const DEFAULT_CHAT_DELAY_THRESHOLD_PAGOS = 1800; // pagos: 30 minutos
 
-async function getChatDelayThreshold() {
+// Umbral según la cola. Pagos tolera demoras mucho mayores (el pago tarda), cargas no.
+async function getChatDelayThreshold(category) {
+  const isPagos = category === 'pagos';
+  const key = isPagos ? 'chatDelayThresholdPagosSeconds' : 'chatDelayThresholdSeconds';
+  const def = isPagos ? DEFAULT_CHAT_DELAY_THRESHOLD_PAGOS : DEFAULT_CHAT_DELAY_THRESHOLD;
   try {
-    const v = await getConfig('chatDelayThresholdSeconds');
+    const v = await getConfig(key);
     const n = parseInt(v, 10);
-    return Number.isFinite(n) && n > 0 ? n : DEFAULT_CHAT_DELAY_THRESHOLD;
+    return Number.isFinite(n) && n > 0 ? n : def;
   } catch (_) {
-    return DEFAULT_CHAT_DELAY_THRESHOLD;
+    return def;
   }
+}
+
+// Deriva la cola (cargas/pagos) del estado del chat.
+function deriveChatQueue(cs) {
+  return (cs && (cs.status === 'payments' || cs.category === 'pagos')) ? 'pagos' : 'cargas';
 }
 
 function buildDelayPreview(content, type) {
@@ -1182,13 +1192,14 @@ async function delayClockResolve(userId, { responded, agentId = null, agentUsern
       { userId, pendingSince: { $ne: null } },
       { $set: { pendingSince: null, pendingPreview: null, pendingType: null } },
       { new: false }
-    ).select('username assignedTo pendingSince pendingPreview pendingType').lean();
+    ).select('username assignedTo pendingSince pendingPreview pendingType category status').lean();
 
     if (!cs || !cs.pendingSince) return; // no había espera en curso (o ya la tomó otro)
 
     const now = new Date();
     const delaySeconds = Math.round((now - new Date(cs.pendingSince)) / 1000);
-    const threshold = await getChatDelayThreshold();
+    const queue = deriveChatQueue(cs);
+    const threshold = await getChatDelayThreshold(queue);
 
     if (delaySeconds >= threshold) {
       await ChatDelay.create({
@@ -1204,7 +1215,8 @@ async function delayClockResolve(userId, { responded, agentId = null, agentUsern
         respondedByUsername: responded ? agentUsername : null,
         respondedVia: responded ? (via || 'message') : null,
         assignedTo: cs.assignedTo || null,
-        status: responded ? 'responded' : 'unanswered'
+        status: responded ? 'responded' : 'unanswered',
+        category: queue
       });
     }
   } catch (e) {
@@ -4229,6 +4241,11 @@ app.post('/api/admin/chats/:userId/close', authMiddleware, adminMiddleware, asyn
   try {
     const { userId } = req.params;
     
+    // SLA: si se cierra con una espera en curso, registrarla como "sin responder".
+    // Se resuelve ANTES de cerrar para que capture la cola real (cargas/pagos);
+    // el cierre pone status:'closed' y pisaría esa info.
+    await delayClockResolve(userId, { responded: false });
+
     await ChatStatus.findOneAndUpdate(
       { userId },
       {
@@ -4240,9 +4257,6 @@ app.post('/api/admin/chats/:userId/close', authMiddleware, adminMiddleware, asyn
       },
       { upsert: true }
     );
-
-    // SLA: si se cerró con una espera en curso, registrarla como "sin responder".
-    await delayClockResolve(userId, { responded: false });
 
     res.json({ success: true, message: 'Chat cerrado' });
   } catch (error) {
@@ -10382,10 +10396,14 @@ app.post('/api/admin/close-chat', authMiddleware, adminMiddleware, async (req, r
       return res.status(400).json({ error: 'Usuario no especificado' });
     }
     
+    // SLA: registrar la espera en curso como "sin responder" ANTES de cerrar
+    // (el cierre pone status:'closed' y perdería la cola cargas/pagos real).
+    await delayClockResolve(userId, { responded: false });
+
     // Actualizar estado del chat
     await ChatStatus.findOneAndUpdate(
       { userId },
-      { 
+      {
         status: 'closed',
         assignedTo: null,
         closedAt: new Date(),
@@ -10410,9 +10428,6 @@ app.post('/api/admin/close-chat', authMiddleware, adminMiddleware, async (req, r
       timestamp: new Date()
     });
     
-    // SLA: si se cerró con una espera en curso, registrarla como "sin responder".
-    await delayClockResolve(userId, { responded: false });
-
     // Notificar a admins (siempre, es interno)
     notifyAdmins('chat_closed', { userId, by: req.user.username, adminId: req.user.userId, isPaymentsTab });
 
@@ -10432,14 +10447,16 @@ app.get('/api/admin/chat-delays', authMiddleware, adminMiddleware, async (req, r
       return res.status(403).json({ error: 'Solo el admin general puede ver las demoras' });
     }
 
-    const threshold = await getChatDelayThreshold();
+    const thrCargas = await getChatDelayThreshold('cargas');
+    const thrPagos = await getChatDelayThreshold('pagos');
 
     // Filtros del historial
-    const { from, to, agent, status, page = 1, limit = 50 } = req.query;
+    const { from, to, agent, status, category, page = 1, limit = 50 } = req.query;
     const minDelay = parseInt(req.query.minDelay, 10); // en segundos
 
     const q = {};
     if (status === 'responded' || status === 'unanswered') q.status = status;
+    if (category === 'cargas' || category === 'pagos') q.category = category;
     if (agent) q.respondedByUsername = agent;
     if (Number.isFinite(minDelay) && minDelay > 0) q.delaySeconds = { $gte: minDelay };
     if (from || to) {
@@ -10471,33 +10488,42 @@ app.get('/api/admin/chat-delays', authMiddleware, adminMiddleware, async (req, r
       ])
     ]);
 
-    // "Esperando ahora": clientes con el reloj corriendo por encima del umbral,
-    // en chats abiertos (los de pagos/cerrados no cuentan acá).
-    const cutoff = new Date(Date.now() - threshold * 1000);
+    // "Esperando ahora": clientes con el reloj corriendo, en chats abiertos o de
+    // pagos. Cada uno se compara contra el umbral de SU cola (cargas vs pagos).
+    const now = Date.now();
     const waitingDocs = await ChatStatus.find({
-      status: 'open',
-      pendingSince: { $ne: null, $lte: cutoff }
+      status: { $in: ['open', 'payments'] },
+      pendingSince: { $ne: null }
     })
-      .select('userId username pendingSince pendingPreview pendingType assignedTo')
+      .select('userId username pendingSince pendingPreview pendingType assignedTo category status')
       .sort({ pendingSince: 1 })
-      .limit(200)
+      .limit(300)
       .lean();
 
-    const now = Date.now();
-    const waiting = waitingDocs.map(d => ({
-      userId: d.userId,
-      username: d.username,
-      preview: d.pendingPreview || '',
-      type: d.pendingType || 'text',
-      waitingSeconds: Math.round((now - new Date(d.pendingSince).getTime()) / 1000),
-      since: d.pendingSince,
-      assignedTo: d.assignedTo || null
-    }));
+    let waiting = waitingDocs.map(d => {
+      const queue = deriveChatQueue(d);
+      return {
+        userId: d.userId,
+        username: d.username,
+        preview: d.pendingPreview || '',
+        type: d.pendingType || 'text',
+        category: queue,
+        waitingSeconds: Math.round((now - new Date(d.pendingSince).getTime()) / 1000),
+        since: d.pendingSince,
+        assignedTo: d.assignedTo || null
+      };
+    }).filter(w => w.waitingSeconds >= (w.category === 'pagos' ? thrPagos : thrCargas));
+
+    // Aplicar el filtro de cola también a "esperando ahora" si se pidió uno.
+    if (category === 'cargas' || category === 'pagos') {
+      waiting = waiting.filter(w => w.category === category);
+    }
 
     const s = summaryAgg[0] || { count: 0, avgDelay: 0, worstDelay: 0, unanswered: 0 };
 
     res.json({
-      thresholdSeconds: threshold,
+      thresholdSeconds: thrCargas,
+      thresholdPagosSeconds: thrPagos,
       waiting,
       delays,
       pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
@@ -10521,13 +10547,25 @@ app.post('/api/admin/chat-delays/config', authMiddleware, adminMiddleware, async
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Solo el admin general puede configurar el umbral' });
     }
-    let { thresholdSeconds } = req.body;
-    thresholdSeconds = parseInt(thresholdSeconds, 10);
-    if (!Number.isFinite(thresholdSeconds) || thresholdSeconds < 10 || thresholdSeconds > 86400) {
-      return res.status(400).json({ error: 'Umbral inválido (debe estar entre 10 segundos y 24 horas)' });
+    const out = {};
+    const validRange = (n) => Number.isFinite(n) && n >= 10 && n <= 86400;
+
+    if (req.body.thresholdSeconds != null) {
+      const n = parseInt(req.body.thresholdSeconds, 10);
+      if (!validRange(n)) return res.status(400).json({ error: 'Umbral de cargas inválido (10s a 24h)' });
+      await setConfig('chatDelayThresholdSeconds', String(n));
+      out.thresholdSeconds = n;
     }
-    await setConfig('chatDelayThresholdSeconds', String(thresholdSeconds));
-    res.json({ success: true, thresholdSeconds });
+    if (req.body.thresholdPagosSeconds != null) {
+      const n = parseInt(req.body.thresholdPagosSeconds, 10);
+      if (!validRange(n)) return res.status(400).json({ error: 'Umbral de pagos inválido (10s a 24h)' });
+      await setConfig('chatDelayThresholdPagosSeconds', String(n));
+      out.thresholdPagosSeconds = n;
+    }
+    if (Object.keys(out).length === 0) {
+      return res.status(400).json({ error: 'No se envió ningún umbral' });
+    }
+    res.json({ success: true, ...out });
   } catch (error) {
     console.error('Error guardando umbral de demoras:', error);
     res.status(500).json({ error: 'Error del servidor' });

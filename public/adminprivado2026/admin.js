@@ -1806,7 +1806,7 @@ function addMessageToChat(message, isOutgoing = false) {
                 <span>${escapeHtml(message.senderUsername)}</span>
             </div>
             <div class="message-content">${formatMessageContent(message)}</div>
-            <div class="message-time">${formatDateTime(message.timestamp || new Date())}</div>
+            <div class="message-time">${formatChatTime(message.timestamp || new Date())}</div>
         `;
     }
 
@@ -3919,6 +3919,31 @@ function formatDateTime(date) {
     }) + ' ' + time;
 }
 
+// Igual que formatDateTime pero CON segundos. Se usa solo en los mensajes del
+// chat (enviados/recibidos) para poder ver el horario exacto y controlar demoras.
+function formatChatTime(date) {
+    if (!date) return '';
+    const d = new Date(date);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const dateOpts = { timeZone: 'America/Argentina/Buenos_Aires' };
+    const dStr = d.toLocaleDateString('es-AR', dateOpts);
+    const todayStr = today.toLocaleDateString('es-AR', dateOpts);
+    const yesterdayStr = yesterday.toLocaleDateString('es-AR', dateOpts);
+
+    const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+
+    if (dStr === todayStr) return `Hoy ${time}`;
+    if (dStr === yesterdayStr) return `Ayer ${time}`;
+
+    return d.toLocaleDateString('es-AR', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        timeZone: 'America/Argentina/Buenos_Aires'
+    }) + ' ' + time;
+}
+
 function debounce(func, wait) {
     let timeout;
     return function executedFunction(...args) {
@@ -5147,7 +5172,7 @@ function createMessageElement(message) {
         div.dataset.messageid = message.id || '';
         // Mostrar la hora de envío también en los mensajes automáticos (naranja),
         // para poder corroborar a qué horario se enviaron y controlar demoras.
-        const time = formatDateTime(message.timestamp || new Date());
+        const time = formatChatTime(message.timestamp || new Date());
         div.innerHTML = `<div class="message-content"><span class="icon icon-lock"></span> <span>${escapeHtml(message.content)}</span></div><div class="message-time system-time">${time}</div>`;
         return div;
     }
@@ -5158,9 +5183,9 @@ function createMessageElement(message) {
     msgDiv.className = `message ${isOutgoing ? 'outgoing' : 'incoming'}`;
     msgDiv.dataset.messageid = message.id;
     
-    const time = formatDateTime(message.timestamp || new Date());
+    const time = formatChatTime(message.timestamp || new Date());
     const content = formatMessageContent(message);
-    
+
     msgDiv.innerHTML = `
         <div class="message-header">
             <span class="icon icon-user"></span>
@@ -8519,14 +8544,22 @@ function _cdQuery() {
     const from = document.getElementById('cdFrom')?.value;
     const to = document.getElementById('cdTo')?.value;
     const status = document.getElementById('cdStatus')?.value;
+    const cat = document.getElementById('cdCategory')?.value;
     const minMin = parseInt(document.getElementById('cdMinDelay')?.value, 10);
     if (from) p.set('from', from);
     if (to) p.set('to', to);
     if (status) p.set('status', status);
+    if (cat) p.set('category', cat);
     if (Number.isFinite(minMin) && minMin > 0) p.set('minDelay', String(minMin * 60)); // min → seg
     p.set('page', String(_cdPage));
     p.set('limit', '50');
     return p.toString();
+}
+
+// Badge de cola (cargas/pagos) para las tablas.
+function _cdCatBadge(cat) {
+    if (cat === 'pagos') return '<span style="background:rgba(255,82,82,0.15);color:#ff8a8a;border:1px solid rgba(255,82,82,0.4);border-radius:5px;padding:1px 6px;font-size:10.5px;white-space:nowrap;">💸 Pagos</span>';
+    return '<span style="background:rgba(0,200,120,0.12);color:#7fe0a8;border:1px solid rgba(0,200,120,0.35);border-radius:5px;padding:1px 6px;font-size:10.5px;white-space:nowrap;">💳 Cargas</span>';
 }
 
 async function loadChatDelays() {
@@ -8539,12 +8572,17 @@ async function loadChatDelays() {
         if (!r.ok) throw new Error(j.error || ('Error ' + r.status));
 
         _cdThresholdSeconds = j.thresholdSeconds || 120;
+        const _cdThresholdPagos = j.thresholdPagosSeconds || 1800;
         const thrInput = document.getElementById('chatDelayThresholdInput');
         if (thrInput && document.activeElement !== thrInput) {
             thrInput.value = Math.round(_cdThresholdSeconds / 60);
         }
+        const thrPagosInput = document.getElementById('chatDelayThresholdPagosInput');
+        if (thrPagosInput && document.activeElement !== thrPagosInput) {
+            thrPagosInput.value = Math.round(_cdThresholdPagos / 60);
+        }
         const hint = document.getElementById('chatDelayThresholdHint');
-        if (hint) hint.textContent = '(actual: ' + _cdDur(_cdThresholdSeconds) + ')';
+        if (hint) hint.textContent = '(cargas: ' + _cdDur(_cdThresholdSeconds) + ' · pagos: ' + _cdDur(_cdThresholdPagos) + ')';
 
         // Resumen
         const s = j.summary || {};
@@ -8577,12 +8615,13 @@ function renderChatDelaysWaiting(waiting) {
         el.innerHTML = '<div style="color:#6fcf6f;padding:12px;background:rgba(0,255,136,0.05);border-radius:8px;">✅ Nadie esperando respuesta por encima del umbral.</div>';
         return;
     }
-    let html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Mensaje</th>'
+    let html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Cola</th><th>Mensaje</th>'
         + '<th style="text-align:right;">Esperando</th><th>Asignado a</th></tr></thead><tbody>';
     waiting.forEach(function (w) {
         html += '<tr style="cursor:pointer;" onclick="openChatFromDelay(\'' + _centEsc(w.userId) + '\')">'
             + '<td><strong>' + _centEsc(w.username) + '</strong></td>'
-            + '<td style="max-width:340px;color:#ccc;">' + _centEsc(w.preview || '—') + '</td>'
+            + '<td>' + _cdCatBadge(w.category) + '</td>'
+            + '<td style="max-width:320px;color:#ccc;">' + _centEsc(w.preview || '—') + '</td>'
             + '<td style="text-align:right;color:#ffb300;font-weight:800;">' + _cdDur(w.waitingSeconds) + '</td>'
             + '<td style="color:#aaa;">' + _centEsc(w.assignedTo || '—') + '</td></tr>';
     });
@@ -8597,7 +8636,7 @@ function renderChatDelaysHistory(delays) {
         el.innerHTML = '<div class="empty-state"><p>No hay demoras registradas con este filtro.</p></div>';
         return;
     }
-    let html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Mensaje</th>'
+    let html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Cola</th><th>Mensaje</th>'
         + '<th style="text-align:right;">Demora</th><th>Estado</th><th>Respondió</th>'
         + '<th>Vía</th><th>Fecha del mensaje</th></tr></thead><tbody>';
     delays.forEach(function (d) {
@@ -8609,7 +8648,8 @@ function renderChatDelaysHistory(delays) {
         const via = _viaMap[d.respondedVia] || '—';
         html += '<tr style="cursor:pointer;" onclick="openChatFromDelay(\'' + _centEsc(d.userId) + '\')">'
             + '<td><strong>' + _centEsc(d.username) + '</strong></td>'
-            + '<td style="max-width:320px;color:#ccc;">' + _centEsc(d.userMessagePreview || '—') + '</td>'
+            + '<td>' + _cdCatBadge(d.category) + '</td>'
+            + '<td style="max-width:300px;color:#ccc;">' + _centEsc(d.userMessagePreview || '—') + '</td>'
             + '<td style="text-align:right;font-weight:800;color:' + (respondido ? '#ffc107' : '#ff5252') + ';">' + _cdDur(d.delaySeconds) + '</td>'
             + '<td>' + estado + '</td>'
             + '<td style="color:#ccc;">' + _centEsc(d.respondedByUsername || '—') + '</td>'
@@ -8647,25 +8687,26 @@ function applyChatDelaysFilter() {
 function clearChatDelaysFilter() {
     ['cdFrom', 'cdTo', 'cdMinDelay'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     const st = document.getElementById('cdStatus'); if (st) st.value = '';
+    const cat = document.getElementById('cdCategory'); if (cat) cat.value = '';
     _cdPage = 1;
     loadChatDelays();
 }
 
 async function saveChatDelayThreshold() {
-    const input = document.getElementById('chatDelayThresholdInput');
-    const mins = parseInt(input?.value, 10);
-    if (!Number.isFinite(mins) || mins < 1 || mins > 1440) {
-        showToast('Umbral inválido (1 a 1440 minutos)', 'error');
+    const mins = parseInt(document.getElementById('chatDelayThresholdInput')?.value, 10);
+    const minsPagos = parseInt(document.getElementById('chatDelayThresholdPagosInput')?.value, 10);
+    if (!Number.isFinite(mins) || mins < 1 || mins > 1440 || !Number.isFinite(minsPagos) || minsPagos < 1 || minsPagos > 1440) {
+        showToast('Umbrales inválidos (1 a 1440 minutos cada uno)', 'error');
         return;
     }
     try {
         const r = await authFetch('/api/admin/chat-delays/config', {
             method: 'POST',
-            body: JSON.stringify({ thresholdSeconds: mins * 60 })
+            body: JSON.stringify({ thresholdSeconds: mins * 60, thresholdPagosSeconds: minsPagos * 60 })
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || 'Error');
-        showToast('Umbral guardado: ' + mins + ' min', 'success');
+        showToast(`Umbrales guardados · cargas ${mins} min · pagos ${minsPagos} min`, 'success');
         loadChatDelays();
     } catch (e) {
         showToast('❌ ' + e.message, 'error');

@@ -1282,6 +1282,11 @@ const CONVERSATIONS_CACHE_TIME = 30000; // 30 segundos (actualizamos en tiempo r
 let _lastConvRefreshAt = 0;
 let _convRefreshTimer = null;
 function scheduleConversationsRefresh() {
+    // Si no estás viendo la sección Chats, no tiene sentido recargar la lista de
+    // conversaciones por cada mensaje de otros agentes (gasta requests y puede
+    // 429-ear). Al volver a Chats, switchSection('chats') la recarga una vez.
+    const chatsActive = document.getElementById('chatsSection')?.classList.contains('active');
+    if (!chatsActive) return;
     const MIN_GAP = 4000;
     const doRefresh = () => {
         _lastConvRefreshAt = Date.now();
@@ -3675,6 +3680,9 @@ function switchSection(section) {
     });
     
     // Load section data
+    // Al volver a Chats, recargar la lista una vez (mientras estuviste en otra
+    // sección no se refrescaba en background, así que puede haber chats nuevos).
+    if (section === 'chats') loadConversations(false);
     if (section === 'users') loadUsers(1);
     if (section === 'transactions') {
         // La primera vez que se entra, el rango arranca en HOY (antes traía TODO

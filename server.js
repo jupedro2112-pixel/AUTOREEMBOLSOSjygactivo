@@ -85,6 +85,17 @@ const generalLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  // Cada admin logueado tiene su PROPIO cupo, keyeado por su cookie de sesión
+  // (admin_api_session). Así varios agentes detrás de la misma IP (oficina/NAT)
+  // NO comparten el límite y no se 429-ean entre ellos. Los clientes de la PWA
+  // (que se autentican por header Bearer, sin esa cookie) siguen limitados por IP.
+  keyGenerator: (req) => {
+    const sess = getAdminApiSessionCookie(req);
+    return sess ? ('sess:' + sess) : req.ip;
+  },
+  // Desactiva la validación de IPv6-fallback de la lib: usamos cookie para admins
+  // e IP para clientes a propósito (no necesitamos el helper de IPv6 acá).
+  validate: { keyGeneratorIpFallback: false },
   message: { error: 'Demasiadas solicitudes. Intenta más tarde.' }
 });
 

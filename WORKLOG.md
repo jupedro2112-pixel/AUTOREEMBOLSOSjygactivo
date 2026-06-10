@@ -8,6 +8,28 @@
 
 ## Sesión 2026-06-10
 
+### 22. Fix 429 con MUCHOS admins a la vez (cupo por admin + no recargar fuera de Chats)
+- **Síntoma:** con varios agentes trabajando en simultáneo, aparecía de nuevo
+  "Demasiadas solicitudes" (429); ej: un admin en la sección Demoras veía
+  "Error cargando closed" mientras otro agente contestaba en Chats.
+- **Causa 1 (de fondo):** `generalLimiter` (300 req/min) estaba keyeado por **IP**.
+  Varios agentes detrás de la misma IP (oficina/NAT) **comparten el cupo** → se
+  429-ean entre todos. El fix anterior (#19) bajó el volumen por-admin pero no
+  resuelve el pool compartido por IP con N admins.
+- **Causa 2 (desperdicio):** estando en otra sección (Demoras, etc.), el panel
+  igual recargaba la lista de conversaciones en background por cada mensaje de
+  otros agentes (vía `scheduleConversationsRefresh` disparado por sockets).
+- **Fix server (`server.js`):** `generalLimiter` ahora usa `keyGenerator` por
+  **cookie de sesión** (`admin_api_session`) → cada admin logueado tiene su PROPIO
+  cupo de 300/min, sin importar la IP compartida. Los clientes de la PWA (auth por
+  header Bearer, sin esa cookie) siguen limitados por IP. `validate:
+  { keyGeneratorIpFallback:false }` para no chocar con la validación IPv6 de la lib.
+- **Fix cliente (`admin.js`):** `scheduleConversationsRefresh` corta temprano si la
+  sección Chats no está activa (no recarga conversaciones cuando no las estás
+  viendo). Al volver a Chats, `switchSection('chats')` recarga la lista una vez.
+- **Validado:** `node --check` OK. El fix del cupo por admin requiere redeploy del
+  server; el del cliente, recargar el panel.
+
 ### 21. Hora de envío visible en los mensajes automáticos (naranja) del chat admin
 - **Pedido:** los mensajes automáticos del sistema (naranjas) no mostraban la hora;
   el owner quiere verla para corroborar demoras / horario de envío.

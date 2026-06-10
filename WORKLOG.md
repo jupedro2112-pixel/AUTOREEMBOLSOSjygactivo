@@ -27,9 +27,24 @@
     POST config acepta ambos.
   - **Panel:** dos inputs de umbral (Cargas/Pagos), filtro de Cola (Todas/Cargas/
     Pagos), columna "Cola" con badge en ambas tablas. Hint muestra los dos umbrales.
-  - Nota: registros viejos de ChatDelay (pre-cambio) no tienen `category` → se ven
-    como "Cargas" por default; los nuevos sí la traen.
+  - Nota: registros viejos de ChatDelay (pre-cambio) no tienen `category`.
 - **Validado:** `node --check` OK. Back necesita redeploy; front, recargar el panel.
+
+### 24b. Ajuste de la cola: señales más fuertes + registros viejos no mienten
+- **Problema reportado:** un chat que estaba en pagos aparecía como "Cargas". Causa:
+  esos registros eran ANTERIORES al deploy del cambio (sin campo `category`), y el
+  badge los mostraba como "Cargas" por default.
+- **Fix UI:** registros sin `category` ahora muestran "—" (no "Cargas").
+- **Mejora de precisión (back):** `delayClockResolve` acepta `queueHint`. Lógica final
+  (confirmada con el flujo del owner): **gana "pagos" si hay CUALQUIER señal de pagos** →
+  `queue = (queueHint==='pagos' || deriveChatQueue(cs)==='pagos') ? 'pagos' : 'cargas'`.
+  Señales de pagos: chat en `status:'payments'` (pestaña Pagos), operación de retiro,
+  o agente `withdrawer`. Señales de cargas (depositor / carga / bonus / CBU) caen a
+  cargas por defecto. Helper `roleQueueHint(role)`.
+- **Flujo real del owner:** cargas las contesta un admin `depositor` en chat abierto;
+  el chat pasa a Pagos cuando el cliente toca "Retirar" (auto) o el depositor toca
+  "Enviar a pagos" → `status:'payments'`; ahí se manda el comprobante y se cierra.
+  Con la regla "pagos gana", todo lo que pasa en la sección Pagos queda etiquetado pagos.
 
 ### 23. Renombrar influencer (con migración de usuarios) + borrar campaña definitivamente
 - **Pedido:** poder corregir el nombre de un influencer cargado mal, y poder

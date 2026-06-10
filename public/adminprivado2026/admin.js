@@ -8559,7 +8559,9 @@ function _cdQuery() {
 // Badge de cola (cargas/pagos) para las tablas.
 function _cdCatBadge(cat) {
     if (cat === 'pagos') return '<span style="background:rgba(255,82,82,0.15);color:#ff8a8a;border:1px solid rgba(255,82,82,0.4);border-radius:5px;padding:1px 6px;font-size:10.5px;white-space:nowrap;">💸 Pagos</span>';
-    return '<span style="background:rgba(0,200,120,0.12);color:#7fe0a8;border:1px solid rgba(0,200,120,0.35);border-radius:5px;padding:1px 6px;font-size:10.5px;white-space:nowrap;">💳 Cargas</span>';
+    if (cat === 'cargas') return '<span style="background:rgba(0,200,120,0.12);color:#7fe0a8;border:1px solid rgba(0,200,120,0.35);border-radius:5px;padding:1px 6px;font-size:10.5px;white-space:nowrap;">💳 Cargas</span>';
+    // Registros viejos (anteriores al deploy del cambio): sin dato de cola.
+    return '<span style="color:#888;font-size:10.5px;" title="Registro previo a la separación por cola">—</span>';
 }
 
 async function loadChatDelays() {

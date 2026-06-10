@@ -1154,6 +1154,14 @@ function deriveChatQueue(cs) {
   return (cs && (cs.status === 'payments' || cs.category === 'pagos')) ? 'pagos' : 'cargas';
 }
 
+// Cola según el rol del agente que respondió: el withdrawer solo atiende pagos y el
+// depositor solo cargas. El admin general atiende ambas → null (se deriva del chat).
+function roleQueueHint(role) {
+  if (role === 'withdrawer') return 'pagos';
+  if (role === 'depositor') return 'cargas';
+  return null;
+}
+
 function buildDelayPreview(content, type) {
   if (type === 'image') return '📸 Imagen';
   if (type === 'video') return '🎥 Video';
@@ -1182,7 +1190,7 @@ async function delayClockOnUserMessage(userId, content, type) {
 // Resolver el reloj. responded=true → un agente respondió; responded=false → el
 // chat se cerró sin responder. Registra ChatDelay sólo si la demora ≥ umbral.
 // Siempre limpia el reloj.
-async function delayClockResolve(userId, { responded, agentId = null, agentUsername = null, via = null } = {}) {
+async function delayClockResolve(userId, { responded, agentId = null, agentUsername = null, via = null, queueHint = null } = {}) {
   if (!userId) return;
   try {
     // Limpiar el reloj de forma ATÓMICA y quedarse con el valor previo. Si dos
@@ -1198,7 +1206,11 @@ async function delayClockResolve(userId, { responded, agentId = null, agentUsern
 
     const now = new Date();
     const delaySeconds = Math.round((now - new Date(cs.pendingSince)) / 1000);
-    const queue = deriveChatQueue(cs);
+    // Gana "pagos" si hay CUALQUIER señal de pagos: el chat está en la pestaña Pagos
+    // (status:'payments'), o la operación fue un retiro, o respondió un withdrawer.
+    // Si no hay ninguna señal de pagos → cargas. Esto matchea el flujo real: una vez
+    // que el chat pasa a Pagos, toda demora ahí es de la cola de pagos.
+    const queue = (queueHint === 'pagos' || deriveChatQueue(cs) === 'pagos') ? 'pagos' : 'cargas';
     const threshold = await getChatDelayThreshold(queue);
 
     if (delaySeconds >= threshold) {
@@ -1471,7 +1483,7 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
     });
 
     // SLA: enviar el CBU es responderle al cliente (resuelve el reloj de demora).
-    await delayClockResolve(userId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message' });
+    await delayClockResolve(userId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message', queueHint: 'cargas' });
     
     // Notificar al usuario por socket si está conectado
     const userSocket = connectedUsers.get(userId);
@@ -4691,7 +4703,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
 
           // SLA: el comando del agente cuenta como respuesta al cliente.
           if (isAdminRole) {
-            await delayClockResolve(commandReceiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'command' });
+            await delayClockResolve(commandReceiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'command', queueHint: roleQueueHint(req.user.role) });
           }
 
           // NO emitir el mensaje original del comando, solo la respuesta
@@ -4734,7 +4746,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
     } else {
       // Admin enviando mensaje - notificar al usuario
       // SLA: respuesta de texto del agente — resolver el reloj de demora.
-      await delayClockResolve(req.body.receiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message' });
+      await delayClockResolve(req.body.receiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message', queueHint: roleQueueHint(req.user.role) });
       const userSocket = connectedUsers.get(req.body.receiverId);
       const deliveredViaSocket = !!userSocket;
       if (userSocket) {
@@ -5453,7 +5465,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
 
     if (result.success) {
       // SLA: atender al cliente con una carga cuenta como respuesta (resuelve el reloj).
-      await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation' });
+      await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation', queueHint: 'cargas' });
       // Si hay bonus, acreditarlo en JUGAYGANA como individual_bonus en operación separada.
       // Pausa de 700ms entre la carga principal y el bonus para evitar el rate-limit
       // interno de JUGAYGANA sobre operaciones consecutivas sobre el mismo user
@@ -5859,7 +5871,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
     if (result.success) {
       await recordUserActivity(user.id, 'withdrawal', amount);
       // SLA: atender al cliente con un retiro cuenta como respuesta (resuelve el reloj).
-      await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation' });
+      await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation', queueHint: 'pagos' });
 
       // Obtener saldo actualizado del usuario. Reintenta para evitar "saldo $0"
       // engañoso cuando getUserBalance falla transitoriamente post-retiro.
@@ -6016,7 +6028,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
 
     if (depositResult.success) {
       // SLA: atender al cliente con un bonus cuenta como respuesta (resuelve el reloj).
-      await delayClockResolve(bonusUser.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation' });
+      await delayClockResolve(bonusUser.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation', queueHint: 'cargas' });
       // bonusUser ya lo resolvimos arriba con findOne — no hace falta repetir
       // el query (mismo efecto, una llamada menos a la DB).
 
@@ -6291,7 +6303,7 @@ io.on('connection', (socket) => {
 
             // SLA: el comando del agente cuenta como respuesta al cliente.
             if (isAdminRole) {
-              await delayClockResolve(commandReceiverId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'command' });
+              await delayClockResolve(commandReceiverId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'command', queueHint: roleQueueHint(socket.role) });
             }
 
             // IMPORTANTE: NO guardar el mensaje del comando (/cbu), solo la respuesta
@@ -6380,7 +6392,7 @@ io.on('connection', (socket) => {
           // SLA: reloj de demora de respuesta. Si responde un agente, resolvemos
           // (y registramos si superó el umbral); si escribe el cliente, arrancamos.
           if (isAdminRole) {
-            await delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message' });
+            await delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message', queueHint: roleQueueHint(socket.role) });
           } else {
             await delayClockOnUserMessage(targetUserId, content, type);
           }

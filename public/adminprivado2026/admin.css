@@ -821,6 +821,16 @@ body {
     max-width: 90%;
 }
 
+/* Mantener el tamaño del texto del mensaje de sistema y mostrar la hora de envío */
+.message.system .message-content {
+    font-size: 13px;
+}
+.message.system .message-time {
+    text-align: right;
+    opacity: 0.75;
+    font-size: 10.5px;
+}
+
 .message-header {
     display: flex;
     align-items: center;

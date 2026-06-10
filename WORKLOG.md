@@ -8,6 +8,17 @@
 
 ## Sesión 2026-06-10
 
+### 21. Hora de envío visible en los mensajes automáticos (naranja) del chat admin
+- **Pedido:** los mensajes automáticos del sistema (naranjas) no mostraban la hora;
+  el owner quiere verla para corroborar demoras / horario de envío.
+- **Causa:** `createMessageElement` (panel) renderizaba `type==='system'` sin la
+  línea `.message-time` (a diferencia de los mensajes normales). En tiempo real,
+  `addMessageToChat` los pintaba como burbuja normal (inconsistente).
+- **Fix (solo `adminprivado2026/`):** la rama de sistema de `createMessageElement`
+  ahora incluye `formatDateTime(timestamp)` (mismo formato "Hoy HH:mm" que el resto);
+  `addMessageToChat` delega en `createMessageElement` para `type==='system'` →
+  historial y tiempo real quedan idénticos (naranja + hora). CSS menor en `admin.css`.
+
 ### 20. Control de demoras de respuesta en chats (SLA de atención)
 - **Pedido:** poder controlar cuánto tarda la atención. Si un cliente manda un
   mensaje y se tarda > umbral (default 2 min) en responderle, que quede registrado

@@ -1786,18 +1786,25 @@ function addMessageToChat(message, isOutgoing = false) {
         }
     }
     
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `message ${isOutgoing ? 'outgoing' : 'incoming'}`;
-    msgDiv.dataset.messageid = message.id;
-    msgDiv.innerHTML = `
-        <div class="message-header">
-            <span class="icon icon-user"></span>
-            <span>${escapeHtml(message.senderUsername)}</span>
-        </div>
-        <div class="message-content">${formatMessageContent(message)}</div>
-        <div class="message-time">${formatDateTime(message.timestamp || new Date())}</div>
-    `;
-    
+    // Mensajes de sistema (automáticos, naranja): mismo render que al cargar el
+    // historial, ya con la hora de envío visible (createMessageElement).
+    let msgDiv;
+    if (message.type === 'system') {
+        msgDiv = createMessageElement(message);
+    } else {
+        msgDiv = document.createElement('div');
+        msgDiv.className = `message ${isOutgoing ? 'outgoing' : 'incoming'}`;
+        msgDiv.dataset.messageid = message.id;
+        msgDiv.innerHTML = `
+            <div class="message-header">
+                <span class="icon icon-user"></span>
+                <span>${escapeHtml(message.senderUsername)}</span>
+            </div>
+            <div class="message-content">${formatMessageContent(message)}</div>
+            <div class="message-time">${formatDateTime(message.timestamp || new Date())}</div>
+        `;
+    }
+
     // Remove empty state if exists
     const emptyState = elements.chatMessages.querySelector('.empty-state');
     if (emptyState) {
@@ -5130,7 +5137,10 @@ function createMessageElement(message) {
         const div = document.createElement('div');
         div.className = 'message system';
         div.dataset.messageid = message.id || '';
-        div.innerHTML = `<span class="icon icon-lock"></span> <span>${escapeHtml(message.content)}</span>`;
+        // Mostrar la hora de envío también en los mensajes automáticos (naranja),
+        // para poder corroborar a qué horario se enviaron y controlar demoras.
+        const time = formatDateTime(message.timestamp || new Date());
+        div.innerHTML = `<div class="message-content"><span class="icon icon-lock"></span> <span>${escapeHtml(message.content)}</span></div><div class="message-time system-time">${time}</div>`;
         return div;
     }
     

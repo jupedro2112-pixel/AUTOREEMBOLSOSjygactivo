@@ -75,6 +75,11 @@
                     <span>Chats</span>
                     <span id="unreadBadge" class="badge hidden">0</span>
                 </a>
+                <a href="#" class="nav-item nav-item-chat-delays" data-section="chatDelays" style="display:none">
+                    <span>⏱️</span>
+                    <span>Demoras</span>
+                    <span id="chatDelaysWaitingBadge" class="badge hidden">0</span>
+                </a>
                 <a href="#" class="nav-item" data-section="users">
                     <span class="icon icon-users"></span>
                     <span>Usuarios</span>
@@ -868,6 +873,94 @@
                 <div id="reembolsosBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>
+            </section>
+
+            <!-- ============================================================
+                 CONTROL DE DEMORAS DE RESPUESTA EN CHATS (SLA de atención)
+                 ============================================================ -->
+            <section id="chatDelaysSection" class="section">
+                <div class="panel-header">
+                    <h2>⏱️ Demoras de respuesta</h2>
+                    <button class="refresh-btn" onclick="loadChatDelays()" title="Refrescar">🔄</button>
+                </div>
+                <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Registra cuándo un cliente esperó más que el umbral entre que escribió y que un agente le respondió. Muestra los que <strong>están esperando ahora</strong> y el <strong>historial</strong> de demoras (respondidas y cerradas sin responder), con el mensaje, los minutos de demora y qué agente respondió.</p>
+                </div>
+
+                <!-- Configuración de umbral -->
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:14px;">
+                    <span style="color:#ddd;font-size:12.5px;font-weight:700;">Umbral de demora:</span>
+                    <input id="chatDelayThresholdInput" type="number" min="1" max="1440" step="1" style="width:80px;padding:7px 9px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:13px;">
+                    <span style="color:#aaa;font-size:12px;">minutos</span>
+                    <button class="btn btn-secondary btn-sm" onclick="saveChatDelayThreshold()">Guardar umbral</button>
+                    <span id="chatDelayThresholdHint" style="color:#888;font-size:11px;"></span>
+                </div>
+
+                <!-- Resumen -->
+                <div class="stats-grid" id="chatDelaysSummary" style="margin-bottom:1.2rem;">
+                    <div class="stat-card" style="border-color:#ffb300">
+                        <span style="font-size:1.3rem">⏳</span>
+                        <span id="cdWaitingNow" class="stat-number" style="color:#ffb300">—</span>
+                        <span class="stat-label">Esperando ahora</span>
+                    </div>
+                    <div class="stat-card">
+                        <span style="font-size:1.3rem">📊</span>
+                        <span id="cdCount" class="stat-number">—</span>
+                        <span class="stat-label">Demoras (filtro)</span>
+                    </div>
+                    <div class="stat-card">
+                        <span style="font-size:1.3rem">⌛</span>
+                        <span id="cdAvg" class="stat-number">—</span>
+                        <span class="stat-label">Demora promedio</span>
+                    </div>
+                    <div class="stat-card" style="border-color:#ff5252">
+                        <span style="font-size:1.3rem">🚨</span>
+                        <span id="cdWorst" class="stat-number" style="color:#ff5252">—</span>
+                        <span class="stat-label">Peor demora</span>
+                    </div>
+                    <div class="stat-card" style="border-color:#ff5252">
+                        <span style="font-size:1.3rem">❌</span>
+                        <span id="cdUnanswered" class="stat-number" style="color:#ff5252">—</span>
+                        <span class="stat-label">Sin responder</span>
+                    </div>
+                </div>
+
+                <!-- Esperando ahora -->
+                <h3 style="color:#ffb300;font-size:14px;margin:6px 0 8px;">⏳ Esperando respuesta ahora</h3>
+                <div id="chatDelaysWaiting" style="margin-bottom:18px;">
+                    <div style="color:#aaa;padding:14px;">⏳ Cargando…</div>
+                </div>
+
+                <!-- Historial -->
+                <h3 style="color:#d4af37;font-size:14px;margin:6px 0 8px;">📜 Historial de demoras</h3>
+                <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <label style="color:#999;font-size:10.5px;">Desde</label>
+                        <input id="cdFrom" type="date" style="padding:6px 8px;border-radius:7px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:12px;">
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <label style="color:#999;font-size:10.5px;">Hasta</label>
+                        <input id="cdTo" type="date" style="padding:6px 8px;border-radius:7px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:12px;">
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <label style="color:#999;font-size:10.5px;">Estado</label>
+                        <select id="cdStatus" style="padding:6px 8px;border-radius:7px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:12px;">
+                            <option value="">Todas</option>
+                            <option value="responded">Respondidas</option>
+                            <option value="unanswered">Sin responder</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:3px;">
+                        <label style="color:#999;font-size:10.5px;">Demora mín. (min)</label>
+                        <input id="cdMinDelay" type="number" min="0" step="1" placeholder="0" style="width:90px;padding:6px 8px;border-radius:7px;border:1px solid rgba(255,255,255,0.15);background:#1a1a24;color:#fff;font-size:12px;">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" onclick="applyChatDelaysFilter()">Filtrar</button>
+                    <button class="btn btn-secondary btn-sm" onclick="clearChatDelaysFilter()">Limpiar</button>
+                </div>
+                <div id="chatDelaysHistory">
+                    <div style="color:#aaa;padding:14px;">⏳ Cargando…</div>
+                </div>
+                <div id="chatDelaysPagination" style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px;"></div>
             </section>
 
             <!-- ============================================================

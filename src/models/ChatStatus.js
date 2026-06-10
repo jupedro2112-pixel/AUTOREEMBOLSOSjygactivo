@@ -55,6 +55,23 @@ const chatStatusSchema = new mongoose.Schema({
   notes: {
     type: String,
     default: null
+  },
+  // ===== Reloj de demora de respuesta (control de SLA de atención) =====
+  // Se setea cuando el cliente manda un mensaje y no hay una espera en curso;
+  // se limpia cuando un agente responde (o cuando se cierra el chat). Permite
+  // medir cuánto tardó la atención. Ver modelo ChatDelay.
+  pendingSince: {
+    type: Date,
+    default: null,
+    index: true
+  },
+  pendingPreview: {
+    type: String,
+    default: null
+  },
+  pendingType: {
+    type: String,
+    default: null
   }
 }, {
   timestamps: true

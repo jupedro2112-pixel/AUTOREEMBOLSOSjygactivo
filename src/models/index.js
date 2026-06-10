@@ -21,6 +21,7 @@ const OtpCode = require('./OtpCode');
 const Campaign = require('./Campaign');
 const CampaignClick = require('./CampaignClick');
 const InfluencerStory = require('./InfluencerStory');
+const ChatDelay = require('./ChatDelay');
 
 
 /**
@@ -414,6 +415,7 @@ module.exports = {
   Campaign,
   CampaignClick,
   InfluencerStory,
+  ChatDelay,
 
   // Funciones de conexión
   connectDB,

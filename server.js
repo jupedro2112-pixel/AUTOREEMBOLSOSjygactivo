@@ -67,6 +67,7 @@ const ReferralEvent = require('./src/models/ReferralEvent');
 const Campaign = require('./src/models/Campaign');
 const CampaignClick = require('./src/models/CampaignClick');
 const InfluencerStory = require('./src/models/InfluencerStory');
+const ChatDelay = require('./src/models/ChatDelay');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -1112,6 +1113,109 @@ function getArgentinaYesterday() {
 }
 
 // ============================================
+// CONTROL DE DEMORAS DE RESPUESTA EN CHATS (SLA de atención)
+// ============================================
+// El "reloj" de espera vive en ChatStatus (pendingSince/pendingPreview/pendingType),
+// en MongoDB → funciona en multi-instancia sin estado en memoria. Cuando un agente
+// responde (o se cierra el chat) se calcula la demora y, si supera el umbral, se
+// guarda un registro permanente en ChatDelay (snapshot que sobrevive al TTL de
+// Message). TODO va envuelto en try/catch: una falla acá NUNCA debe romper la
+// entrega de un mensaje.
+const DEFAULT_CHAT_DELAY_THRESHOLD = 120; // 2 minutos, en segundos
+
+async function getChatDelayThreshold() {
+  try {
+    const v = await getConfig('chatDelayThresholdSeconds');
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_CHAT_DELAY_THRESHOLD;
+  } catch (_) {
+    return DEFAULT_CHAT_DELAY_THRESHOLD;
+  }
+}
+
+function buildDelayPreview(content, type) {
+  if (type === 'image') return '📸 Imagen';
+  if (type === 'video') return '🎥 Video';
+  const s = (content == null ? '' : String(content)).replace(/\s+/g, ' ').trim();
+  return s.length > 200 ? s.slice(0, 200) + '…' : s;
+}
+
+// Cliente manda un mensaje → arrancar el reloj SI no hay una espera en curso
+// (la demora se mide desde el PRIMER mensaje sin responder, no desde el último).
+async function delayClockOnUserMessage(userId, content, type) {
+  if (!userId) return;
+  try {
+    await ChatStatus.updateOne(
+      { userId, $or: [{ pendingSince: null }, { pendingSince: { $exists: false } }] },
+      { $set: {
+        pendingSince: new Date(),
+        pendingPreview: buildDelayPreview(content, type),
+        pendingType: type || 'text'
+      } }
+    );
+  } catch (e) {
+    logger.error(`[chatDelay] start failed (${userId}): ${e.message}`);
+  }
+}
+
+// Resolver el reloj. responded=true → un agente respondió; responded=false → el
+// chat se cerró sin responder. Registra ChatDelay sólo si la demora ≥ umbral.
+// Siempre limpia el reloj.
+async function delayClockResolve(userId, { responded, agentId = null, agentUsername = null, via = null } = {}) {
+  if (!userId) return;
+  try {
+    // Limpiar el reloj de forma ATÓMICA y quedarse con el valor previo. Si dos
+    // agentes responden a la vez, sólo el que efectivamente "tomó" el pendingSince
+    // (filtro pendingSince != null) registra la demora → sin doble conteo.
+    const cs = await ChatStatus.findOneAndUpdate(
+      { userId, pendingSince: { $ne: null } },
+      { $set: { pendingSince: null, pendingPreview: null, pendingType: null } },
+      { new: false }
+    ).select('username assignedTo pendingSince pendingPreview pendingType').lean();
+
+    if (!cs || !cs.pendingSince) return; // no había espera en curso (o ya la tomó otro)
+
+    const now = new Date();
+    const delaySeconds = Math.round((now - new Date(cs.pendingSince)) / 1000);
+    const threshold = await getChatDelayThreshold();
+
+    if (delaySeconds >= threshold) {
+      await ChatDelay.create({
+        id: uuidv4(),
+        userId,
+        username: cs.username || null,
+        userMessageAt: cs.pendingSince,
+        userMessagePreview: cs.pendingPreview || '',
+        userMessageType: cs.pendingType || 'text',
+        respondedAt: responded ? now : null,
+        delaySeconds,
+        respondedById: responded ? agentId : null,
+        respondedByUsername: responded ? agentUsername : null,
+        respondedVia: responded ? (via || 'message') : null,
+        assignedTo: cs.assignedTo || null,
+        status: responded ? 'responded' : 'unanswered'
+      });
+    }
+  } catch (e) {
+    logger.error(`[chatDelay] resolve failed (${userId}): ${e.message}`);
+  }
+}
+
+// Limpiar el reloj sin registrar nada (cuando el chat sale del estado "esperando
+// agente" por un motivo que no es ni respuesta ni cierre, ej: pasa a pagos).
+async function delayClockClear(userId) {
+  if (!userId) return;
+  try {
+    await ChatStatus.updateOne(
+      { userId },
+      { $set: { pendingSince: null, pendingPreview: null, pendingType: null } }
+    );
+  } catch (e) {
+    logger.error(`[chatDelay] clear failed (${userId}): ${e.message}`);
+  }
+}
+
+// ============================================
 // MIDDLEWARE DE AUTENTICACIÓN
 // ============================================
 const authMiddleware = async (req, res, next) => {
@@ -1342,6 +1446,9 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
       timestamp: new Date(Date.now() + 100),
       read: false
     });
+
+    // SLA: enviar el CBU es responderle al cliente (resuelve el reloj de demora).
+    await delayClockResolve(userId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message' });
     
     // Notificar al usuario por socket si está conectado
     const userSocket = connectedUsers.get(userId);
@@ -4122,7 +4229,10 @@ app.post('/api/admin/chats/:userId/close', authMiddleware, adminMiddleware, asyn
       },
       { upsert: true }
     );
-    
+
+    // SLA: si se cerró con una espera en curso, registrarla como "sin responder".
+    await delayClockResolve(userId, { responded: false });
+
     res.json({ success: true, message: 'Chat cerrado' });
   } catch (error) {
     res.status(500).json({ error: 'Error cerrando chat' });
@@ -4496,7 +4606,13 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
         { status: 'open', assignedTo: null, closedAt: null, closedBy: null }
       );
     }
-    
+
+    // SLA: si el cliente escribió, arrancar el reloj de demora de respuesta
+    // (los agentes resuelven el reloj en la rama de comando o en el emit de admin).
+    if (!isAdminRole) {
+      await delayClockOnUserMessage(req.user.userId, content, type);
+    }
+
     // CORREGIDO: Procesar comandos si el mensaje empieza con /
     if (content.trim().startsWith('/')) {
       const commandName = content.trim().split(' ')[0];
@@ -4547,7 +4663,12 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
           });
           
           logger.debug(`[API_COMMAND] Response sent for command: ${commandName}`);
-          
+
+          // SLA: el comando del agente cuenta como respuesta al cliente.
+          if (isAdminRole) {
+            await delayClockResolve(commandReceiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'command' });
+          }
+
           // NO emitir el mensaje original del comando, solo la respuesta
           return res.json(responseMessage);
         } else {
@@ -4587,6 +4708,8 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       io.to(`user_${req.user.userId}`).emit('message_sent', message);
     } else {
       // Admin enviando mensaje - notificar al usuario
+      // SLA: respuesta de texto del agente — resolver el reloj de demora.
+      await delayClockResolve(req.body.receiverId, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'message' });
       const userSocket = connectedUsers.get(req.body.receiverId);
       const deliveredViaSocket = !!userSocket;
       if (userSocket) {
@@ -5304,6 +5427,8 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
     const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description);
 
     if (result.success) {
+      // SLA: atender al cliente con una carga cuenta como respuesta (resuelve el reloj).
+      await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation' });
       // Si hay bonus, acreditarlo en JUGAYGANA como individual_bonus en operación separada.
       // Pausa de 700ms entre la carga principal y el bonus para evitar el rate-limit
       // interno de JUGAYGANA sobre operaciones consecutivas sobre el mismo user
@@ -5708,6 +5833,8 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
     
     if (result.success) {
       await recordUserActivity(user.id, 'withdrawal', amount);
+      // SLA: atender al cliente con un retiro cuenta como respuesta (resuelve el reloj).
+      await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation' });
 
       // Obtener saldo actualizado del usuario. Reintenta para evitar "saldo $0"
       // engañoso cuando getUserBalance falla transitoriamente post-retiro.
@@ -5863,6 +5990,8 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
     );
 
     if (depositResult.success) {
+      // SLA: atender al cliente con un bonus cuenta como respuesta (resuelve el reloj).
+      await delayClockResolve(bonusUser.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation' });
       // bonusUser ya lo resolvimos arriba con findOne — no hace falta repetir
       // el query (mismo efecto, una llamada menos a la DB).
 
@@ -6132,9 +6261,14 @@ io.on('connection', (socket) => {
               username: socket.username,
               command: commandName
             });
-            
+
             logger.debug(`[COMMAND] Response sent for command: ${commandName}`);
-            
+
+            // SLA: el comando del agente cuenta como respuesta al cliente.
+            if (isAdminRole) {
+              await delayClockResolve(commandReceiverId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'command' });
+            }
+
             // IMPORTANTE: NO guardar el mensaje del comando (/cbu), solo la respuesta
             // Salir aquí - el mensaje del comando NO se guarda ni se emite
             return;
@@ -6217,6 +6351,13 @@ io.on('connection', (socket) => {
               { userId: targetUserId, status: 'closed' },
               { status: 'open', closedAt: null, closedBy: null }
             );
+          }
+          // SLA: reloj de demora de respuesta. Si responde un agente, resolvemos
+          // (y registramos si superó el umbral); si escribe el cliente, arrancamos.
+          if (isAdminRole) {
+            await delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message' });
+          } else {
+            await delayClockOnUserMessage(targetUserId, content, type);
           }
         } catch (csErr) {
           logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);
@@ -10206,12 +10347,126 @@ app.post('/api/admin/close-chat', authMiddleware, adminMiddleware, async (req, r
       timestamp: new Date()
     });
     
+    // SLA: si se cerró con una espera en curso, registrarla como "sin responder".
+    await delayClockResolve(userId, { responded: false });
+
     // Notificar a admins (siempre, es interno)
     notifyAdmins('chat_closed', { userId, by: req.user.username, adminId: req.user.userId, isPaymentsTab });
-    
+
     res.json({ success: true, message: 'Chat cerrado correctamente', closedBy: req.user.username });
   } catch (error) {
     console.error('Error cerrando chat:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// CONTROL DE DEMORAS DE RESPUESTA EN CHATS (reporte SLA) — solo admin general
+// ============================================
+app.get('/api/admin/chat-delays', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede ver las demoras' });
+    }
+
+    const threshold = await getChatDelayThreshold();
+
+    // Filtros del historial
+    const { from, to, agent, status, page = 1, limit = 50 } = req.query;
+    const minDelay = parseInt(req.query.minDelay, 10); // en segundos
+
+    const q = {};
+    if (status === 'responded' || status === 'unanswered') q.status = status;
+    if (agent) q.respondedByUsername = agent;
+    if (Number.isFinite(minDelay) && minDelay > 0) q.delaySeconds = { $gte: minDelay };
+    if (from || to) {
+      q.userMessageAt = {};
+      if (from) q.userMessageAt.$gte = new Date(from);
+      if (to) q.userMessageAt.$lt = new Date(new Date(to).getTime() + 24 * 60 * 60 * 1000); // 'to' inclusivo (todo el día)
+    }
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+
+    // Historial paginado de demoras
+    const [delays, total, summaryAgg] = await Promise.all([
+      ChatDelay.find(q)
+        .sort({ userMessageAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
+      ChatDelay.countDocuments(q),
+      ChatDelay.aggregate([
+        { $match: q },
+        { $group: {
+          _id: null,
+          count: { $sum: 1 },
+          avgDelay: { $avg: '$delaySeconds' },
+          worstDelay: { $max: '$delaySeconds' },
+          unanswered: { $sum: { $cond: [{ $eq: ['$status', 'unanswered'] }, 1, 0] } }
+        } }
+      ])
+    ]);
+
+    // "Esperando ahora": clientes con el reloj corriendo por encima del umbral,
+    // en chats abiertos (los de pagos/cerrados no cuentan acá).
+    const cutoff = new Date(Date.now() - threshold * 1000);
+    const waitingDocs = await ChatStatus.find({
+      status: 'open',
+      pendingSince: { $ne: null, $lte: cutoff }
+    })
+      .select('userId username pendingSince pendingPreview pendingType assignedTo')
+      .sort({ pendingSince: 1 })
+      .limit(200)
+      .lean();
+
+    const now = Date.now();
+    const waiting = waitingDocs.map(d => ({
+      userId: d.userId,
+      username: d.username,
+      preview: d.pendingPreview || '',
+      type: d.pendingType || 'text',
+      waitingSeconds: Math.round((now - new Date(d.pendingSince).getTime()) / 1000),
+      since: d.pendingSince,
+      assignedTo: d.assignedTo || null
+    }));
+
+    const s = summaryAgg[0] || { count: 0, avgDelay: 0, worstDelay: 0, unanswered: 0 };
+
+    res.json({
+      thresholdSeconds: threshold,
+      waiting,
+      delays,
+      pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
+      summary: {
+        count: s.count || 0,
+        avgDelaySeconds: Math.round(s.avgDelay || 0),
+        worstDelaySeconds: s.worstDelay || 0,
+        unansweredCount: s.unanswered || 0,
+        waitingNowCount: waiting.length
+      }
+    });
+  } catch (error) {
+    console.error('Error obteniendo demoras de chat:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Configurar el umbral de demora (en minutos desde el front; se guarda en segundos)
+app.post('/api/admin/chat-delays/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede configurar el umbral' });
+    }
+    let { thresholdSeconds } = req.body;
+    thresholdSeconds = parseInt(thresholdSeconds, 10);
+    if (!Number.isFinite(thresholdSeconds) || thresholdSeconds < 10 || thresholdSeconds > 86400) {
+      return res.status(400).json({ error: 'Umbral inválido (debe estar entre 10 segundos y 24 horas)' });
+    }
+    await setConfig('chatDelayThresholdSeconds', String(thresholdSeconds));
+    res.json({ success: true, thresholdSeconds });
+  } catch (error) {
+    console.error('Error guardando umbral de demoras:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

@@ -644,7 +644,13 @@ function setupRoleBasedUI() {
     if (dashNavItem) {
         dashNavItem.style.display = role === 'admin' ? '' : 'none';
     }
-    
+
+    // Demoras de respuesta (SLA): sólo admin general
+    const cdNavItem = document.querySelector('.nav-item-chat-delays');
+    if (cdNavItem) {
+        cdNavItem.style.display = role === 'admin' ? '' : 'none';
+    }
+
     // Actualizar botones según la pestaña actual
     updateActionButtonsByTab();
 }
@@ -3645,6 +3651,11 @@ function switchSection(section) {
         showToast('No tienes permiso para acceder a esta sección', 'error');
         return;
     }
+    // Solo admin general puede ver el reporte de demoras
+    if (section === 'chatDelays' && currentAdmin?.role !== 'admin') {
+        showToast('No tienes permiso para acceder a esta sección', 'error');
+        return;
+    }
     
     // Update nav
     elements.navItems.forEach(item => {
@@ -3683,6 +3694,7 @@ function switchSection(section) {
     if (section === 'centralWelcomeBonus') loadCentralWelcomeBonus();
     if (section === 'suspiciousAccounts') loadSuspiciousAccounts();
     if (section === 'reembolsos') loadReembolsos();
+    if (section === 'chatDelays') loadChatDelays();
     if (section === 'reviews') loadReviews();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'publisherAdmins') {
@@ -8416,6 +8428,192 @@ async function loadReembolsos() {
         body.innerHTML = html;
     } catch (e) {
         body.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+
+// ============================================================
+// CONTROL DE DEMORAS DE RESPUESTA EN CHATS (SLA de atención)
+// ============================================================
+let _cdPage = 1;
+let _cdThresholdSeconds = 120;
+
+function _cdDur(sec) {
+    sec = Math.max(0, Math.round(Number(sec) || 0));
+    if (sec < 60) return sec + 's';
+    const m = Math.floor(sec / 60), s = sec % 60;
+    if (m < 60) return m + 'm' + (s ? ' ' + s + 's' : '');
+    const h = Math.floor(m / 60), mm = m % 60;
+    return h + 'h' + (mm ? ' ' + mm + 'm' : '');
+}
+
+function _cdQuery() {
+    const p = new URLSearchParams();
+    const from = document.getElementById('cdFrom')?.value;
+    const to = document.getElementById('cdTo')?.value;
+    const status = document.getElementById('cdStatus')?.value;
+    const minMin = parseInt(document.getElementById('cdMinDelay')?.value, 10);
+    if (from) p.set('from', from);
+    if (to) p.set('to', to);
+    if (status) p.set('status', status);
+    if (Number.isFinite(minMin) && minMin > 0) p.set('minDelay', String(minMin * 60)); // min → seg
+    p.set('page', String(_cdPage));
+    p.set('limit', '50');
+    return p.toString();
+}
+
+async function loadChatDelays() {
+    const waitingEl = document.getElementById('chatDelaysWaiting');
+    const histEl = document.getElementById('chatDelaysHistory');
+    if (waitingEl) waitingEl.innerHTML = '<div style="color:#aaa;padding:14px;">⏳ Cargando…</div>';
+    try {
+        const r = await authFetch('/api/admin/chat-delays?' + _cdQuery());
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('Error ' + r.status));
+
+        _cdThresholdSeconds = j.thresholdSeconds || 120;
+        const thrInput = document.getElementById('chatDelayThresholdInput');
+        if (thrInput && document.activeElement !== thrInput) {
+            thrInput.value = Math.round(_cdThresholdSeconds / 60);
+        }
+        const hint = document.getElementById('chatDelayThresholdHint');
+        if (hint) hint.textContent = '(actual: ' + _cdDur(_cdThresholdSeconds) + ')';
+
+        // Resumen
+        const s = j.summary || {};
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('cdWaitingNow', s.waitingNowCount || 0);
+        set('cdCount', s.count || 0);
+        set('cdAvg', s.count ? _cdDur(s.avgDelaySeconds) : '—');
+        set('cdWorst', s.count ? _cdDur(s.worstDelaySeconds) : '—');
+        set('cdUnanswered', s.unansweredCount || 0);
+
+        // Badge en el nav
+        const badge = document.getElementById('chatDelaysWaitingBadge');
+        if (badge) {
+            if (s.waitingNowCount > 0) { badge.textContent = s.waitingNowCount; badge.classList.remove('hidden'); }
+            else badge.classList.add('hidden');
+        }
+
+        renderChatDelaysWaiting(j.waiting || []);
+        renderChatDelaysHistory(j.delays || []);
+        renderChatDelaysPagination(j.pagination || { page: 1, pages: 1, total: 0 });
+    } catch (e) {
+        if (waitingEl) waitingEl.innerHTML = '<div class="empty-state"><p>❌ ' + _centEsc(e.message) + '</p></div>';
+    }
+}
+
+function renderChatDelaysWaiting(waiting) {
+    const el = document.getElementById('chatDelaysWaiting');
+    if (!el) return;
+    if (!waiting.length) {
+        el.innerHTML = '<div style="color:#6fcf6f;padding:12px;background:rgba(0,255,136,0.05);border-radius:8px;">✅ Nadie esperando respuesta por encima del umbral.</div>';
+        return;
+    }
+    let html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Mensaje</th>'
+        + '<th style="text-align:right;">Esperando</th><th>Asignado a</th></tr></thead><tbody>';
+    waiting.forEach(function (w) {
+        html += '<tr style="cursor:pointer;" onclick="openChatFromDelay(\'' + _centEsc(w.userId) + '\')">'
+            + '<td><strong>' + _centEsc(w.username) + '</strong></td>'
+            + '<td style="max-width:340px;color:#ccc;">' + _centEsc(w.preview || '—') + '</td>'
+            + '<td style="text-align:right;color:#ffb300;font-weight:800;">' + _cdDur(w.waitingSeconds) + '</td>'
+            + '<td style="color:#aaa;">' + _centEsc(w.assignedTo || '—') + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+function renderChatDelaysHistory(delays) {
+    const el = document.getElementById('chatDelaysHistory');
+    if (!el) return;
+    if (!delays.length) {
+        el.innerHTML = '<div class="empty-state"><p>No hay demoras registradas con este filtro.</p></div>';
+        return;
+    }
+    let html = '<table class="data-table"><thead><tr><th>Cliente</th><th>Mensaje</th>'
+        + '<th style="text-align:right;">Demora</th><th>Estado</th><th>Respondió</th>'
+        + '<th>Vía</th><th>Fecha del mensaje</th></tr></thead><tbody>';
+    delays.forEach(function (d) {
+        const respondido = d.status === 'responded';
+        const estado = respondido
+            ? '<span style="color:#6fcf6f;font-weight:700;">Respondida</span>'
+            : '<span style="color:#ff5252;font-weight:700;">Sin responder</span>';
+        const _viaMap = { command: 'comando', message: 'mensaje', operation: 'carga/retiro' };
+        const via = _viaMap[d.respondedVia] || '—';
+        html += '<tr style="cursor:pointer;" onclick="openChatFromDelay(\'' + _centEsc(d.userId) + '\')">'
+            + '<td><strong>' + _centEsc(d.username) + '</strong></td>'
+            + '<td style="max-width:320px;color:#ccc;">' + _centEsc(d.userMessagePreview || '—') + '</td>'
+            + '<td style="text-align:right;font-weight:800;color:' + (respondido ? '#ffc107' : '#ff5252') + ';">' + _cdDur(d.delaySeconds) + '</td>'
+            + '<td>' + estado + '</td>'
+            + '<td style="color:#ccc;">' + _centEsc(d.respondedByUsername || '—') + '</td>'
+            + '<td style="color:#aaa;">' + via + '</td>'
+            + '<td style="color:#aaa;white-space:nowrap;">' + fmtFechaHoraAR(d.userMessageAt) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+}
+
+function renderChatDelaysPagination(pag) {
+    const el = document.getElementById('chatDelaysPagination');
+    if (!el) return;
+    const pages = pag.pages || 1;
+    if (pages <= 1) { el.innerHTML = '<span style="color:#888;font-size:11px;">' + (pag.total || 0) + ' demora(s)</span>'; return; }
+    const prevDis = _cdPage <= 1 ? 'disabled' : '';
+    const nextDis = _cdPage >= pages ? 'disabled' : '';
+    el.innerHTML =
+        '<button class="btn btn-secondary btn-sm" ' + prevDis + ' onclick="chatDelaysGoPage(' + (_cdPage - 1) + ')">◀ Anterior</button>'
+        + '<span style="color:#bbb;font-size:12px;">Página ' + _cdPage + ' de ' + pages + ' · ' + (pag.total || 0) + ' total</span>'
+        + '<button class="btn btn-secondary btn-sm" ' + nextDis + ' onclick="chatDelaysGoPage(' + (_cdPage + 1) + ')">Siguiente ▶</button>';
+}
+
+function chatDelaysGoPage(p) {
+    if (p < 1) return;
+    _cdPage = p;
+    loadChatDelays();
+}
+
+function applyChatDelaysFilter() {
+    _cdPage = 1;
+    loadChatDelays();
+}
+
+function clearChatDelaysFilter() {
+    ['cdFrom', 'cdTo', 'cdMinDelay'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const st = document.getElementById('cdStatus'); if (st) st.value = '';
+    _cdPage = 1;
+    loadChatDelays();
+}
+
+async function saveChatDelayThreshold() {
+    const input = document.getElementById('chatDelayThresholdInput');
+    const mins = parseInt(input?.value, 10);
+    if (!Number.isFinite(mins) || mins < 1 || mins > 1440) {
+        showToast('Umbral inválido (1 a 1440 minutos)', 'error');
+        return;
+    }
+    try {
+        const r = await authFetch('/api/admin/chat-delays/config', {
+            method: 'POST',
+            body: JSON.stringify({ thresholdSeconds: mins * 60 })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        showToast('Umbral guardado: ' + mins + ' min', 'success');
+        loadChatDelays();
+    } catch (e) {
+        showToast('❌ ' + e.message, 'error');
+    }
+}
+
+// Abrir el chat del cliente desde una fila de demora (va a la sección Chats).
+function openChatFromDelay(userId) {
+    if (!userId) return;
+    switchSection('chats');
+    const conv = conversations.find(c => c.userId === userId);
+    if (conv) {
+        selectConversation(userId, conv.username);
+    } else {
+        // No está en la lista actual (otra pestaña): lo seleccionamos igual por id.
+        selectConversation(userId, userId);
     }
 }
 

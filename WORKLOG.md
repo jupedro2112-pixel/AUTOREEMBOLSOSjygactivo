@@ -6,6 +6,49 @@
 >
 > **Última actualización: 2026-06-08**
 
+## Sesión 2026-06-10
+
+### 20. Control de demoras de respuesta en chats (SLA de atención)
+- **Pedido:** poder controlar cuánto tarda la atención. Si un cliente manda un
+  mensaje y se tarda > umbral (default 2 min) en responderle, que quede registrado
+  en algún lado con los minutos de demora y el mensaje que esperó.
+- **Decisión clave por el TTL:** `Message` se borra a los 3 días, así que el reporte
+  NO puede apoyarse en el historial de mensajes. Se creó una colección PERMANENTE
+  nueva `ChatDelay` (sin TTL, como Transaction) que guarda un SNAPSHOT del texto.
+- **Decisiones de negocio (confirmadas con el owner):** umbral CONFIGURABLE desde el
+  panel (default 2 min, en Config `chatDelayThresholdSeconds`) · registrar demoras
+  respondidas Y mostrar las "sin responder" · los comandos (/cbu, etc.) cuentan como
+  respuesta. Ampliación de exactitud: cargas/retiros/bonus/CBU también cuentan como
+  respuesta (atender al cliente sin escribir igual frena el reloj).
+- **Modelo del "reloj":** vive en `ChatStatus` (`pendingSince`/`pendingPreview`/
+  `pendingType`), en MongoDB → multi-instancia sin estado en memoria.
+  - Cliente escribe → si no hay reloj corriendo, se setea `pendingSince` (se mide
+    desde el PRIMER mensaje sin responder, no el último).
+  - Agente responde (mensaje/comando/carga/retiro/bonus/CBU) → `delayClockResolve`
+    limpia el reloj de forma ATÓMICA (findOneAndUpdate con doc previo, sin doble
+    conteo si responden dos agentes a la vez) y registra `ChatDelay` si superó el umbral.
+  - Chat cerrado con espera en curso → se registra como `unanswered`.
+  - Helpers `delayClockOnUserMessage`/`delayClockResolve`/`delayClockClear` van todos
+    envueltos en try/catch: una falla acá NUNCA rompe la entrega del mensaje.
+- **Enganches:** socket `send_message` (user/agent/comando), HTTP `/api/messages/send`
+  (idem), `chats/:userId/close` y `close-chat`, y los endpoints `deposit`/`withdrawal`/
+  `bonus`/`send-cbu`. Los mensajes automáticos del sistema (bienvenida, etc.) NO cuentan
+  (se crean por otro camino).
+- **Endpoints (solo admin general, role==='admin'):**
+  - `GET /api/admin/chat-delays?from&to&agent&status&minDelay&page` → `{ thresholdSeconds,
+    waiting[] (esperando ahora, en vivo desde ChatStatus, solo status:open), delays[]
+    (historial paginado), summary, pagination }`.
+  - `POST /api/admin/chat-delays/config` `{ thresholdSeconds }` (10s–24h).
+- **Panel:** sección nueva "⏱️ Demoras" (sidebar, oculta salvo admin general). Tarjetas
+  de resumen (esperando ahora / cantidad / promedio / peor / sin responder), tabla
+  "Esperando ahora", historial con filtros (fecha/estado/agente/demora mín.) + paginación,
+  input de umbral en minutos, badge en el nav. Click en una fila abre el chat del cliente.
+  Reusa clases existentes (sin CSS nuevo).
+- **Sin migración:** colección nueva + campos opcionales nuevos en ChatStatus. Los chats
+  abiertos viejos no tienen `pendingSince` hasta el próximo mensaje del cliente (correcto).
+- **Validado:** `node --check` OK en server.js, admin.js y los modelos. (No se puede
+  correr el server en Tails; sólo syntax check.)
+
 ## Sesión 2026-06-08
 
 ### 19. Fix 429 "Demasiadas solicitudes" en chats del admin con muchos chats activos

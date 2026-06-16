@@ -1527,7 +1527,13 @@ async function selectConversation(userId, username) {
     if (elements.chatBlockedReason) elements.chatBlockedReason.textContent = '';
     if (elements.btnBlock) elements.btnBlock.style.display = 'none';
     if (elements.btnUnblock) elements.btnUnblock.style.display = 'none';
-    
+    // Reset del banner de premio Fueguito hasta que loadUserInfo confirme el estado
+    const fireBanner = document.getElementById('chatFireBonusBanner');
+    if (fireBanner) fireBanner.style.display = 'none';
+    // Reset de la barra de etiquetas/notas hasta que loadUserInfo la rellene
+    const tagsBar = document.getElementById('chatTagsBar');
+    if (tagsBar) tagsBar.style.display = 'none';
+
     // CORREGIDO: Mostrar mensajes cacheados inmediatamente (sin esperar)
     const cachedMessages = messageCache.get(userId);
     if (cachedMessages && cachedMessages.length > 0) {
@@ -2457,8 +2463,253 @@ async function loadUserInfo(userId) {
                 elements.chatAppStatus.style.color = '#aaa';
             }
         }
+
+        // Fueguito: si el cliente tiene pendiente el premio "100% en próxima carga"
+        // (hito día 15), mostrar un cartel al operador con botón para marcarlo como
+        // aplicado. Así el operador sabe que se lo tiene que dar y queda registrado.
+        renderFireBonusBanner(user);
+
+        // Etiquetas y nota interna del cliente.
+        renderUserTagsAndNotes(user);
     } catch (error) {
         console.error('Error loading user info:', error);
+    }
+}
+
+function renderFireBonusBanner(user) {
+    const el = document.getElementById('chatFireBonusBanner');
+    if (!el) return;
+    if (!user || !user.fireNextLoadBonus) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+    }
+    el.style.display = '';
+    el.style.padding = '8px 14px';
+    el.style.fontSize = '12px';
+    el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
+    el.style.background = 'linear-gradient(90deg,#d4820a,#b36904)';
+    el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
+        '<span style="font-size:18px;">🔥</span>' +
+        '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">FUEGUITO: 100% en la próxima carga</strong>' +
+        '<div style="font-size:11px;opacity:0.9;">Premio del día 15 — aplicáselo en la próxima carga y marcalo como aplicado.</div></div>' +
+        '<button onclick="applyFireNextLoadBonus(\'' + escapeHtml(String(user.id)) + '\')" style="background:#fff;color:#b36904;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✓ Marcar aplicado</button>' +
+        '</div>';
+}
+
+async function applyFireNextLoadBonus(userId) {
+    if (!confirm('¿Marcar el 100% de próxima carga (Fueguito) como aplicado? El cliente no lo va a tener más después de esto.')) return;
+    try {
+        const r = await authFetch('/api/admin/users/' + encodeURIComponent(userId) + '/fire-next-load-bonus/apply', { method: 'POST' });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Premio Fueguito marcado como aplicado', 'success');
+            const el = document.getElementById('chatFireBonusBanner');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ============================================================
+// ETIQUETAS Y NOTAS DE USUARIOS (panel admin)
+// ============================================================
+let allTagsCache = [];
+
+// Trae la lista de etiquetas en uso (para filtro, sugerencias y difusión).
+async function loadAllTags() {
+    try {
+        const r = await authFetch('/api/admin/tags');
+        const j = await r.json();
+        allTagsCache = Array.isArray(j.tags) ? j.tags : [];
+    } catch (e) { /* no romper la UI por esto */ }
+    return allTagsCache;
+}
+
+// Mantiene una etiqueta nueva en el cache local (para que aparezca al instante
+// en filtros/sugerencias sin re-consultar).
+function rememberTag(tag) {
+    if (tag && !allTagsCache.includes(tag)) {
+        allTagsCache.push(tag);
+        allTagsCache.sort((a, b) => a.localeCompare(b, 'es'));
+    }
+}
+
+// Desplegable de filtro por etiqueta en la sección Usuarios.
+function populateUsersTagFilter() {
+    const sel = document.getElementById('usersTagFilter');
+    if (!sel) return;
+    const fill = () => {
+        const current = sel.value;
+        sel.innerHTML = '<option value="">🏷️ Todas las etiquetas</option>' +
+            allTagsCache.map(t => '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>').join('');
+        sel.value = current;
+    };
+    if (allTagsCache.length === 0) { loadAllTags().then(fill); } else { fill(); }
+}
+
+// Sugerencias (datalist) del input de etiqueta en el chat.
+function populateTagSuggestions() {
+    const dl = document.getElementById('chatTagSuggestions');
+    if (!dl) return;
+    const fill = () => { dl.innerHTML = allTagsCache.map(t => '<option value="' + escapeHtml(t) + '"></option>').join(''); };
+    if (allTagsCache.length === 0) { loadAllTags().then(fill); } else { fill(); }
+}
+
+// Render completo de la barra de etiquetas + nota del cliente (al cargar el chat).
+function renderUserTagsAndNotes(user) {
+    const bar = document.getElementById('chatTagsBar');
+    if (!bar) return;
+    bar.style.display = '';
+    renderChatTagsList(Array.isArray(user.tags) ? user.tags : []);
+    const notesText = document.getElementById('chatNotesText');
+    if (notesText) notesText.value = user.adminNotes || '';
+    const toggle = document.getElementById('chatNotesToggle');
+    if (toggle) toggle.textContent = (user.adminNotes && user.adminNotes.trim()) ? '📝 Nota ✓' : '📝 Nota';
+    const box = document.getElementById('chatNotesBox');
+    if (box) box.style.display = 'none';
+    populateTagSuggestions();
+}
+
+// Render solo de los chips de etiquetas (se reusa al agregar/quitar).
+function renderChatTagsList(tags) {
+    const list = document.getElementById('chatTagsList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!tags || tags.length === 0) {
+        const empty = document.createElement('span');
+        empty.style.color = '#888';
+        empty.textContent = 'sin etiquetas';
+        list.appendChild(empty);
+        return;
+    }
+    tags.forEach(t => list.appendChild(buildTagChip(t)));
+}
+
+// Construye un chip de etiqueta con botón de quitar. Usa DOM (no innerHTML) para
+// no tener que escapar la etiqueta dentro de un onclick.
+function buildTagChip(tag) {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:rgba(212,175,55,0.22);border:1px solid rgba(212,175,55,0.5);color:#f0d98c;border-radius:12px;padding:2px 8px;font-size:11px;';
+    const label = document.createElement('span');
+    label.textContent = tag;
+    chip.appendChild(label);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.textContent = '✕';
+    x.title = 'Quitar etiqueta';
+    x.style.cssText = 'background:none;border:none;color:#f0d98c;cursor:pointer;font-size:11px;padding:0;line-height:1;';
+    x.onclick = () => removeChatTag(tag);
+    chip.appendChild(x);
+    return chip;
+}
+
+async function addChatTag() {
+    if (!selectedUserId) return;
+    const input = document.getElementById('chatTagInput');
+    const tag = input ? input.value.trim() : '';
+    if (!tag) return;
+    try {
+        const r = await authFetch('/api/admin/users/' + encodeURIComponent(selectedUserId) + '/tags', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'add', tag })
+        });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            if (input) input.value = '';
+            rememberTag(tag.toLowerCase().replace(/\s+/g, ' ').slice(0, 40));
+            renderChatTagsList(j.tags);
+            populateTagSuggestions();
+            showToast('Etiqueta agregada', 'success');
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function removeChatTag(tag) {
+    if (!selectedUserId) return;
+    try {
+        const r = await authFetch('/api/admin/users/' + encodeURIComponent(selectedUserId) + '/tags', {
+            method: 'POST',
+            body: JSON.stringify({ action: 'remove', tag })
+        });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            renderChatTagsList(j.tags);
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function toggleChatNotes() {
+    const box = document.getElementById('chatNotesBox');
+    if (box) box.style.display = (box.style.display === 'none' || !box.style.display) ? 'block' : 'none';
+}
+
+async function saveChatNotes() {
+    if (!selectedUserId) return;
+    const ta = document.getElementById('chatNotesText');
+    const notes = ta ? ta.value : '';
+    try {
+        const r = await authFetch('/api/admin/users/' + encodeURIComponent(selectedUserId) + '/notes', {
+            method: 'POST',
+            body: JSON.stringify({ notes })
+        });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Nota guardada', 'success');
+            const toggle = document.getElementById('chatNotesToggle');
+            if (toggle) toggle.textContent = (notes && notes.trim()) ? '📝 Nota ✓' : '📝 Nota';
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ---- Difusión push por etiqueta (sección Notificaciones) ----
+async function loadTagBroadcastOptions() {
+    const sel = document.getElementById('tagBroadcastSelect');
+    if (!sel) return;
+    await loadAllTags();
+    const current = sel.value;
+    sel.innerHTML = '<option value="">— Elegí una etiqueta —</option>' +
+        allTagsCache.map(t => '<option value="' + escapeHtml(t) + '">' + escapeHtml(t) + '</option>').join('');
+    sel.value = current;
+}
+
+async function sendTagBroadcast() {
+    const sel = document.getElementById('tagBroadcastSelect');
+    const titleEl = document.getElementById('tagBroadcastTitle');
+    const bodyEl = document.getElementById('tagBroadcastBody');
+    const statusEl = document.getElementById('tagBroadcastStatus');
+    const btn = document.getElementById('tagBroadcastSendBtn');
+    const tag = sel ? sel.value : '';
+    const title = titleEl ? titleEl.value.trim() : '';
+    const body = bodyEl ? bodyEl.value.trim() : '';
+    if (!tag) { showToast('Elegí una etiqueta', 'error'); return; }
+    if (!title || !body) { showToast('Completá título y mensaje', 'error'); return; }
+    if (!confirm('¿Enviar la difusión a todos los clientes con la etiqueta "' + tag + '"?')) return;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Enviando...'; }
+    if (statusEl) statusEl.textContent = '';
+    try {
+        const r = await authFetch('/api/notifications/send-to-tag', {
+            method: 'POST',
+            body: JSON.stringify({ tag, title, body })
+        });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            if (statusEl) statusEl.textContent = '✅ Enviado a ' + j.targetUsers + ' usuario(s) · OK ' + j.successCount + ' · fallos ' + j.failureCount;
+            showToast('Difusión enviada', 'success');
+        } else {
+            showToast(j.error || 'Error al enviar', 'error');
+        }
+    } catch (e) {
+        showToast('Error de conexión', 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '🚀 Enviar a la etiqueta'; }
     }
 }
 
@@ -3217,9 +3468,12 @@ async function loadUsers(page = 1) {
     usersPage = page;
     const searchInput = document.getElementById('searchUsers');
     const search = searchInput ? searchInput.value.trim() : '';
+    const tagSel = document.getElementById('usersTagFilter');
+    const tag = tagSel ? tagSel.value : '';
     try {
         const qs = new URLSearchParams({ page: String(page) });
         if (search) qs.set('search', search);
+        if (tag) qs.set('tag', tag);
         const response = await fetch(`${API_URL}/api/admin/users?${qs.toString()}`, {
             headers: { 'Authorization': `Bearer ${currentToken}` }
         });
@@ -3230,6 +3484,8 @@ async function loadUsers(page = 1) {
         allUsersCache = data.users || [];
         renderUsers(allUsersCache);
         renderUsersPagination(data);
+        // Mantener poblado el desplegable de etiquetas para el filtro.
+        populateUsersTagFilter();
     } catch (error) {
         console.error('Error loading users:', error);
     }
@@ -3393,9 +3649,15 @@ function renderUsers(users) {
             ? `${verifyBtn}${loginNoPwdBtn}`
             : '<span style="color:#888;">—</span>';
 
+        const tagsHtml = (Array.isArray(user.tags) && user.tags.length)
+            ? '<div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px;">' +
+              user.tags.map(t => '<span style="background:rgba(212,175,55,0.18);border:1px solid rgba(212,175,55,0.45);color:#d4af37;border-radius:9px;padding:1px 6px;font-size:9.5px;">' + escapeHtml(t) + '</span>').join('') +
+              '</div>'
+            : '';
+
         return `
         <tr class="${isAdminUser ? 'admin-row' : ''}">
-            <td>${escapeHtml(user.username)}</td>
+            <td>${escapeHtml(user.username)}${tagsHtml}</td>
             <td>${escapeHtml(user.accountNumber || user.accountId || '-')}</td>
             <td>${escapeHtml(user.email || '-')}</td>
             <td>${escapeHtml(user.phone || '-')}</td>
@@ -5233,7 +5495,8 @@ async function loadNotificationsPanel() {
         loadNotifStats(),
         loadNotifUsers(1, filter),
         loadNotifStrategy(),
-        loadSchedules()
+        loadSchedules(),
+        loadTagBroadcastOptions()
     ]);
 }
 

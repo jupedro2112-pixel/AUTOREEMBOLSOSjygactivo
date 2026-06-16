@@ -39,9 +39,11 @@ VIP.fire = (function () {
     }
 
     async function showFireModal() {
-        if (!VIP.state.fireStatus) {
-            await loadFireStatus();
-        }
+        // Siempre refrescar el estado al abrir: así se reflejan premios que el
+        // servidor ya expiró/consumió (efectivo del mismo día, 100% próxima carga
+        // aplicado por un operador) y no queda un botón de reclamo "viejo" por
+        // estado cacheado en memoria.
+        await loadFireStatus();
         if (!VIP.state.fireStatus) {
             VIP.ui.showToast('Error cargando datos del fueguito', 'error');
             return;

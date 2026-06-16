@@ -687,6 +687,45 @@ router.post('/send-to-usernames', requireAdmin, async (req, res) => {
   }
 });
 
+// Difusión push a todos los clientes que tengan una etiqueta dada. Resuelve los
+// usernames por etiqueta y reusa el envío masivo existente. Difusión masiva →
+// restringida a admin general (no cajeros), igual criterio que el resto de los
+// envíos masivos sensibles.
+router.post('/send-to-tag', requireAdmin, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo un admin general puede enviar difusiones por etiqueta' });
+    }
+    const { tag, title, body, data } = req.body;
+    const cleanTag = String(tag || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 40);
+    if (!cleanTag) return res.status(400).json({ error: 'Etiqueta requerida' });
+    if (!title || !body) return res.status(400).json({ error: 'Título y cuerpo son requeridos' });
+
+    const users = await User.find({ tags: cleanTag, role: 'user' }).select('username').lean();
+    const usernames = users.map(u => u.username).filter(Boolean);
+    if (usernames.length === 0) {
+      return res.status(400).json({ error: 'No hay usuarios con esa etiqueta' });
+    }
+
+    const result = await sendNotificationToUsernames(User, usernames, title, body, data || {});
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Difusión enviada',
+        tag: cleanTag,
+        targetUsers: result.targetUsers,
+        successCount: result.successCount,
+        failureCount: result.failureCount
+      });
+    } else {
+      res.status(500).json({ success: false, error: result.error });
+    }
+  } catch (error) {
+    console.error('[FCM] Error send-to-tag:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============================================
 // ESTRATEGIA DE NOTIFICACIONES (plantillas editables)
 // ============================================

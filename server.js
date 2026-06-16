@@ -68,6 +68,8 @@ const Campaign = require('./src/models/Campaign');
 const CampaignClick = require('./src/models/CampaignClick');
 const InfluencerStory = require('./src/models/InfluencerStory');
 const ChatDelay = require('./src/models/ChatDelay');
+const Comprobante = require('./src/models/Comprobante');
+const comprobanteAi = require('./src/services/comprobanteAiService');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -1121,6 +1123,146 @@ function getArgentinaYesterday() {
   const argentinaNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
   argentinaNow.setDate(argentinaNow.getDate() - 1);
   return argentinaNow.toDateString();
+}
+
+// ============================================
+// COMPROBANTES — detección de reutilización con IA (anti-estafa)
+// ============================================
+// Normaliza una huella de comprobante para comparar duplicados (sólo alfanumérico).
+function _normComprobanteKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// Crea y emite un mensaje de sistema adminOnly (sólo lo ven los admins en el
+// chat; el cliente NO lo recibe). Reusa el mismo patrón que la alerta de bonus.
+async function _emitAdminOnlyChatNote(userId, username, content) {
+  try {
+    const msg = await Message.create({
+      id: uuidv4(),
+      senderId: 'admin',
+      senderUsername: 'Sistema',
+      senderRole: 'admin',
+      receiverId: userId,
+      receiverRole: 'user',
+      content,
+      type: 'system',
+      adminOnly: true,
+      timestamp: new Date(),
+      read: false
+    });
+    const data = {
+      id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+      receiverId: userId, receiverRole: 'user', content, timestamp: new Date(),
+      type: 'system', adminOnly: true
+    };
+    // Sólo a la sala del chat (admins viéndolo) + a todos los admins. NO a user_<id>.
+    io.to(`chat_${userId}`).emit('new_message', data);
+    notifyAdmins('new_message', { message: data, userId, username });
+  } catch (e) {
+    logger.warn(`[comprobante] no se pudo emitir aviso admin: ${e.message}`);
+  }
+}
+
+// Analiza una imagen enviada por un cliente: detecta si es comprobante, lo
+// registra (colección Comprobante) y avisa SÓLO a los admins si es duplicado o
+// no. Pensado para correr fire-and-forget: NUNCA frena la entrega del mensaje.
+async function analyzeComprobanteFromMessage({ userId, username, content, messageId }) {
+  try {
+    if (!comprobanteAi.isEnabled()) return; // sin ANTHROPIC_API_KEY → dormido
+    const result = await comprobanteAi.analyzeComprobante(content);
+
+    // La IA no pudo analizar (error técnico): registrar y salir en silencio.
+    if (!result.ok) {
+      try {
+        await Comprobante.create({
+          id: uuidv4(), userId, username, messageId,
+          isComprobante: false, status: 'error',
+          errorReason: String(result.error || '').slice(0, 300),
+          rawText: result.rawText || null, model: comprobanteAi.getModel(), createdAt: new Date()
+        });
+      } catch (_) {}
+      return;
+    }
+
+    // No es comprobante (captura de error, foto cualquiera): registrar liviano, sin avisar.
+    if (!result.isComprobante) {
+      try {
+        await Comprobante.create({
+          id: uuidv4(), userId, username, messageId,
+          isComprobante: false, aiConfidence: result.confidence || 0,
+          status: 'not_comprobante', rawText: result.rawText || null,
+          model: result.model, createdAt: new Date()
+        });
+      } catch (_) {}
+      return;
+    }
+
+    // Es comprobante → armar huella para dedupe (N° de operación; si no, combo).
+    const opKey = _normComprobanteKey(result.operationNumber);
+    let dedupeKey = opKey || null;
+    if (!dedupeKey && result.amount && (result.originCbu || result.paymentDate)) {
+      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originCbu || ''}|${result.paymentDate || ''}`);
+    }
+
+    const base = {
+      id: uuidv4(), userId, username, messageId,
+      isComprobante: true, aiConfidence: result.confidence || 0,
+      operationNumber: result.operationNumber || null,
+      amount: result.amount, originHolder: result.originHolder || null,
+      originCbu: result.originCbu || null, bank: result.bank || null,
+      paymentDate: result.paymentDate || null, rawText: result.rawText || null,
+      dedupeKey, model: result.model, createdAt: new Date()
+    };
+
+    const montoStr = result.amount ? `$${Number(result.amount).toLocaleString('es-AR')}` : 's/monto';
+    const opStr = result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación';
+    const dataDesc = `${opStr} · ${montoStr}${result.paymentDate ? ' · ' + result.paymentDate : ''}`;
+
+    // Sin huella confiable → registrar y avisar que hay que verificar a mano.
+    if (!dedupeKey) {
+      try { await Comprobante.create({ ...base, status: 'no_key' }); } catch (_) {}
+      await _emitAdminOnlyChatNote(userId, username,
+        `🧾 Comprobante recibido (${dataDesc}). ⚠️ No se pudo leer un N° de operación claro para chequear duplicado — verificá a mano.`);
+      return;
+    }
+
+    // Buscar un comprobante ANTERIOR con la misma huella.
+    let original = null;
+    try {
+      original = await Comprobante.findOne({ dedupeKey, isComprobante: true })
+        .sort({ createdAt: 1 }).lean();
+    } catch (e) {
+      logger.warn(`[comprobante] error buscando duplicado: ${e.message}`);
+    }
+
+    if (original) {
+      const sameUser = String(original.userId) === String(userId);
+      try {
+        await Comprobante.create({
+          ...base, status: 'duplicate',
+          duplicateOfUserId: original.userId || null,
+          duplicateOfUsername: original.username || null,
+          duplicateOfComprobanteId: original.id || null
+        });
+      } catch (_) {}
+      if (sameUser) {
+        await _emitAdminOnlyChatNote(userId, username,
+          `🧾 Comprobante REPETIDO (${dataDesc}). El propio cliente ya lo había enviado antes. Revisá antes de cargar.`);
+      } else {
+        await _emitAdminOnlyChatNote(userId, username,
+          `🚨 COMPROBANTE YA UTILIZADO POR: @${original.username || original.userId}\n${dataDesc}\n⚠️ Ya lo había enviado otro usuario. NO cargar sin verificar.`);
+      }
+      return;
+    }
+
+    // Único → registrar y avisar OK.
+    try { await Comprobante.create({ ...base, status: 'unique' }); } catch (_) {}
+    await _emitAdminOnlyChatNote(userId, username,
+      `✅ Comprobante verificado — no es duplicado (${dataDesc}).`);
+  } catch (e) {
+    // Defensa total: este análisis NUNCA debe romper nada del chat.
+    logger.warn(`[comprobante] analyzeComprobanteFromMessage falló: ${e.message}`);
+  }
 }
 
 // ============================================
@@ -4650,6 +4792,14 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       delayClockOnUserMessage(req.user.userId, content, type).catch(() => {}); // fire-and-forget
     }
 
+    // Comprobantes: si el cliente envía una imagen, analizarla con IA en segundo
+    // plano para detectar comprobantes reutilizados. Fire-and-forget: NO frena el chat.
+    if (!isAdminRole && type === 'image') {
+      analyzeComprobanteFromMessage({
+        userId: req.user.userId, username: req.user.username, content, messageId: message.id
+      }).catch(() => {});
+    }
+
     // CORREGIDO: Procesar comandos si el mensaje empieza con /
     if (content.trim().startsWith('/')) {
       const commandName = content.trim().split(' ')[0];
@@ -5510,6 +5660,25 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           );
         } catch (promoErr) {
           logger.warn(`[promo-bonus] no se pudo marcar usado en depósito: ${promoErr.message}`);
+        }
+      }
+
+      // Fueguito: si el cliente tenía pendiente el premio "100% en próxima carga"
+      // (hito día 15) y esta carga incluyó un bonus que SÍ se acreditó, el premio
+      // se considera consumido. Limpiamos el flag de forma atómica (solo si estaba
+      // en true) para que el cartel deje de aparecerle al cliente y no se pueda
+      // volver a reclamar (antes el flag nunca se limpiaba = bono 100% infinito).
+      if (bonusActuallyApplied) {
+        try {
+          const fireClear = await FireStreak.updateOne(
+            { userId: user.id, pendingNextLoadBonus: true },
+            { $set: { pendingNextLoadBonus: false } }
+          );
+          if (fireClear.modifiedCount > 0) {
+            logger.info(`[fire] pendingNextLoadBonus consumido por carga con bonus user=${user.username} agent=${req.user?.username}`);
+          }
+        } catch (fireErr) {
+          logger.warn(`[fire] no se pudo limpiar pendingNextLoadBonus en depósito: ${fireErr.message}`);
         }
       }
 
@@ -6401,6 +6570,14 @@ io.on('connection', (socket) => {
         } catch (csErr) {
           logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);
         }
+      }
+
+      // Comprobantes: imagen de un cliente → análisis IA fire-and-forget para
+      // detectar reutilización. NO frena la entrega del mensaje.
+      if (!isAdminRole && type === 'image') {
+        analyzeComprobanteFromMessage({
+          userId: socket.userId, username: socket.username, content, messageId: message.id
+        }).catch(() => {});
       }
 
       // Entregar el mensaje en tiempo real (ya con el ChatStatus actualizado,
@@ -10713,9 +10890,44 @@ app.get('/api/users/:userId', authMiddleware, async (req, res) => {
       } catch (e) { /* no bloquear la respuesta del perfil por esto */ }
     }
 
+    // Fueguito: exponer al panel admin si el cliente tiene pendiente el premio
+    // "100% en próxima carga" (hito día 15) para que el operador lo vea y pueda
+    // marcarlo como aplicado. Solo para roles de staff (no se filtra al cliente).
+    if (adminRoles.includes(req.user.role)) {
+      try {
+        const fs = await FireStreak.findOne({ userId }).select('pendingNextLoadBonus streak').lean();
+        user.fireNextLoadBonus = !!(fs && fs.pendingNextLoadBonus);
+        user.fireStreak = fs ? (fs.streak || 0) : 0;
+      } catch (e) { /* no bloquear el perfil por esto */ }
+    }
+
     res.json({ user });
   } catch (error) {
     console.error('Error obteniendo usuario:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Fueguito: marcar el premio "100% en próxima carga" (hito día 15) como aplicado.
+// Lo usan los operadores cuando ya le dieron el 100% al cliente manualmente, para
+// que el cartel deje de aparecer y no se pueda reclamar de nuevo. Esto cierra el
+// bug donde el flag pendingNextLoadBonus nunca se limpiaba (bono 100% infinito).
+app.post('/api/admin/users/:userId/fire-next-load-bonus/apply', authMiddleware, depositorMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    // Limpieza atómica: solo modifica si realmente estaba pendiente (evita
+    // dobles marcas concurrentes de dos operadores sobre el mismo cliente).
+    const result = await FireStreak.updateOne(
+      { userId, pendingNextLoadBonus: true },
+      { $set: { pendingNextLoadBonus: false } }
+    );
+    if (!result.matchedCount) {
+      return res.status(400).json({ error: 'El cliente no tiene un 100% de próxima carga pendiente.' });
+    }
+    logger.info(`[fire] pendingNextLoadBonus marcado como aplicado manualmente user=${userId} agent=${req.user?.username}`);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error aplicando fueguito next-load bonus:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -10784,6 +10996,12 @@ app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =>
       ];
     }
 
+    // Filtro por etiqueta (normalizada). Permite ver "todos los etiquetados como X".
+    const tagFilter = normalizeTag(req.query.tag);
+    if (tagFilter) {
+      query.tags = tagFilter;
+    }
+
     // Paginación. Default 20 por página (antes traía TODO de una → trababa el panel).
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
@@ -10800,6 +11018,72 @@ app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =>
     res.json({ users, total, page, totalPages, perPage: limit });
   } catch (error) {
     console.error('Error obteniendo usuarios:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// ETIQUETAS Y NOTAS DE USUARIOS (ADMIN)
+// ============================================
+
+// Normaliza una etiqueta: trim + minúsculas + espacios colapsados, máx 40 chars.
+// Devuelve '' si no es válida. Sirve para que el guardado y el filtro coincidan
+// siempre (sin importar mayúsculas/espacios que tipee el operador).
+function normalizeTag(raw) {
+  if (raw === undefined || raw === null) return '';
+  return String(raw).trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 40);
+}
+
+// Lista de etiquetas en uso (para el filtro y el autocompletado del panel).
+app.get('/api/admin/tags', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const tags = await User.distinct('tags');
+    const clean = (tags || [])
+      .filter(t => t && typeof t === 'string')
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    res.json({ tags: clean });
+  } catch (error) {
+    console.error('Error obteniendo etiquetas:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Agregar o quitar una etiqueta de un usuario (atómico, con auditoría liviana).
+app.post('/api/admin/users/:userId/tags', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const action = String(req.body.action || 'add').toLowerCase();
+    const tag = normalizeTag(req.body.tag);
+    if (!tag) return res.status(400).json({ error: 'Etiqueta inválida' });
+    if (!['add', 'remove'].includes(action)) return res.status(400).json({ error: 'Acción inválida' });
+
+    const exists = await User.exists({ id: userId });
+    if (!exists) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const historyEntry = { tag, action, byUsername: req.user.username, at: new Date() };
+    const update = action === 'add'
+      ? { $addToSet: { tags: tag }, $push: { tagHistory: historyEntry } }
+      : { $pull: { tags: tag }, $push: { tagHistory: historyEntry } };
+    await User.updateOne({ id: userId }, update);
+
+    const updated = await User.findOne({ id: userId }).select('tags').lean();
+    res.json({ success: true, tags: (updated && updated.tags) || [] });
+  } catch (error) {
+    console.error('Error actualizando etiquetas:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Guardar la nota interna libre de un usuario (sólo la ve el staff).
+app.post('/api/admin/users/:userId/notes', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const notes = String(req.body.notes || '').slice(0, 2000);
+    const r = await User.updateOne({ id: userId }, { $set: { adminNotes: notes } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error guardando nota de usuario:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

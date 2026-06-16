@@ -416,7 +416,33 @@ const userSchema = new mongoose.Schema({
   registrationUserAgent: {
     type: String,
     default: null
-  }
+  },
+
+  // =============================================
+  // Etiquetas y notas internas (panel admin)
+  // =============================================
+  // Etiquetas para clasificar/marcar clientes (ej: 'comprobante-duplicado',
+  // 'comprobante-usado', 'sospechoso', 'confiable', 'VIP'). Sólo las usa el staff
+  // desde el panel admin: permiten filtrar la lista de usuarios y segmentar
+  // difusiones push por etiqueta. Se guardan normalizadas (minúsculas, sin espacios
+  // duplicados) desde el backend para que el filtro sea consistente.
+  tags: {
+    type: [String],
+    default: [],
+    index: true
+  },
+  // Nota libre interna sobre el cliente (sólo la ve el staff en el panel).
+  adminNotes: {
+    type: String,
+    default: ''
+  },
+  // Auditoría liviana de cambios de etiquetas: quién agregó/quitó qué y cuándo.
+  tagHistory: [{
+    tag: { type: String },
+    action: { type: String, enum: ['add', 'remove'] },
+    byUsername: { type: String },
+    at: { type: Date, default: Date.now }
+  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

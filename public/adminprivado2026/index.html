@@ -311,6 +311,28 @@
                         </div>
                         <!-- Bono de carga vigente del cliente — lo llena loadChatPromoBonus() -->
                         <div id="chatPromoBonusBanner" style="display:none;"></div>
+                        <!-- Premio Fueguito "100% próxima carga" (día 15) pendiente — lo llena loadUserInfo() -->
+                        <div id="chatFireBonusBanner" style="display:none;"></div>
+                        <!-- Etiquetas y nota interna del cliente — lo llena loadUserInfo() -->
+                        <div id="chatTagsBar" style="display:none;padding:7px 14px;border-bottom:1px solid rgba(0,0,0,0.25);background:rgba(0,0,0,0.14);font-size:12px;">
+                            <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
+                                <span title="Etiquetas del cliente">🏷️</span>
+                                <span id="chatTagsList" style="display:flex;gap:5px;flex-wrap:wrap;"></span>
+                                <input type="text" id="chatTagInput" list="chatTagSuggestions" placeholder="+ etiqueta" maxlength="40"
+                                       onkeydown="if(event.key==='Enter'){event.preventDefault();addChatTag();}"
+                                       style="background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:3px 8px;font-size:11.5px;width:130px;">
+                                <datalist id="chatTagSuggestions"></datalist>
+                                <button type="button" onclick="addChatTag()" style="background:#2a6df0;color:#fff;border:none;border-radius:6px;padding:3px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">Agregar</button>
+                                <button type="button" id="chatNotesToggle" onclick="toggleChatNotes()" style="margin-left:auto;background:rgba(255,255,255,0.12);color:#ddd;border:none;border-radius:6px;padding:3px 9px;font-size:11.5px;cursor:pointer;">📝 Nota</button>
+                            </div>
+                            <div id="chatNotesBox" style="display:none;margin-top:7px;">
+                                <textarea id="chatNotesText" rows="2" maxlength="2000" placeholder="Nota interna sobre el cliente (solo la ve el staff)…"
+                                          style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:6px 8px;font-size:12px;resize:vertical;"></textarea>
+                                <div style="display:flex;justify-content:flex-end;margin-top:5px;">
+                                    <button type="button" onclick="saveChatNotes()" style="background:#0f8a2f;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:11.5px;font-weight:700;cursor:pointer;">Guardar nota</button>
+                                </div>
+                            </div>
+                        </div>
                         <div id="chatMessages" class="chat-messages">
                             <div class="empty-state">
                                 <span class="icon icon-comment-dots"></span>
@@ -353,6 +375,10 @@
                             <span class="icon icon-search"></span>
                             <input type="text" id="searchUsers" placeholder="Buscar usuario...">
                         </div>
+                        <select id="usersTagFilter" onchange="loadUsers(1)" title="Filtrar por etiqueta"
+                                style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:7px 10px;border-radius:6px;font-weight:600;font-size:13px;">
+                            <option value="">🏷️ Todas las etiquetas</option>
+                        </select>
                         <button class="btn-primary" onclick="showCreateUserModal()">
                             <span class="icon icon-plus"></span> Crear Usuario
                         </button>
@@ -1143,6 +1169,33 @@
                     <div id="notifSpecificUsers" style="display:none;margin-top:1rem">
                         <label class="form-label">Usernames (uno por línea o separados por coma)</label>
                         <textarea id="notifUsernames" class="form-input" rows="4" placeholder="usuario1&#10;usuario2&#10;usuario3"></textarea>
+                    </div>
+                </div>
+
+                <!-- Difusión por etiqueta -->
+                <div class="commands-section" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem">
+                    <h3 style="margin-bottom:1rem;font-size:1rem;color:#d4af37">📣 Difusión por etiqueta</h3>
+                    <p style="margin:0 0 1rem;color:#bbb;font-size:.82rem;line-height:1.5;">Enviá una notificación push a todos los clientes que tengan una etiqueta determinada (ej: VIP, en-riesgo). Solo admin general.</p>
+                    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;margin-bottom:.75rem">
+                        <div>
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Etiqueta</label>
+                            <select id="tagBroadcastSelect" class="form-input" style="min-width:220px">
+                                <option value="">— Elegí una etiqueta —</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="loadTagBroadcastOptions()" title="Actualizar lista de etiquetas">🔄</button>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Título *</label>
+                        <input type="text" id="tagBroadcastTitle" class="form-input" placeholder="Ej: 🎁 Bono exclusivo para vos" maxlength="100" />
+                    </div>
+                    <div class="form-group" style="margin-top:.75rem">
+                        <label class="form-label">Mensaje *</label>
+                        <textarea id="tagBroadcastBody" class="form-input" rows="3" placeholder="Ej: Ingresá ahora y reclamá tu bono." maxlength="250" style="resize:vertical"></textarea>
+                    </div>
+                    <div style="margin-top:1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                        <button id="tagBroadcastSendBtn" class="btn btn-primary" onclick="sendTagBroadcast()">🚀 Enviar a la etiqueta</button>
+                        <span id="tagBroadcastStatus" style="font-size:.85rem;color:#a5b4fc"></span>
                     </div>
                 </div>
 

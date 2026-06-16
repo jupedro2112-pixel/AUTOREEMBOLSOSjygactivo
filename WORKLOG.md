@@ -4,7 +4,77 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-08**
+> **Última actualización: 2026-06-16**
+
+## Sesión 2026-06-16
+
+### 27. Registro de comprobantes con IA (anti-reutilización/estafa) — NUEVO
+- **Caso:** clientes que reusan un comprobante ya usado por otro usuario (el user1
+  pasa comprobante y carga; user2 —sin relación aparente— pide cargar con el MISMO
+  comprobante). Se quería detectarlo automáticamente.
+- **Cómo funciona:** cuando un cliente manda una IMAGEN por el chat, en segundo plano
+  (fire-and-forget, cero impacto en la velocidad del chat) se manda a **Claude vision**
+  que decide si es comprobante y extrae datos (N° operación, monto, CBU/alias origen,
+  banco, fecha). Se guarda en la colección nueva **`Comprobante`** (permanente, sin TTL)
+  y se busca duplicado por **huella** (`dedupeKey` = N° operación normalizado; si no hay,
+  combo monto|cbu|fecha).
+  - Duplicado de OTRO usuario → mensaje **adminOnly** en el chat: `🚨 COMPROBANTE YA
+    UTILIZADO POR: @usuario …`. Duplicado del mismo cliente → aviso más suave.
+  - No duplicado → aviso adminOnly `✅ Comprobante verificado — no es duplicado`.
+  - No es comprobante (captura de error, foto cualquiera) → se registra liviano, SIN avisar.
+  - Sin N° de operación legible → aviso "verificá a mano".
+- **Modelo de IA:** `claude-haiku-4-5` (default, ~US$0,003 por comprobante). Configurable
+  con env `COMPROBANTE_AI_MODEL`. Cliente vía **axios** (mismo patrón que JUGAYGANA, sin
+  sumar dependencias nuevas).
+- **Activación:** lee `ANTHROPIC_API_KEY` desde `process.env` (cargada por SSM en el
+  bootstrap, igual que JWT_SECRET). **Si la key NO está, queda DORMIDO** (no analiza, no
+  crea registros, no rompe nada). → Para activarlo: cargar `ANTHROPIC_API_KEY` en el
+  SSM_PATH (AWS Parameter Store) y redeploy/restart.
+- **Archivos:** `src/models/Comprobante.js` (nuevo), `src/services/comprobanteAiService.js`
+  (nuevo), enganches en server.js (helper `analyzeComprobanteFromMessage` + 2 hooks: socket
+  `send_message` y HTTP `/api/messages/send`, sólo `senderRole==='user'` && `type==='image'`).
+- **Alcance:** sólo cubre imágenes que pasan por el chat de la app. Si el comprobante llega
+  por otro canal (WhatsApp directo) no se ve. Pendiente ofrecido: verificación del lado del
+  operador en el panel (subir imagen antes de cargar) — NO hecho aún (el owner eligió "solo chat").
+- **Validado:** `node --check` OK. Back necesita redeploy + cargar la API key en SSM.
+
+### 26. Etiquetas + notas internas en usuarios (panel admin)
+- **Pedido:** poder etiquetar/anotar clientes (ej: `comprobante-duplicado`, `sospechoso`,
+  `confiable`, `VIP`), filtrar usuarios por etiqueta y mandar difusiones push por etiqueta.
+- **Modelo (`User`):** `tags: [String]` (indexado), `adminNotes` (texto), `tagHistory`
+  (auditoría liviana: quién agregó/quitó qué y cuándo). Las etiquetas se normalizan en el
+  backend (minúsculas, trim, espacios colapsados, máx 40 chars) para que guardado y filtro coincidan.
+- **Backend (server.js):** filtro `?tag=` en `GET /api/admin/users`; `GET /api/admin/tags`
+  (lista de etiquetas en uso); `POST /api/admin/users/:userId/tags` (action add|remove,
+  atómico con `$addToSet`/`$pull`); `POST /api/admin/users/:userId/notes`. Helper `normalizeTag`.
+  `GET /api/users/:userId` ya devuelve tags+adminNotes (full user). Todos con `adminMiddleware`.
+- **Difusión por etiqueta (`notificationRoutes.js`):** `POST /api/notifications/send-to-tag`
+  → resuelve usernames por etiqueta y reusa `sendNotificationToUsernames`. **Solo admin
+  general** (chequeo `req.user.role==='admin'`, no cajeros).
+- **Panel (`adminprivado2026`):** barra de etiquetas + nota en el chat del usuario (chips
+  con quitar, input con autocompletado, textarea de nota); chips de etiqueta bajo el nombre
+  en la tabla de Usuarios; filtro por etiqueta en la sección Usuarios; card "📣 Difusión por
+  etiqueta" en Notificaciones. Reusa `authFetch`/`escapeHtml`.
+- **Validado:** `node --check` OK (server.js, admin.js, notificationRoutes.js, User.js).
+  Back necesita redeploy; front, recargar el panel.
+
+### 25. Fix bug Fueguito: el "100% próxima carga" (día 15) nunca se limpiaba
+- **Bug:** el flag `pendingNextLoadBonus` se ponía en `true` al llegar al día 15 pero NUNCA
+  se volvía a poner en `false` en ningún lado → el cartel "🎁 Tenés un 100% en tu próxima
+  carga" quedaba visible para siempre y era un **bono 100% infinito** explotable (el cliente
+  podía pedirlo a un operador en cada carga). (Reportado como "aparece para reclamar el bono"
+  estando en día 26; por la captura era el premio del día 15, no el de día 20.)
+- **Fix (ambas cosas, como pidió el owner):**
+  - **Auto-limpieza:** en `POST /api/admin/deposit`, si la carga incluyó un bonus que se
+    acreditó OK, se limpia el flag de forma atómica (`FireStreak.updateOne({userId, pendingNextLoadBonus:true},{false})`).
+  - **Botón manual:** `GET /api/users/:userId` ahora expone `fireNextLoadBonus` para el panel;
+    nuevo `POST /api/admin/users/:userId/fire-next-load-bonus/apply` (depositorMiddleware) lo
+    marca como aplicado. En el chat del panel aparece un cartel "🔥 FUEGUITO: 100% próxima carga"
+    con botón "✓ Marcar aplicado".
+  - **Front cliente:** `showFireModal` ahora SIEMPRE refresca el estado al abrir (antes usaba
+    estado cacheado → podía mostrar un botón de reclamo viejo de un premio ya expirado/consumido).
+- **Nota:** el premio en efectivo (días 10/20/30) ya auto-expira el mismo día (sin cambios).
+- **Validado:** `node --check` OK (server.js, admin.js, fire.js). Back redeploy; front recargar.
 
 ## Sesión 2026-06-10
 

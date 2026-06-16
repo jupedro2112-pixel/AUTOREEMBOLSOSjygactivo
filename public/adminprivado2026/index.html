@@ -613,6 +613,41 @@
                                 <span class="icon icon-save"></span> Guardar banco automático
                             </button>
                         </div>
+                        <!-- Movimientos del banco automático (hgcash) -->
+                        <div id="hgcashMovementsPanel">
+                            <div class="panel-subheader" style="margin-top: 24px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                                <h3 style="margin:0;">🏦 Movimientos del banco</h3>
+                                <select id="hgcashMovFilter" onchange="loadHgcashMovements(1)" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 9px;border-radius:6px;font-size:12px;">
+                                    <option value="">Todos</option>
+                                    <option value="pending">Pendientes (sin match)</option>
+                                    <option value="shadow_matched">Match (sombra)</option>
+                                    <option value="auto_charged">Cargados (auto)</option>
+                                    <option value="error">Con error</option>
+                                    <option value="ignored">Ignorados (salientes)</option>
+                                </select>
+                                <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
+                            </div>
+                            <div style="overflow-x:auto;">
+                                <table class="data-table" style="min-width:780px;">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Dir.</th>
+                                            <th>Monto</th>
+                                            <th>Origen</th>
+                                            <th>CBU origen</th>
+                                            <th>Estado</th>
+                                            <th>Usuario</th>
+                                            <th>Coelsa/op</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="hgcashMovBody">
+                                        <tr><td colspan="8" style="color:#888;text-align:center;">—</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="hgcashMovPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:10px;"></div>
+                        </div>
                     </div>
                 </div>
             </section>

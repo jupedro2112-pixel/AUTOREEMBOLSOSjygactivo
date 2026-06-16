@@ -4901,14 +4901,18 @@ async function loadCBUConfig() {
 
 async function loadHgcashConfig() {
     const form = document.getElementById('hgcashConfigForm');
+    const movPanel = document.getElementById('hgcashMovementsPanel');
     try {
         const r = await authFetch('/api/admin/hgcash/config');
         if (!r.ok) {
             // Sólo admin general puede verlo: si no, ocultamos la card.
             if (form) form.style.display = 'none';
+            if (movPanel) movPanel.style.display = 'none';
             return;
         }
         if (form) form.style.display = '';
+        if (movPanel) movPanel.style.display = '';
+        loadHgcashMovements(1);
         const j = await r.json();
         const c = j.config || {};
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
@@ -4929,6 +4933,71 @@ async function loadHgcashConfig() {
         }
     } catch (e) {
         if (form) form.style.display = 'none';
+        if (movPanel) movPanel.style.display = 'none';
+    }
+}
+
+// Etiquetas legibles + color para el estado de match de un movimiento.
+function hgcashStatusBadge(st) {
+    const map = {
+        pending:        ['Pendiente', '#d4820a'],
+        claiming:       ['Procesando', '#888'],
+        shadow_matched: ['Match (sombra)', '#2a6df0'],
+        auto_charged:   ['Cargado ✓', '#0f8a2f'],
+        no_match:       ['Sin match', '#888'],
+        ignored:        ['Saliente', '#666'],
+        error:          ['Error', '#dc3545']
+    };
+    const [label, color] = map[st] || [st || '—', '#888'];
+    return '<span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;white-space:nowrap;">' + escapeHtml(label) + '</span>';
+}
+
+async function loadHgcashMovements(page = 1) {
+    const body = document.getElementById('hgcashMovBody');
+    const pag = document.getElementById('hgcashMovPagination');
+    if (!body) return;
+    const status = (document.getElementById('hgcashMovFilter') || {}).value || '';
+    try {
+        const qs = new URLSearchParams({ page: String(page) });
+        if (status) qs.set('status', status);
+        const r = await authFetch('/api/admin/hgcash/movements?' + qs.toString());
+        if (!r.ok) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Sin acceso o sin datos</td></tr>'; return; }
+        const j = await r.json();
+        const movs = j.movements || [];
+        if (!movs.length) {
+            body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">No hay movimientos</td></tr>';
+            if (pag) pag.innerHTML = '';
+            return;
+        }
+        body.innerHTML = movs.map(m => {
+            const fecha = m.createdAt ? fmtFechaHoraAR(m.createdAt) : '—';
+            const dir = m.direction === 'Inbound' ? '⬇️ Entra' : (m.direction === 'Outbound' ? '⬆️ Sale' : '—');
+            const monto = m.amount != null ? '$' + Number(m.amount).toLocaleString('es-AR') : (m.amountRaw || '—');
+            const origen = m.fromName || '—';
+            const cbu = m.fromCBU || '—';
+            const usuario = m.matchedUsername ? '@' + m.matchedUsername : '—';
+            const op = m.coelsaCode || m.externalId || '—';
+            return '<tr>' +
+                '<td style="white-space:nowrap;">' + escapeHtml(fecha) + '</td>' +
+                '<td>' + escapeHtml(dir) + '</td>' +
+                '<td style="white-space:nowrap;">' + escapeHtml(monto) + '</td>' +
+                '<td>' + escapeHtml(origen) + '</td>' +
+                '<td style="font-size:11px;">' + escapeHtml(cbu) + '</td>' +
+                '<td>' + hgcashStatusBadge(m.matchStatus) + (m.chargeError ? '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(m.chargeError).slice(0,60)) + '</span>' : '') + '</td>' +
+                '<td>' + escapeHtml(usuario) + '</td>' +
+                '<td style="font-size:11px;">' + escapeHtml(op) + '</td>' +
+                '</tr>';
+        }).join('');
+        if (pag) {
+            const totalPages = j.totalPages || 1;
+            const cur = j.page || 1;
+            const mk = (label, target, disabled) => '<button onclick="loadHgcashMovements(' + target + ')" ' + (disabled ? 'disabled' : '') + ' style="padding:5px 11px;background:' + (disabled ? '#1a1a2e' : '#2a2a3a') + ';color:' + (disabled ? '#444' : '#fff') + ';border:none;border-radius:6px;cursor:' + (disabled ? 'not-allowed' : 'pointer') + ';font-size:12px;">' + label + '</button>';
+            pag.innerHTML = totalPages > 1
+                ? mk('« Anterior', cur - 1, cur <= 1) + '<span style="font-size:12px;color:#aaa;">Página ' + cur + ' de ' + totalPages + '</span>' + mk('Siguiente »', cur + 1, cur >= totalPages)
+                : '';
+        }
+    } catch (e) {
+        body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error cargando movimientos</td></tr>';
     }
 }
 

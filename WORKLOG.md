@@ -36,7 +36,8 @@
   Endpoints admin (solo admin general): `GET/POST /api/admin/hgcash/config`,
   `GET /api/admin/hgcash/movements`. Panel: card "🏦 Banco automático (hgcash)" en la sección
   "Comandos y Configuración CBU" (CBU + modo sombra/auto + ventana + activar; muestra estado de
-  firma/IA y la URL del webhook).
+  firma/IA y la URL del webhook) + **tabla de movimientos del banco** (filtro por estado +
+  paginación + badge de estado de match: pendiente/match-sombra/cargado/error) — solo admin general.
 - **Para activarlo:** (1) en el dashboard de hgcash: setear webhook URL
   `https://vipcargas.com/api/hgcash/webhook` + generar secreto de firma; (2) cargar
   `HGCASH_WEBHOOK_SECRET` en SSM; (3) en el panel: cargar el CBU de hgcash + activar (arranca

@@ -8,6 +8,51 @@
 
 ## Sesión 2026-06-16
 
+### 29. Carga AUTOMÁTICA por banco con API (hgcash / Urbana) — NUEVO
+- **Caso:** un banco (hgcash) tiene API; cuando un cliente transfiere a ese CBU y manda
+  el comprobante, que la carga se haga sola. El otro banco (sin API) sigue manual.
+- **API hgcash** (https://docs.hg.cash): webhook `account-movement` (push) firmado con
+  HMAC-SHA256 en header `X-HG-Webhook-Signature: sha256=<hex>` sobre el body crudo, secreto
+  configurable en el dashboard. Base URL `https://hg.cash/api/v1`, auth `Bearer cash_...`
+  (sólo para consultas; el webhook no necesita token). Campos del movimiento: direction
+  (Inbound/Outbound), amount, currency, fromCBU/fromCUIT/fromName, toCBU, coelsaCode, date, id.
+- **Decisiones (owner):** matcheo por **monto + CBU origen + ventana 60 min**; arranca
+  **apagado** y en **modo sombra** (detecta y avisa al admin SIN cargar) hasta habilitar auto.
+- **Cómo funciona:**
+  - Webhook `POST /api/hgcash/webhook` (sin authMiddleware): valida firma HMAC sobre el body
+    crudo (se agregó `verify` en express.json → `req.rawBody`), guarda el movimiento en la
+    colección nueva **`BankMovement`** (dedupe por `movementId`), responde 2xx rápido y matchea
+    en segundo plano.
+  - **Matcheo en cualquier orden:** desde el movimiento (`hgcashMatchFromMovement`) busca el
+    comprobante; desde el comprobante (`hgcashMatchFromComprobante`, enganchado en
+    `analyzeComprobanteFromMessage`) busca el movimiento. Match exacto = monto en centavos
+    igual + `fromCBU`==`cbu_origen` (normalizado a dígitos, ≥18) + dentro de la ventana.
+  - **Anti-doble-carga:** se reclama atómicamente el movimiento (pending→claiming) Y el
+    comprobante antes de cargar.
+  - **Carga (`hgcashAutoCarga`):** modo sombra → mensaje adminOnly "MATCH listo para cargar".
+    Modo auto → `jugaygana.depositToUser` + Transaction (metadata.source 'auto_hgcash') +
+    mensaje al cliente (/sys_deposit) + emit balance + aviso admin. Si falla, queda manual.
+- **Config** en `Config['hgcash']` `{ enabled, cbu, accountId, mode, windowMinutes, currency }`.
+  Endpoints admin (solo admin general): `GET/POST /api/admin/hgcash/config`,
+  `GET /api/admin/hgcash/movements`. Panel: card "🏦 Banco automático (hgcash)" en la sección
+  "Comandos y Configuración CBU" (CBU + modo sombra/auto + ventana + activar; muestra estado de
+  firma/IA y la URL del webhook).
+- **Para activarlo:** (1) en el dashboard de hgcash: setear webhook URL
+  `https://vipcargas.com/api/hgcash/webhook` + generar secreto de firma; (2) cargar
+  `HGCASH_WEBHOOK_SECRET` en SSM; (3) en el panel: cargar el CBU de hgcash + activar (arranca
+  en sombra) → pasar a auto cuando confíe. Requiere también la IA de comprobantes activa
+  (`ANTHROPIC_API_KEY`) porque el matcheo usa el comprobante. **Apagado por defecto: no carga
+  nada hasta habilitarlo.**
+- **Limitación:** sólo auto-carga si el comprobante muestra un CBU de origen legible (22 díg.).
+  Si sólo muestra alias → queda manual (aviso al operador). Movimientos sin comprobante que
+  matchee quedan `pending` para reconciliación manual.
+- **Validado:** `node --check` OK (server.js, admin.js, modelos). Back necesita redeploy.
+
+### 28. Lectura del CBU/titular de DESTINO en el comprobante (IA)
+- La IA del comprobante ahora también extrae `cbu_destino`/`titular_destino` (campos
+  `destCbu`/`destHolder` en Comprobante). Necesario para distinguir banco con API vs sin API
+  en la carga automática (#28). Cambio aditivo, sin romper lo existente.
+
 ### 27. Registro de comprobantes con IA (anti-reutilización/estafa) — NUEVO
 - **Caso:** clientes que reusan un comprobante ya usado por otro usuario (el user1
   pasa comprobante y carga; user2 —sin relación aparente— pide cargar con el MISMO

@@ -4895,6 +4895,70 @@ async function loadCBUConfig() {
     loadCanalUrlConfig();
     // Cargar la config de la Comunidad (Telegram)
     loadCommunityConfig();
+    // Cargar la config del banco automático (hgcash)
+    loadHgcashConfig();
+}
+
+async function loadHgcashConfig() {
+    const form = document.getElementById('hgcashConfigForm');
+    try {
+        const r = await authFetch('/api/admin/hgcash/config');
+        if (!r.ok) {
+            // Sólo admin general puede verlo: si no, ocultamos la card.
+            if (form) form.style.display = 'none';
+            return;
+        }
+        if (form) form.style.display = '';
+        const j = await r.json();
+        const c = j.config || {};
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('hgcashCbu', c.cbu || '');
+        set('hgcashMode', c.mode || 'shadow');
+        set('hgcashWindow', c.windowMinutes || 60);
+        const en = document.getElementById('hgcashEnabled');
+        if (en) en.checked = !!c.enabled;
+        const status = document.getElementById('hgcashStatusLine');
+        if (status) {
+            const parts = [];
+            parts.push(c.enabled ? '🟢 Integración ACTIVA' : '⚪ Integración apagada');
+            parts.push(c.mode === 'auto' ? 'modo AUTO (carga sola)' : 'modo SOMBRA (no carga)');
+            parts.push(j.secretConfigured ? 'firma ✅' : 'firma ❌ (falta HGCASH_WEBHOOK_SECRET en SSM)');
+            parts.push(j.aiEnabled ? 'IA ✅' : 'IA ❌ (falta ANTHROPIC_API_KEY)');
+            status.innerHTML = parts.join(' · ') +
+                '<br><span style="color:#888;">Webhook a configurar en hgcash: <code>https://vipcargas.com' + (j.webhookUrl || '/api/hgcash/webhook') + '</code></span>';
+        }
+    } catch (e) {
+        if (form) form.style.display = 'none';
+    }
+}
+
+async function saveHgcashConfig() {
+    const cbu = (document.getElementById('hgcashCbu') || {}).value || '';
+    const mode = (document.getElementById('hgcashMode') || {}).value || 'shadow';
+    const windowMinutes = parseInt((document.getElementById('hgcashWindow') || {}).value, 10) || 60;
+    const enabled = !!(document.getElementById('hgcashEnabled') || {}).checked;
+    if (enabled && !cbu.trim()) {
+        showToast('Para activar tenés que cargar el CBU de hgcash', 'error');
+        return;
+    }
+    if (enabled && mode === 'auto' && !confirm('Vas a activar la CARGA AUTOMÁTICA real (modo auto). Las transferencias que matcheen se van a acreditar solas. ¿Confirmás?')) {
+        return;
+    }
+    try {
+        const r = await authFetch('/api/admin/hgcash/config', {
+            method: 'POST',
+            body: JSON.stringify({ cbu: cbu.trim(), mode, windowMinutes, enabled })
+        });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Banco automático guardado', 'success');
+            loadHgcashConfig();
+        } else {
+            showToast(j.error || 'Error al guardar', 'error');
+        }
+    } catch (e) {
+        showToast('Error de conexión', 'error');
+    }
 }
 
 async function saveCBUConfig() {

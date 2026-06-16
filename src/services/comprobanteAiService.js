@@ -66,6 +66,8 @@ const PROMPT = [
   '- monto: el importe transferido, sólo el número sin símbolos ni puntos de miles (number).',
   '- titular_origen: nombre del que envió el dinero (string).',
   '- cbu_origen: CBU/CVU o alias de la cuenta de ORIGEN (string).',
+  '- titular_destino: nombre del que RECIBE el dinero (string).',
+  '- cbu_destino: CBU/CVU o alias de la cuenta de DESTINO (a quién se le transfirió) (string).',
   '- banco: banco o billetera (string).',
   '- fecha: fecha y hora que figura en el comprobante, tal cual (string).',
   '',
@@ -73,6 +75,7 @@ const PROMPT = [
   'exactamente estas claves:',
   '{"es_comprobante": true|false, "confianza": 0..1, "numero_operacion": string|null,',
   ' "monto": number|null, "titular_origen": string|null, "cbu_origen": string|null,',
+  ' "titular_destino": string|null, "cbu_destino": string|null,',
   ' "banco": string|null, "fecha": string|null}'
 ].join('\n');
 
@@ -146,6 +149,8 @@ async function analyzeComprobante(content) {
       amount: amountNum,
       originHolder: parsed.titular_origen ? String(parsed.titular_origen).trim() : null,
       originCbu: parsed.cbu_origen ? String(parsed.cbu_origen).trim() : null,
+      destHolder: parsed.titular_destino ? String(parsed.titular_destino).trim() : null,
+      destCbu: parsed.cbu_destino ? String(parsed.cbu_destino).trim() : null,
       bank: parsed.banco ? String(parsed.banco).trim() : null,
       paymentDate: parsed.fecha ? String(parsed.fecha).trim() : null,
       rawText: raw,

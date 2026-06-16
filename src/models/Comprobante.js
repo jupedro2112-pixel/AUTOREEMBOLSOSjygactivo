@@ -29,6 +29,8 @@ const comprobanteSchema = new mongoose.Schema({
   amount: { type: Number, default: null },
   originHolder: { type: String, default: null, trim: true }, // titular / origen
   originCbu: { type: String, default: null, trim: true },    // CBU/CVU/alias origen
+  destHolder: { type: String, default: null, trim: true },   // titular / destino (quién recibe)
+  destCbu: { type: String, default: null, trim: true },      // CBU/CVU/alias destino (a quién se envió)
   bank: { type: String, default: null, trim: true },
   paymentDate: { type: String, default: null, trim: true },  // fecha/hora tal como figura
   rawText: { type: String, default: null },                  // texto crudo leído (debug)
@@ -48,6 +50,17 @@ const comprobanteSchema = new mongoose.Schema({
   duplicateOfUserId: { type: String, default: null },
   duplicateOfUsername: { type: String, default: null },
   duplicateOfComprobanteId: { type: String, default: null },
+
+  // Matcheo con el banco con API (hgcash) → carga automática
+  toApiBank: { type: Boolean, default: false }, // el destino es el CBU del banco con API
+  bankMatchStatus: {
+    type: String,
+    enum: ['none', 'pending', 'claiming', 'shadow_matched', 'auto_charged', 'matched'],
+    default: 'none',
+    index: true
+  },
+  matchedMovementId: { type: String, default: null }, // movementId de BankMovement matcheado
+  autoCharged: { type: Boolean, default: false },
 
   // Meta
   model: { type: String, default: null },        // modelo de IA que lo analizó

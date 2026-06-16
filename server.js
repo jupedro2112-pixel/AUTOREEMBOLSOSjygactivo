@@ -70,6 +70,7 @@ const InfluencerStory = require('./src/models/InfluencerStory');
 const ChatDelay = require('./src/models/ChatDelay');
 const Comprobante = require('./src/models/Comprobante');
 const comprobanteAi = require('./src/services/comprobanteAiService');
+const BankMovement = require('./src/models/BankMovement');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -505,7 +506,13 @@ app.use(cors({
   exposedHeaders: ['X-Total-Count', 'X-RateLimit-Remaining']
 }));
 app.use('/api/', generalLimiter);
-app.use(express.json({ limit: '10mb' }));
+// Guardamos el body CRUDO (Buffer) en req.rawBody para poder validar firmas
+// HMAC de webhooks (ej. hgcash) sobre los bytes exactos. No cambia el parseo
+// normal: req.body sigue siendo el JSON parseado.
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => { req.rawBody = buf; }
+}));
 app.use(mongoSanitize());
 app.use(xss());
 
@@ -1209,7 +1216,9 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       isComprobante: true, aiConfidence: result.confidence || 0,
       operationNumber: result.operationNumber || null,
       amount: result.amount, originHolder: result.originHolder || null,
-      originCbu: result.originCbu || null, bank: result.bank || null,
+      originCbu: result.originCbu || null,
+      destHolder: result.destHolder || null, destCbu: result.destCbu || null,
+      bank: result.bank || null,
       paymentDate: result.paymentDate || null, rawText: result.rawText || null,
       dedupeKey, model: result.model, createdAt: new Date()
     };
@@ -1223,6 +1232,8 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       try { await Comprobante.create({ ...base, status: 'no_key' }); } catch (_) {}
       await _emitAdminOnlyChatNote(userId, username,
         `🧾 Comprobante recibido (${dataDesc}). ⚠️ No se pudo leer un N° de operación claro para chequear duplicado — verificá a mano.`);
+      // Banco automático: aunque no haya N° de operación, puede matchear por monto+CBU origen.
+      hgcashMatchFromComprobante({ ...base, status: 'no_key' }).catch(() => {});
       return;
     }
 
@@ -1259,11 +1270,276 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     try { await Comprobante.create({ ...base, status: 'unique' }); } catch (_) {}
     await _emitAdminOnlyChatNote(userId, username,
       `✅ Comprobante verificado — no es duplicado (${dataDesc}).`);
+    // Banco automático: si fue al CBU con API, intentar matchear + cargar.
+    hgcashMatchFromComprobante({ ...base, status: 'unique' }).catch(() => {});
   } catch (e) {
     // Defensa total: este análisis NUNCA debe romper nada del chat.
     logger.warn(`[comprobante] analyzeComprobanteFromMessage falló: ${e.message}`);
   }
 }
+
+// ============================================
+// BANCO AUTOMÁTICO (hgcash / Urbana) — carga automática por match de comprobante
+// ============================================
+// Config en Config['hgcash']:
+//   { enabled, cbu, accountId, mode ('shadow'|'auto'), windowMinutes, currency }
+//   enabled=false → TODO apagado. mode='shadow' → matchea y avisa pero NO carga.
+// El secreto de firma del webhook va en process.env.HGCASH_WEBHOOK_SECRET (SSM).
+const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', mode: 'shadow', windowMinutes: 60, currency: 'ARS' };
+
+async function getHgcashConfig() {
+  const cfg = await getConfig('hgcash', null);
+  return Object.assign({}, HGCASH_DEFAULTS, cfg || {});
+}
+
+// Sólo dígitos (para comparar CBUs sin importar formato/espacios).
+function _digits(s) { return String(s || '').replace(/\D/g, ''); }
+
+// Igualdad de montos en centavos (evita errores de coma flotante).
+function _amountsEqual(a, b) {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  return Math.round(Number(a) * 100) === Math.round(Number(b) * 100);
+}
+
+// Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
+// ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
+async function hgcashAutoCarga({ movement, comprobante, mode }) {
+  const shadow = mode !== 'auto';
+
+  // 1) Reclamar el movimiento (pending → claiming).
+  const movClaim = await BankMovement.findOneAndUpdate(
+    { movementId: movement.movementId, matchStatus: 'pending' },
+    { $set: { matchStatus: 'claiming' } }, { new: true }
+  );
+  if (!movClaim) return; // ya lo tomó otro proceso
+
+  // 2) Reclamar el comprobante (no cargado/tomado todavía).
+  const compClaim = await Comprobante.findOneAndUpdate(
+    { id: comprobante.id, autoCharged: { $ne: true }, bankMatchStatus: { $nin: ['claiming', 'auto_charged', 'shadow_matched'] } },
+    { $set: { bankMatchStatus: 'claiming', toApiBank: true } }, { new: true }
+  );
+  if (!compClaim) {
+    // El comprobante ya fue tomado por otro movimiento → devolver el movimiento.
+    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'pending' } });
+    return;
+  }
+
+  const user = await User.findOne({ id: comprobante.userId });
+  if (!user) {
+    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: 'usuario no encontrado' } });
+    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+    return;
+  }
+
+  const amount = movement.amount;
+  const opDesc = `op. hgcash ${movement.coelsaCode || movement.externalId || movement.movementId}`;
+  const dataDesc = `$${Number(amount).toLocaleString('es-AR')} · ${movement.fromName || movement.fromCBU || 's/origen'} · ${opDesc}`;
+
+  // Modo sombra: NO cargar, sólo avisar al admin que el match está listo.
+  if (shadow) {
+    await BankMovement.updateOne({ movementId: movement.movementId }, {
+      $set: { matchStatus: 'shadow_matched', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id }
+    });
+    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'shadow_matched', matchedMovementId: movement.movementId } });
+    await _emitAdminOnlyChatNote(user.id, user.username,
+      `🏦 MATCH hgcash (MODO SOMBRA) — ${dataDesc}\n✅ La transferencia coincide con el comprobante. Lista para cargar (auto-carga DESACTIVADA — cargá vos).`);
+    logger.info(`[hgcash] shadow match user=${user.username} amount=$${amount} movement=${movement.movementId}`);
+    return;
+  }
+
+  // Modo auto: cargar de verdad en JUGAYGANA.
+  try {
+    const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)');
+    if (!result.success) {
+      await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: String(result.error || 'fallo deposit').slice(0, 300) } });
+      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+      await _emitAdminOnlyChatNote(user.id, user.username,
+        `🏦 MATCH hgcash — ${dataDesc}\n⚠️ La AUTO-CARGA FALLÓ en JUGAYGANA (${result.error || 's/detalle'}). Cargá manual.`);
+      return;
+    }
+
+    await BankMovement.updateOne({ movementId: movement.movementId }, {
+      $set: { matchStatus: 'auto_charged', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargedAt: new Date() }
+    });
+    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'auto_charged', matchedMovementId: movement.movementId, autoCharged: true } });
+
+    try { await recordUserActivity(user.id, 'deposit', Number(amount)); } catch (_) {}
+    await Transaction.create({
+      id: uuidv4(), type: 'deposit', amount: Number(amount),
+      username: user.username, userId: user.id,
+      description: `Carga automática hgcash (${opDesc})`,
+      adminUsername: 'auto-hgcash', adminRole: 'system',
+      transactionId: result.data?.transfer_id || result.data?.transferId,
+      metadata: { source: 'auto_hgcash', movementId: movement.movementId, comprobanteId: comprobante.id },
+      timestamp: new Date()
+    });
+
+    // Mensaje al cliente (usa /sys_deposit si está; si no, fallback).
+    let newBalance = null;
+    try {
+      const balRes = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+      if (balRes.success) newBalance = balRes.balance;
+    } catch (_) {}
+    const balStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
+    const depositCmd = await Command.findOne({ name: '/sys_deposit', isActive: true });
+    const clientMsg = (depositCmd && depositCmd.response)
+      ? depositCmd.response.replace(/\{amount\}/g, Number(amount)).replace(/\{bonus\}/g, 0).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose')
+      : `🔒💰 Depósito de $${Number(amount).toLocaleString('es-AR')} acreditado con éxito. ✅\n💸 Tu nuevo saldo es ${balStr} 💸`;
+    const sysMsg = await Message.create({
+      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+      receiverId: user.id, receiverRole: 'user', content: clientMsg, type: 'system', timestamp: new Date(), read: false
+    });
+    const msgData = { id: sysMsg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content: clientMsg, timestamp: new Date(), type: 'system' };
+    io.to(`user_${user.id}`).emit('new_message', msgData);
+    io.to(`chat_${user.id}`).emit('new_message', msgData);
+    notifyAdmins('new_message', { message: msgData, userId: user.id, username: user.username });
+    const uSock = connectedUsers.get(user.id);
+    if (uSock && newBalance !== null) uSock.emit('balance_updated', { balance: newBalance });
+
+    await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.`);
+    logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
+  } catch (e) {
+    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: String(e.message).slice(0, 300) } });
+    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+    logger.error(`[hgcash] auto-carga excepción user=${user.username}: ${e.message}`);
+  }
+}
+
+// Desde un MOVIMIENTO entrante: buscar el comprobante que coincida (monto + CBU
+// origen + ventana de tiempo). Si matchea exacto → carga (o sombra).
+async function hgcashMatchFromMovement(movement) {
+  try {
+    const cfg = await getHgcashConfig();
+    if (!cfg.enabled) return;
+    if (!movement || movement.direction !== 'Inbound' || movement.matchStatus !== 'pending') return;
+    if (cfg.currency && movement.currency && String(movement.currency).toUpperCase() !== String(cfg.currency).toUpperCase()) return;
+
+    const movFrom = _digits(movement.fromCBU);
+    if (!movFrom || movFrom.length < 18) return; // sin CBU origen del banco no podemos matchear seguro
+
+    const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60 * 1000);
+    const candidates = await Comprobante.find({
+      isComprobante: true,
+      autoCharged: { $ne: true },
+      bankMatchStatus: { $in: ['none', 'pending'] },
+      createdAt: { $gte: since }
+    }).sort({ createdAt: -1 }).limit(50).lean();
+
+    const match = candidates.find(c =>
+      _amountsEqual(c.amount, movement.amount) &&
+      _digits(c.originCbu) === movFrom
+    );
+    if (!match) return; // queda pending; un comprobante posterior puede matchearlo
+    await hgcashAutoCarga({ movement, comprobante: match, mode: cfg.mode });
+  } catch (e) {
+    logger.warn(`[hgcash] match desde movimiento falló: ${e.message}`);
+  }
+}
+
+// Desde un COMPROBANTE recién recibido: si su destino es el CBU del banco con API,
+// buscar un movimiento entrante que coincida. Si matchea exacto → carga (o sombra).
+async function hgcashMatchFromComprobante(comprobante) {
+  try {
+    const cfg = await getHgcashConfig();
+    if (!cfg.enabled) return;
+    if (!comprobante || !comprobante.isComprobante || comprobante.autoCharged) return;
+
+    const cfgCbu = _digits(cfg.cbu);
+    if (!cfgCbu) return; // no hay CBU del banco con API configurado
+    if (_digits(comprobante.destCbu) !== cfgCbu) return; // no fue al banco con API
+
+    // Marcar que el comprobante apunta al banco con API.
+    await Comprobante.updateOne({ id: comprobante.id }, { $set: { toApiBank: true, bankMatchStatus: 'pending' } });
+
+    const compCbu = _digits(comprobante.originCbu);
+    if (!compCbu || compCbu.length < 18) {
+      // Sin CBU de origen legible → no se puede matchear exacto; queda manual.
+      await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
+        `🏦 Comprobante al banco automático, pero no se pudo leer el CBU de origen para auto-cargar. Verificá y cargá a mano.`);
+      return;
+    }
+
+    const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60 * 1000);
+    const candidates = await BankMovement.find({
+      direction: 'Inbound', matchStatus: 'pending', createdAt: { $gte: since }
+    }).sort({ createdAt: -1 }).limit(50).lean();
+
+    const mov = candidates.find(m =>
+      _amountsEqual(comprobante.amount, m.amount) && _digits(m.fromCBU) === compCbu
+    );
+    if (!mov) return; // todavía no llegó el movimiento; el webhook lo matcheará al llegar
+    await hgcashAutoCarga({ movement: mov, comprobante, mode: cfg.mode });
+  } catch (e) {
+    logger.warn(`[hgcash] match desde comprobante falló: ${e.message}`);
+  }
+}
+
+// Webhook de hgcash: movimientos de cuenta (acreditaciones entrantes). SIN
+// authMiddleware (lo llama el banco). Valida firma HMAC sobre el body CRUDO,
+// guarda el movimiento (dedupe por id), responde 2xx rápido y matchea en
+// segundo plano. NUNCA carga si la config está apagada (modo sombra por defecto).
+app.post('/api/hgcash/webhook', async (req, res) => {
+  try {
+    const secret = process.env.HGCASH_WEBHOOK_SECRET || null;
+    if (secret) {
+      const sigHeader = req.get('X-HG-Webhook-Signature') || '';
+      const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
+      const expected = crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex');
+      const provided = sigHeader.toLowerCase().startsWith('sha256=') ? sigHeader.slice(7).toLowerCase() : sigHeader.toLowerCase();
+      if (!safeCompare(expected, provided)) {
+        logger.warn('[hgcash] webhook con firma inválida — rechazado');
+        return res.status(401).json({ error: 'firma inválida' });
+      }
+    } else {
+      logger.warn('[hgcash] webhook recibido SIN HGCASH_WEBHOOK_SECRET — no se valida firma (configurá el secreto en SSM)');
+    }
+
+    const p = req.body || {};
+    if (!p.id) return res.status(400).json({ error: 'payload sin id' });
+
+    const amountNum = (p.amount !== undefined && p.amount !== null)
+      ? (Number(String(p.amount).replace(/[^\d.-]/g, '')) || null) : null;
+    const doc = {
+      movementId: String(p.id),
+      externalId: p.externalID || null,
+      coelsaCode: p.coelsaCode || null,
+      amount: amountNum, amountRaw: (p.amount !== undefined && p.amount !== null) ? String(p.amount) : null,
+      currency: p.currency || null, direction: p.direction || null,
+      status: p.status || null, type: p.type || null, accountId: p.accountId || null,
+      fromName: p.fromName || null, fromCBU: p.fromCBU || null, fromCUIT: p.fromCUIT || null,
+      toName: p.toName || null, toCBU: p.toCBU || null, toCUIT: p.toCUIT || null,
+      date: p.date ? new Date(p.date) : null, timezone: p.timezone || null,
+      topic: p.topic || null, eventType: p.eventType || null, raw: p
+    };
+
+    let isNew = false;
+    try {
+      await BankMovement.create({
+        ...doc,
+        matchStatus: (doc.direction === 'Inbound') ? 'pending' : 'ignored',
+        createdAt: new Date()
+      });
+      isNew = true;
+    } catch (e) {
+      if (e && e.code === 11000) {
+        // Reentrega / created+status_change: actualizar datos sin pisar el matchStatus.
+        await BankMovement.updateOne({ movementId: doc.movementId }, { $set: { status: doc.status, eventType: doc.eventType, raw: doc.raw } });
+      } else { throw e; }
+    }
+
+    // Responder 2xx YA (el banco reintenta si no; el matcheo corre aparte).
+    res.status(200).json({ ok: true });
+
+    if (isNew && doc.direction === 'Inbound') {
+      BankMovement.findOne({ movementId: doc.movementId }).lean()
+        .then(fresh => { if (fresh) return hgcashMatchFromMovement(fresh); })
+        .catch(() => {});
+    }
+  } catch (error) {
+    logger.error(`[hgcash] webhook error: ${error.message}`);
+    if (!res.headersSent) res.status(500).json({ error: 'error interno' });
+  }
+});
 
 // ============================================
 // CONTROL DE DEMORAS DE RESPUESTA EN CHATS (SLA de atención)
@@ -10960,6 +11236,68 @@ app.post('/api/admin/cbu', authMiddleware, adminMiddleware, async (req, res) => 
     res.json({ success: true, message: 'CBU actualizado correctamente' });
   } catch (error) {
     console.error('Error actualizando CBU:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// BANCO AUTOMÁTICO (hgcash) — config y movimientos (solo admin general)
+// ============================================
+app.get('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const cfg = await getHgcashConfig();
+    res.json({
+      config: cfg,
+      // No exponemos el secreto; sólo si está cargado (para que el panel avise).
+      secretConfigured: !!process.env.HGCASH_WEBHOOK_SECRET,
+      aiEnabled: comprobanteAi.isEnabled(),
+      webhookUrl: '/api/hgcash/webhook'
+    });
+  } catch (error) {
+    console.error('Error obteniendo config hgcash:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const cur = await getHgcashConfig();
+    const b = req.body || {};
+    const mode = (b.mode === 'auto') ? 'auto' : 'shadow';
+    const windowMinutes = Math.min(1440, Math.max(1, parseInt(b.windowMinutes, 10) || cur.windowMinutes || 60));
+    const next = {
+      enabled: typeof b.enabled === 'boolean' ? b.enabled : cur.enabled,
+      cbu: b.cbu !== undefined ? String(b.cbu).trim() : cur.cbu,
+      accountId: b.accountId !== undefined ? String(b.accountId).trim() : cur.accountId,
+      mode,
+      windowMinutes,
+      currency: b.currency ? String(b.currency).toUpperCase().slice(0, 3) : (cur.currency || 'ARS')
+    };
+    await setConfig('hgcash', next);
+    logger.info(`[hgcash] config actualizada por ${req.user.username}: enabled=${next.enabled} mode=${next.mode} cbu=${next.cbu ? '***' + String(next.cbu).slice(-4) : 'vacío'}`);
+    res.json({ success: true, config: next });
+  } catch (error) {
+    console.error('Error guardando config hgcash:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Movimientos recientes del banco (para auditar matches y reconciliar).
+app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 30));
+    const q = {};
+    if (req.query.status) q.matchStatus = String(req.query.status);
+    const total = await BankMovement.countDocuments(q);
+    const movements = await BankMovement.find(q)
+      .sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    res.json({ movements, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit) });
+  } catch (error) {
+    console.error('Error obteniendo movimientos hgcash:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

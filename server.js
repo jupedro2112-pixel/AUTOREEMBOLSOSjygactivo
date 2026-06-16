@@ -759,7 +759,7 @@ app.use('/adminprivado2026/', adminHostCheck, (req, res) => {
 function _slugifyPublisher(s) {
   return String(s || '')
     .toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '') // quitar acentos
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar acentos
     .replace(/\s+/g, '-')                              // espacios → guiones
     .replace(/[^a-z0-9_-]/g, '')                       // sólo seguros
     .replace(/-+/g, '-')                               // colapsar guiones
@@ -1205,10 +1205,19 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     }
 
     // Es comprobante → armar huella para dedupe (N° de operación; si no, combo).
-    const opKey = _normComprobanteKey(result.operationNumber);
+    let opKey = _normComprobanteKey(result.operationNumber);
+    // Defensa anti falso-duplicado: si el "N° de operación" es en realidad un CBU/cuenta
+    // (coincide con el CBU de origen/destino, o es un número largo de 18+ dígitos), NO lo
+    // usamos como huella — el CBU se repite entre transferencias y marcaría duplicados falsos.
+    const _destDig = _digits(result.destCbu);
+    const _origDig = _digits(result.originCbu);
+    if (opKey && ((_destDig && opKey === _destDig) || (_origDig && opKey === _origDig) || /^\d{18,}$/.test(opKey))) {
+      opKey = '';
+    }
     let dedupeKey = opKey || null;
-    if (!dedupeKey && result.amount && (result.originCbu || result.paymentDate)) {
-      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originCbu || ''}|${result.paymentDate || ''}`);
+    // Fallback: combo que incluye el NOMBRE de origen (más único que el CBU repetido).
+    if (!dedupeKey && result.amount && (result.originHolder || result.originCbu || result.paymentDate)) {
+      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate || ''}`);
     }
 
     const base = {
@@ -1285,11 +1294,18 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
 //   { enabled, cbu, accountId, mode ('shadow'|'auto'), windowMinutes, currency }
 //   enabled=false → TODO apagado. mode='shadow' → matchea y avisa pero NO carga.
 // El secreto de firma del webhook va en process.env.HGCASH_WEBHOOK_SECRET (SSM).
-const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', mode: 'shadow', windowMinutes: 60, currency: 'ARS' };
+// Nota: el payload real de hgcash NO trae CBUs (sólo fromName/toName/amount/status/
+// externalID). Por eso el matcheo es por monto + NOMBRE de origen + ventana de tiempo,
+// con guard de ambigüedad. `accountName` = el toName de tu cuenta hgcash (ej. el titular)
+// para confirmar que el comprobante fue a tu banco con API. `acceptStatuses` = estados del
+// movimiento que cuentan como acreditado (hgcash manda status:"done").
+const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, currency: 'ARS', acceptStatuses: ['done'] };
 
 async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
-  return Object.assign({}, HGCASH_DEFAULTS, cfg || {});
+  const merged = Object.assign({}, HGCASH_DEFAULTS, cfg || {});
+  if (!Array.isArray(merged.acceptStatuses) || merged.acceptStatuses.length === 0) merged.acceptStatuses = ['done'];
+  return merged;
 }
 
 // Sólo dígitos (para comparar CBUs sin importar formato/espacios).
@@ -1299,6 +1315,34 @@ function _digits(s) { return String(s || '').replace(/\D/g, ''); }
 function _amountsEqual(a, b) {
   if (a === null || a === undefined || b === null || b === undefined) return false;
   return Math.round(Number(a) * 100) === Math.round(Number(b) * 100);
+}
+
+// Normaliza un nombre para comparar (mayúsculas, sin acentos, sin puntuación, espacios simples).
+function _normName(s) {
+  return String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// ¿Coinciden dos nombres? Igual normalizado, o uno contiene al otro (≥5 chars).
+function _nameMatch(a, b) {
+  const na = _normName(a), nb = _normName(b);
+  if (!na || !nb || na.length < 5 || nb.length < 5) return false;
+  return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+// ¿El estado del movimiento cuenta como acreditado?
+function _statusAccredited(status, cfg) {
+  const list = (cfg.acceptStatuses || ['done']).map(s => String(s).toLowerCase());
+  return list.includes(String(status || '').toLowerCase());
+}
+
+// ¿El comprobante apunta a NUESTRA cuenta hgcash? (por CBU si lo hubiera, o por nombre de cuenta)
+function _comprobanteToOurBank(comprobante, cfg) {
+  const cfgCbu = _digits(cfg.cbu);
+  if (cfgCbu && _digits(comprobante.destCbu) === cfgCbu) return true;
+  if (cfg.accountName && _nameMatch(comprobante.destHolder, cfg.accountName)) return true;
+  return false;
 }
 
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
@@ -1405,17 +1449,18 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   }
 }
 
-// Desde un MOVIMIENTO entrante: buscar el comprobante que coincida (monto + CBU
-// origen + ventana de tiempo). Si matchea exacto → carga (o sombra).
+// Desde un MOVIMIENTO entrante: buscar el comprobante que coincida.
+// El payload de hgcash NO trae CBUs → matcheamos por MONTO + NOMBRE de origen +
+// ventana de tiempo. Si hay UN solo candidato → carga (o sombra). Si hay varios
+// (ambigüedad) → NO carga, queda para el operador.
 async function hgcashMatchFromMovement(movement) {
   try {
     const cfg = await getHgcashConfig();
     if (!cfg.enabled) return;
     if (!movement || movement.direction !== 'Inbound' || movement.matchStatus !== 'pending') return;
+    if (!_statusAccredited(movement.status, cfg)) return; // todavía no acreditado (status != done)
     if (cfg.currency && movement.currency && String(movement.currency).toUpperCase() !== String(cfg.currency).toUpperCase()) return;
-
-    const movFrom = _digits(movement.fromCBU);
-    if (!movFrom || movFrom.length < 18) return; // sin CBU origen del banco no podemos matchear seguro
+    if (!movement.fromName) return; // sin nombre de origen no podemos identificar seguro
 
     const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60 * 1000);
     const candidates = await Comprobante.find({
@@ -1423,52 +1468,64 @@ async function hgcashMatchFromMovement(movement) {
       autoCharged: { $ne: true },
       bankMatchStatus: { $in: ['none', 'pending'] },
       createdAt: { $gte: since }
-    }).sort({ createdAt: -1 }).limit(50).lean();
+    }).sort({ createdAt: -1 }).limit(80).lean();
 
-    const match = candidates.find(c =>
+    const matches = candidates.filter(c =>
       _amountsEqual(c.amount, movement.amount) &&
-      _digits(c.originCbu) === movFrom
+      _nameMatch(c.originHolder, movement.fromName) &&
+      _comprobanteToOurBank(c, cfg)
     );
-    if (!match) return; // queda pending; un comprobante posterior puede matchearlo
-    await hgcashAutoCarga({ movement, comprobante: match, mode: cfg.mode });
+    if (matches.length === 0) return; // queda pending; un comprobante posterior puede matchearlo
+    if (matches.length > 1) {
+      logger.warn(`[hgcash] AMBIGUO: ${matches.length} comprobantes coinciden con movimiento ${movement.movementId} ($${movement.amount} de ${movement.fromName}). No se auto-carga.`);
+      notifyAdmins('hgcash_ambiguous', { movementId: movement.movementId, amount: movement.amount, fromName: movement.fromName, count: matches.length });
+      return;
+    }
+    await hgcashAutoCarga({ movement, comprobante: matches[0], mode: cfg.mode });
   } catch (e) {
     logger.warn(`[hgcash] match desde movimiento falló: ${e.message}`);
   }
 }
 
-// Desde un COMPROBANTE recién recibido: si su destino es el CBU del banco con API,
-// buscar un movimiento entrante que coincida. Si matchea exacto → carga (o sombra).
+// Desde un COMPROBANTE recién recibido: si fue a NUESTRA cuenta hgcash, buscar un
+// movimiento entrante que coincida por MONTO + NOMBRE de origen + ventana de tiempo.
 async function hgcashMatchFromComprobante(comprobante) {
   try {
     const cfg = await getHgcashConfig();
     if (!cfg.enabled) return;
     if (!comprobante || !comprobante.isComprobante || comprobante.autoCharged) return;
 
-    const cfgCbu = _digits(cfg.cbu);
-    if (!cfgCbu) return; // no hay CBU del banco con API configurado
-    if (_digits(comprobante.destCbu) !== cfgCbu) return; // no fue al banco con API
+    // ¿Fue a nuestro banco con API? (por CBU si lo hubiera, o por nombre de cuenta)
+    if (!_comprobanteToOurBank(comprobante, cfg)) return;
 
     // Marcar que el comprobante apunta al banco con API.
     await Comprobante.updateOne({ id: comprobante.id }, { $set: { toApiBank: true, bankMatchStatus: 'pending' } });
 
-    const compCbu = _digits(comprobante.originCbu);
-    if (!compCbu || compCbu.length < 18) {
-      // Sin CBU de origen legible → no se puede matchear exacto; queda manual.
+    if (!comprobante.originHolder) {
+      // Sin nombre de origen legible → no se puede matchear seguro; queda manual.
       await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
-        `🏦 Comprobante al banco automático, pero no se pudo leer el CBU de origen para auto-cargar. Verificá y cargá a mano.`);
+        `🏦 Comprobante al banco automático, pero no se pudo leer el nombre de origen para auto-cargar. Verificá y cargá a mano.`);
       return;
     }
 
     const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60 * 1000);
     const candidates = await BankMovement.find({
       direction: 'Inbound', matchStatus: 'pending', createdAt: { $gte: since }
-    }).sort({ createdAt: -1 }).limit(50).lean();
+    }).sort({ createdAt: -1 }).limit(80).lean();
 
-    const mov = candidates.find(m =>
-      _amountsEqual(comprobante.amount, m.amount) && _digits(m.fromCBU) === compCbu
+    const matches = candidates.filter(m =>
+      _statusAccredited(m.status, cfg) &&
+      _amountsEqual(comprobante.amount, m.amount) &&
+      _nameMatch(comprobante.originHolder, m.fromName)
     );
-    if (!mov) return; // todavía no llegó el movimiento; el webhook lo matcheará al llegar
-    await hgcashAutoCarga({ movement: mov, comprobante, mode: cfg.mode });
+    if (matches.length === 0) return; // todavía no llegó el movimiento; el webhook lo matcheará al llegar
+    if (matches.length > 1) {
+      logger.warn(`[hgcash] AMBIGUO: ${matches.length} movimientos coinciden con comprobante ${comprobante.id}. No se auto-carga.`);
+      await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
+        `🏦 Hay ${matches.length} transferencias que coinciden con este comprobante (mismo monto y nombre en la ventana). Verificá y cargá a mano.`);
+      return;
+    }
+    await hgcashAutoCarga({ movement: matches[0], comprobante, mode: cfg.mode });
   } catch (e) {
     logger.warn(`[hgcash] match desde comprobante falló: ${e.message}`);
   }
@@ -11271,9 +11328,13 @@ app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req
       enabled: typeof b.enabled === 'boolean' ? b.enabled : cur.enabled,
       cbu: b.cbu !== undefined ? String(b.cbu).trim() : cur.cbu,
       accountId: b.accountId !== undefined ? String(b.accountId).trim() : cur.accountId,
+      accountName: b.accountName !== undefined ? String(b.accountName).trim() : (cur.accountName || ''),
       mode,
       windowMinutes,
-      currency: b.currency ? String(b.currency).toUpperCase().slice(0, 3) : (cur.currency || 'ARS')
+      currency: b.currency ? String(b.currency).toUpperCase().slice(0, 3) : (cur.currency || 'ARS'),
+      acceptStatuses: Array.isArray(b.acceptStatuses) && b.acceptStatuses.length
+        ? b.acceptStatuses.map(s => String(s).toLowerCase().trim()).filter(Boolean)
+        : (cur.acceptStatuses || ['done'])
     };
     await setConfig('hgcash', next);
     logger.info(`[hgcash] config actualizada por ${req.user.username}: enabled=${next.enabled} mode=${next.mode} cbu=${next.cbu ? '***' + String(next.cbu).slice(-4) : 'vacío'}`);

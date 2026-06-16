@@ -4916,6 +4916,7 @@ async function loadHgcashConfig() {
         const j = await r.json();
         const c = j.config || {};
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        set('hgcashAccountName', c.accountName || '');
         set('hgcashCbu', c.cbu || '');
         set('hgcashMode', c.mode || 'shadow');
         set('hgcashWindow', c.windowMinutes || 60);
@@ -5002,12 +5003,13 @@ async function loadHgcashMovements(page = 1) {
 }
 
 async function saveHgcashConfig() {
+    const accountName = (document.getElementById('hgcashAccountName') || {}).value || '';
     const cbu = (document.getElementById('hgcashCbu') || {}).value || '';
     const mode = (document.getElementById('hgcashMode') || {}).value || 'shadow';
     const windowMinutes = parseInt((document.getElementById('hgcashWindow') || {}).value, 10) || 60;
     const enabled = !!(document.getElementById('hgcashEnabled') || {}).checked;
-    if (enabled && !cbu.trim()) {
-        showToast('Para activar tenés que cargar el CBU de hgcash', 'error');
+    if (enabled && !accountName.trim() && !cbu.trim()) {
+        showToast('Para activar cargá al menos el NOMBRE de tu cuenta hgcash (o el CBU)', 'error');
         return;
     }
     if (enabled && mode === 'auto' && !confirm('Vas a activar la CARGA AUTOMÁTICA real (modo auto). Las transferencias que matcheen se van a acreditar solas. ¿Confirmás?')) {
@@ -5016,7 +5018,7 @@ async function saveHgcashConfig() {
     try {
         const r = await authFetch('/api/admin/hgcash/config', {
             method: 'POST',
-            body: JSON.stringify({ cbu: cbu.trim(), mode, windowMinutes, enabled })
+            body: JSON.stringify({ accountName: accountName.trim(), cbu: cbu.trim(), mode, windowMinutes, enabled })
         });
         const j = await r.json();
         if (r.ok && j.success) {

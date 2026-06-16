@@ -590,8 +590,13 @@
                             </p>
                             <div id="hgcashStatusLine" style="font-size:12px;margin-bottom:10px;color:#aaa;"></div>
                             <div class="form-group">
-                                <label>CBU de tu cuenta hgcash (la que recibe):</label>
-                                <input type="text" id="hgcashCbu" placeholder="CBU de destino (22 dígitos)" style="width:100%;">
+                                <label>Nombre de tu cuenta hgcash (el titular que recibe):</label>
+                                <input type="text" id="hgcashAccountName" placeholder="Ej: DAPA BERGER EUGENIA SOLEDAD" style="width:100%;">
+                                <small style="color:#aaa;font-size:11px;">Es el "Para/toName" que figura en los comprobantes. Se usa para confirmar que la transferencia fue a tu cuenta (hgcash no manda CBU).</small>
+                            </div>
+                            <div class="form-group">
+                                <label>CBU de tu cuenta hgcash (opcional):</label>
+                                <input type="text" id="hgcashCbu" placeholder="CBU de destino (si el comprobante lo muestra)" style="width:100%;">
                             </div>
                             <div class="form-group">
                                 <label>Modo:</label>

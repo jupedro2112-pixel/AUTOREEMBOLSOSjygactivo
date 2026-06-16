@@ -8,6 +8,31 @@
 
 ## Sesión 2026-06-16
 
+### 30. Fixes hgcash tras prueba real (matcheo por nombre + falso-duplicado + diagnóstico 403)
+- **Contexto:** al probar, el comprobante se detectaba pero no cargaba. Los logs de webhook de
+  hgcash + el payload real revelaron 3 cosas:
+  1. **Webhook 403:** el webhook apuntaba a `vipcargas.com` (producción EB detrás de **Cloudflare**),
+     que bloquea el POST del banco antes de llegar a Node. Además el código nuevo estaba en **Render**
+     (otra URL). **Redis NO interviene.** → Para probar en Render: apuntar el webhook a la URL de Render
+     + setear `HGCASH_WEBHOOK_SECRET`/`ANTHROPIC_API_KEY` en Environment de Render. En EB/producción:
+     volver a vipcargas.com + cargar secrets en SSM + **regla WAF "Skip" en Cloudflare para
+     `/api/hgcash/webhook`** (si no, 403).
+  2. **El payload real de hgcash NO trae CBUs** (solo `fromName`/`toName`/`amount`/`status:"done"`/
+     `externalID`/`id`/`direction`). El match por CBU jamás podía funcionar.
+  3. **Falso "duplicado":** sin N° de operación, la IA usaba el CBU como N° → el CBU se repite → falsos
+     duplicados.
+- **Fixes (código):**
+  - Dedup: el prompt de la IA aclara que `numero_operacion` NO es el CBU; la huella **ignora** un N° que
+    sea un CBU (== CBU origen/destino o ≥18 díg.) y usa fallback `monto|nombre_origen|cbu|fecha`.
+  - Matchers hgcash reescritos: match por **monto + NOMBRE de origen + ventana** con **guard de
+    ambigüedad** (>1 candidato = no carga, manual) y sólo si el movimiento está **acreditado**
+    (`status:"done"`, configurable). Destino confirmado por **nombre de cuenta** (o CBU si está).
+    Helpers `_normName`/`_nameMatch`/`_statusAccredited`/`_comprobanteToOurBank`.
+  - Config `hgcash`: nuevos `accountName` (toName de tu cuenta, para confirmar destino sin CBU) y
+    `acceptStatuses` (default `['done']`). Panel: campo "Nombre de tu cuenta hgcash"; CBU pasa a opcional.
+- **Validado:** `node --check` OK. Recomendado: probar en **modo sombra** hasta validar matches, después auto.
+
+
 ### 29. Carga AUTOMÁTICA por banco con API (hgcash / Urbana) — NUEVO
 - **Caso:** un banco (hgcash) tiene API; cuando un cliente transfiere a ese CBU y manda
   el comprobante, que la carga se haga sola. El otro banco (sin API) sigue manual.

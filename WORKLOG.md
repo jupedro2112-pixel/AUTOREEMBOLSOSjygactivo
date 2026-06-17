@@ -32,6 +32,22 @@
     `acceptStatuses` (default `['done']`). Panel: campo "Nombre de tu cuenta hgcash"; CBU pasa a opcional.
 - **Validado:** `node --check` OK. Recomendado: probar en **modo sombra** hasta validar matches, después auto.
 
+### 31. hgcash: match aunque el comprobante no muestre destino + logs de diagnóstico
+- **Síntoma (prueba en Render):** webhook llega OK (HTTP 200), el movimiento se guarda pero queda
+  "Pendiente" (sin match) → no carga. Causa probable: los comprobantes no traían datos de DESTINO
+  (o fueron procesados por código viejo), y el match exigía confirmar el destino.
+- **Fix:** nuevo helper `_destOkOrUnknown` — el match acepta cuando el destino confirma nuestra cuenta
+  **o cuando el comprobante no muestra destino** (el webhook de hgcash ya prueba que la plata entró a
+  NUESTRA cuenta; con monto + nombre de origen + ventana + guard de ambigüedad el riesgo es mínimo).
+  Aplicado en ambos matchers. El comprobante-side ya no mal-etiqueta `toApiBank` cuando el destino es
+  desconocido.
+- **Logs nuevos** `[hgcash] movimiento SIN match...` / `comprobante SIN movimiento aún...` con resumen
+  de candidatos (montos/nombres) para diagnosticar en los logs de Render.
+- **Nota de entorno:** se prueba en Render (`vipcargasantino.onrender.com`), HTTPS válido y sin
+  Cloudflare. La URL cruda de EB daba "fetch failed" (sin HTTPS en el 443). Producción seguirá en
+  vipcargas.com + regla WAF "Skip" en Cloudflare.
+- **Validado:** `node --check` OK.
+
 
 ### 29. Carga AUTOMÁTICA por banco con API (hgcash / Urbana) — NUEVO
 - **Caso:** un banco (hgcash) tiene API; cuando un cliente transfiere a ese CBU y manda

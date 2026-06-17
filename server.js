@@ -1345,6 +1345,16 @@ function _comprobanteToOurBank(comprobante, cfg) {
   return false;
 }
 
+// ¿El destino confirma nuestra cuenta, O el comprobante no muestra destino?
+// Muchos comprobantes no muestran el CBU/nombre de destino. Como el webhook de
+// hgcash es prueba REAL de que la plata entró a NUESTRA cuenta, aceptamos el match
+// también cuando el comprobante no trae datos de destino (con el guard de
+// ambigüedad + monto + nombre de origen + ventana, el riesgo es mínimo).
+function _destOkOrUnknown(comprobante, cfg) {
+  if (_comprobanteToOurBank(comprobante, cfg)) return true;
+  return !comprobante.destHolder && !comprobante.destCbu;
+}
+
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
 async function hgcashAutoCarga({ movement, comprobante, mode }) {
@@ -1473,9 +1483,14 @@ async function hgcashMatchFromMovement(movement) {
     const matches = candidates.filter(c =>
       _amountsEqual(c.amount, movement.amount) &&
       _nameMatch(c.originHolder, movement.fromName) &&
-      _comprobanteToOurBank(c, cfg)
+      _destOkOrUnknown(c, cfg)
     );
-    if (matches.length === 0) return; // queda pending; un comprobante posterior puede matchearlo
+    if (matches.length === 0) {
+      // Diagnóstico: por qué no matcheó (para ver en los logs de Render).
+      const resumen = candidates.slice(0, 8).map(c => `$${c.amount}/"${c.originHolder || '?'}"→"${c.destHolder || '?'}"`).join(' , ');
+      logger.info(`[hgcash] movimiento SIN match: $${movement.amount} de "${movement.fromName}" (status=${movement.status}). ${candidates.length} comprobantes en ventana: ${resumen}`);
+      return; // queda pending; un comprobante posterior puede matchearlo
+    }
     if (matches.length > 1) {
       logger.warn(`[hgcash] AMBIGUO: ${matches.length} comprobantes coinciden con movimiento ${movement.movementId} ($${movement.amount} de ${movement.fromName}). No se auto-carga.`);
       notifyAdmins('hgcash_ambiguous', { movementId: movement.movementId, amount: movement.amount, fromName: movement.fromName, count: matches.length });
@@ -1495,15 +1510,20 @@ async function hgcashMatchFromComprobante(comprobante) {
     if (!cfg.enabled) return;
     if (!comprobante || !comprobante.isComprobante || comprobante.autoCharged) return;
 
-    // ¿Fue a nuestro banco con API? (por CBU si lo hubiera, o por nombre de cuenta)
-    if (!_comprobanteToOurBank(comprobante, cfg)) return;
+    // ¿Fue a nuestro banco? Confirmado por destino, o destino desconocido (el
+    // comprobante no muestra a quién se transfirió). Si claramente fue a OTRO banco
+    // (muestra un destino distinto al nuestro) → no intentamos.
+    const toOur = _comprobanteToOurBank(comprobante, cfg);
+    if (!toOur && !_destOkOrUnknown(comprobante, cfg)) return;
 
-    // Marcar que el comprobante apunta al banco con API.
-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { toApiBank: true, bankMatchStatus: 'pending' } });
+    // Sólo marcamos toApiBank cuando el destino confirma nuestra cuenta.
+    if (toOur) {
+      await Comprobante.updateOne({ id: comprobante.id }, { $set: { toApiBank: true, bankMatchStatus: 'pending' } });
+    }
 
     if (!comprobante.originHolder) {
       // Sin nombre de origen legible → no se puede matchear seguro; queda manual.
-      await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
+      if (toOur) await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
         `🏦 Comprobante al banco automático, pero no se pudo leer el nombre de origen para auto-cargar. Verificá y cargá a mano.`);
       return;
     }
@@ -1518,7 +1538,10 @@ async function hgcashMatchFromComprobante(comprobante) {
       _amountsEqual(comprobante.amount, m.amount) &&
       _nameMatch(comprobante.originHolder, m.fromName)
     );
-    if (matches.length === 0) return; // todavía no llegó el movimiento; el webhook lo matcheará al llegar
+    if (matches.length === 0) {
+      logger.info(`[hgcash] comprobante SIN movimiento aún: $${comprobante.amount} de "${comprobante.originHolder}" — ${candidates.length} movimientos pendientes en ventana`);
+      return; // todavía no llegó el movimiento; el webhook lo matcheará al llegar
+    }
     if (matches.length > 1) {
       logger.warn(`[hgcash] AMBIGUO: ${matches.length} movimientos coinciden con comprobante ${comprobante.id}. No se auto-carga.`);
       await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,

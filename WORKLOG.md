@@ -8,6 +8,28 @@
 
 ## Sesión 2026-06-17
 
+### 38. Pago AUTOMÁTICO de retiros (cash-out hgcash), confirmado por el agente
+- **Pedido:** que el retiro se pague automático al CBU del cliente, pero SIEMPRE verificado y
+  confirmado antes por un agente. El agente confirma → se paga solo.
+- **Flujo:** el self-retiro (ya descuenta JUGAYGANA) ahora crea un `PendingPayout` (status
+  `pending_review`) con monto + titular + CBU/alias. En el chat del cliente aparece un banner
+  "💸 RETIRO PENDIENTE: $X · titular · CBU/alias" con botones **Pagar** / **Rechazar**. Al confirmar:
+  resuelve el CBU/CVU de 22 díg. (si vino alias, lo busca con `/alias-lookup`), llama a hgcash
+  `POST /transactions` (cash-out) con `externalID = payout.id` (idempotencia) y `webhookUrl`. Estado:
+  `paying` → webhook `DONE` → `paid` + aviso al cliente; `ERROR/CANCELLED` → `failed` + aviso admin.
+- **Componentes:** `src/services/hgcashService.js` (createCashOut + lookupAlias, axios + Bearer
+  `HGCASH_API_TOKEN`), `src/models/PendingPayout.js`, endpoints `GET /api/admin/payouts`,
+  `POST /api/admin/payouts/:id/pay`, `/cancel` (withdrawerMiddleware), rama TRANSACTION_REQUEST en
+  el webhook `/api/hgcash/webhook` (`handlePayoutStatusWebhook`), auto-captura del `accountId` desde
+  los movimientos. Banner + funciones `payPayout`/`cancelPayout` en el panel.
+- **Para activar:** cargar `HGCASH_API_TOKEN` (token `cash_...` del dashboard hgcash) en SSM. Sin él,
+  el botón avisa "pago automático no configurado, pagá manual" (dormido, no rompe nada). El accountId
+  se auto-captura del primer movimiento entrante (o se setea en config).
+- **Seguridad:** el AGENTE es el filtro (verifica y confirma cada pago); reclamo atómico
+  pending_review→paying (no doble pago); idempotencia por externalID. El saldo en JUGAYGANA ya se
+  descontó en el self-retiro.
+- **Validado:** `node --check` OK (server.js, hgcashService.js, PendingPayout.js, admin.js).
+
 ### 37. hgcash: match por N° de transacción == coelsa (funciona con CUALQUIER banco)
 - **Problema:** comprobantes de otros bancos (ej. BNA) no auto-cargaban. Causa: muchos comprobantes
   muestran el DESTINATARIO pero NO el nombre del que ENVÍA → el match por "nombre de origen" fallaba.

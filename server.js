@@ -71,6 +71,8 @@ const ChatDelay = require('./src/models/ChatDelay');
 const Comprobante = require('./src/models/Comprobante');
 const comprobanteAi = require('./src/services/comprobanteAiService');
 const BankMovement = require('./src/models/BankMovement');
+const PendingPayout = require('./src/models/PendingPayout');
+const hgcashPay = require('./src/services/hgcashService');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -1483,6 +1485,74 @@ async function hgcashConsumeOnManualDeposit(userId, username, amount) {
   }
 }
 
+// Guarda el accountId de nuestra cuenta hgcash en la config si todavía no está
+// (lo necesitamos para los pagos salientes / cash-out).
+async function ensureHgcashAccountIdSaved(accountId) {
+  try {
+    const cfg = await getHgcashConfig();
+    if (!cfg.accountId && accountId) {
+      await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(accountId) }));
+      logger.info(`[hgcash] accountId auto-guardado: ${accountId}`);
+    }
+  } catch (_) {}
+}
+
+// Avisa al cliente (y a los admins) que su retiro fue pagado.
+async function notifyPayoutPaid(payout) {
+  try {
+    const content = `💸✅ ¡Tu retiro de $${Number(payout.amount).toLocaleString('es-AR')} fue enviado a tu cuenta! Puede tardar unos minutos en acreditarse.`;
+    const msg = await Message.create({
+      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+      receiverId: payout.userId, receiverRole: 'user', content, type: 'system', timestamp: new Date(), read: false
+    });
+    const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: payout.userId, receiverRole: 'user', content, timestamp: new Date(), type: 'system' };
+    io.to(`user_${payout.userId}`).emit('new_message', data);
+    io.to(`chat_${payout.userId}`).emit('new_message', data);
+    notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
+  } catch (e) {
+    logger.warn(`[hgcash-pay] notifyPayoutPaid falló: ${e.message}`);
+  }
+}
+
+// Procesa el webhook de estado de un cash-out (pago saliente). Matchea por externalID
+// (que es nuestro payout.id) o por el id de la transacción hgcash.
+async function handlePayoutStatusWebhook(p) {
+  try {
+    const status = String(p.status || '').toUpperCase();
+    const ext = p.externalID ? String(p.externalID) : null;
+    const hgId = p.id ? String(p.id) : null;
+    const query = ext ? { id: ext } : (hgId ? { hgTransactionId: hgId } : null);
+    if (!query) return;
+    const payout = await PendingPayout.findOne(query);
+    if (!payout) {
+      logger.warn(`[hgcash-pay] webhook de pago sin payout local: ext=${ext} hgId=${hgId} status=${status}`);
+      return;
+    }
+    // Guardar el hgTransactionId si todavía no lo teníamos.
+    if (hgId && !payout.hgTransactionId) {
+      await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTransactionId: hgId } });
+    }
+
+    if (status === 'DONE') {
+      if (payout.status === 'paid') return; // idempotente
+      await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'paid', hgStatus: status, paidAt: new Date() } });
+      await notifyPayoutPaid(payout);
+      logger.info(`[hgcash-pay] PAGADO payout=${payout.id} user=${payout.username} $${payout.amount}`);
+    } else if (status === 'ERROR' || status === 'CANCELLED') {
+      const reason = p.errorCode || p.error || status;
+      await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', hgStatus: status, error: String(reason).slice(0, 300) } });
+      await _emitAdminOnlyChatNote(payout.userId, payout.username,
+        `💸 ⚠️ El PAGO automático FALLÓ en hgcash (${reason}) — $${Number(payout.amount).toLocaleString('es-AR')} a ${payout.titular || payout.cbu}. Revisá y pagá manual.`);
+      logger.warn(`[hgcash-pay] FALLÓ payout=${payout.id} status=${status} reason=${reason}`);
+    } else {
+      // PENDING / AWAITING_REVIEW / PROCESSING → sólo actualizar hgStatus.
+      await PendingPayout.updateOne({ id: payout.id }, { $set: { hgStatus: status } });
+    }
+  } catch (e) {
+    logger.warn(`[hgcash-pay] handlePayoutStatusWebhook falló: ${e.message}`);
+  }
+}
+
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
 async function hgcashAutoCarga({ movement, comprobante, mode }) {
@@ -1698,6 +1768,18 @@ app.post('/api/hgcash/webhook', async (req, res) => {
 
     const p = req.body || {};
     if (!p.id) return res.status(400).json({ error: 'payload sin id' });
+
+    // Webhook de ESTADO de un PAGO saliente (cash-out): topic TRANSACTION_REQUEST.
+    // Lo manejamos aparte (no es un movimiento entrante).
+    if (String(p.topic || '').toUpperCase() === 'TRANSACTION_REQUEST') {
+      res.status(200).json({ ok: true });
+      handlePayoutStatusWebhook(p).catch(() => {});
+      return;
+    }
+
+    // Auto-capturar el accountId de NUESTRA cuenta hgcash (para los pagos salientes)
+    // la primera vez que llega un movimiento, si todavía no está en la config.
+    if (p.accountId) { ensureHgcashAccountIdSaved(p.accountId).catch(() => {}); }
 
     const amountNum = (p.amount !== undefined && p.amount !== null)
       ? (Number(String(p.amount).replace(/[^\d.-]/g, '')) || null) : null;
@@ -7884,6 +7966,21 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       logger.warn(`[withdrawal/request] no se pudo registrar Transaction para ${user.username}: ${txErr.message}`);
     }
 
+    // Crear el "pago pendiente": el agente lo verifica en el chat/Pagos y, al
+    // confirmar, se paga automáticamente al CBU del cliente vía hgcash (si está
+    // configurado el token). El saldo en JUGAYGANA YA fue descontado arriba.
+    try {
+      await PendingPayout.create({
+        id: uuidv4(), userId: user.id, username: user.username,
+        amount: amountNum, titular: titularT, cbu: cbuT, alias: aliasT,
+        status: 'pending_review',
+        withdrawalTxId: result.data?.transfer_id || result.data?.transferId || null,
+        createdAt: new Date()
+      });
+    } catch (ppErr) {
+      logger.warn(`[withdrawal/request] no se pudo crear PendingPayout para ${user.username}: ${ppErr.message}`);
+    }
+
     // Guardar datos bancarios para la próxima vez (si el usuario lo pidió).
     if (saveData) {
       user.withdrawalAccount = { titular: titularT, cbu: cbuT, alias: aliasT, savedAt: new Date() };
@@ -11510,6 +11607,133 @@ app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (r
     res.json({ movements, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit) });
   } catch (error) {
     console.error('Error obteniendo movimientos hgcash:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// PAGOS AUTOMÁTICOS (retiros) — el agente verifica y confirma, se paga por hgcash
+// ============================================
+
+// Resuelve el accountId de la cuenta hgcash a debitar (config, o el último movimiento).
+async function resolveHgcashAccountId() {
+  try {
+    const cfg = await getHgcashConfig();
+    if (cfg.accountId) return cfg.accountId;
+    const mov = await BankMovement.findOne({ accountId: { $ne: null } }).sort({ createdAt: -1 }).select('accountId').lean();
+    return mov ? mov.accountId : null;
+  } catch (_) { return null; }
+}
+
+// Listar pagos pendientes (para la sección Pagos / banner del chat). Opcional ?userId= o ?status=.
+app.get('/api/admin/payouts', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    const q = {};
+    if (req.query.userId) q.userId = String(req.query.userId);
+    q.status = req.query.status ? String(req.query.status) : { $in: ['pending_review', 'paying', 'failed'] };
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const total = await PendingPayout.countDocuments(q);
+    const payouts = await PendingPayout.find(q).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    res.json({ payouts, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit), payEnabled: hgcashPay.isEnabled() });
+  } catch (error) {
+    console.error('Error listando payouts:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// El agente CONFIRMA el pago → se ejecuta el cash-out automático en hgcash.
+app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!hgcashPay.isEnabled()) {
+      return res.status(400).json({ error: 'Pago automático no configurado (falta HGCASH_API_TOKEN). Pagá manual.' });
+    }
+    const payout = await PendingPayout.findOne({ id });
+    if (!payout) return res.status(404).json({ error: 'Pago no encontrado' });
+    if (!['pending_review', 'failed'].includes(payout.status)) {
+      return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
+    }
+
+    const accountId = await resolveHgcashAccountId();
+    if (!accountId) return res.status(400).json({ error: 'No se pudo determinar la cuenta hgcash a debitar (accountId).' });
+
+    // Resolver el CBU/CVU de 22 dígitos. Si vino un alias, lo buscamos.
+    let resolvedCbu = String(payout.cbu || '').replace(/\D/g, '');
+    let lookupName = null;
+    if (resolvedCbu.length !== 22) {
+      const lk = await hgcashPay.lookupAlias(payout.alias || payout.cbu);
+      if (lk.ok && lk.data && lk.data.cvu) {
+        resolvedCbu = String(lk.data.cvu).replace(/\D/g, '');
+        lookupName = lk.data.nombre || null;
+      }
+    }
+    if (resolvedCbu.length !== 22) {
+      return res.status(400).json({ error: 'No se pudo resolver el CBU/CVU destino (revisá el alias/CBU del cliente).' });
+    }
+
+    // Reclamo atómico: solo procede el que pase pending_review/failed → paying.
+    const claimed = await PendingPayout.findOneAndUpdate(
+      { id, status: { $in: ['pending_review', 'failed'] } },
+      { $set: { status: 'paying', resolvedCbu, lookupName, paidBy: req.user.username, error: null } },
+      { new: true }
+    );
+    if (!claimed) return res.status(409).json({ error: 'El pago ya está siendo procesado.' });
+
+    const webhookUrl = `${req.protocol}://${req.get('host')}/api/hgcash/webhook`;
+    const result = await hgcashPay.createCashOut({
+      accountId,
+      amount: payout.amount,
+      toCBU: resolvedCbu,
+      toName: payout.titular || lookupName || undefined,
+      concept: `Retiro Sala de Juegos - ${payout.username}`,
+      externalID: payout.id, // idempotencia
+      webhookUrl
+    });
+
+    if (!result.ok) {
+      // 409 Duplicate External ID = ya se había mandado este pago → no es error real.
+      if (result.httpStatus === 409 && /duplicate/i.test(String(result.error))) {
+        await PendingPayout.updateOne({ id }, { $set: { status: 'paying' } });
+        return res.json({ success: true, message: 'El pago ya estaba en curso (idempotencia).', status: 'paying' });
+      }
+      await PendingPayout.updateOne({ id }, { $set: { status: 'failed', error: String(result.error).slice(0, 300) } });
+      return res.status(400).json({ error: 'No se pudo iniciar el pago en hgcash: ' + result.error });
+    }
+
+    const hgId = result.data && result.data.id;
+    const hgStatus = (result.data && result.data.status) || 'PENDING';
+    const isDone = String(hgStatus).toUpperCase() === 'DONE';
+    await PendingPayout.updateOne({ id }, {
+      $set: {
+        hgTransactionId: hgId || null,
+        hgStatus,
+        status: isDone ? 'paid' : 'paying',
+        paidAt: isDone ? new Date() : null
+      }
+    });
+
+    logger.info(`[hgcash-pay] cash-out iniciado payout=${id} user=${payout.username} $${payout.amount} hgId=${hgId} status=${hgStatus} por ${req.user.username}`);
+    res.json({ success: true, status: isDone ? 'paid' : 'paying', hgTransactionId: hgId, hgStatus });
+  } catch (error) {
+    console.error('Error pagando payout:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// El agente RECHAZA el pago (sospechoso / lo maneja a mano). No paga.
+app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await PendingPayout.findOneAndUpdate(
+      { id, status: { $in: ['pending_review', 'failed'] } },
+      { $set: { status: 'cancelled', paidBy: req.user.username, error: 'Cancelado por el agente' } },
+      { new: true }
+    );
+    if (!r) return res.status(400).json({ error: 'No se pudo cancelar (ya está pagado o en proceso).' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error cancelando payout:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

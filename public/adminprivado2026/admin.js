@@ -1533,6 +1533,9 @@ async function selectConversation(userId, username) {
     // Reset de la barra de etiquetas/notas hasta que loadUserInfo la rellene
     const tagsBar = document.getElementById('chatTagsBar');
     if (tagsBar) tagsBar.style.display = 'none';
+    // Reset del banner de pago/retiro pendiente
+    const payoutBanner = document.getElementById('chatPayoutBanner');
+    if (payoutBanner) payoutBanner.style.display = 'none';
 
     // CORREGIDO: Mostrar mensajes cacheados inmediatamente (sin esperar)
     const cachedMessages = messageCache.get(userId);
@@ -2471,9 +2474,74 @@ async function loadUserInfo(userId) {
 
         // Etiquetas y nota interna del cliente.
         renderUserTagsAndNotes(user);
+
+        // Pago/retiro pendiente (verificar y pagar automático).
+        loadPayoutBanner(user.id);
     } catch (error) {
         console.error('Error loading user info:', error);
     }
+}
+
+async function loadPayoutBanner(userId) {
+    const el = document.getElementById('chatPayoutBanner');
+    if (!el) return;
+    try {
+        const r = await authFetch('/api/admin/payouts?userId=' + encodeURIComponent(userId) + '&status=pending_review');
+        if (!r.ok) { el.style.display = 'none'; return; }
+        const j = await r.json();
+        const p = (j.payouts || [])[0];
+        if (!p) { el.style.display = 'none'; el.innerHTML = ''; return; }
+        el.style.display = '';
+        el.style.padding = '9px 14px';
+        el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
+        el.style.background = 'linear-gradient(90deg,#7a1fa2,#5a1580)';
+        const dest = escapeHtml(p.alias || p.cbu || '-');
+        const titular = escapeHtml(p.titular || '-');
+        const monto = '$' + Number(p.amount).toLocaleString('es-AR');
+        const payBtn = j.payEnabled
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">💸 Pagar ' + monto + '</button>'
+            : '<span style="color:#ffd;font-size:11px;">Pago automático no configurado (falta token). Pagá manual.</span>';
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;font-size:12.5px;">' +
+            '<span style="font-size:18px;">💸</span>' +
+            '<div style="flex:1;min-width:160px;"><strong>RETIRO PENDIENTE: ' + monto + '</strong>' +
+            '<div style="font-size:11px;opacity:0.92;">Titular: ' + titular + ' · CBU/alias: ' + dest + '</div>' +
+            '<div style="font-size:10.5px;opacity:0.8;">Verificá los datos antes de pagar.</div></div>' +
+            payBtn +
+            '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">Rechazar</button>' +
+            '</div>';
+    } catch (e) {
+        el.style.display = 'none';
+    }
+}
+
+async function payPayout(id) {
+    if (!confirm('¿Confirmás el PAGO automático de este retiro? Se va a transferir al CBU del cliente. Verificá que los datos sean correctos.')) return;
+    const el = document.getElementById('chatPayoutBanner');
+    try {
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST' });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast(j.status === 'paid' ? 'Pago realizado ✅' : 'Pago iniciado ⏳', 'success');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else {
+            showToast(j.error || 'Error al pagar', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function cancelPayout(id) {
+    if (!confirm('¿Rechazar este pago? No se va a pagar automáticamente (lo manejás a mano).')) return;
+    const el = document.getElementById('chatPayoutBanner');
+    try {
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Pago rechazado', 'success');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
 }
 
 function renderFireBonusBanner(user) {

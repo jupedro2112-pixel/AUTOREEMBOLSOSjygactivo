@@ -48,6 +48,20 @@
   vipcargas.com + regla WAF "Skip" en Cloudflare.
 - **Validado:** `node --check` OK.
 
+### 32. hgcash: el COMPROBANTE es el disparador (no la transferencia sola)
+- **Problema reportado:** tras una carga automática, una transferencia nueva cargaba **sin que el
+  cliente mande comprobante** — el webhook agarraba un comprobante **viejo/sobrante** (mismo monto+
+  nombre, dentro de los 60 min) y cargaba. Riesgo: cargar contra el comprobante de otro momento/usuario.
+- **Fix:** el matcheo DESDE el comprobante (`hgcashMatchFromComprobante`) sigue con ventana completa
+  (`windowMinutes`, default 60) y es el **disparador principal**. El matcheo DESDE la transferencia
+  (`hgcashMatchFromMovement`) pasa a ser solo **red de seguridad** para el caso raro en que el
+  comprobante llega segundos ANTES que el webhook: usa una ventana CORTA `raceWindowMinutes`
+  (default 10, configurable, máx 120). Así una transferencia nueva NO carga contra comprobantes viejos.
+- En la práctica el webhook llega antes que el comprobante (el cliente transfiere → saca captura →
+  manda), así que el camino normal es el del comprobante. La carga ocurre cuando el cliente manda el
+  comprobante y hay una transferencia pendiente que coincide.
+- **Validado:** `node --check` OK.
+
 
 ### 29. Carga AUTOMÁTICA por banco con API (hgcash / Urbana) — NUEVO
 - **Caso:** un banco (hgcash) tiene API; cuando un cliente transfiere a ese CBU y manda

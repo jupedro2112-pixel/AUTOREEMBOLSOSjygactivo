@@ -1299,7 +1299,12 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
 // con guard de ambigüedad. `accountName` = el toName de tu cuenta hgcash (ej. el titular)
 // para confirmar que el comprobante fue a tu banco con API. `acceptStatuses` = estados del
 // movimiento que cuentan como acreditado (hgcash manda status:"done").
-const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, currency: 'ARS', acceptStatuses: ['done'] };
+// windowMinutes: ventana para el matcheo DESDE el comprobante (el cliente manda el
+//   comprobante y se busca su transferencia pendiente — el disparador principal).
+// raceWindowMinutes: ventana CORTA para el matcheo DESDE la transferencia (solo cubre
+//   el caso raro en que el comprobante llega segundos ANTES que el webhook). Mantenerla
+//   chica evita que una transferencia nueva cargue contra un comprobante viejo/sobrante.
+const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'] };
 
 async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
@@ -1459,10 +1464,11 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   }
 }
 
-// Desde un MOVIMIENTO entrante: buscar el comprobante que coincida.
-// El payload de hgcash NO trae CBUs → matcheamos por MONTO + NOMBRE de origen +
-// ventana de tiempo. Si hay UN solo candidato → carga (o sombra). Si hay varios
-// (ambigüedad) → NO carga, queda para el operador.
+// Desde un MOVIMIENTO entrante (webhook): SOLO red de seguridad para el caso raro en
+// que el comprobante llegó segundos ANTES que el aviso del banco. Usa una ventana
+// CORTA (raceWindowMinutes) para NO cargar contra comprobantes viejos/sobrantes — el
+// disparador principal es el comprobante (hgcashMatchFromComprobante). Match por
+// MONTO + NOMBRE de origen. Si hay varios candidatos (ambigüedad) → NO carga.
 async function hgcashMatchFromMovement(movement) {
   try {
     const cfg = await getHgcashConfig();
@@ -1472,7 +1478,9 @@ async function hgcashMatchFromMovement(movement) {
     if (cfg.currency && movement.currency && String(movement.currency).toUpperCase() !== String(cfg.currency).toUpperCase()) return;
     if (!movement.fromName) return; // sin nombre de origen no podemos identificar seguro
 
-    const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60 * 1000);
+    // Ventana CORTA: solo comprobantes enviados en los últimos raceWindowMinutes.
+    const raceMin = Math.min(cfg.windowMinutes || 60, cfg.raceWindowMinutes || 10);
+    const since = new Date(Date.now() - raceMin * 60 * 1000);
     const candidates = await Comprobante.find({
       isComprobante: true,
       autoCharged: { $ne: true },
@@ -11354,6 +11362,7 @@ app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req
       accountName: b.accountName !== undefined ? String(b.accountName).trim() : (cur.accountName || ''),
       mode,
       windowMinutes,
+      raceWindowMinutes: Math.min(120, Math.max(1, parseInt(b.raceWindowMinutes, 10) || cur.raceWindowMinutes || 10)),
       currency: b.currency ? String(b.currency).toUpperCase().slice(0, 3) : (cur.currency || 'ARS'),
       acceptStatuses: Array.isArray(b.acceptStatuses) && b.acceptStatuses.length
         ? b.acceptStatuses.map(s => String(s).toLowerCase().trim()).filter(Boolean)

@@ -1376,6 +1376,33 @@ function _destOkOrUnknown(comprobante, cfg) {
   return !comprobante.destHolder && !comprobante.destCbu;
 }
 
+// Maneja un fallo de auto-carga (JUGAYGANA caído, etc.) de forma REINTENTABLE:
+// cuenta el intento y, si no superó el tope (3), devuelve el movimiento a 'pending'
+// para que un nuevo comprobante pueda reintentar. Pasado el tope, lo deja en 'error'
+// (carga manual). El comprobante vuelve a 'pending' para no quedar consumido.
+const HGCASH_MAX_CHARGE_ATTEMPTS = 3;
+async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc, user) {
+  let attempts = (movement.chargeAttempts || 0) + 1;
+  try {
+    const upd = await BankMovement.findOneAndUpdate(
+      { movementId: movement.movementId },
+      { $inc: { chargeAttempts: 1 }, $set: { chargeError: String(errMsg || '').slice(0, 300) } },
+      { new: true }
+    );
+    if (upd && typeof upd.chargeAttempts === 'number') attempts = upd.chargeAttempts;
+  } catch (_) {}
+  const terminal = attempts >= HGCASH_MAX_CHARGE_ATTEMPTS;
+  await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: terminal ? 'error' : 'pending' } });
+  await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+  if (user) {
+    const extra = terminal
+      ? `Se agotaron los ${HGCASH_MAX_CHARGE_ATTEMPTS} intentos automáticos. Cargá manual.`
+      : 'Podés reintentar reenviando el comprobante; si no, cargá manual.';
+    await _emitAdminOnlyChatNote(user.id, user.username,
+      `🏦 MATCH hgcash — ${dataDesc}\n⚠️ La AUTO-CARGA FALLÓ en JUGAYGANA (${errMsg || 's/detalle'}). ${extra}`);
+  }
+}
+
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
 async function hgcashAutoCarga({ movement, comprobante, mode }) {
@@ -1423,13 +1450,11 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   }
 
   // Modo auto: cargar de verdad en JUGAYGANA.
+  let charged = false; // true una vez que la acreditación se confirmó (evita reintentos que dupliquen)
   try {
     const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)');
     if (!result.success) {
-      await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: String(result.error || 'fallo deposit').slice(0, 300) } });
-      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
-      await _emitAdminOnlyChatNote(user.id, user.username,
-        `🏦 MATCH hgcash — ${dataDesc}\n⚠️ La AUTO-CARGA FALLÓ en JUGAYGANA (${result.error || 's/detalle'}). Cargá manual.`);
+      await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
       return;
     }
 
@@ -1437,6 +1462,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       $set: { matchStatus: 'auto_charged', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargedAt: new Date() }
     });
     await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'auto_charged', matchedMovementId: movement.movementId, autoCharged: true } });
+    charged = true; // ya acreditó: cualquier error posterior NO debe disparar reintento
 
     try { await recordUserActivity(user.id, 'deposit', Number(amount)); } catch (_) {}
     await Transaction.create({
@@ -1474,9 +1500,15 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.`);
     logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
   } catch (e) {
-    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: String(e.message).slice(0, 300) } });
-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
-    logger.error(`[hgcash] auto-carga excepción user=${user.username}: ${e.message}`);
+    if (charged) {
+      // La carga YA se acreditó; el error fue en un paso posterior (mensaje/transacción).
+      // NO reintentar (sería doble carga). Solo dejamos constancia.
+      logger.error(`[hgcash] carga OK pero falló paso posterior user=${user.username}: ${e.message}`);
+    } else {
+      // La carga no llegó a confirmarse → fallo reintentable.
+      await hgcashHandleChargeFailure(movClaim || movement, comprobante, e.message, dataDesc, user);
+      logger.error(`[hgcash] auto-carga excepción user=${user.username}: ${e.message}`);
+    }
   }
 }
 

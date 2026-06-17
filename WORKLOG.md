@@ -8,6 +8,19 @@
 
 ## Sesión 2026-06-17
 
+### 34. hgcash: fallo de auto-carga REINTENTABLE (no queda trabado en error)
+- **Síntoma:** si JUGAYGANA falla al auto-cargar, el movimiento quedaba en `error` para siempre →
+  reenviar el comprobante real no podía reintentar (el matcher solo mira `pending`).
+- **Aclaración importante:** el matcheo NO usa la hora impresa en el comprobante (sólo monto + nombre
+  de origen + cuándo llegó al sistema). El error fue 100% de JUGAYGANA, no del horario.
+- **Fix:** helper `hgcashHandleChargeFailure` — ante un fallo de carga cuenta el intento
+  (`BankMovement.chargeAttempts`) y, si no superó el tope (`HGCASH_MAX_CHARGE_ATTEMPTS=3`), devuelve el
+  movimiento a `pending` (reintentable con el próximo comprobante) y el comprobante a `pending`. Pasado
+  el tope → `error` (carga manual). Bandera `charged`: si la excepción ocurre DESPUÉS de acreditar
+  (paso local posterior), NO se reintenta (evita doble carga).
+- Movimientos viejos ya en `error` (pre-fix) no se auto-recuperan → cargar manual.
+- **Validado:** `node --check` OK.
+
 ### 33. Dedup de comprobantes robusto: hash de imagen (re-envío detectado 100%)
 - **Síntoma:** un comprobante reenviado al día siguiente NO se detectó como duplicado.
 - **Causas:** (1) la huella de dedup dependía del N° de operación leído por la IA, y la lectura

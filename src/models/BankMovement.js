@@ -60,6 +60,7 @@ const bankMovementSchema = new mongoose.Schema({
   matchedUsername: { type: String, default: null },
   matchedComprobanteId: { type: String, default: null },
   chargeError: { type: String, default: null },
+  chargeAttempts: { type: Number, default: 0 }, // intentos de auto-carga fallidos
   chargedAt: { type: Date, default: null },
 
   createdAt: { type: Date, default: Date.now, index: true }

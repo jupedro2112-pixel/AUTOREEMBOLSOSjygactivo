@@ -6,6 +6,24 @@
 >
 > **Última actualización: 2026-06-16**
 
+## Sesión 2026-06-17
+
+### 33. Dedup de comprobantes robusto: hash de imagen (re-envío detectado 100%)
+- **Síntoma:** un comprobante reenviado al día siguiente NO se detectó como duplicado.
+- **Causas:** (1) la huella de dedup dependía del N° de operación leído por la IA, y la lectura
+  OCR puede VARIAR entre envíos (especialmente códigos largos tipo UUID) → huella distinta → no
+  matchea; (2) posible base de datos distinta entre entornos (Render de prueba vs producción).
+  **No hay TTL en `Comprobante`** — la verificación NO expira (es permanente).
+- **Fix:** nuevo campo `Comprobante.imageHash` (SHA-256 de la imagen base64). El chequeo de
+  duplicado ahora busca por **imageHash O dedupeKey** (`$or`), y se hace ANTES de la rama "sin N°
+  de operación". Así, reenviar **la misma imagen** se detecta como duplicado al 100%, sin depender
+  del OCR. (Sólo para imágenes `data:` base64 — capturas; para URLs https queda null.)
+- Si no hay ni dedupeKey ni imageHash → status `no_key` + aviso "verificá a mano".
+- **Nota auto-carga (confirmado):** el matcheo desde el comprobante usa `windowMinutes` (default 60):
+  si la transferencia (movimiento del banco) tiene más de 60 min, NO matchea → no se auto-carga →
+  queda para verificación manual del agente. Configurable.
+- **Validado:** `node --check` OK.
+
 ## Sesión 2026-06-16
 
 ### 30. Fixes hgcash tras prueba real (matcheo por nombre + falso-duplicado + diagnóstico 403)

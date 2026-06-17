@@ -38,6 +38,11 @@ const comprobanteSchema = new mongoose.Schema({
   // Huella para detectar duplicados. Se arma con el N° de operación normalizado;
   // si no hay, con un combo monto|cbu|fecha. Indexada para búsqueda rápida.
   dedupeKey: { type: String, default: null, index: true },
+  // Hash SHA-256 de la imagen. Si se reenvía LA MISMA imagen, el hash coincide y
+  // se detecta como duplicado al 100%, sin depender de cómo la IA leyó los datos
+  // (la lectura OCR puede variar entre envíos). Sólo se calcula para imágenes
+  // base64 (data:) — el caso típico de capturas; para URLs https queda null.
+  imageHash: { type: String, default: null, index: true },
 
   // Estado del análisis
   status: {

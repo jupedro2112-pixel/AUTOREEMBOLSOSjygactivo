@@ -1204,6 +1204,17 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       return;
     }
 
+    // Huella de la IMAGEN (SHA-256). Detecta re-envíos de la misma imagen al 100%,
+    // sin depender de la lectura OCR (que puede variar entre envíos). Sólo para
+    // imágenes base64 (data:) — capturas; para URLs https no hay bytes a mano.
+    let imageHash = null;
+    try {
+      if (typeof content === 'string' && content.startsWith('data:')) {
+        const m = content.match(/;base64,(.*)$/s);
+        if (m) imageHash = crypto.createHash('sha256').update(m[1]).digest('hex');
+      }
+    } catch (_) {}
+
     // Es comprobante → armar huella para dedupe (N° de operación; si no, combo).
     let opKey = _normComprobanteKey(result.operationNumber);
     // Defensa anti falso-duplicado: si el "N° de operación" es en realidad un CBU/cuenta
@@ -1229,30 +1240,27 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       destHolder: result.destHolder || null, destCbu: result.destCbu || null,
       bank: result.bank || null,
       paymentDate: result.paymentDate || null, rawText: result.rawText || null,
-      dedupeKey, model: result.model, createdAt: new Date()
+      dedupeKey, imageHash, model: result.model, createdAt: new Date()
     };
 
     const montoStr = result.amount ? `$${Number(result.amount).toLocaleString('es-AR')}` : 's/monto';
     const opStr = result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación';
     const dataDesc = `${opStr} · ${montoStr}${result.paymentDate ? ' · ' + result.paymentDate : ''}`;
 
-    // Sin huella confiable → registrar y avisar que hay que verificar a mano.
-    if (!dedupeKey) {
-      try { await Comprobante.create({ ...base, status: 'no_key' }); } catch (_) {}
-      await _emitAdminOnlyChatNote(userId, username,
-        `🧾 Comprobante recibido (${dataDesc}). ⚠️ No se pudo leer un N° de operación claro para chequear duplicado — verificá a mano.`);
-      // Banco automático: aunque no haya N° de operación, puede matchear por monto+CBU origen.
-      hgcashMatchFromComprobante({ ...base, status: 'no_key' }).catch(() => {});
-      return;
-    }
-
-    // Buscar un comprobante ANTERIOR con la misma huella.
+    // Buscar un comprobante ANTERIOR duplicado: por IMAGEN idéntica (imageHash) O por
+    // huella de datos (dedupeKey). El hash de imagen se chequea SIEMPRE (aunque no haya
+    // N° de operación), así un re-envío de la misma imagen se detecta igual.
+    const dupOr = [];
+    if (imageHash) dupOr.push({ imageHash });
+    if (dedupeKey) dupOr.push({ dedupeKey });
     let original = null;
-    try {
-      original = await Comprobante.findOne({ dedupeKey, isComprobante: true })
-        .sort({ createdAt: 1 }).lean();
-    } catch (e) {
-      logger.warn(`[comprobante] error buscando duplicado: ${e.message}`);
+    if (dupOr.length) {
+      try {
+        original = await Comprobante.findOne({ isComprobante: true, $or: dupOr })
+          .sort({ createdAt: 1 }).lean();
+      } catch (e) {
+        logger.warn(`[comprobante] error buscando duplicado: ${e.message}`);
+      }
     }
 
     if (original) {
@@ -1275,12 +1283,20 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       return;
     }
 
-    // Único → registrar y avisar OK.
-    try { await Comprobante.create({ ...base, status: 'unique' }); } catch (_) {}
-    await _emitAdminOnlyChatNote(userId, username,
-      `✅ Comprobante verificado — no es duplicado (${dataDesc}).`);
+    // No es duplicado. Si tenemos alguna huella (datos o imagen) → verificado OK.
+    // Si no hay NINGUNA (ni N° de operación ni hash de imagen) → avisar verificá a mano.
+    const hasDedup = !!dedupeKey || !!imageHash;
+    const status = dedupeKey ? 'unique' : 'no_key';
+    try { await Comprobante.create({ ...base, status }); } catch (_) {}
+    if (hasDedup) {
+      await _emitAdminOnlyChatNote(userId, username,
+        `✅ Comprobante verificado — no es duplicado (${dataDesc}).`);
+    } else {
+      await _emitAdminOnlyChatNote(userId, username,
+        `🧾 Comprobante recibido (${dataDesc}). ⚠️ No se pudieron extraer datos para chequear duplicado — verificá a mano.`);
+    }
     // Banco automático: si fue al CBU con API, intentar matchear + cargar.
-    hgcashMatchFromComprobante({ ...base, status: 'unique' }).catch(() => {});
+    hgcashMatchFromComprobante({ ...base, status }).catch(() => {});
   } catch (e) {
     // Defensa total: este análisis NUNCA debe romper nada del chat.
     logger.warn(`[comprobante] analyzeComprobanteFromMessage falló: ${e.message}`);

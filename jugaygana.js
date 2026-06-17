@@ -750,29 +750,39 @@ async function creditUserBalance(username, amount, jugayganaUserId = null) {
 // DEPÓSITO NORMAL (deposit_type: deposit)
 // ============================================
 
-async function depositToUser(username, amount, description = '') {
-  console.log(`💰 Depositando $${amount} a ${username}`);
+async function depositToUser(username, amount, description = '', jugayganaUserId = null) {
+  console.log(`💰 Depositando $${amount} a ${username}${jugayganaUserId ? ` (jgId ${jugayganaUserId})` : ''}`);
 
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
 
-  // Lookup tri-estado: distinguir "no existe" (crear) de "error de API" (NO crear).
-  // Si la API responde con timeout/502/HTML, el usuario probablemente SÍ existe
-  // pero no podemos confirmarlo — intentar CREATEUSER fallaría con "duplicado".
-  let lookup = await lookupUserOrError(username);
+  let userInfo;
 
-  if (lookup.status === 'error') {
-    console.error(`⚠️  depositToUser: no se pudo verificar ${username} en JUGAYGANA: ${lookup.error}`);
-    return {
-      success: false,
-      error: `No se pudo verificar el usuario en la plataforma (${lookup.error}). Intentá de nuevo en unos minutos.`
-    };
-  }
+  if (jugayganaUserId) {
+    // Bypass del lookup flaky de JUGAYGANA: si ya tenemos el ID guardado, lo usamos
+    // directo y vamos derecho al DepositMoney. Evita el error "el usuario existe pero
+    // no podemos confirmarlo ahora" cuando ShowUsers responde intermitente — que era
+    // el punto de falla más común de la auto-carga.
+    console.log(`✅ Usando jugayganaUserId guardado (${jugayganaUserId}) — sin lookup`);
+    userInfo = { id: jugayganaUserId };
+  } else {
+    // Lookup tri-estado: distinguir "no existe" (crear) de "error de API" (NO crear).
+    // Si la API responde con timeout/502/HTML, el usuario probablemente SÍ existe
+    // pero no podemos confirmarlo — intentar CREATEUSER fallaría con "duplicado".
+    let lookup = await lookupUserOrError(username);
 
-  let userInfo = lookup.user;
+    if (lookup.status === 'error') {
+      console.error(`⚠️  depositToUser: no se pudo verificar ${username} en JUGAYGANA: ${lookup.error}`);
+      return {
+        success: false,
+        error: `No se pudo verificar el usuario en la plataforma (${lookup.error}). Intentá de nuevo en unos minutos.`
+      };
+    }
 
-  // Solo intentamos crear si la API confirmó que NO existe.
-  if (lookup.status === 'not_found') {
+    userInfo = lookup.user;
+
+    // Solo intentamos crear si la API confirmó que NO existe.
+    if (lookup.status === 'not_found') {
     console.log(`👤 Usuario no encontrado, creando: ${username}`);
 
     let createSuccess = false;
@@ -851,6 +861,7 @@ async function depositToUser(username, amount, description = '') {
       }
       console.error(`❌ No se pudo crear o encontrar el usuario después de múltiples intentos`);
       return { success: false, error: `No se pudo crear el usuario: ${createError}. Por favor, intente nuevamente.` };
+    }
     }
   }
 

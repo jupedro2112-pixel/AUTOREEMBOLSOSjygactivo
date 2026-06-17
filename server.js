@@ -1395,11 +1395,9 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
   await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: terminal ? 'error' : 'pending' } });
   await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
   if (user) {
-    const extra = terminal
-      ? `Se agotaron los ${HGCASH_MAX_CHARGE_ATTEMPTS} intentos automáticos. Cargá manual.`
-      : 'Podés reintentar reenviando el comprobante; si no, cargá manual.';
+    const prefijo = terminal ? `Se agotaron los ${HGCASH_MAX_CHARGE_ATTEMPTS} intentos automáticos. ` : '';
     await _emitAdminOnlyChatNote(user.id, user.username,
-      `🏦 MATCH hgcash — ${dataDesc}\n⚠️ La AUTO-CARGA FALLÓ en JUGAYGANA (${errMsg || 's/detalle'}). ${extra}`);
+      `🏦 MATCH hgcash — ${dataDesc}\n⚠️ La AUTO-CARGA FALLÓ en JUGAYGANA (${errMsg || 's/detalle'}). ${prefijo}Cargá MANUAL a este usuario por el mismo monto: al hacerlo se marca como usado (no se duplica).`);
   }
 }
 
@@ -1499,7 +1497,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   // Modo auto: cargar de verdad en JUGAYGANA.
   let charged = false; // true una vez que la acreditación se confirmó (evita reintentos que dupliquen)
   try {
-    const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)');
+    const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)', user.jugayganaUserId || null);
     if (!result.success) {
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
       return;
@@ -6070,7 +6068,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       return res.status(400).json({ error: 'Monto inválido' });
     }
     
-    const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description);
+    const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
 
     if (result.success) {
       // SLA: atender al cliente con una carga cuenta como respuesta (resuelve el reloj).

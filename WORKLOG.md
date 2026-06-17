@@ -8,6 +8,22 @@
 
 ## Sesión 2026-06-17
 
+### 36. Causa raíz de "auto-carga falla pero manual funciona": el lookup flaky
+- **Diagnóstico:** el error "JUGAYGANA está respondiendo intermitente — el usuario existe pero no
+  podemos confirmarlo" sale en `jugaygana.js:843-850`, en el **lookup** (ShowUsers) que `depositToUser`
+  hace ANTES del DepositMoney. O sea: el depósito NUNCA se intentó → reintentar es seguro para ese caso.
+  La carga manual usaba el mismo camino; funcionó por timing (JUGAYGANA es intermitente).
+- **Fix de raíz:** `depositToUser(username, amount, description, jugayganaUserId=null)` ahora acepta el
+  ID guardado y, si está, **saltea el lookup** y va derecho al DepositMoney (igual que ya hacía
+  `creditUserBalance`). Auto-carga (hgcash) y carga manual (`/api/admin/deposit`) ahora pasan
+  `user.jugayganaUserId` → muchísimas menos fallas por el lookup. Backward-compatible: si no hay ID,
+  cae al lookup de siempre.
+- **Sobre el re-envío del comprobante:** la dedup (hash de imagen) lo detecta como "ya usado" — eso es
+  CORRECTO (anti-fraude). Por eso reenviar NO reintenta. La recuperación ante fallo es **carga manual**
+  (que consume el movimiento, #35). Se ajustó el mensaje de fallo para indicar carga manual (sin sugerir
+  reenviar el comprobante).
+- **Validado:** `node --check` OK (server.js, jugaygana.js).
+
 ### 35. hgcash: carga manual consume el movimiento (anti doble-carga si JUGAYGANA falló)
 - **Pedido:** si JUGAYGANA falla la auto-carga, el operador carga manual a ese usuario; al hacerlo,
   esa transferencia/foto debe quedar marcada como CARGADA, para que cuando JUGAYGANA se recupere NO

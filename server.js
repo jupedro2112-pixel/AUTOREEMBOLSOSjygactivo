@@ -1403,6 +1403,46 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
   }
 }
 
+// Cuando un operador carga MANUAL a un usuario, si había un movimiento hgcash
+// matcheado a ese usuario por el MISMO monto (que no se pudo auto-cargar), lo
+// marcamos como `manual_charged` y consumimos el comprobante. Así esa transferencia
+// /foto NO vuelve a auto-cargar cuando JUGAYGANA se recupere (evita doble carga).
+async function hgcashConsumeOnManualDeposit(userId, username, amount) {
+  try {
+    const cfg = await getHgcashConfig();
+    if (!cfg.enabled) return false;
+    if (!userId || !(Number(amount) > 0)) return false;
+
+    // Candidatos: movimientos matcheados a ese usuario, todavía no cargados.
+    const cands = await BankMovement.find({
+      matchedUserId: userId,
+      matchStatus: { $in: ['pending', 'error'] }
+    }).sort({ createdAt: -1 }).limit(10).lean();
+    const target = cands.find(m => _amountsEqual(m.amount, amount));
+    if (!target) return false;
+
+    // Claim atómico (evita choque con un reintento automático).
+    const claimed = await BankMovement.findOneAndUpdate(
+      { movementId: target.movementId, matchStatus: { $in: ['pending', 'error'] } },
+      { $set: { matchStatus: 'manual_charged', chargedAt: new Date() } },
+      { new: true }
+    );
+    if (!claimed) return false;
+
+    if (target.matchedComprobanteId) {
+      await Comprobante.updateOne({ id: target.matchedComprobanteId },
+        { $set: { bankMatchStatus: 'manual_charged', autoCharged: true } });
+    }
+    await _emitAdminOnlyChatNote(userId, username,
+      `🏦 Transferencia hgcash marcada como CARGADA MANUAL ($${Number(target.amount).toLocaleString('es-AR')}). Ese comprobante no se va a auto-cargar de nuevo.`);
+    logger.info(`[hgcash] movimiento ${target.movementId} → manual_charged (carga manual de ${username})`);
+    return true;
+  } catch (e) {
+    logger.warn(`[hgcash] consume on manual deposit falló: ${e.message}`);
+    return false;
+  }
+}
+
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
 async function hgcashAutoCarga({ movement, comprobante, mode }) {
@@ -1432,6 +1472,13 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
     return;
   }
+
+  // Registrar a quién matcheó el movimiento (sirve para reconciliar y para que una
+  // carga MANUAL a este usuario consuma el movimiento aunque la auto-carga falle).
+  try {
+    await BankMovement.updateOne({ movementId: movement.movementId },
+      { $set: { matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id } });
+  } catch (_) {}
 
   const amount = movement.amount;
   const opDesc = `op. hgcash ${movement.coelsaCode || movement.externalId || movement.movementId}`;
@@ -6059,6 +6106,11 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       }
 
       await recordUserActivity(user.id, 'deposit', parseFloat(amount));
+
+      // hgcash: si esta carga MANUAL corresponde a una transferencia hgcash pendiente
+      // de ese usuario (mismo monto), marcarla como cargada → no se auto-carga después.
+      // Fire-and-forget: no frena la respuesta de la carga.
+      hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount)).catch(() => {});
 
       // ROI de las estrategias: si el depósito incluyó bono, marcamos el
       // PromoBonus vigente del usuario como usado y guardamos el monto de

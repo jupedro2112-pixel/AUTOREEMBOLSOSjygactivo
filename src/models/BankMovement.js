@@ -52,7 +52,9 @@ const bankMovementSchema = new mongoose.Schema({
     // no_match: no se encontró comprobante que coincida
     // ignored: outbound / otra moneda / no aplica
     // error: falló la carga tras matchear
-    enum: ['pending', 'claiming', 'shadow_matched', 'auto_charged', 'no_match', 'ignored', 'error'],
+    // manual_charged: un operador cargó manual a ese usuario (consume el movimiento
+    // para que no se auto-cargue después cuando JUGAYGANA se recupere).
+    enum: ['pending', 'claiming', 'shadow_matched', 'auto_charged', 'manual_charged', 'no_match', 'ignored', 'error'],
     default: 'pending',
     index: true
   },

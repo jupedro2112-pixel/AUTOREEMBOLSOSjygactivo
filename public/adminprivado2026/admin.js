@@ -4945,6 +4945,7 @@ function hgcashStatusBadge(st) {
         claiming:       ['Procesando', '#888'],
         shadow_matched: ['Match (sombra)', '#2a6df0'],
         auto_charged:   ['Cargado ✓', '#0f8a2f'],
+        manual_charged: ['Cargado manual ✓', '#0f8a2f'],
         no_match:       ['Sin match', '#888'],
         ignored:        ['Saliente', '#666'],
         error:          ['Error', '#dc3545']

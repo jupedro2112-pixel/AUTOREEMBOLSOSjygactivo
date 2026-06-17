@@ -8,6 +8,23 @@
 
 ## Sesión 2026-06-17
 
+### 35. hgcash: carga manual consume el movimiento (anti doble-carga si JUGAYGANA falló)
+- **Pedido:** si JUGAYGANA falla la auto-carga, el operador carga manual a ese usuario; al hacerlo,
+  esa transferencia/foto debe quedar marcada como CARGADA, para que cuando JUGAYGANA se recupere NO
+  se auto-cargue de nuevo (evitar doble carga).
+- **Cómo:**
+  - En `hgcashAutoCarga` ahora se registra en el movimiento `matchedUserId/Username/ComprobanteId`
+    apenas matchea (antes solo en éxito/sombra) → el fallo recuerda a quién era.
+  - Nuevo `hgcashConsumeOnManualDeposit(userId, username, amount)`: busca un movimiento matcheado a
+    ese usuario, en `pending`/`error`, con el MISMO monto; lo marca atómicamente `manual_charged` +
+    marca el comprobante `autoCharged`. Enganchado en `POST /api/admin/deposit` (carga manual del
+    operador), fire-and-forget.
+  - Estado nuevo `manual_charged` en BankMovement y Comprobante; badge en el panel ("Cargado manual ✓").
+- **Resultado:** carga manual del mismo monto al mismo usuario → la transferencia hgcash queda
+  consumida → la foto no vuelve a auto-cargar. (Requiere monto igual; si el operador carga otro monto,
+  no consume — es a propósito, para no marcar mal.)
+- **Validado:** `node --check` OK.
+
 ### 34. hgcash: fallo de auto-carga REINTENTABLE (no queda trabado en error)
 - **Síntoma:** si JUGAYGANA falla al auto-cargar, el movimiento quedaba en `error` para siempre →
   reenviar el comprobante real no podía reintentar (el matcher solo mira `pending`).

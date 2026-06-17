@@ -8,6 +8,23 @@
 
 ## Sesión 2026-06-17
 
+### 37. hgcash: match por N° de transacción == coelsa (funciona con CUALQUIER banco)
+- **Problema:** comprobantes de otros bancos (ej. BNA) no auto-cargaban. Causa: muchos comprobantes
+  muestran el DESTINATARIO pero NO el nombre del que ENVÍA → el match por "nombre de origen" fallaba.
+  Además la cuenta destino real ("LA DELFI S.R.L." / alias URBANATRADE) no coincidía con la config vieja.
+- **Hallazgo clave:** el comprobante trae "Número de transacción" y el movimiento del banco trae el
+  MISMO valor en `coelsaCode` (ej. `3D5W612E6Z8WR04Q2GXYWR`). Es un match DEFINITIVO.
+- **Fix:** nuevo `_comprobanteMatchesMovement(comprobante, movement, cfg)` con 2 criterios (además del
+  monto): (1) **N° de transacción del comprobante == coelsaCode/externalID del movimiento** (definitivo,
+  no necesita el nombre del remitente ni la config de cuenta → sirve para cualquier banco); (2) fallback
+  por **nombre de origen + destino consistente** (el destino se valida contra el `toName`/`toCBU` REAL del
+  movimiento, no contra la config → funciona con cualquier cuenta hgcash). Ambos matchers (desde
+  comprobante y desde movimiento) usan este helper. Se quitó la dependencia de la config `accountName`.
+- **Limitación:** si un comprobante NO muestra ni el N° de transacción ni el nombre del remitente, queda
+  manual (no hay clave común confiable). Cubre la gran mayoría de transferencias por CBU/CVU (traen coelsa).
+- **Validado:** `node --check` OK. Para probar: transferencia NUEVA + comprobante (la vieja $174.000 que
+  quedó pendiente, cargala manual: reenviar el comprobante lo detecta como duplicado, correctamente).
+
 ### 36. Causa raíz de "auto-carga falla pero manual funciona": el lookup flaky
 - **Diagnóstico:** el error "JUGAYGANA está respondiendo intermitente — el usuario existe pero no
   podemos confirmarlo" sale en `jugaygana.js:843-850`, en el **lookup** (ShowUsers) que `depositToUser`

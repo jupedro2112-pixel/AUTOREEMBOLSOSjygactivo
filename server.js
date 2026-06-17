@@ -1376,6 +1376,48 @@ function _destOkOrUnknown(comprobante, cfg) {
   return !comprobante.destHolder && !comprobante.destCbu;
 }
 
+// ¿El destino del comprobante es consistente con el del movimiento (o no se sabe)?
+// Usa el destino REAL del movimiento (toName/toCBU de la cuenta hgcash que recibió),
+// así funciona para CUALQUIER cuenta hgcash sin depender de la config. Si el
+// comprobante no muestra destino, se acepta (el movimiento ya prueba que entró a
+// nuestra cuenta).
+function _destConsistentOk(comprobante, movement, cfg) {
+  if (!comprobante.destHolder && !comprobante.destCbu) return true;
+  if (movement) {
+    if (comprobante.destCbu && movement.toCBU && _digits(comprobante.destCbu) === _digits(movement.toCBU)) return true;
+    if (comprobante.destHolder && movement.toName && _nameMatch(comprobante.destHolder, movement.toName)) return true;
+  }
+  if (_comprobanteToOurBank(comprobante, cfg)) return true;
+  return false;
+}
+
+// ¿Este comprobante corresponde a ESTE movimiento entrante? Debe coincidir el MONTO y,
+// además, UNO de estos (en orden de fuerza):
+//   (1) N° de transacción del comprobante == coelsaCode/externalID del movimiento.
+//       Es DEFINITIVO y funciona para cualquier banco (no necesita el nombre del que envía).
+//   (2) Nombre de ORIGEN del comprobante == fromName del movimiento, con destino consistente.
+// Si no se cumple ninguno → no es match (queda manual).
+function _comprobanteMatchesMovement(comprobante, movement, cfg) {
+  if (!_amountsEqual(comprobante.amount, movement.amount)) return false;
+
+  // (1) Match definitivo por número de transacción / coelsa.
+  const opKey = _normComprobanteKey(comprobante.operationNumber);
+  if (opKey && opKey.length >= 6) {
+    const coelsa = _normComprobanteKey(movement.coelsaCode);
+    const ext = _normComprobanteKey(movement.externalId);
+    if (coelsa && coelsa === opKey) return true;
+    if (ext && opKey.length >= 8 && ext.includes(opKey)) return true;
+  }
+
+  // (2) Fallback por nombre de origen + destino consistente.
+  if (comprobante.originHolder && movement.fromName &&
+      _nameMatch(comprobante.originHolder, movement.fromName) &&
+      _destConsistentOk(comprobante, movement, cfg)) {
+    return true;
+  }
+  return false;
+}
+
 // Maneja un fallo de auto-carga (JUGAYGANA caído, etc.) de forma REINTENTABLE:
 // cuenta el intento y, si no superó el tope (3), devuelve el movimiento a 'pending'
 // para que un nuevo comprobante pueda reintentar. Pasado el tope, lo deja en 'error'
@@ -1569,7 +1611,6 @@ async function hgcashMatchFromMovement(movement) {
     if (!movement || movement.direction !== 'Inbound' || movement.matchStatus !== 'pending') return;
     if (!_statusAccredited(movement.status, cfg)) return; // todavía no acreditado (status != done)
     if (cfg.currency && movement.currency && String(movement.currency).toUpperCase() !== String(cfg.currency).toUpperCase()) return;
-    if (!movement.fromName) return; // sin nombre de origen no podemos identificar seguro
 
     // Ventana CORTA: solo comprobantes enviados en los últimos raceWindowMinutes.
     const raceMin = Math.min(cfg.windowMinutes || 60, cfg.raceWindowMinutes || 10);
@@ -1581,15 +1622,11 @@ async function hgcashMatchFromMovement(movement) {
       createdAt: { $gte: since }
     }).sort({ createdAt: -1 }).limit(80).lean();
 
-    const matches = candidates.filter(c =>
-      _amountsEqual(c.amount, movement.amount) &&
-      _nameMatch(c.originHolder, movement.fromName) &&
-      _destOkOrUnknown(c, cfg)
-    );
+    const matches = candidates.filter(c => _comprobanteMatchesMovement(c, movement, cfg));
     if (matches.length === 0) {
       // Diagnóstico: por qué no matcheó (para ver en los logs de Render).
-      const resumen = candidates.slice(0, 8).map(c => `$${c.amount}/"${c.originHolder || '?'}"→"${c.destHolder || '?'}"`).join(' , ');
-      logger.info(`[hgcash] movimiento SIN match: $${movement.amount} de "${movement.fromName}" (status=${movement.status}). ${candidates.length} comprobantes en ventana: ${resumen}`);
+      const resumen = candidates.slice(0, 8).map(c => `$${c.amount}/op:${c.operationNumber || '?'}/"${c.originHolder || '?'}"`).join(' , ');
+      logger.info(`[hgcash] movimiento SIN match: $${movement.amount} de "${movement.fromName}" coelsa=${movement.coelsaCode || '-'} (status=${movement.status}). ${candidates.length} comprobantes en ventana: ${resumen}`);
       return; // queda pending; un comprobante posterior puede matchearlo
     }
     if (matches.length > 1) {
@@ -1611,24 +1648,9 @@ async function hgcashMatchFromComprobante(comprobante) {
     if (!cfg.enabled) return;
     if (!comprobante || !comprobante.isComprobante || comprobante.autoCharged) return;
 
-    // ¿Fue a nuestro banco? Confirmado por destino, o destino desconocido (el
-    // comprobante no muestra a quién se transfirió). Si claramente fue a OTRO banco
-    // (muestra un destino distinto al nuestro) → no intentamos.
-    const toOur = _comprobanteToOurBank(comprobante, cfg);
-    if (!toOur && !_destOkOrUnknown(comprobante, cfg)) return;
-
-    // Sólo marcamos toApiBank cuando el destino confirma nuestra cuenta.
-    if (toOur) {
-      await Comprobante.updateOne({ id: comprobante.id }, { $set: { toApiBank: true, bankMatchStatus: 'pending' } });
-    }
-
-    if (!comprobante.originHolder) {
-      // Sin nombre de origen legible → no se puede matchear seguro; queda manual.
-      if (toOur) await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
-        `🏦 Comprobante al banco automático, pero no se pudo leer el nombre de origen para auto-cargar. Verificá y cargá a mano.`);
-      return;
-    }
-
+    // Buscamos un movimiento entrante que corresponda (por N° de transacción/coelsa,
+    // o por nombre de origen + destino). NO dependemos de la config de cuenta: el
+    // match se valida contra el movimiento real (sirve para cualquier banco/cuenta).
     const since = new Date(Date.now() - (cfg.windowMinutes || 60) * 60 * 1000);
     const candidates = await BankMovement.find({
       direction: 'Inbound', matchStatus: 'pending', createdAt: { $gte: since }
@@ -1636,11 +1658,10 @@ async function hgcashMatchFromComprobante(comprobante) {
 
     const matches = candidates.filter(m =>
       _statusAccredited(m.status, cfg) &&
-      _amountsEqual(comprobante.amount, m.amount) &&
-      _nameMatch(comprobante.originHolder, m.fromName)
+      _comprobanteMatchesMovement(comprobante, m, cfg)
     );
     if (matches.length === 0) {
-      logger.info(`[hgcash] comprobante SIN movimiento aún: $${comprobante.amount} de "${comprobante.originHolder}" — ${candidates.length} movimientos pendientes en ventana`);
+      logger.info(`[hgcash] comprobante SIN movimiento aún: $${comprobante.amount} op=${comprobante.operationNumber || '-'} de "${comprobante.originHolder || '?'}" — ${candidates.length} movimientos pendientes en ventana`);
       return; // todavía no llegó el movimiento; el webhook lo matcheará al llegar
     }
     if (matches.length > 1) {

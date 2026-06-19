@@ -8,6 +8,18 @@
 
 ## Sesión 2026-06-19
 
+### 50. FIX rol comunidad: "Error cargando mensajes" / no veía chats
+- **Síntoma:** el Admin Comunidad veía la LISTA de chats pero al abrir uno daba "Error cargando mensajes" (cruz roja)
+  y el tiempo real no funcionaba.
+- **Causa:** varios chequeos de rol en server.js usaban el array literal `['admin','depositor','withdrawer']` SIN
+  `comunidad` → 403 en cargar mensajes y al traer info del usuario, y el socket no lo trataba como agente.
+- **Fix:** se reemplazaron TODAS las ocurrencias de `['admin','depositor','withdrawer']` por
+  `['admin','depositor','withdrawer','comunidad']` en server.js. Cubre: `GET /api/messages/:userId` (L5171),
+  `POST /api/messages/send` (L5326), `GET /api/users/:userId` (info del chat), cookie de panel, protección de
+  borrado de admins, conteo de admins, y los 4 handlers de Socket.IO (authenticate/join_admin_room/join_chat_room/
+  send_message). Ninguno da acceso a Pagos (eso sigue gateado por withdrawerMiddleware / checks de 'payments').
+- **Validado:** `node --check` OK (server.js).
+
 ### 49. Oferta "100% recuperación" post-carga + etiqueta "NO Comunidad" + fix SLA auto-carga + fix UI pestañas
 - **Mensaje de recuperación tras carga:** después de una carga (manual `/api/admin/deposit` o automática
   `hgcashAutoCarga`) se envía un mensaje ofreciendo el 100% de recuperación para que entre a la Comunidad.

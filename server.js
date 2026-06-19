@@ -668,7 +668,7 @@ function requireAdminCookie(req, res, next) {
   }
   try {
     const decoded = jwt.verify(cookieVal, JWT_SECRET, { algorithms: ['HS256'] });
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     if (!adminRoles.includes(decoded.role)) {
       return res.status(403).send('Forbidden');
     }
@@ -4878,7 +4878,7 @@ app.delete('/api/users/:id', authMiddleware, adminMiddleware, async (req, res) =
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
     
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     if (adminRoles.includes(userToDelete.role) && req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Solo los administradores pueden eliminar otros administradores' });
     }
@@ -5168,7 +5168,7 @@ app.get('/api/messages/:userId', authMiddleware, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const before = req.query.before ? new Date(req.query.before) : null;
 
-    const allowedRoles = ['admin', 'depositor', 'withdrawer'];
+    const allowedRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     const isAdminRole = allowedRoles.includes(req.user.role);
     if (!isAdminRole && req.user.userId !== userId) {
       return res.status(403).json({ error: 'Acceso denegado' });
@@ -5323,7 +5323,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       }
     }
     
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     const isAdminRole = adminRoles.includes(req.user.role);
     
     // Issue #3: Bloquear comandos enviados por usuarios comunes (solo admins pueden procesar comandos)
@@ -6951,7 +6951,7 @@ io.on('connection', (socket) => {
       socket.username = decoded.username;
       socket.role = decoded.role;
 
-      if (['admin', 'depositor', 'withdrawer'].includes(decoded.role)) {
+      if (['admin', 'depositor', 'withdrawer', 'comunidad'].includes(decoded.role)) {
         connectedAdmins.set(decoded.userId, socket);
         socket.join('admins'); // Unir a sala de admins
         logger.info(`Admin connected: ${decoded.username} (${decoded.role}) socket=${socket.id}`);
@@ -6975,7 +6975,7 @@ io.on('connection', (socket) => {
   
   // Unirse a sala de admins (admin, depositor, withdrawer)
   socket.on('join_admin_room', () => {
-    if (['admin', 'depositor', 'withdrawer'].includes(socket.role)) {
+    if (['admin', 'depositor', 'withdrawer', 'comunidad'].includes(socket.role)) {
       socket.join('admins');
       logger.debug(`Admin ${socket.username} (${socket.role}) joined admin room`);
     }
@@ -6994,7 +6994,7 @@ io.on('connection', (socket) => {
   
   // CORREGIDO: Unirse a sala de chat específica (para admins)
   socket.on('join_chat_room', (data) => {
-    if (['admin', 'depositor', 'withdrawer'].includes(socket.role) && data && data.userId) {
+    if (['admin', 'depositor', 'withdrawer', 'comunidad'].includes(socket.role) && data && data.userId) {
       socket.join(`chat_${data.userId}`);
       logger.debug(`Admin ${socket.username} joined chat room: chat_${data.userId}`);
     }
@@ -7047,7 +7047,7 @@ io.on('connection', (socket) => {
       }
       
       // Determinar el receptor correcto
-      const isAdminRole = ['admin', 'depositor', 'withdrawer'].includes(socket.role);
+      const isAdminRole = ['admin', 'depositor', 'withdrawer', 'comunidad'].includes(socket.role);
       const targetReceiverId = isAdminRole ? receiverId : 'admin';
       const targetReceiverRole = isAdminRole ? 'user' : 'admin';
       
@@ -10209,7 +10209,7 @@ app.get('/api/admin/database', authMiddleware, adminMiddleware, async (req, res)
     const users = await User.find().select('-password').lean();
     const totalMessages = await Message.countDocuments();
     
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     const totalAdmins = users.filter(u => adminRoles.includes(u.role)).length;
     
     res.json({
@@ -11597,7 +11597,7 @@ app.get('/api/users/:userId', authMiddleware, async (req, res) => {
     const { userId } = req.params;
     
     // Only admins or the user themselves can fetch a user profile
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     if (!adminRoles.includes(req.user.role) && req.user.userId !== userId) {
       return res.status(403).json({ error: 'Acceso denegado' });
     }

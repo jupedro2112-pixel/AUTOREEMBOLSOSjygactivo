@@ -11972,6 +11972,27 @@ app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMidd
   }
 });
 
+// DESCARTAR un pago pendiente viejo que YA se resolvió en su momento: lo saca de la
+// cola SIN devolver fichas y SIN avisar al cliente. Solo admin general (limpieza).
+app.post('/api/admin/payouts/:id/dismiss', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede descartar pagos.' });
+    }
+    const { id } = req.params;
+    const r = await PendingPayout.findOneAndUpdate(
+      { id, status: { $in: ['pending_review', 'failed'] } },
+      { $set: { status: 'cancelled', paidVia: 'dismissed', paidBy: req.user.username, chipsReturned: false, error: 'Descartado (pago viejo ya resuelto): sin devolución ni aviso' } },
+      { new: true }
+    );
+    if (!r) return res.status(400).json({ error: 'No se pudo descartar (ya está pagado o en proceso).' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error descartando payout:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // GESTIÓN DE USUARIOS (ADMIN)
 // ============================================

@@ -2605,6 +2605,10 @@ async function loadPayoutBanner(userId) {
         const payBtn = j.payEnabled
             ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">💸 Pagar ' + monto + '</button>'
             : '<span style="color:#ffd;font-size:11px;">Pago automático no configurado (falta token). Pagá manual.</span>';
+        // "Descartar": SOLO admin general. Limpia un pago viejo ya resuelto SIN devolver fichas ni avisar al cliente.
+        const dismissBtn = (currentAdmin?.role === 'admin')
+            ? '<button onclick="dismissPayout(\'' + escapeHtml(p.id) + '\')" title="Limpiar pago viejo ya resuelto: no devuelve fichas ni avisa al cliente" style="background:rgba(0,0,0,0.35);color:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">🗑️ Descartar</button>'
+            : '';
         el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;font-size:12.5px;">' +
             '<span style="font-size:18px;">💸</span>' +
             '<div style="flex:1;min-width:160px;"><strong>RETIRO PENDIENTE: ' + monto + '</strong>' +
@@ -2613,6 +2617,7 @@ async function loadPayoutBanner(userId) {
             payBtn +
             '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🏦 Pagar con otro banco</button>' +
             '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar (devolver fichas)</button>' +
+            dismissBtn +
             '</div>';
     } catch (e) {
         el.style.display = 'none';
@@ -2659,6 +2664,23 @@ async function payOtherBank(id) {
         const j = await r.json();
         if (r.ok && j.success) {
             showToast('Pagado por otro banco ✅', 'success');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// Descartar un pago pendiente VIEJO que ya se resolvió en su momento: NO devuelve
+// fichas y NO le avisa nada al cliente. Solo admin general (limpieza de cartel viejo).
+async function dismissPayout(id) {
+    if (!confirm('¿DESCARTAR este pago pendiente?\n\n• NO le devuelve fichas al cliente\n• NO le envía ningún aviso\n\nUsar SOLO para limpiar pagos viejos que ya se pagaron en su momento.')) return;
+    const el = document.getElementById('chatPayoutBanner');
+    try {
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/dismiss', { method: 'POST' });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Pago descartado (sin avisar ni devolver)', 'success');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error', 'error');

@@ -8,6 +8,18 @@
 
 ## Sesión 2026-06-19
 
+### 48. Botón "Descartar" para limpiar pagos pendientes viejos (sin avisar ni devolver)
+- **Caso:** quedaron `PendingPayout` viejos en `pending_review` (de cuando el pago automático no andaba y se
+  dio la orden de NO marcarlos). Ya se pagaron en su momento y el cliente siguió jugando. No sirve "Pagar con
+  otro banco" (avisaría al cliente) ni "Rechazar" (devolvería fichas que no corresponden).
+- **Solución:** botón **🗑️ Descartar** en el banner del retiro, **solo visible para el admin general**. Endpoint
+  `POST /api/admin/payouts/:id/dismiss` (withdrawerMiddleware + check `role==='admin'`): marca el payout
+  `cancelled` con `paidVia:'dismissed'`, `chipsReturned:false` y nota de auditoría. **NO** devuelve fichas, **NO**
+  llama a hgcash, **NO** envía ningún mensaje al cliente. Reclamo atómico desde `pending_review`/`failed`.
+- **Uso:** abrir el chat de cada cliente afectado → el banner del retiro muestra "🗑️ Descartar" (solo admin) →
+  confirma → el cartel desaparece sin avisar nada. Es para limpieza puntual de pagos viejos ya resueltos.
+- **Validado:** `node --check` OK (server.js, admin.js).
+
 ### 47. Sección de chat "Comunidad" + rol "comunidad" + etiquetas en la lista de chats
 - **Rol nuevo `comunidad`:** clon de `depositor` (mismas funciones: cargas, bonus, fire-bonus) + ve la sección
   Comunidad − NO ve Pagos. Agregado a: enum `User.role`, `ADMIN_ROLES`, `adminMiddleware`, `depositorMiddleware`

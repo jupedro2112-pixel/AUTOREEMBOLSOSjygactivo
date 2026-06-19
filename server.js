@@ -1049,20 +1049,39 @@ async function changePasswordByPhone(phone, newPassword) {
 //     el número → queda "$50000" (el $ es el signo de peso literal del template).
 //   - Texto (username, bank, etc.): el template escribe "{username}" sin $ y se
 //     reemplaza por el valor.
-// Nunca lanza: ante cualquier error devuelve el fallback ya renderizado.
+// Si el comando EXISTE (activo) pero su respuesta quedó VACÍA, se interpreta como
+// "desactivado a propósito" → devuelve null para que el caller NO envíe el mensaje.
+// Si el comando NO existe (instalación nueva, antes del seed) usa el fallback.
+// Nunca lanza: ante error de DB devuelve el fallback ya renderizado.
 async function renderSystemCommand(name, fallback, vars = {}) {
   let template = fallback;
   try {
     const cmd = await Command.findOne({ name, isActive: true }).lean();
-    if (cmd && cmd.response) template = cmd.response;
+    if (cmd) {
+      // El comando existe: si lo vaciaron desde el panel, no se envía nada.
+      if (!cmd.response || !String(cmd.response).trim()) return null;
+      template = cmd.response;
+    }
   } catch (e) {
     logger.warn(`[renderSystemCommand] ${name}: ${e.message} — usando fallback`);
   }
+  if (template == null) return null;
   let out = template;
   for (const [k, v] of Object.entries(vars)) {
     out = out.replace(new RegExp('\\{' + k + '\\}', 'g'), v == null ? '' : String(v));
   }
   return out;
+}
+
+// Igual que renderSystemCommand pero a partir de un Command ya cargado (los flujos
+// que ya hacían Command.findOne directo). Devuelve null si el comando existe pero su
+// respuesta está vacía (desactivado a propósito); usa el fallback si no existe.
+function resolveSysContent(cmd, fallback) {
+  if (cmd) {
+    if (!cmd.response || !String(cmd.response).trim()) return null;
+    return cmd.response;
+  }
+  return fallback;
 }
 
 // Agregar usuario externo
@@ -1497,10 +1516,16 @@ async function ensureHgcashAccountIdSaved(accountId) {
   } catch (_) {}
 }
 
-// Avisa al cliente (y a los admins) que su retiro fue pagado.
+// Avisa al cliente (y a los admins) que su retiro fue pagado. El texto es editable
+// desde COMANDOS (/sys_payout_paid); si se vacía ese comando, no se envía nada.
 async function notifyPayoutPaid(payout) {
   try {
-    const content = `💸✅ ¡Tu retiro de $${Number(payout.amount).toLocaleString('es-AR')} fue enviado a tu cuenta! Puede tardar unos minutos en acreditarse.`;
+    const content = await renderSystemCommand(
+      '/sys_payout_paid',
+      '💸✅ ¡Tu retiro de ${amount} fue enviado a tu cuenta! Puede tardar unos minutos en acreditarse.',
+      { amount: Number(payout.amount).toLocaleString('es-AR') }
+    );
+    if (!content) return; // comando vaciado a propósito → no enviar
     const msg = await Message.create({
       id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
       receiverId: payout.userId, receiverRole: 'user', content, type: 'system', timestamp: new Date(), read: false
@@ -1640,17 +1665,18 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     } catch (_) {}
     const balStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
     const depositCmd = await Command.findOne({ name: '/sys_deposit', isActive: true });
-    const clientMsg = (depositCmd && depositCmd.response)
-      ? depositCmd.response.replace(/\{amount\}/g, Number(amount)).replace(/\{bonus\}/g, 0).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose')
-      : `🔒💰 Depósito de $${Number(amount).toLocaleString('es-AR')} acreditado con éxito. ✅\n💸 Tu nuevo saldo es ${balStr} 💸`;
-    const sysMsg = await Message.create({
-      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
-      receiverId: user.id, receiverRole: 'user', content: clientMsg, type: 'system', timestamp: new Date(), read: false
-    });
-    const msgData = { id: sysMsg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content: clientMsg, timestamp: new Date(), type: 'system' };
-    io.to(`user_${user.id}`).emit('new_message', msgData);
-    io.to(`chat_${user.id}`).emit('new_message', msgData);
-    notifyAdmins('new_message', { message: msgData, userId: user.id, username: user.username });
+    const depositTpl = resolveSysContent(depositCmd, `🔒💰 Depósito de $${Number(amount).toLocaleString('es-AR')} acreditado con éxito. ✅\n💸 Tu nuevo saldo es ${balStr} 💸`);
+    if (depositTpl) { // null = comando vaciado a propósito → no enviar mensaje al cliente
+      const clientMsg = depositTpl.replace(/\{amount\}/g, Number(amount)).replace(/\{bonus\}/g, 0).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose');
+      const sysMsg = await Message.create({
+        id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+        receiverId: user.id, receiverRole: 'user', content: clientMsg, type: 'system', timestamp: new Date(), read: false
+      });
+      const msgData = { id: sysMsg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content: clientMsg, timestamp: new Date(), type: 'system' };
+      io.to(`user_${user.id}`).emit('new_message', msgData);
+      io.to(`chat_${user.id}`).emit('new_message', msgData);
+      notifyAdmins('new_message', { message: msgData, userId: user.id, username: user.username });
+    }
     const uSock = connectedUsers.get(user.id);
     if (uSock && newBalance !== null) uSock.emit('balance_updated', { balance: newBalance });
 
@@ -2157,7 +2183,7 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
       { bank: cbuConfig.bank, titular: cbuConfig.titular, cbu: cbuConfig.number, alias: cbuConfig.alias }
     );
 
-    await Message.create({
+    if (fullMessage) await Message.create({ // null = /sys_cbu vaciado → solo se manda el CBU
       id: uuidv4(),
       senderId: req.user.userId,
       senderUsername: req.user.username,
@@ -2169,7 +2195,7 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
       timestamp: timestamp,
       read: false
     });
-    
+
     // 2. CBU solo para copiar y pegar
     await Message.create({
       id: uuidv4(),
@@ -2190,7 +2216,7 @@ app.post('/api/admin/send-cbu', authMiddleware, adminMiddleware, async (req, res
     // Notificar al usuario por socket si está conectado
     const userSocket = connectedUsers.get(userId);
     if (userSocket) {
-      userSocket.emit('new_message', {
+      if (fullMessage) userSocket.emit('new_message', {
         senderId: req.user.userId,
         senderUsername: req.user.username,
         content: fullMessage,
@@ -4412,7 +4438,7 @@ app.post('/api/cbu/request', authMiddleware, async (req, res) => {
       { bank: cbuConfig.bank, titular: cbuConfig.titular, cbu: cbuConfig.number, alias: cbuConfig.alias }
     );
 
-    await Message.create({
+    if (fullMessage) await Message.create({ // null = /sys_cbu vaciado → solo se manda el CBU
       id: uuidv4(),
       senderId: 'system',
       senderUsername: 'Sistema',
@@ -4424,7 +4450,7 @@ app.post('/api/cbu/request', authMiddleware, async (req, res) => {
       timestamp: new Date(),
       read: false
     });
-    
+
     // 3. CBU solo
     await Message.create({
       id: uuidv4(),
@@ -4538,7 +4564,7 @@ app.post('/api/messages/welcome', authMiddleware, async (req, res) => {
       notifyAdmins('new_message', { message: data, userId, username });
     };
 
-    await createSystemMessage(welcomeContent, true);
+    if (welcomeContent) await createSystemMessage(welcomeContent, true); // null = /sys_welcome vaciado
     if (cbuNumber && cbuNumber !== 'No disponible') {
       await createSystemMessage(cbuNumber, false);
     }
@@ -6268,6 +6294,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // Crear mensaje de sistema para el usuario
       const depositCmdName = parseFloat(bonus) > 0 ? '/sys_deposit_bonus' : '/sys_deposit';
       const depositCmd = await Command.findOne({ name: depositCmdName, isActive: true });
+      // Si el comando existe pero fue vaciado desde el panel → no se envía la confirmación.
+      const depositMsgDisabled = depositCmd && (!depositCmd.response || !String(depositCmd.response).trim());
+      if (!depositMsgDisabled) {
       let messageContent;
       // El mensaje al usuario refleja el OUTCOME REAL, no lo que se pidió:
       //   - Si bonus solicitado + acreditado OK → menciona ambos
@@ -6326,6 +6355,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         userId: user.id,
         username: user.username
       });
+      } // fin confirmación de depósito (omitida si el comando fue vaciado)
 
       // Si el bonus se solicitó pero falló en JUGAYGANA tras los 3 reintentos,
       // crear un mensaje admin-only en el chat avisando al agente que tiene
@@ -6367,8 +6397,10 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         }
       }
 
-      // Segundo mensaje recordatorio
+      // Segundo mensaje recordatorio (omitido si /sys_reminder fue vaciado)
       const reminderCmd = await Command.findOne({ name: '/sys_reminder', isActive: true });
+      const reminderDisabled = reminderCmd && (!reminderCmd.response || !String(reminderCmd.response).trim());
+      if (!reminderDisabled) {
       const reminderContent = (reminderCmd && reminderCmd.response)
         ? reminderCmd.response
             .replace(/\{amount\}/g, amount)
@@ -6400,6 +6432,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       io.to(`user_${user.id}`).emit('new_message', reminderData);
       io.to(`chat_${user.id}`).emit('new_message', reminderData);
       notifyAdmins('new_message', { message: reminderData, userId: user.id, username: user.username });
+      } // fin recordatorio (omitido si el comando fue vaciado)
 
       // Cartel "instalá la app" — solo si el usuario TODAVÍA NO la tiene instalada.
       // Detección: tener un token FCM de contexto 'standalone' = PWA instalada.
@@ -6408,6 +6441,8 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
 
       if (!hasAppInstalled) {
         const installCmd = await Command.findOne({ name: '/sys_install_app', isActive: true });
+        const installDisabled = installCmd && (!installCmd.response || !String(installCmd.response).trim());
+        if (!installDisabled) { // null = comando vaciado a propósito → no enviar
         const installContent = (installCmd && installCmd.response)
           ? installCmd.response.replace(/\{amount\}/g, amount).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose')
           : `🎁━━━━━━━━━━━━━━━🎁\n📲 INSTALÁ LA APP\n   Y GANÁ $5.000 🎁\n🎁━━━━━━━━━━━━━━━🎁\n\n¿Todavía no instalaste la app? ¡Hacelo ahora y reclamá tu BONO DE $5.000! 🤑\n\n✅ Te avisamos al toque de tus bonos y reembolsos\n✅ Entrás más rápido y no perdés tu cuenta\n\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, elegí "Agregar a pantalla de inicio".\n\n🎁 Una vez instalada, abrí la app y tocá el botón "🎁 Reclamar $5.000" que vas a ver arriba del chat. ¡El bono se acredita al instante!`;
@@ -6438,6 +6473,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         io.to(`user_${user.id}`).emit('new_message', installData);
         io.to(`chat_${user.id}`).emit('new_message', installData);
         notifyAdmins('new_message', { message: installData, userId: user.id, username: user.username });
+        } // fin cartel instalá la app (omitido si el comando fue vaciado)
       }
 
       // Notificar al usuario específico si está conectado. Sólo si tenemos
@@ -6621,14 +6657,16 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
       }
       const balanceStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
 
-      // Crear mensaje de sistema para el usuario
+      // Crear mensaje de sistema para el usuario (omitido si /sys_withdrawal fue vaciado)
       const withdrawalCmd = await Command.findOne({ name: '/sys_withdrawal', isActive: true });
+      const withdrawalDisabled = withdrawalCmd && (!withdrawalCmd.response || !String(withdrawalCmd.response).trim());
+      if (!withdrawalDisabled) {
       const messageContent = (withdrawalCmd && withdrawalCmd.response)
         ? withdrawalCmd.response
             .replace(/\{amount\}/g, amount)
             .replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose')
         : `🔒💸 Retiro de $${amount} realizado correctamente. \n💸 Tu nuevo saldo es ${balanceStr} 💸\nSu pago se está procesando. Por favor, aguarde un momento.`;
-      
+
       const systemMessage = await Message.create({
         id: uuidv4(),
         senderId: 'admin',
@@ -6641,7 +6679,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
         timestamp: new Date(),
         read: false
       });
-      
+
       // CORREGIDO: Emitir a todos los que están viendo este chat (usuario y admins)
       const messageData = {
         id: systemMessage.id,
@@ -6654,20 +6692,21 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
         timestamp: new Date(),
         type: 'system'
       };
-      
+
       // Emitir a la sala del usuario
       io.to(`user_${user.id}`).emit('new_message', messageData);
-      
+
       // Emitir a la sala del chat (para admins que están viendo)
       io.to(`chat_${user.id}`).emit('new_message', messageData);
-      
+
       // Notificar a todos los admins
       notifyAdmins('new_message', {
         message: messageData,
         userId: user.id,
         username: user.username
       });
-      
+      } // fin mensaje de retiro (omitido si el comando fue vaciado)
+
       // Notificar al usuario específico si está conectado. Sólo si tenemos
       // balance real — si falló el lookup, omitimos para no escribir "null" en UI.
       const userSocket = connectedUsers.get(user.id);
@@ -6792,6 +6831,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
       if (bonusUser) {
         try {
           const bonusCmd = await Command.findOne({ name: '/sys_bonus', isActive: true });
+          const bonusDisabled = bonusCmd && (!bonusCmd.response || !String(bonusCmd.response).trim());
           let bonusMsg;
           if (bonusCmd && bonusCmd.response) {
             bonusMsg = bonusCmd.response
@@ -6800,7 +6840,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
           } else {
             bonusMsg = `🎁 ¡Bonificación de $${bonusAmount} acreditada en tu cuenta! ✅\n💸 Tu saldo actual es $${newBalance !== null ? newBalance : '—'} 💸\n\nPuedes verificarlo en: https://www.jugaygana44.bet`;
           }
-          await Message.create({
+          if (!bonusDisabled) await Message.create({ // null = comando vaciado a propósito → no enviar
             id: uuidv4(),
             senderId: 'system',
             senderUsername: req.user?.username,
@@ -7682,6 +7722,12 @@ async function initializeData() {
       description: 'Mensaje de felicitación cuando el usuario reclama el bono por instalar la app. Variables: {username}, ${amount}',
       type: 'message',
       response: '🎁 ¡Felicitaciones {username}! Te acreditamos tu BONO DE ${amount} por instalar la app. ¡Gracias por sumarte! 🥳'
+    },
+    {
+      name: '/sys_payout_paid',
+      description: 'Mensaje automático "pago enviado" cuando un retiro se paga (pago automático por hgcash o "Pagar con otro banco"). Variables: ${amount}. Si lo dejás vacío, no se envía.',
+      type: 'message',
+      response: '💸✅ ¡Tu retiro de ${amount} fue enviado a tu cuenta! Puede tardar unos minutos en acreditarse.'
     }
   ];
   for (const cmd of systemCmds) {
@@ -8016,7 +8062,8 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       '⏳ Recibimos tu solicitud de retiro de ${amount}.\nUn agente la está procesando y te confirma la transferencia en breve. ¡Gracias!',
       { amount: amountNum.toLocaleString('es-AR') }
     );
-    const withdrawConfirmMsg = await Message.create({
+    // null = /sys_withdrawal_request vaciado a propósito → no se manda la confirmación.
+    const withdrawConfirmMsg = withdrawConfirmContent ? await Message.create({
       id: uuidv4(),
       senderId: 'system',
       senderUsername: 'Sistema',
@@ -8027,7 +8074,7 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       type: 'text',
       timestamp: new Date(),
       read: false
-    });
+    }) : null;
 
     // 3. Mover el chat a "Pagos" automáticamente: el retiro lo gestiona el área
     //    de pagos. Antes el ChatStatus no se tocaba, así que si el chat estaba
@@ -8051,11 +8098,13 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       notifyAdmins('chat_moved', { userId: req.user.userId, to: 'payments', by: 'sistema' });
       // Entregar los mensajes en tiempo real (al panel admin y al usuario).
       io.to('admins').emit('new_message', { message: withdrawMsg, userId: req.user.userId, username: req.user.username });
-      io.to('admins').emit('new_message', { message: withdrawConfirmMsg, userId: req.user.userId, username: req.user.username });
       io.to(`chat_${req.user.userId}`).emit('new_message', withdrawMsg);
-      io.to(`chat_${req.user.userId}`).emit('new_message', withdrawConfirmMsg);
       io.to(`user_${req.user.userId}`).emit('new_message', withdrawMsg);
-      io.to(`user_${req.user.userId}`).emit('new_message', withdrawConfirmMsg);
+      if (withdrawConfirmMsg) {
+        io.to('admins').emit('new_message', { message: withdrawConfirmMsg, userId: req.user.userId, username: req.user.username });
+        io.to(`chat_${req.user.userId}`).emit('new_message', withdrawConfirmMsg);
+        io.to(`user_${req.user.userId}`).emit('new_message', withdrawConfirmMsg);
+      }
     } catch (chatErr) {
       logger.error(`[withdrawal/request] No se pudo mover el chat a pagos: ${chatErr.message}`);
     }
@@ -8219,7 +8268,7 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
       '🎁 ¡Felicitaciones {username}! Te acreditamos tu BONO DE ${amount} por instalar la app. ¡Gracias por sumarte! 🥳',
       { username: user.username, amount: INSTALL_BONUS_AMOUNT.toLocaleString('es-AR') }
     );
-    await Message.create({
+    if (installBonusContent) await Message.create({ // null = /sys_install_bonus vaciado → no enviar
       id: uuidv4(),
       senderId: 'system',
       senderUsername: 'Sistema',
@@ -10343,8 +10392,8 @@ app.get('/api/admin/datos', authMiddleware, adminMiddleware, async (req, res) =>
 
       // Bloques B + C + D: análisis completo de depósitos
       Transaction.aggregate([
-        // 1. Depósitos del período
-        { $match: { type: 'deposit', timestamp: { $gte: startUTC, $lte: endUTC } } },
+        // 1. Depósitos del período (excluye devoluciones de retiros rechazados: no son carga real)
+        { $match: { type: 'deposit', 'metadata.source': { $ne: 'payout_refund' }, timestamp: { $gte: startUTC, $lte: endUTC } } },
 
         // 2. Agrupar por usuario: operaciones y monto en el período
         { $group: {
@@ -10504,7 +10553,8 @@ app.get('/api/admin/central/ingresos', authMiddleware, adminMiddleware, async (r
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
     const rows = await Transaction.aggregate([
-      { $match: { type: 'deposit', timestamp: { $gte: since } } },
+      // Excluye las devoluciones de retiros rechazados (no son ingreso real).
+      { $match: { type: 'deposit', 'metadata.source': { $ne: 'payout_refund' }, timestamp: { $gte: since } } },
       { $group: {
         _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp', timezone: ART_TZ } },
         count: { $sum: 1 },
@@ -11604,6 +11654,33 @@ app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (r
     const total = await BankMovement.countDocuments(q);
     const movements = await BankMovement.find(q)
       .sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+
+    // Enriquecer los movimientos SALIENTES (pagos) con el usuario al que se pagó:
+    // el cash-out usa externalID = PendingPayout.id y guarda el hgTransactionId en el payout.
+    try {
+      const out = movements.filter(m => m.direction === 'Outbound');
+      const outIds = out.map(m => m.externalId).filter(Boolean);
+      const outHgIds = out.map(m => m.movementId).filter(Boolean);
+      if (outIds.length || outHgIds.length) {
+        const or = [];
+        if (outIds.length) or.push({ id: { $in: outIds } });
+        if (outHgIds.length) or.push({ hgTransactionId: { $in: outHgIds } });
+        const payouts = await PendingPayout.find({ $or: or })
+          .select('id hgTransactionId username resolvedCbu titular').lean();
+        const byId = new Map(payouts.map(p => [p.id, p]));
+        const byHg = new Map(payouts.filter(p => p.hgTransactionId).map(p => [p.hgTransactionId, p]));
+        for (const m of movements) {
+          if (m.direction !== 'Outbound') continue;
+          const p = (m.externalId && byId.get(m.externalId)) || (m.movementId && byHg.get(m.movementId));
+          if (p) {
+            m.payoutUsername = p.username || null;
+            if (!m.toCBU && p.resolvedCbu) m.toCBU = p.resolvedCbu;
+            if (!m.toName && p.titular) m.toName = p.titular;
+          }
+        }
+      }
+    } catch (e) { logger.warn(`[hgcash] enriquecer movimientos salientes: ${e.message}`); }
+
     res.json({ movements, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit) });
   } catch (error) {
     console.error('Error obteniendo movimientos hgcash:', error);
@@ -11708,10 +11785,16 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       $set: {
         hgTransactionId: hgId || null,
         hgStatus,
+        paidVia: 'hgcash',
         status: isDone ? 'paid' : 'paying',
         paidAt: isDone ? new Date() : null
       }
     });
+
+    // Si hgcash confirmó el pago en el acto (DONE), avisamos al cliente ya mismo
+    // (el aviso por webhook DONE es idempotente, no duplica). Si quedó 'paying',
+    // el aviso lo dispara el webhook al confirmarse.
+    if (isDone) { await notifyPayoutPaid(claimed); }
 
     logger.info(`[hgcash-pay] cash-out iniciado payout=${id} user=${payout.username} $${payout.amount} hgId=${hgId} status=${hgStatus} por ${req.user.username}`);
     res.json({ success: true, status: isDone ? 'paid' : 'paying', hgTransactionId: hgId, hgStatus });
@@ -11721,19 +11804,83 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
   }
 });
 
-// El agente RECHAZA el pago (sospechoso / lo maneja a mano). No paga.
+// El agente RECHAZA el pago: NO se paga y se le DEVUELVEN las fichas al cliente
+// (re-crédito en JUGAYGANA, ya que el self-retiro se las había descontado).
 app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const r = await PendingPayout.findOneAndUpdate(
+    // Reclamo atómico: sólo procede uno (evita doble devolución si dos agentes tocan a la vez).
+    const payout = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed'] } },
-      { $set: { status: 'cancelled', paidBy: req.user.username, error: 'Cancelado por el agente' } },
+      { $set: { status: 'cancelled', paidBy: req.user.username, error: 'Rechazado por el agente — fichas devueltas' } },
       { new: true }
     );
-    if (!r) return res.status(400).json({ error: 'No se pudo cancelar (ya está pagado o en proceso).' });
+    if (!payout) return res.status(400).json({ error: 'No se pudo rechazar (ya está pagado o en proceso).' });
+
+    // Devolver las fichas: re-crédito del monto en JUGAYGANA.
+    const user = await User.findOne({ id: payout.userId });
+    let refunded = false;
+    try {
+      const credit = await jugaygana.depositToUser(
+        payout.username, Number(payout.amount),
+        'Devolución de retiro rechazado', (user && user.jugayganaUserId) || null
+      );
+      if (credit && credit.success) {
+        refunded = true;
+        let refundTxId = null;
+        try {
+          const tx = await Transaction.create({
+            id: uuidv4(), type: 'deposit', amount: Number(payout.amount),
+            username: payout.username, userId: payout.userId,
+            description: 'Devolución de fichas por retiro rechazado',
+            adminId: req.user.userId, adminUsername: req.user.username, adminRole: req.user.role,
+            transactionId: credit.data?.transfer_id || credit.data?.transferId,
+            metadata: { source: 'payout_refund', payoutId: payout.id },
+            timestamp: new Date()
+          });
+          refundTxId = tx.id;
+        } catch (_) {}
+        await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true, refundTxId } });
+        try {
+          const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
+          const uSock = connectedUsers.get(payout.userId);
+          if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance });
+        } catch (_) {}
+        await _emitAdminOnlyChatNote(payout.userId, payout.username,
+          `↩️ Retiro RECHAZADO: se devolvieron $${Number(payout.amount).toLocaleString('es-AR')} a las fichas del cliente.`);
+      } else {
+        await _emitAdminOnlyChatNote(payout.userId, payout.username,
+          `⚠️ Retiro rechazado pero NO se pudieron devolver las fichas ($${Number(payout.amount).toLocaleString('es-AR')}): ${(credit && credit.error) || 'error JUGAYGANA'}. Devolvé el saldo a mano.`);
+      }
+    } catch (e) {
+      logger.error(`[payout-cancel] devolución de fichas falló payout=${id}: ${e.message}`);
+      await _emitAdminOnlyChatNote(payout.userId, payout.username,
+        `⚠️ Retiro rechazado pero NO se pudieron devolver las fichas ($${Number(payout.amount).toLocaleString('es-AR')}). Devolvé el saldo a mano.`);
+    }
+    res.json({ success: true, chipsReturned: refunded });
+  } catch (error) {
+    console.error('Error rechazando payout:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// El agente paga el retiro DESDE OTRO BANCO (manual, fuera de hgcash): se marca como
+// pagado SIN devolver fichas y SIN llamar a hgcash. Manda el aviso de "pago enviado".
+app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const payout = await PendingPayout.findOneAndUpdate(
+      { id, status: { $in: ['pending_review', 'failed'] } },
+      { $set: { status: 'paid', paidVia: 'other_bank', paidBy: req.user.username, paidAt: new Date(), error: null } },
+      { new: true }
+    );
+    if (!payout) return res.status(400).json({ error: 'No se pudo marcar como pagado (ya está pagado o en proceso).' });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username,
+      `🏦 Retiro de $${Number(payout.amount).toLocaleString('es-AR')} pagado por OTRO BANCO por ${req.user.username}.`);
+    await notifyPayoutPaid(payout); // aviso editable /sys_payout_paid (no envía si está vacío)
     res.json({ success: true });
   } catch (error) {
-    console.error('Error cancelando payout:', error);
+    console.error('Error pagando payout por otro banco:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

@@ -42,6 +42,11 @@ const pendingPayoutSchema = new mongoose.Schema({
   paidBy: { type: String, default: null },   // agente que confirmó
   paidAt: { type: Date, default: null },
   error: { type: String, default: null },
+  // Forma de pago: 'hgcash' (automático) | 'other_bank' (pagado manual por otro banco)
+  paidVia: { type: String, default: null },
+  // Si al rechazar se le devolvieron las fichas al cliente (re-crédito en JUGAYGANA)
+  chipsReturned: { type: Boolean, default: false },
+  refundTxId: { type: String, default: null }, // Transaction del re-crédito de fichas
   // Link al retiro original (Transaction)
   withdrawalTxId: { type: String, default: null },
 

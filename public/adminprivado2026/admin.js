@@ -2507,7 +2507,8 @@ async function loadPayoutBanner(userId) {
             '<div style="font-size:11px;opacity:0.92;">Titular: ' + titular + ' · CBU/alias: ' + dest + '</div>' +
             '<div style="font-size:10.5px;opacity:0.8;">Verificá los datos antes de pagar.</div></div>' +
             payBtn +
-            '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">Rechazar</button>' +
+            '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🏦 Pagar con otro banco</button>' +
+            '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar (devolver fichas)</button>' +
             '</div>';
     } catch (e) {
         el.style.display = 'none';
@@ -2530,13 +2531,30 @@ async function payPayout(id) {
 }
 
 async function cancelPayout(id) {
-    if (!confirm('¿Rechazar este pago? No se va a pagar automáticamente (lo manejás a mano).')) return;
+    if (!confirm('¿Rechazar este pago? NO se paga y se le DEVUELVEN las fichas al cliente (re-crédito en JUGAYGANA).')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
         const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
         const j = await r.json();
         if (r.ok && j.success) {
-            showToast('Pago rechazado', 'success');
+            showToast(j.chipsReturned ? 'Pago rechazado · fichas devueltas ✅' : 'Pago rechazado (revisá: no se pudieron devolver las fichas)', j.chipsReturned ? 'success' : 'error');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// Pagar el retiro DESDE OTRO BANCO (manual, fuera de hgcash): marca pagado sin
+// devolver fichas y sin llamar a hgcash. Avisa "pago enviado" al cliente.
+async function payOtherBank(id) {
+    if (!confirm('¿Marcar este retiro como PAGADO desde otro banco? Confirmá sólo si YA hiciste la transferencia por fuera. No se devuelven fichas.')) return;
+    const el = document.getElementById('chatPayoutBanner');
+    try {
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay-other-bank', { method: 'POST' });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Pagado por otro banco ✅', 'success');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error', 'error');
@@ -2694,6 +2712,13 @@ async function addChatTag() {
             showToast(j.error || 'Error', 'error');
         }
     } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// Agrega una etiqueta predefinida con un solo clic (ej: "Comunidad").
+function quickAddChatTag(tag) {
+    const input = document.getElementById('chatTagInput');
+    if (input) input.value = tag;
+    addChatTag();
 }
 
 async function removeChatTag(tag) {
@@ -5031,11 +5056,11 @@ async function loadHgcashMovements(page = 1) {
         const qs = new URLSearchParams({ page: String(page) });
         if (status) qs.set('status', status);
         const r = await authFetch('/api/admin/hgcash/movements?' + qs.toString());
-        if (!r.ok) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Sin acceso o sin datos</td></tr>'; return; }
+        if (!r.ok) { body.innerHTML = '<tr><td colspan="10" style="color:#888;text-align:center;">Sin acceso o sin datos</td></tr>'; return; }
         const j = await r.json();
         const movs = j.movements || [];
         if (!movs.length) {
-            body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">No hay movimientos</td></tr>';
+            body.innerHTML = '<tr><td colspan="10" style="color:#888;text-align:center;">No hay movimientos</td></tr>';
             if (pag) pag.innerHTML = '';
             return;
         }
@@ -5044,15 +5069,20 @@ async function loadHgcashMovements(page = 1) {
             const dir = m.direction === 'Inbound' ? '⬇️ Entra' : (m.direction === 'Outbound' ? '⬆️ Sale' : '—');
             const monto = m.amount != null ? '$' + Number(m.amount).toLocaleString('es-AR') : (m.amountRaw || '—');
             const origen = m.fromName || '—';
-            const cbu = m.fromCBU || '—';
-            const usuario = m.matchedUsername ? '@' + m.matchedUsername : '—';
+            const cbuOrigen = m.fromCBU || '—';
+            const destino = m.toName || '—';
+            const cbuDestino = m.toCBU || '—';
+            // En pagos (Outbound) el usuario viene del payout (payoutUsername); en cargas (Inbound) del match.
+            const usuario = m.matchedUsername ? '@' + m.matchedUsername : (m.payoutUsername ? '@' + m.payoutUsername : '—');
             const op = m.coelsaCode || m.externalId || '—';
             return '<tr>' +
                 '<td style="white-space:nowrap;">' + escapeHtml(fecha) + '</td>' +
                 '<td>' + escapeHtml(dir) + '</td>' +
                 '<td style="white-space:nowrap;">' + escapeHtml(monto) + '</td>' +
                 '<td>' + escapeHtml(origen) + '</td>' +
-                '<td style="font-size:11px;">' + escapeHtml(cbu) + '</td>' +
+                '<td style="font-size:11px;">' + escapeHtml(cbuOrigen) + '</td>' +
+                '<td>' + escapeHtml(destino) + '</td>' +
+                '<td style="font-size:11px;">' + escapeHtml(cbuDestino) + '</td>' +
                 '<td>' + hgcashStatusBadge(m.matchStatus) + (m.chargeError ? '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(m.chargeError).slice(0,60)) + '</span>' : '') + '</td>' +
                 '<td>' + escapeHtml(usuario) + '</td>' +
                 '<td style="font-size:11px;">' + escapeHtml(op) + '</td>' +
@@ -5067,7 +5097,7 @@ async function loadHgcashMovements(page = 1) {
                 : '';
         }
     } catch (e) {
-        body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error cargando movimientos</td></tr>';
+        body.innerHTML = '<tr><td colspan="10" style="color:#888;text-align:center;">Error cargando movimientos</td></tr>';
     }
 }
 

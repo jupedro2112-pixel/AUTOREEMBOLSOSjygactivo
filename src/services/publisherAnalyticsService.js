@@ -17,7 +17,8 @@
  *   - loyal     : ≥ 5 cargas
  *
  * Fuente de datos: Transaction (deposits/withdrawals). Se excluyen los regalos
- * (metadata.source in install_bonus / welcome_gift) del cómputo de cargas reales.
+ * y las devoluciones de retiros rechazados (metadata.source in install_bonus /
+ * welcome_gift / payout_refund) del cómputo de cargas reales.
  */
 const { User, Transaction, Campaign, InfluencerStory } = require('../models');
 
@@ -27,7 +28,7 @@ const AT_RISK_DAYS = 21;      // 8–21d = en riesgo; >21d = perdido
 const NEW_DAYS = 7;           // registrado hace ≤7d = nuevo
 const HIGH_TICKET_ARS = 30000; // promedio de carga ≥ $30.000 = ticket alto
 const LOYAL_MIN_DEPOSITS = 5;  // ≥5 cargas = cliente fiel/fuerte
-const GIFT_SOURCES = ['install_bonus', 'welcome_gift'];
+const GIFT_SOURCES = ['install_bonus', 'welcome_gift', 'payout_refund'];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Cuántos clientes devolver por segmento en el detalle (ordenados por total

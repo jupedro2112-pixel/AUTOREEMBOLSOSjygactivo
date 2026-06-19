@@ -325,6 +325,7 @@
                                        style="background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.18);color:#fff;border-radius:6px;padding:3px 8px;font-size:11.5px;width:130px;">
                                 <datalist id="chatTagSuggestions"></datalist>
                                 <button type="button" onclick="addChatTag()" style="background:#2a6df0;color:#fff;border:none;border-radius:6px;padding:3px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">Agregar</button>
+                                <button type="button" onclick="quickAddChatTag('Comunidad')" title="Agregar etiqueta Comunidad" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:3px 9px;font-size:11.5px;font-weight:700;cursor:pointer;">+ Comunidad</button>
                                 <button type="button" id="chatNotesToggle" onclick="toggleChatNotes()" style="margin-left:auto;background:rgba(255,255,255,0.12);color:#ddd;border:none;border-radius:6px;padding:3px 9px;font-size:11.5px;cursor:pointer;">📝 Nota</button>
                             </div>
                             <div id="chatNotesBox" style="display:none;margin-top:7px;">
@@ -635,7 +636,7 @@
                                 <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
                             </div>
                             <div style="overflow-x:auto;">
-                                <table class="data-table" style="min-width:780px;">
+                                <table class="data-table" style="min-width:1000px;">
                                     <thead>
                                         <tr>
                                             <th>Fecha</th>
@@ -643,13 +644,15 @@
                                             <th>Monto</th>
                                             <th>Origen</th>
                                             <th>CBU origen</th>
+                                            <th>Destino</th>
+                                            <th>CBU destino</th>
                                             <th>Estado</th>
                                             <th>Usuario</th>
                                             <th>Coelsa/op</th>
                                         </tr>
                                     </thead>
                                     <tbody id="hgcashMovBody">
-                                        <tr><td colspan="8" style="color:#888;text-align:center;">—</td></tr>
+                                        <tr><td colspan="10" style="color:#888;text-align:center;">—</td></tr>
                                     </tbody>
                                 </table>
                             </div>

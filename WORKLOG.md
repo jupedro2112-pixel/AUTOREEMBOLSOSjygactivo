@@ -4,7 +4,69 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-16**
+> **Última actualización: 2026-06-19**
+
+## Sesión 2026-06-19
+
+### 44. Movimientos hgcash: mostrar CBU origen + destino + usuario del pago
+- **Pedido:** en la tabla de "Movimientos del banco" (sección Comandos/Config), al hacer un pago
+  saliente sólo se veía el CBU de origen. Se quería ver origen Y destino, y a qué usuario se le pagó.
+- **Back (`GET /api/admin/hgcash/movements`):** los `BankMovement` salientes (`direction:'Outbound'`)
+  se enriquecen con el `PendingPayout` correspondiente (match por `externalId == payout.id` o por
+  `hgTransactionId`) → se adjunta `payoutUsername` y, si faltan, `toCBU`/`toName` desde el payout.
+- **Front (`loadHgcashMovements` + tabla en index.html):** nuevas columnas **Destino** y **CBU destino**;
+  la columna **Usuario** ahora usa `matchedUsername` (cargas entrantes) o `payoutUsername` (pagos salientes).
+  Tabla pasó de 8 a 10 columnas (colspans y min-width actualizados).
+
+### 43. Comandos vacíos = NO enviar ese mensaje automático
+- **Pedido:** hoy los comandos `/sys_*` (mensajes automáticos) sólo se podían editar; ahora, si se
+  deja el comando VACÍO desde el panel, ese mensaje no debe enviarse.
+- **Antes:** `renderSystemCommand` con respuesta vacía → caía al **fallback hardcodeado** (lo opuesto a lo pedido).
+- **Ahora:** `renderSystemCommand(name, fallback, vars)` devuelve **`null`** si el comando EXISTE (activo)
+  pero su `response` está vacío → el caller no crea ni emite el mensaje. Si el comando NO existe (instalación
+  nueva pre-seed) sigue usando el fallback. Helper gemelo `resolveSysContent(cmd, fallback)` para los flujos
+  que hacían `Command.findOne` directo.
+- **Cubre:** `/sys_deposit`, `/sys_deposit_bonus`, `/sys_reminder`, `/sys_install_app`, `/sys_withdrawal`,
+  `/sys_bonus`, `/sys_cbu` (omite el descriptivo, igual manda el CBU para copiar), `/sys_welcome`,
+  `/sys_withdrawal_request` (igual mueve el chat a Pagos), `/sys_install_bonus`, `/sys_payout_paid`, y la
+  carga automática hgcash (`/sys_deposit`). El CRUD ya guardaba `response: ''` sin problema.
+- **Nota:** desactivar el toggle (isActive:false) sigue cayendo al fallback; lo que apaga el envío es DEJARLO VACÍO.
+
+### 42. Mensaje "pago enviado" automático en el pago por API (hgcash) — editable /sys_payout_paid
+- **Pedido:** que el pago automático por hgcash mande el mensaje de "pago enviado" (hoy se mandaba a mano con `/5`).
+- **Cómo:** nuevo comando del sistema **`/sys_payout_paid`** (sembrado en `systemCmds`, editable desde Comandos).
+  `notifyPayoutPaid` ahora renderiza ese comando (var `${amount}`); si se vacía, no envía nada.
+- **Se dispara en:** webhook hgcash `DONE` (`handlePayoutStatusWebhook`), el caso en que el cash-out vuelve
+  `DONE` en el acto desde `POST /payouts/:id/pay` (antes NO avisaba), y "Pagar con otro banco" (#41).
+- **Migrá tu texto de `/5` a `/sys_payout_paid`** una vez (copiá el contenido en Comandos).
+
+### 41. Rechazar pago = devolver fichas + botón "Pagar con otro banco"
+- **Pedido:** al RECHAZAR un pago desde el panel, devolver al cliente las fichas que se le habían
+  descontado (el self-retiro ya descuenta en JUGAYGANA). Y, como a veces se paga desde otro banco,
+  agregar esa opción aparte (sin devolver fichas).
+- **`POST /payouts/:id/cancel` (Rechazar):** reclamo atómico `pending_review|failed → cancelled` (anti doble
+  devolución), luego re-acredita el monto en JUGAYGANA (`jugaygana.depositToUser` con `jugayganaUserId`),
+  registra `Transaction` (`metadata.source:'payout_refund'`), emite `balance_updated` y nota admin-only. Si la
+  devolución falla, deja nota "devolvé el saldo a mano" (no re-intenta para no duplicar). Devuelve `chipsReturned`.
+- **`POST /payouts/:id/pay-other-bank` (NUEVO):** marca `paid` con `paidVia:'other_bank'`, SIN tocar hgcash y
+  SIN devolver fichas; manda el aviso `/sys_payout_paid`. Botón "🏦 Pagar con otro banco" en el banner del chat.
+- **Modelo `PendingPayout`:** nuevos campos `paidVia` ('hgcash'|'other_bank'), `chipsReturned` (bool), `refundTxId`.
+- **Panel:** banner de pago ahora tiene 3 acciones: **💸 Pagar** (auto hgcash) · **🏦 Pagar con otro banco** ·
+  **↩️ Rechazar (devolver fichas)**. Confirmaciones y toasts actualizados.
+
+### 40. Etiqueta rápida "Comunidad" (1 clic) en el chat del panel
+- Botón **"+ Comunidad"** al lado de "Agregar" en la barra de etiquetas del chat → `quickAddChatTag('Comunidad')`
+  (carga el input y reusa `addChatTag`). Se normaliza a minúsculas en el back (queda `comunidad`), como el resto.
+
+### 45. Devolución de fichas (#41) NO cuenta como ingreso/carga en reportes
+- La devolución por retiro rechazado registra `Transaction type:'deposit'` con `metadata.source:'payout_refund'`
+  (para auditoría). Para que esa plata —que nunca entró— no infle los reportes, se excluye `payout_refund` de:
+  `publisherAnalyticsService` (agregado a `GIFT_SOURCES`), **Central → Ingresos** (`/api/admin/central/ingresos`)
+  y **Estadísticas** (`/api/admin/datos`). El resto de queries de depósitos (reembolsos/fueguito) no se tocó.
+
+- **Validado:** `node --check` OK (server.js, admin.js, PendingPayout.js, publisherAnalyticsService.js).
+- **Para activar el pago automático real seguís necesitando `HGCASH_API_TOKEN` en SSM (sin cambios).**
+- **Acordate de migrar el texto de tu comando `/5` a `/sys_payout_paid` desde Comandos.**
 
 ## Sesión 2026-06-17
 

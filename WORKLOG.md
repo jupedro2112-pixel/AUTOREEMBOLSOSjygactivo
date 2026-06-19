@@ -8,6 +8,20 @@
 
 ## Sesión 2026-06-19
 
+### 52. FIX CRÍTICO rol comunidad: faltaba en enum Message.senderRole (rompía responder/cerrar/etc.)
+- **Síntoma:** el Admin Comunidad no podía responder mensajes ni operar; error "Validación: `comunidad` is not a
+  valid enum value for path `senderRole`" y toasts "[object Object]".
+- **Causa raíz:** `Message.senderRole` tenía enum `['user','admin','depositor','withdrawer','system']` SIN `comunidad`.
+  Los mensajes se guardan con `senderRole: req.user.role` / `socket.role` (server.js L5340, L7157, L11337), así que
+  cualquier acción del comunidad que cree un mensaje (responder por socket/HTTP, cerrar chat) fallaba la validación.
+- **Fix:** agregado `'comunidad'` al enum `Message.senderRole`.
+- **Auditoría completa (pedida por el owner):** se revisaron TODOS los enums de TODOS los modelos. Los únicos campos
+  de ROL son `User.role` (ya con comunidad), `Message.senderRole` (corregido) y `Message.receiverRole`
+  (`['user','admin']`: comunidad nunca es receptor → ok). `Transaction.adminRole` no tiene enum. Los 3 únicos
+  guardados dinámicos de rol (L5340/L7157/L11337) quedan cubiertos. Verificado a mano cada acción del comunidad
+  (responder socket/HTTP, depósito, bonus, cargar saldo/info, cargar mensajes, CBU, cerrar chat, derivar) → todas OK.
+- **Validado:** `node --check` OK (server.js, Message.js).
+
 ### 51. FIX devolución de bonus suelto + retiro mínimo $4.999
 - **Bug (devolución como fichas en vez de bonus):** si el cliente tenía un BONUS SUELTO (botón Bonus / fueguito,
   `type:'bonus'`) y lo quiso retirar, al rechazar volvía como fichas normales. Causa: la detección solo miraba la

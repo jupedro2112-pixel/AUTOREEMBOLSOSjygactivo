@@ -11817,45 +11817,74 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
     );
     if (!payout) return res.status(400).json({ error: 'No se pudo rechazar (ya está pagado o en proceso).' });
 
-    // Devolver las fichas: re-crédito del monto en JUGAYGANA.
+    // Devolver el saldo en JUGAYGANA. Si la ÚLTIMA carga del cliente incluyó bonus,
+    // se devuelve esa porción como BONUS (capeada al monto del retiro) y el resto como
+    // fichas comunes. Cada parte es una llamada independiente con sus propios reintentos;
+    // si una falla queda nota interna al agente (no se reintenta a ciegas → no duplica).
     const user = await User.findOne({ id: payout.userId });
-    let refunded = false;
+    const jgId = (user && user.jugayganaUserId) || null;
+    const W = Number(payout.amount);
+
+    // Bonus de la última carga (Transaction.bonus refleja lo realmente acreditado).
+    let bonusPart = 0;
     try {
-      const credit = await jugaygana.depositToUser(
-        payout.username, Number(payout.amount),
-        'Devolución de retiro rechazado', (user && user.jugayganaUserId) || null
-      );
-      if (credit && credit.success) {
-        refunded = true;
-        let refundTxId = null;
-        try {
-          const tx = await Transaction.create({
-            id: uuidv4(), type: 'deposit', amount: Number(payout.amount),
-            username: payout.username, userId: payout.userId,
-            description: 'Devolución de fichas por retiro rechazado',
-            adminId: req.user.userId, adminUsername: req.user.username, adminRole: req.user.role,
-            transactionId: credit.data?.transfer_id || credit.data?.transferId,
-            metadata: { source: 'payout_refund', payoutId: payout.id },
-            timestamp: new Date()
-          });
-          refundTxId = tx.id;
-        } catch (_) {}
-        await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true, refundTxId } });
-        try {
-          const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
-          const uSock = connectedUsers.get(payout.userId);
-          if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance });
-        } catch (_) {}
-        await _emitAdminOnlyChatNote(payout.userId, payout.username,
-          `↩️ Retiro RECHAZADO: se devolvieron $${Number(payout.amount).toLocaleString('es-AR')} a las fichas del cliente.`);
-      } else {
-        await _emitAdminOnlyChatNote(payout.userId, payout.username,
-          `⚠️ Retiro rechazado pero NO se pudieron devolver las fichas ($${Number(payout.amount).toLocaleString('es-AR')}): ${(credit && credit.error) || 'error JUGAYGANA'}. Devolvé el saldo a mano.`);
+      const lastDeposit = await Transaction.findOne({ userId: payout.userId, type: 'deposit' })
+        .sort({ timestamp: -1 }).select('bonus').lean();
+      const lastBonus = lastDeposit && Number(lastDeposit.bonus) > 0 ? Number(lastDeposit.bonus) : 0;
+      bonusPart = Math.min(lastBonus, W); // capeado al monto del retiro
+    } catch (_) { bonusPart = 0; }
+    const chipsPart = W - bonusPart;
+
+    // Registra una Transaction de devolución (excluida de reportes de ingreso por source).
+    const mkRefundTx = async (amt, kind, data) => {
+      try {
+        await Transaction.create({
+          id: uuidv4(), type: 'deposit', amount: Number(amt),
+          username: payout.username, userId: payout.userId,
+          description: `Devolución de retiro rechazado (${kind === 'bonus' ? 'bonus' : 'fichas'})`,
+          adminId: req.user.userId, adminUsername: req.user.username, adminRole: req.user.role,
+          transactionId: data?.transfer_id || data?.transferId,
+          metadata: { source: 'payout_refund', refundKind: kind, payoutId: payout.id },
+          timestamp: new Date()
+        });
+      } catch (_) {}
+    };
+
+    let chipsOk = chipsPart <= 0; // sin parte de fichas → ya "ok"
+    let bonusOk = bonusPart <= 0; // sin parte de bonus  → ya "ok"
+    try {
+      if (chipsPart > 0) {
+        const r = await jugaygana.depositToUser(payout.username, chipsPart, 'Devolución de retiro rechazado (fichas)', jgId);
+        if (r && r.success) { chipsOk = true; await mkRefundTx(chipsPart, 'chips', r.data); }
+      }
+      if (bonusPart > 0) {
+        const r = await jugaygana.creditUserBalance(payout.username, bonusPart, jgId);
+        if (r && r.success) { bonusOk = true; await mkRefundTx(bonusPart, 'bonus', r.data); }
       }
     } catch (e) {
-      logger.error(`[payout-cancel] devolución de fichas falló payout=${id}: ${e.message}`);
+      logger.error(`[payout-cancel] devolución falló payout=${id}: ${e.message}`);
+    }
+
+    const refunded = chipsOk && bonusOk;
+    if (refunded) {
+      await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true } });
+      try {
+        const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
+        const uSock = connectedUsers.get(payout.userId);
+        if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance });
+      } catch (_) {}
+      const detalle = bonusPart > 0
+        ? `$${bonusPart.toLocaleString('es-AR')} como BONUS + $${chipsPart.toLocaleString('es-AR')} en fichas`
+        : `$${chipsPart.toLocaleString('es-AR')} en fichas`;
       await _emitAdminOnlyChatNote(payout.userId, payout.username,
-        `⚠️ Retiro rechazado pero NO se pudieron devolver las fichas ($${Number(payout.amount).toLocaleString('es-AR')}). Devolvé el saldo a mano.`);
+        `↩️ Retiro RECHAZADO: se devolvió $${W.toLocaleString('es-AR')} (${detalle}).`);
+    } else {
+      // Devolución parcial/fallida → avisar al agente exactamente qué falta hacer a mano.
+      const faltan = [];
+      if (!chipsOk && chipsPart > 0) faltan.push(`$${chipsPart.toLocaleString('es-AR')} en fichas`);
+      if (!bonusOk && bonusPart > 0) faltan.push(`$${bonusPart.toLocaleString('es-AR')} como bonus`);
+      await _emitAdminOnlyChatNote(payout.userId, payout.username,
+        `⚠️ Retiro rechazado: NO se pudo devolver ${faltan.join(' + ')} (de $${W.toLocaleString('es-AR')}). Completalo a mano.`);
     }
     res.json({ success: true, chipsReturned: refunded });
   } catch (error) {

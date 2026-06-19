@@ -64,6 +64,21 @@
   `publisherAnalyticsService` (agregado a `GIFT_SOURCES`), **Central → Ingresos** (`/api/admin/central/ingresos`)
   y **Estadísticas** (`/api/admin/datos`). El resto de queries de depósitos (reembolsos/fueguito) no se tocó.
 
+### 46. Devolución de fichas dividida: bonus de la última carga vuelve como BONUS
+- **Pedido:** al devolver las fichas (rechazo de pago), si la ÚLTIMA carga del cliente incluyó bonus,
+  devolver esa porción como BONUS y el resto como fichas comunes.
+- **Regla (acordada):** `bonusPart = min(bonus_de_la_última_carga, monto_retiro)` (capeado), `chipsPart = resto`.
+  La parte fichas va por `jugaygana.depositToUser`; la parte bonus por `jugaygana.creditUserBalance`
+  (mismo camino que un bonus normal → mantiene tratamiento de bonus en JUGAYGANA).
+- **Seguridad del monto:** el TOTAL siempre = monto del retiro (no devuelve de más ni de menos).
+  Dato del bonus: `Transaction.bonus` de la última `Transaction type:'deposit'` (refleja lo realmente acreditado).
+- **Falla parcial (2 llamadas a JUGAYGANA):** cada parte con sus reintentos; si una falla, NO se reintenta a
+  ciegas (no duplica) y queda **nota interna admin-only** detallando qué falta devolver a mano. `chipsReturned`
+  sólo queda `true` si entraron AMBAS partes.
+- **Reportes:** ambas partes se registran como `Transaction type:'deposit'` con `metadata.source:'payout_refund'`
+  (+ `refundKind:'bonus'|'chips'`), así siguen excluidas de Ingresos/Estadísticas/analítica (#45).
+- **Nota interna al agente:** en éxito detalla el split ("$X como BONUS + $Y en fichas"); en parcial, qué faltó.
+
 - **Validado:** `node --check` OK (server.js, admin.js, PendingPayout.js, publisherAnalyticsService.js).
 - **Para activar el pago automático real seguís necesitando `HGCASH_API_TOKEN` en SSM (sin cambios).**
 - **Acordate de migrar el texto de tu comando `/5` a `/sys_payout_paid` desde Comandos.**

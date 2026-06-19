@@ -8,6 +8,35 @@
 
 ## Sesión 2026-06-19
 
+### 47. Sección de chat "Comunidad" + rol "comunidad" + etiquetas en la lista de chats
+- **Rol nuevo `comunidad`:** clon de `depositor` (mismas funciones: cargas, bonus, fire-bonus) + ve la sección
+  Comunidad − NO ve Pagos. Agregado a: enum `User.role`, `ADMIN_ROLES`, `adminMiddleware`, `depositorMiddleware`
+  (NO `withdrawerMiddleware`), `validRoles` (x3: crear/editar usuarios), `isAgent` (User.js), y al `<select>` de crear
+  admin (index.html). Labels y detección de "rol admin" en el panel (`getMessageType`, `isAdminUser`, `getRoleLabel`).
+- **Sección "Comunidad":** nuevo valor `status:'comunidad'` en `ChatStatus`. Pestaña al lado de Abiertos, visible solo
+  para `admin` y `comunidad` (`setupRoleBasedUI`). Endpoint `POST /api/admin/send-to-community` (clon de send-to-payments):
+  setea `status:'comunidad'`, manda mensaje editable `/sys_community` al cliente, emite `chat_moved → to:'comunidad'`.
+  Botón "Derivar a Comunidad" (verde) en Abiertos para admin/depositor/comunidad; en la pestaña Comunidad el botón
+  pasa a "Enviar a Abiertos" (sendToOpen).
+- **Visibilidad backend** (`GET /api/admin/conversations`): depositor bloqueado de `payments` Y `comunidad`;
+  comunidad bloqueado de `payments`; withdrawer solo `payments`. El pipeline ya soporta cualquier status.
+- **Alerta visible:** al derivar a Comunidad, el agente comunidad (y admin) recibe sonido + toast + notificación del
+  navegador + **badge rojo con contador en la pestaña Comunidad** (se limpia al entrar a la pestaña). Helpers
+  `bumpComunidadAlert`/`renderComunidadBadge`/`clearComunidadAlert`. La alerta NO molesta a depositor/withdrawer.
+- **Bloqueo de re-derivación:** si el cliente YA tiene la etiqueta `comunidad`, `send-to-community` devuelve 400 (decisión:
+  la etiqueta se pone SOLO a mano con "+Comunidad"; derivar NO la agrega).
+- **Etiquetas en la lista de chats (#6):** `GET /api/admin/conversations` ahora proyecta `tags`; `renderConversations`
+  pinta los chips de etiqueta en cada tarjeta (verde si es 'comunidad', dorado el resto) — sin entrar al chat.
+- **Mensaje editable `/sys_community`:** sembrado en `systemCmds` (si se vacía, no se envía, vía renderSystemCommand).
+- **Sin romper nada:** un chat en Comunidad NO se reabre solo cuando el cliente escribe (el reopen solo aplica a `closed`);
+  `send-to-open` lo devuelve bien a Abiertos. SLA: los chats de comunidad se tratan como cola 'cargas' y NO aparecen en
+  "esperando ahora" (no se agregó al `$in`), sin romper el tracking existente.
+- **Validado:** `node --check` OK (server.js, ChatStatus.js, User.js, admin.js).
+- **Pendiente tuyo:** crear una cuenta con rol "Admin Comunidad" desde el panel; redeploy del back (siembra `/sys_community`
+  y activa el endpoint); recargar el panel.
+
+
+
 ### 44. Movimientos hgcash: mostrar CBU origen + destino + usuario del pago
 - **Pedido:** en la tabla de "Movimientos del banco" (sección Comandos/Config), al hacer un pago
   saliente sólo se veía el CBU de origen. Se quería ver origen Y destino, y a qué usuario se le pagó.

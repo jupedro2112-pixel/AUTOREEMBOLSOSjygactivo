@@ -33,6 +33,7 @@ let selectedUserRole = null; // Role of the user currently selected for an actio
 let selectedUserForBlock = null; // { id, username } for the block modal
 let conversations = [];
 let currentTab = 'open';
+let comunidadAlertCount = 0; // chats derivados a Comunidad sin mirar (badge + alerta)
 let typingTimeout = null;
 let messageCache = new Map();
 let lastSentMessageContent = null; // Para evitar duplicados de mensajes propios
@@ -103,6 +104,7 @@ const elements = {
     btnWithdraw: document.getElementById('btnWithdraw'),
     btnPassword: document.getElementById('btnPassword'),
     btnPayments: document.getElementById('btnPayments'),
+    btnCommunity: document.getElementById('btnCommunity'),
     btnBlock: document.getElementById('btnBlock'),
     btnUnblock: document.getElementById('btnUnblock'),
     btnClose: document.getElementById('btnClose'),
@@ -146,6 +148,7 @@ function setupEventListeners() {
             elements.tabBtns.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             currentTab = btn.dataset.tab;
+            if (currentTab === 'comunidad') clearComunidadAlert();
             // Limpiar selección de chat al cambiar de pestaña
             if (selectedUserId) {
                 if (socket) socket.emit('leave_chat_room', { userId: selectedUserId });
@@ -592,24 +595,35 @@ function setupRoleBasedUI() {
     const tabOpen = document.querySelector('[data-tab="open"]');
     const tabClosed = document.querySelector('[data-tab="closed"]');
     const tabPayments = document.querySelector('[data-tab="payments"]');
-    
+    const tabComunidad = document.querySelector('[data-tab="comunidad"]');
+
     if (role === 'withdrawer') {
         // Withdrawer solo ve PAGOS
         if (tabOpen) tabOpen.style.display = 'none';
         if (tabClosed) tabClosed.style.display = 'none';
         if (tabPayments) tabPayments.style.display = 'flex';
+        if (tabComunidad) tabComunidad.style.display = 'none';
         currentTab = 'payments';
     } else if (role === 'depositor') {
-        // Depositer no ve PAGOS
+        // Depositor: abiertos/cerrados; NO ve PAGOS ni COMUNIDAD
         if (tabPayments) tabPayments.style.display = 'none';
+        if (tabComunidad) tabComunidad.style.display = 'none';
         if (tabOpen) tabOpen.style.display = 'flex';
         if (tabClosed) tabClosed.style.display = 'flex';
         currentTab = 'open';
+    } else if (role === 'comunidad') {
+        // Comunidad: abiertos/cerrados/comunidad; NO ve PAGOS. Enfocado en Abiertos.
+        if (tabPayments) tabPayments.style.display = 'none';
+        if (tabOpen) tabOpen.style.display = 'flex';
+        if (tabClosed) tabClosed.style.display = 'flex';
+        if (tabComunidad) tabComunidad.style.display = 'flex';
+        currentTab = 'open';
     } else {
-        // Admin general ve todo
+        // Admin general ve todo (incluida Comunidad)
         if (tabOpen) tabOpen.style.display = 'flex';
         if (tabClosed) tabClosed.style.display = 'flex';
         if (tabPayments) tabPayments.style.display = 'flex';
+        if (tabComunidad) tabComunidad.style.display = 'flex';
     }
     
     // Depositor y withdrawer pueden ver "Usuarios" pero NO pueden exportar CSV
@@ -623,10 +637,10 @@ function setupRoleBasedUI() {
         exportCsvBtn.style.display = role === 'admin' ? '' : 'none';
     }
 
-    // Bonus directo: visible para admin y depositor
+    // Bonus directo: visible para admin, depositor y comunidad
     const btnBonus = elements.btnBonus;
     if (btnBonus) {
-        btnBonus.style.display = ['admin', 'depositor'].includes(role) ? '' : 'none';
+        btnBonus.style.display = ['admin', 'depositor', 'comunidad'].includes(role) ? '' : 'none';
     }
 
     // SMS Masivo: solo visible para admin general
@@ -946,15 +960,53 @@ window.openPaChangePwdModal = openPaChangePwdModal;
 window.closePaChangePwdModal = closePaChangePwdModal;
 window.submitPaChangePwd = submitPaChangePwd;
 
+// ====== Alerta / badge de la sección Comunidad ======
+// Pinta el contador rojo en la pestaña Comunidad.
+function renderComunidadBadge() {
+    const tab = document.querySelector('[data-tab="comunidad"]');
+    if (!tab) return;
+    let b = document.getElementById('comunidadTabBadge');
+    if (comunidadAlertCount > 0) {
+        if (!b) {
+            b = document.createElement('span');
+            b.id = 'comunidadTabBadge';
+            b.style.cssText = 'background:#dc3545;color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:5px;font-weight:800;';
+            tab.appendChild(b);
+        }
+        b.textContent = comunidadAlertCount;
+        b.style.display = '';
+    } else if (b) {
+        b.style.display = 'none';
+    }
+}
+
+// Al derivar un chat a Comunidad: suma al badge + sonido + toast + notificación.
+function bumpComunidadAlert() {
+    comunidadAlertCount++;
+    renderComunidadBadge();
+    try { playNotificationSound(); } catch (_) {}
+    showToast('🔔 Nuevo chat en COMUNIDAD — entrá a la pestaña Comunidad', 'info');
+    try { showBrowserNotification('🔔 Comunidad', 'Derivaron un chat a la sección Comunidad', ''); } catch (_) {}
+}
+
+// Al entrar a la pestaña Comunidad: limpiar el aviso.
+function clearComunidadAlert() {
+    comunidadAlertCount = 0;
+    renderComunidadBadge();
+}
+
 // Actualizar botones de acción según la pestaña actual
 function updateActionButtonsByTab() {
     const btnPayments = elements.btnPayments;
+    const btnCommunity = elements.btnCommunity;
     if (!btnPayments) return;
-    
+
     const role = currentAdmin?.role;
-    
+    // Quién puede derivar a Comunidad desde Abiertos (no el withdrawer).
+    const canDeriveCommunity = ['admin', 'depositor', 'comunidad'].includes(role);
+
     if (currentTab === 'payments') {
-        // En pestaña Pagos: mostrar "Enviar a Abiertos" solo para admin general (no para withdrawer)
+        // En Pagos: "Enviar a Abiertos" (no para withdrawer). Sin botón de comunidad.
         if (role === 'withdrawer') {
             btnPayments.style.display = 'none';
         } else {
@@ -962,11 +1014,29 @@ function updateActionButtonsByTab() {
             btnPayments.innerHTML = '<span class="icon icon-exchange"></span> Enviar a Abiertos';
             btnPayments.onclick = sendToOpen;
         }
+        if (btnCommunity) btnCommunity.style.display = 'none';
+    } else if (currentTab === 'comunidad') {
+        // En Comunidad: ocultar "Pagos"; el botón verde devuelve el chat a Abiertos.
+        btnPayments.style.display = 'none';
+        if (btnCommunity) {
+            btnCommunity.style.display = '';
+            btnCommunity.innerHTML = '<span class="icon icon-exchange"></span> Enviar a Abiertos';
+            btnCommunity.onclick = sendToOpen;
+        }
     } else {
+        // Abiertos / Cerrados: "Enviar a Pagos" + (en Abiertos) "Derivar a Comunidad".
         btnPayments.style.display = '';
-        // En otras pestañas: mostrar "Enviar a Pagos"
         btnPayments.innerHTML = '<span class="icon icon-exchange"></span> Enviar a Pagos';
         btnPayments.onclick = sendToPayments;
+        if (btnCommunity) {
+            if (currentTab === 'open' && canDeriveCommunity) {
+                btnCommunity.style.display = '';
+                btnCommunity.innerHTML = '<span class="icon icon-users"></span> Derivar a Comunidad';
+                btnCommunity.onclick = sendToCommunity;
+            } else {
+                btnCommunity.style.display = 'none';
+            }
+        }
     }
 }
 
@@ -1040,24 +1110,44 @@ function initSocket() {
     
     // CHAT MOVED TO PAYMENTS
     socket.on('chat_moved', (data) => {
-        console.log('💳 Chat moved to payments:', data);
+        console.log('💳 Chat moved:', data);
+        const dest = data && data.to;
+
+        // Si el chat activo es el que se movió, limpiar el panel.
         if (data.userId === selectedUserId) {
             selectedUserId = null;
             activeConversationId = null; // RACE CONDITION FIX
             elements.chatHeader.classList.add('hidden');
             elements.chatInputArea.classList.add('hidden');
+            const txt = dest === 'comunidad' ? 'Chat derivado a Comunidad. Selecciona otra conversación.'
+                      : dest === 'open' ? 'Chat enviado a Abiertos. Selecciona otra conversación.'
+                      : 'Chat enviado a pagos. Selecciona otra conversación.';
             elements.chatMessages.innerHTML = `
                 <div class="empty-state">
                     <span class="icon icon-comment-dots"></span>
-                    <p>Chat enviado a pagos. Selecciona otra conversación.</p>
+                    <p>${txt}</p>
                 </div>
             `;
         }
-        // Invalidar cache de pestañas afectadas
+
+        if (dest === 'comunidad') {
+            // Invalidar caches afectadas y refrescar si estoy en una de ellas.
+            conversationsCacheByTab.delete('open');
+            conversationsCacheByTab.delete('comunidad');
+            if (currentTab === 'open' || currentTab === 'comunidad') loadConversations(true);
+            // ALERTA para el agente de Comunidad (solo a quien ve esa sección).
+            if (['admin', 'comunidad'].includes(currentAdmin?.role) && currentTab !== 'comunidad') {
+                bumpComunidadAlert();
+            }
+            return;
+        }
+
+        // Movimientos a pagos / abiertos (comportamiento existente).
         conversationsCacheByTab.delete('open');
         conversationsCacheByTab.delete('payments');
+        conversationsCacheByTab.delete('comunidad');
         loadConversations(true);
-        showToast('Chat enviado a pagos', 'info');
+        showToast(dest === 'open' ? 'Chat enviado a Abiertos' : 'Chat enviado a pagos', 'info');
     });
     
     // USER TYPING
@@ -1228,7 +1318,7 @@ function handleNewMessage(data) {
         }
     }
     
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     const isFromAdmin = adminRoles.includes(message.senderRole);
     const isSystemMessage = message.type === 'system' || senderId === 'admin' || senderId === 'system';
     
@@ -1330,7 +1420,7 @@ function loadStatsThrottled() {
  * Se llama cuando llega un mensaje nuevo de otro chat.
  */
 function updateConversationInList(message) {
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     const isFromAdmin = adminRoles.includes(message.senderRole);
     const chatUserId = isFromAdmin ? message.receiverId : message.senderId;
     
@@ -1440,9 +1530,21 @@ function renderConversations() {
         return;
     }
     
-    elements.conversationsList.innerHTML = conversations.map(conv => `
-        <div class="conversation-item ${conv.unread > 0 ? 'unread' : ''} ${conv.userId === selectedUserId ? 'active' : ''}" 
-             data-userid="${escapeHtml(conv.userId)}" 
+    elements.conversationsList.innerHTML = conversations.map(conv => {
+        // Chips de etiquetas del cliente (visibles sin entrar al chat). Mismo estilo
+        // que la tabla de Usuarios. 'comunidad' se resalta en verde.
+        const tagsHtml = (Array.isArray(conv.tags) && conv.tags.length)
+            ? `<span class="conv-tags" style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px;">` + conv.tags.map(t => {
+                const isCom = String(t).toLowerCase() === 'comunidad';
+                const st = isCom
+                    ? 'background:rgba(22,163,74,0.20);border:1px solid rgba(22,163,74,0.55);color:#34d36b;'
+                    : 'background:rgba(212,175,55,0.18);border:1px solid rgba(212,175,55,0.45);color:#d4af37;';
+                return `<span style="${st}border-radius:9px;padding:0 6px;font-size:9.5px;">${escapeHtml(t)}</span>`;
+              }).join('') + `</span>`
+            : '';
+        return `
+        <div class="conversation-item ${conv.unread > 0 ? 'unread' : ''} ${conv.userId === selectedUserId ? 'active' : ''}"
+             data-userid="${escapeHtml(conv.userId)}"
              data-username="${escapeHtml(conv.username)}">
             <div class="conv-avatar">
                 <span class="icon icon-user"></span>
@@ -1450,13 +1552,15 @@ function renderConversations() {
             <div class="conv-info">
                 <span class="conv-name">${escapeHtml(conv.username)}${conv.publisher ? ` <span class="conv-publisher" title="Captado por la pauta de ${escapeHtml(conv.publisher)}">📣 ${escapeHtml(conv.publisher)}</span>` : ''}</span>
                 <span class="conv-preview">${escapeHtml(conv.lastMessage || 'Sin mensajes')}</span>
+                ${tagsHtml}
             </div>
             <div class="conv-meta">
                 <span class="conv-time">${formatTime(conv.lastMessageAt)}</span>
                 ${conv.unread > 0 ? `<span class="conv-badge">${conv.unread}</span>` : ''}
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
     
     // Add click handlers
     document.querySelectorAll('.conversation-item').forEach(item => {
@@ -1839,7 +1943,7 @@ function addMessageToChat(message, isOutgoing = false) {
 function getMessageType(msg) {
     if (msg.type === 'system') return 'system';
     // CORREGIDO: Incluir depositor y withdrawer como roles de admin
-    const adminRoles = ['admin', 'depositor', 'withdrawer'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
     if (adminRoles.includes(msg.senderRole)) return 'outgoing';
     return 'incoming';
 }
@@ -3175,6 +3279,54 @@ async function sendToPayments() {
     }
 }
 
+// Derivar un chat a la sección COMUNIDAD (desde Abiertos).
+async function sendToCommunity() {
+    if (!selectedUserId) {
+        showToast('Selecciona un usuario primero', 'error');
+        return;
+    }
+    const btnCommunity = elements.btnCommunity;
+    setButtonLoading(btnCommunity, true, 'Derivando...');
+
+    const userIdToRemove = selectedUserId;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/send-to-community`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${currentToken}` },
+            body: JSON.stringify({ userId: userIdToRemove })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            // 400 típico: el cliente ya tiene la etiqueta 'comunidad'.
+            throw new Error(data.error || 'Error al derivar a Comunidad');
+        }
+
+        // Optimistic UI solo en éxito.
+        selectedUserId = null;
+        activeConversationId = null;
+        elements.chatHeader.classList.add('hidden');
+        elements.chatInputArea.classList.add('hidden');
+        elements.chatMessages.innerHTML = `
+            <div class="empty-state">
+                <span class="icon icon-comment-dots"></span>
+                <p>Chat derivado a Comunidad. Selecciona otra conversación.</p>
+            </div>
+        `;
+        const convItem = document.querySelector(`.conversation-item[data-userid="${userIdToRemove}"]`);
+        if (convItem) convItem.remove();
+
+        showToast('Chat derivado a Comunidad', 'success');
+        conversationsCacheByTab.delete('open');
+        conversationsCacheByTab.delete('comunidad');
+        loadConversations();
+    } catch (error) {
+        console.error('Error derivando a comunidad:', error);
+        showToast(error.message || 'Error al derivar a Comunidad', 'error');
+    } finally {
+        setButtonLoading(btnCommunity, false, '<span class="icon icon-users"></span> Derivar a Comunidad');
+    }
+}
+
 // Enviar a Abiertos (nueva función para cuando está en Pagos)
 async function sendToOpen() {
     if (!selectedUserId) {
@@ -3231,8 +3383,9 @@ async function sendToOpen() {
         conversationsCacheByTab.delete('open');
         conversationsCacheByTab.delete('closed');
         conversationsCacheByTab.delete('payments');
+        conversationsCacheByTab.delete('comunidad');
         loadConversations();
-        
+
     } catch (error) {
         console.error('Error sending to open:', error);
         showToast(error.message || 'Error al enviar a abiertos', 'error');
@@ -3689,7 +3842,7 @@ function renderUsers(users) {
     }
     
     tbody.innerHTML = users.map(user => {
-        const isAdminUser = ['admin', 'depositor', 'withdrawer'].includes(user.role);
+        const isAdminUser = ['admin', 'depositor', 'withdrawer', 'comunidad'].includes(user.role);
         const canChangePassword = adminRole === 'admin' || (adminRole === 'depositor' && !isAdminUser);
         const canBlock = adminRole === 'admin' && !isAdminUser;
 
@@ -3938,7 +4091,7 @@ function applyBlockStateToChatHeader(user) {
     const reason = user.blockReason || 'Sin motivo registrado';
     const blockedBy = user.blockedBy || null;
     const blockedAt = user.blockedAt ? new Date(user.blockedAt) : null;
-    const isAdminUser = ['admin', 'depositor', 'withdrawer'].includes(user.role);
+    const isAdminUser = ['admin', 'depositor', 'withdrawer', 'comunidad'].includes(user.role);
     // Tanto admin general como depositor pueden bloquear (son los que operan en el chat).
     const canBlock = ['admin', 'depositor'].includes(currentAdmin?.role) && !isAdminUser;
 
@@ -4783,7 +4936,8 @@ function getRoleLabel(role) {
         user: 'Usuario',
         admin: 'Admin General',
         depositor: 'Admin Depositor',
-        withdrawer: 'Admin Withdrawer'
+        withdrawer: 'Admin Withdrawer',
+        comunidad: 'Admin Comunidad'
     };
     return labels[role] || role;
 }

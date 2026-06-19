@@ -530,7 +530,7 @@ const USER_PUBLIC_FIELDS = 'id username email phone phoneVerified phoneVerificat
 // agentes de carga/retiro, y publisher_admin (cuenta dedicada a un publicista).
 // Estas cuentas se saltan toda la lógica de JUGAYGANA sync, default-password
 // detection, mustChangePassword forzado, Meta CAPI tracking, etc.
-const ADMIN_ROLES = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
+const ADMIN_ROLES = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
 const isAdminRole = (role) => ADMIN_ROLES.includes(role);
 
 // Rutas que un publisher_admin puede tocar. Cualquier otra ruta devuelve 403.
@@ -2090,14 +2090,15 @@ const authMiddleware = async (req, res, next) => {
 };
 
 const adminMiddleware = (req, res, next) => {
-  if (req.user.role !== 'admin' && req.user.role !== 'depositor' && req.user.role !== 'withdrawer') {
+  if (req.user.role !== 'admin' && req.user.role !== 'depositor' && req.user.role !== 'withdrawer' && req.user.role !== 'comunidad') {
     return res.status(403).json({ error: 'Acceso denegado. Solo administradores.' });
   }
   next();
 };
 
 const depositorMiddleware = (req, res, next) => {
-  if (req.user.role !== 'admin' && req.user.role !== 'depositor') {
+  // 'comunidad' funciona como un depositor (mismas funciones de carga) + ve la sección Comunidad.
+  if (req.user.role !== 'admin' && req.user.role !== 'depositor' && req.user.role !== 'comunidad') {
     return res.status(403).json({ error: 'Acceso denegado. Solo agentes de carga.' });
   }
   next();
@@ -4620,7 +4621,7 @@ app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'El número de teléfono es obligatorio (mínimo 8 dígitos)' });
     }
 
-    const validRoles = ['user', 'admin', 'depositor', 'withdrawer'];
+    const validRoles = ['user', 'admin', 'depositor', 'withdrawer', 'comunidad'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ error: 'Rol inválido' });
     }
@@ -4727,7 +4728,7 @@ app.put('/api/users/:id', authMiddleware, adminMiddleware, async (req, res) => {
       if (req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Solo el administrador principal puede cambiar roles' });
       }
-      const validRoles = ['user', 'admin', 'depositor', 'withdrawer'];
+      const validRoles = ['user', 'admin', 'depositor', 'withdrawer', 'comunidad'];
       if (!validRoles.includes(req.body.role)) {
         return res.status(400).json({ error: 'Rol inválido' });
       }
@@ -7728,6 +7729,12 @@ async function initializeData() {
       description: 'Mensaje automático "pago enviado" cuando un retiro se paga (pago automático por hgcash o "Pagar con otro banco"). Variables: ${amount}. Si lo dejás vacío, no se envía.',
       type: 'message',
       response: '💸✅ ¡Tu retiro de ${amount} fue enviado a tu cuenta! Puede tardar unos minutos en acreditarse.'
+    },
+    {
+      name: '/sys_community',
+      description: 'Mensaje automático al cliente cuando un agente deriva su chat a la sección Comunidad. Sin variables. Si lo dejás vacío, no se envía.',
+      type: 'message',
+      response: '🤝 Te derivamos a nuestro equipo de Comunidad. En breve te atendemos por aquí. ¡Gracias!'
     }
   ];
   for (const cmd of systemCmds) {
@@ -11208,6 +11215,51 @@ app.post('/api/admin/send-to-open', authMiddleware, adminMiddleware, async (req,
   }
 });
 
+// Derivar un chat a la sección COMUNIDAD (desde Abiertos). La atiende el rol 'comunidad'.
+// Regla: si el cliente YA tiene la etiqueta 'comunidad', no se puede derivar de nuevo.
+app.post('/api/admin/send-to-community', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'Usuario no especificado' });
+
+    // Withdrawer no deriva a comunidad (solo maneja pagos).
+    if (req.user.role === 'withdrawer') {
+      return res.status(403).json({ error: 'No tenés permisos para esta acción' });
+    }
+
+    // Bloqueo: si el cliente ya está etiquetado 'comunidad', no se re-deriva.
+    const u = await User.findOne({ id: userId }).select('tags username').lean();
+    if (u && Array.isArray(u.tags) && u.tags.includes('comunidad')) {
+      return res.status(400).json({ error: 'El cliente ya tiene la etiqueta Comunidad: no se puede derivar de nuevo.' });
+    }
+
+    await ChatStatus.findOneAndUpdate(
+      { userId },
+      { status: 'comunidad', category: 'cargas', assignedTo: null, updatedAt: new Date() },
+      { upsert: true }
+    );
+
+    // Mensaje editable al cliente (/sys_community). Si se vacía el comando, no se envía.
+    const content = await renderSystemCommand(
+      '/sys_community',
+      '🤝 Te derivamos a nuestro equipo de Comunidad. En breve te atendemos por aquí. ¡Gracias!',
+      {}
+    );
+    if (content) {
+      await Message.create({
+        id: uuidv4(), senderId: req.user.userId, senderUsername: req.user.username, senderRole: 'admin',
+        receiverId: userId, receiverRole: 'user', content, type: 'text', timestamp: new Date(), read: false
+      });
+    }
+
+    notifyAdmins('chat_moved', { userId, to: 'comunidad', by: req.user.username });
+    res.json({ success: true, message: 'Chat derivado a Comunidad' });
+  } catch (error) {
+    console.error('Error derivando a comunidad:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // Cerrar chat - SOLO INTERNO (no notifica al cliente)
 app.post('/api/admin/close-chat', authMiddleware, adminMiddleware, async (req, res) => {
   try {
@@ -11401,10 +11453,15 @@ app.get('/api/admin/conversations', authMiddleware, adminMiddleware, async (req,
     
     const userRole = req.user.role;
     
-    if (userRole === 'depositor' && status === 'payments') {
-      return res.status(403).json({ error: 'Acceso denegado. Los depositores no pueden ver chats de pagos.' });
+    // Depositor: ve abiertos/cerrados; NO pagos NI comunidad.
+    if (userRole === 'depositor' && (status === 'payments' || status === 'comunidad')) {
+      return res.status(403).json({ error: 'Acceso denegado.' });
     }
-    
+    // Comunidad: ve abiertos/cerrados/comunidad; NO pagos.
+    if (userRole === 'comunidad' && status === 'payments') {
+      return res.status(403).json({ error: 'Acceso denegado. Comunidad no puede ver pagos.' });
+    }
+
     if (userRole === 'withdrawer' && status !== 'payments') {
       return res.status(403).json({ error: 'Acceso denegado. Los withdrawers solo pueden ver chats de pagos.' });
     }
@@ -11476,7 +11533,8 @@ app.get('/api/admin/conversations', authMiddleware, adminMiddleware, async (req,
           lastMessageAt: { $ifNull: ['$lastMessageAt', '$updatedAt', new Date()] },
           status: 1,
           acquisitionCampaign: { $ifNull: ['$user.acquisitionCampaign', null] },
-          publisher: { $ifNull: [{ $arrayElemAt: ['$campaign.publisher', 0] }, null] }
+          publisher: { $ifNull: [{ $arrayElemAt: ['$campaign.publisher', 0] }, null] },
+          tags: { $ifNull: ['$user.tags', []] }
         }
       }
     ];
@@ -12053,7 +12111,7 @@ app.post('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =
     }
     
     // Validar rol
-    const validRoles = ['user', 'admin', 'depositor', 'withdrawer'];
+    const validRoles = ['user', 'admin', 'depositor', 'withdrawer', 'comunidad'];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ error: 'Rol inválido' });
     }

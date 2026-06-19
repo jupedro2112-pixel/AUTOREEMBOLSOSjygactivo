@@ -239,6 +239,9 @@
                             <button class="tab-btn active" data-tab="open">
                                 <span class="icon icon-folder-open"></span> Abiertos
                             </button>
+                            <button class="tab-btn" data-tab="comunidad" style="display:none;">
+                                <span class="icon icon-users"></span> Comunidad
+                            </button>
                             <button class="tab-btn" data-tab="closed">
                                 <span class="icon icon-folder"></span> Cerrados
                             </button>
@@ -293,6 +296,9 @@
                                 </button>
                                 <button id="btnPayments" class="action-btn payments" title="Enviar a Pagos">
                                     <span class="icon icon-exchange"></span> Enviar a Pagos
+                                </button>
+                                <button id="btnCommunity" class="action-btn" title="Derivar a Comunidad" style="display:none;background:#16a34a;color:#fff;">
+                                    <span class="icon icon-users"></span> Derivar a Comunidad
                                 </button>
                                 <button id="btnBlock" class="action-btn block" title="Bloquear usuario" style="display:none;background:#dc3545;color:#fff">
                                     <span class="icon icon-ban"></span> Bloquear
@@ -2466,6 +2472,7 @@
                         <option value="admin">Administrador General</option>
                         <option value="depositor">Admin Depositor</option>
                         <option value="withdrawer">Admin Withdrawer</option>
+                        <option value="comunidad">Admin Comunidad</option>
                     </select>
                 </div>
             </div>

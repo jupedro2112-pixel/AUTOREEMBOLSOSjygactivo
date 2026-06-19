@@ -19,7 +19,7 @@ const chatStatusSchema = new mongoose.Schema({
   },
   status: { 
     type: String, 
-    enum: ['open', 'closed', 'payments'], 
+    enum: ['open', 'closed', 'payments', 'comunidad'],
     default: 'open',
     index: true
   },

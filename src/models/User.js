@@ -60,7 +60,7 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'depositor', 'withdrawer', 'publisher_admin'],
+    enum: ['user', 'admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'],
     default: 'user',
     index: true
   },
@@ -464,7 +464,7 @@ userSchema.virtual('isAdmin').get(function() {
 
 // Virtual para verificar si es agente
 userSchema.virtual('isAgent').get(function() {
-  return ['admin', 'depositor', 'withdrawer'].includes(this.role);
+  return ['admin', 'depositor', 'withdrawer', 'comunidad'].includes(this.role);
 });
 
 // Método para comparar contraseña

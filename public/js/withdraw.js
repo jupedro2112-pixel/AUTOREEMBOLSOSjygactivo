@@ -111,8 +111,8 @@ VIP.withdraw = (function () {
         const balEl = _el('withdrawBalanceAmount');
         if (balEl) balEl.textContent = '$' + _balance.toLocaleString('es-AR');
 
-        // Sin saldo suficiente → bloquear el formulario y avisar.
-        if (_balance < 100) {
+        // Saldo por debajo del mínimo de retiro ($4.999) → bloquear el formulario y avisar.
+        if (_balance < 4999) {
             const noBalance = _el('withdrawNoBalance');
             const form = _el('withdrawForm');
             if (noBalance) noBalance.style.display = '';
@@ -134,8 +134,8 @@ VIP.withdraw = (function () {
             _showError('withdrawError', 'Completá titular, CVU/CBU y alias.');
             return;
         }
-        if (!amount || amount < 100) {
-            _showError('withdrawError', 'El monto mínimo de retiro es $100.');
+        if (!amount || amount < 4999) {
+            _showError('withdrawError', 'El monto mínimo de retiro es $4.999.');
             return;
         }
         if (amount > _balance) {

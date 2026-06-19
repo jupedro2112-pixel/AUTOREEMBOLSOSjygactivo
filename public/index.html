@@ -1078,8 +1078,8 @@
             <!-- Aviso: sin saldo suficiente -->
             <div id="withdrawNoBalance" style="display:none; background: rgba(255,68,68,0.12); border: 1px solid rgba(255,68,68,0.5); border-radius: 10px; padding: 16px; text-align: center;">
                 <div style="font-size: 34px; margin-bottom: 6px;">⚠️</div>
-                <p style="margin: 0; color: #ff6b6b; font-weight: 700; font-size: 14px;">No tenés saldo disponible para retirar.</p>
-                <p style="margin: 8px 0 0; color: #b0b0b0; font-size: 12px;">Cuando tengas saldo vas a poder solicitar tu retiro desde acá.</p>
+                <p style="margin: 0; color: #ff6b6b; font-weight: 700; font-size: 14px;">El retiro mínimo es de $4.999.</p>
+                <p style="margin: 8px 0 0; color: #b0b0b0; font-size: 12px;">Cuando tu saldo llegue a $4.999 vas a poder solicitar tu retiro desde acá.</p>
             </div>
 
             <!-- PASO 1: Datos bancarios + monto -->
@@ -1102,7 +1102,7 @@
                 </div>
                 <div class="input-group">
                     <label>💵 Monto a retirar ($)</label>
-                    <input type="number" id="withdrawAmount" placeholder="Ej: 5000" min="100">
+                    <input type="number" id="withdrawAmount" placeholder="Ej: 5000" min="4999">
                 </div>
                 <div id="withdrawError" class="error-message"></div>
                 <div class="modal-actions">

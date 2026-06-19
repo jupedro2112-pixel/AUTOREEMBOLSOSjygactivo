@@ -8,6 +8,21 @@
 
 ## Sesión 2026-06-19
 
+### 51. FIX devolución de bonus suelto + retiro mínimo $4.999
+- **Bug (devolución como fichas en vez de bonus):** si el cliente tenía un BONUS SUELTO (botón Bonus / fueguito,
+  `type:'bonus'`) y lo quiso retirar, al rechazar volvía como fichas normales. Causa: la detección solo miraba la
+  última CARGA (`type:'deposit'` con campo `bonus>0`); un bonus suelto es `type:'bonus'` y además se guarda **sin
+  `userId`** (solo `username`).
+  - **Fix:** la detección del "último crédito" ahora considera `type` ∈ `['deposit','bonus']` y busca por
+    `userId` **O** `username`. Si el último crédito es `type:'bonus'` → todo ese monto es bonus; si es carga con
+    bonus → el campo `bonus`. Capeado al monto del retiro. (server.js, endpoint `payouts/:id/cancel`.)
+- **Retiro mínimo $4.999:** no se puede solicitar un retiro menor a $4.999.
+  - Backend: `/api/withdrawal/request` y `/api/movements/withdraw` ahora exigen `>= 4999`.
+  - Frontend (`withdraw.js` + `index.html`): validación del form a $4.999, `min` del input, y el cartel de saldo
+    bajo ahora dice "El retiro mínimo es de $4.999". (La carga manual del agente NO tiene este límite.)
+- **Nota:** el cliente del caso reportado ya recibió la devolución vieja (como fichas); el fix aplica de acá en más.
+- **Validado:** `node --check` OK (server.js, withdraw.js).
+
 ### 50. FIX rol comunidad: "Error cargando mensajes" / no veía chats
 - **Síntoma:** el Admin Comunidad veía la LISTA de chats pero al abrir uno daba "Error cargando mensajes" (cruz roja)
   y el tiempo real no funcionaba.

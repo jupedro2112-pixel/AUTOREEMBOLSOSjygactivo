@@ -7868,8 +7868,8 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
     // Castear el monto: sin esto, un valor no numérico llegaba crudo a la
     // API de retiro. Se exige número finito y mínimo $100.
     const amountNum = Number(req.body && req.body.amount);
-    if (!amountNum || !isFinite(amountNum) || amountNum < 100) {
-      return res.status(400).json({ error: 'Monto mínimo $100' });
+    if (!amountNum || !isFinite(amountNum) || amountNum < 4999) {
+      return res.status(400).json({ error: 'El monto mínimo de retiro es $4.999' });
     }
 
     // Si el usuario se registró por flujo rápido (sin OTP), exigir verificación
@@ -7980,8 +7980,8 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     const username = req.user.username;
 
     const amountNum = Number(amount);
-    if (!amountNum || amountNum < 100) {
-      return res.status(400).json({ error: 'El monto mínimo de retiro es $100' });
+    if (!amountNum || amountNum < 4999) {
+      return res.status(400).json({ error: 'El monto mínimo de retiro es $4.999' });
     }
 
     const titularT = (typeof titular === 'string' ? titular : '').trim();
@@ -11926,12 +11926,24 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
     const jgId = (user && user.jugayganaUserId) || null;
     const W = Number(payout.amount);
 
-    // Bonus de la última carga (Transaction.bonus refleja lo realmente acreditado).
+    // Cuánto del retiro era BONUS: miramos el último crédito del cliente, que puede ser
+    // una CARGA con bonus (type:'deposit' con campo bonus) o un BONUS suelto (type:'bonus',
+    // ej. botón Bonus / fueguito / promo). Ignoramos devoluciones previas (payout_refund).
     let bonusPart = 0;
     try {
-      const lastDeposit = await Transaction.findOne({ userId: payout.userId, type: 'deposit' })
-        .sort({ timestamp: -1 }).select('bonus').lean();
-      const lastBonus = lastDeposit && Number(lastDeposit.bonus) > 0 ? Number(lastDeposit.bonus) : 0;
+      // Buscamos por userId O username: las cargas guardan ambos, pero los bonus
+      // sueltos (/api/admin/bonus) guardan solo username (sin userId).
+      const lastCredit = await Transaction.findOne({
+        $or: [{ userId: payout.userId }, { username: payout.username }],
+        type: { $in: ['deposit', 'bonus'] },
+        'metadata.source': { $ne: 'payout_refund' }
+      }).sort({ timestamp: -1 }).select('type amount bonus').lean();
+      let lastBonus = 0;
+      if (lastCredit) {
+        lastBonus = (lastCredit.type === 'bonus')
+          ? (Number(lastCredit.amount) || 0)   // bonus suelto: todo el monto es bonus
+          : (Number(lastCredit.bonus) || 0);   // carga con bonus: solo el campo bonus
+      }
       bonusPart = Math.min(lastBonus, W); // capeado al monto del retiro
     } catch (_) { bonusPart = 0; }
     const chipsPart = W - bonusPart;

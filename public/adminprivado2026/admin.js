@@ -1535,9 +1535,11 @@ function renderConversations() {
         // que la tabla de Usuarios. 'comunidad' se resalta en verde.
         const tagsHtml = (Array.isArray(conv.tags) && conv.tags.length)
             ? `<span class="conv-tags" style="display:flex;gap:3px;flex-wrap:wrap;margin-top:2px;">` + conv.tags.map(t => {
-                const isCom = String(t).toLowerCase() === 'comunidad';
-                const st = isCom
+                const low = String(t).toLowerCase();
+                const st = low === 'comunidad'
                     ? 'background:rgba(22,163,74,0.20);border:1px solid rgba(22,163,74,0.55);color:#34d36b;'
+                    : low === 'no comunidad'
+                    ? 'background:rgba(120,120,130,0.20);border:1px solid rgba(160,160,170,0.5);color:#b8bcc6;'
                     : 'background:rgba(212,175,55,0.18);border:1px solid rgba(212,175,55,0.45);color:#d4af37;';
                 return `<span style="${st}border-radius:9px;padding:0 6px;font-size:9.5px;">${escapeHtml(t)}</span>`;
               }).join('') + `</span>`

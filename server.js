@@ -1084,6 +1084,34 @@ function resolveSysContent(cmd, fallback) {
   return fallback;
 }
 
+// Tras una carga (manual o automática), ofrece al cliente el "100% de recuperación"
+// para que entre a la Comunidad. NO se envía si el cliente ya está etiquetado
+// 'comunidad' (ya está) o 'no comunidad' (ya dijo que no quiere) — anti-spam.
+// Texto editable desde COMANDOS (/sys_recover_100); si se vacía, no se envía.
+async function maybeSendRecoveryMessage(user) {
+  try {
+    if (!user) return;
+    const tags = Array.isArray(user.tags) ? user.tags.map(t => String(t).toLowerCase()) : [];
+    if (tags.includes('comunidad') || tags.includes('no comunidad')) return;
+    const content = await renderSystemCommand(
+      '/sys_recover_100',
+      '🎁 ¿Querés reclamar el 100% de tu carga?\n\nSi jugaste y perdiste lo que cargaste, ¡podés recuperarlo! 💪\n\nPara reclamarlo: sumate a nuestra Comunidad y tené la app instalada. ✅\n\n¡Te esperamos! 🚀',
+      {}
+    );
+    if (!content) return;
+    const msg = await Message.create({
+      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+      receiverId: user.id, receiverRole: 'user', content, type: 'system', timestamp: new Date(), read: false
+    });
+    const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content, timestamp: new Date(), type: 'system' };
+    io.to(`user_${user.id}`).emit('new_message', data);
+    io.to(`chat_${user.id}`).emit('new_message', data);
+    notifyAdmins('new_message', { message: data, userId: user.id, username: user.username });
+  } catch (e) {
+    logger.warn(`[recovery-msg] ${e.message}`);
+  }
+}
+
 // Agregar usuario externo
 async function addExternalUser(userData) {
   try {
@@ -1679,6 +1707,12 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     }
     const uSock = connectedUsers.get(user.id);
     if (uSock && newBalance !== null) uSock.emit('balance_updated', { balance: newBalance });
+
+    // SLA: la auto-carga ES la respuesta al cliente → frena el reloj de demoras
+    // (antes quedaba como "sin respuesta" porque la carga es automática, no un agente).
+    try { await delayClockResolve(user.id, { responded: true, agentId: 'auto-hgcash', agentUsername: 'auto-hgcash', via: 'auto_carga', queueHint: 'cargas' }); } catch (_) {}
+    // Oferta de recuperación 100% (no se envía si está etiquetado comunidad/no comunidad).
+    await maybeSendRecoveryMessage(user);
 
     await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.`);
     logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
@@ -6477,6 +6511,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         } // fin cartel instalá la app (omitido si el comando fue vaciado)
       }
 
+      // Oferta de recuperación 100% (no se envía si está etiquetado comunidad/no comunidad).
+      await maybeSendRecoveryMessage(user);
+
       // Notificar al usuario específico si está conectado. Sólo si tenemos
       // balance real — si falló el lookup, omitimos para no escribir "null" en UI.
       const userSocket = connectedUsers.get(user.id);
@@ -7735,6 +7772,12 @@ async function initializeData() {
       description: 'Mensaje automático al cliente cuando un agente deriva su chat a la sección Comunidad. Sin variables. Si lo dejás vacío, no se envía.',
       type: 'message',
       response: '🤝 Te derivamos a nuestro equipo de Comunidad. En breve te atendemos por aquí. ¡Gracias!'
+    },
+    {
+      name: '/sys_recover_100',
+      description: 'Oferta de "100% de recuperación" que se envía tras cada carga (manual o automática). NO se envía a clientes con la etiqueta "comunidad" o "no comunidad". Sin variables. Si lo dejás vacío, no se envía.',
+      type: 'message',
+      response: '🎁 ¿Querés reclamar el 100% de tu carga?\n\nSi jugaste y perdiste lo que cargaste, ¡podés recuperarlo! 💪\n\nPara reclamarlo: sumate a nuestra Comunidad y tené la app instalada. ✅\n\n¡Te esperamos! 🚀'
     }
   ];
   for (const cmd of systemCmds) {

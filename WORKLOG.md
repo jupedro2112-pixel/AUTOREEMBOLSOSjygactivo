@@ -8,6 +8,22 @@
 
 ## Sesión 2026-06-19
 
+### 49. Oferta "100% recuperación" post-carga + etiqueta "NO Comunidad" + fix SLA auto-carga + fix UI pestañas
+- **Mensaje de recuperación tras carga:** después de una carga (manual `/api/admin/deposit` o automática
+  `hgcashAutoCarga`) se envía un mensaje ofreciendo el 100% de recuperación para que entre a la Comunidad.
+  Editable desde COMANDOS: **`/sys_recover_100`** (si se vacía, no se envía). Helper `maybeSendRecoveryMessage(user)`.
+  - **Anti-spam:** NO se envía si el cliente tiene la etiqueta `comunidad` (ya está) o `no comunidad` (ya dijo que no).
+    En ese caso solo recibe el mensaje normal de depósito.
+- **Etiqueta predefinida "NO Comunidad":** botón rápido **"+ NO Comunidad"** al lado de "+ Comunidad" en el chat,
+  para marcar a quien no quiere entrar y dejar de ofrecerle. Chip gris en la lista (vs verde de 'comunidad').
+- **Fix SLA (Demoras):** cuando un comprobante se auto-cargaba, el chat quedaba como "sin respuesta" con demoras
+  largas (la carga es automática, no la tomaba como respuesta). Ahora `hgcashAutoCarga` llama a `delayClockResolve`
+  (responded:true, via:'auto_carga') al acreditar → frena el reloj. La carga manual ya lo hacía (L6205).
+- **Fix UI pestañas de Chats:** con 4 pestañas (Abiertos/Comunidad/Cerrados/Pagos) la última quedaba tapada y no se
+  podía scrollear. CSS `.tabs` ahora tiene `overflow-x:auto` y `.tab-btn` `flex:0 0 auto` + `white-space:nowrap`
+  (cada pestaña a su ancho, la fila scrollea horizontalmente).
+- **Validado:** `node --check` OK (server.js, admin.js).
+
 ### 48. Botón "Descartar" para limpiar pagos pendientes viejos (sin avisar ni devolver)
 - **Caso:** quedaron `PendingPayout` viejos en `pending_review` (de cuando el pago automático no andaba y se
   dio la orden de NO marcarlos). Ya se pagaron en su momento y el cliente siguió jugando. No sirve "Pagar con

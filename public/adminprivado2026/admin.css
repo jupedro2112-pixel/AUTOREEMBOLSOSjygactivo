@@ -510,15 +510,21 @@ body {
     padding: 10px;
     gap: 5px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    /* Con 4 pestañas la fila puede no entrar: permitir scroll horizontal
+       en vez de tapar la última ("Pagos"). */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
 }
 
 .tab-btn {
-    flex: 1;
-    padding: 10px;
+    flex: 0 0 auto;        /* no estirar: cada pestaña a su ancho, la fila scrollea */
+    white-space: nowrap;   /* el texto no se parte ni se corta */
+    padding: 9px 12px;
     background: transparent;
     border: none;
     color: var(--gray);
-    font-size: 13px;
+    font-size: 12.5px;
     cursor: pointer;
     border-radius: var(--radius);
     display: flex;

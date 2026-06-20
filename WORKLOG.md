@@ -4,7 +4,32 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-19**
+> **Última actualización: 2026-06-20**
+
+## Sesión 2026-06-20
+
+### 53. FIX pago automático hgcash: 403 "No tienes acceso a esta cuenta" al cambiar de cuenta/token
+- **Síntoma:** tras cambiar de cuenta hgcash (token nuevo en `HGCASH_API_TOKEN`), el pago directo
+  automático (cash-out) fallaba con `HTTP 403 {"error":"No tienes acceso a esta cuenta"}`.
+- **Causa raíz:** el cash-out manda el `accountId` de NUESTRA cuenta a debitar, que vivía cacheado en
+  `Config['hgcash'].accountId`. Ese valor era de la cuenta VIEJA y el token nuevo no tiene acceso a ella.
+  Trampa que dejaba clavado: (1) `ensureHgcashAccountIdSaved` solo guardaba `if (!cfg.accountId)` → NUNCA
+  sobreescribía el viejo, aunque entraran movimientos de la cuenta nueva; (2) el panel NO tiene campo para
+  editar/limpiar el `accountId` (solo accountName/cbu/mode/window/enabled) → no se podía corregir desde la UI;
+  (3) `resolveHgcashAccountId` priorizaba `cfg.accountId` (viejo) sobre los movimientos recientes.
+- **Fix (fuente de verdad = el token):** se usa el endpoint `GET /accounts` de hgcash (lista las cuentas a
+  las que el TOKEN actual tiene acceso) para resolver el `accountId`. Así, al cambiar de cuenta/token, se
+  actualiza solo y nunca más salta el 403.
+  - `src/services/hgcashService.js`: nueva función `getAccounts()` (GET /accounts, Bearer del token).
+  - `server.js` `resolveHgcashAccountId({force})`: 1) pregunta a la API y elige la cuenta por moneda
+    (`cfg.currency`, default ARS) + estado "Operativa", y la cachea en config; 2) fallback al `accountId`
+    cacheado; 3) fallback al último `BankMovement`. `force:true` ignora el cache (para reintentar tras 403).
+  - `server.js` `POST /api/admin/payouts/:id/pay`: auto-recuperación — si el cash-out devuelve **403**,
+    fuerza re-resolver el accountId desde la API y reintenta UNA vez con la cuenta correcta. El `externalID`
+    es el mismo (= payout.id) → idempotente, no paga dos veces aunque el primer intento hubiera entrado.
+- **Nota:** no requiere acción manual del owner — con el token nuevo en SSM, el accountId correcto se
+  resuelve solo en el próximo pago. (Opcional pendiente: exponer el accountId en el panel para visibilidad.)
+- **Validado:** `node --check` OK (server.js, hgcashService.js). Back necesita redeploy.
 
 ## Sesión 2026-06-19
 

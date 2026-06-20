@@ -11793,11 +11793,39 @@ app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (r
 // PAGOS AUTOMÁTICOS (retiros) — el agente verifica y confirma, se paga por hgcash
 // ============================================
 
-// Resuelve el accountId de la cuenta hgcash a debitar (config, o el último movimiento).
-async function resolveHgcashAccountId() {
+// Resuelve el accountId de la cuenta hgcash a debitar.
+// Fuente de verdad: la API `GET /accounts` (las cuentas a las que el TOKEN ACTUAL
+// tiene acceso). Así, si cambiás de cuenta hgcash (token nuevo), el accountId se
+// actualiza solo y no salta el 403 "No tienes acceso a esta cuenta" por usar uno viejo.
+// `force:true` ignora el cache y vuelve a preguntar a la API (para reintentar tras un 403).
+// Fallbacks si la API no responde: el accountId cacheado en config, o el último movimiento.
+async function resolveHgcashAccountId({ force = false } = {}) {
   try {
     const cfg = await getHgcashConfig();
-    if (cfg.accountId) return cfg.accountId;
+    // 1) API = qué cuenta puede operar este token (fuente de verdad).
+    try {
+      const acc = await hgcashPay.getAccounts();
+      if (acc.ok && Array.isArray(acc.data) && acc.data.length) {
+        const wantCur = String(cfg.currency || 'ARS').toUpperCase();
+        const isOper = a => /operativa|operative|active/i.test(String(a.status || ''));
+        const curOk = a => String(a.currency || '').toUpperCase() === wantCur;
+        const pick = acc.data.find(a => curOk(a) && isOper(a))
+                  || acc.data.find(a => curOk(a))
+                  || acc.data.find(a => isOper(a))
+                  || acc.data[0];
+        if (pick && pick.id) {
+          // Cachear si cambió (o si veníamos de un accountId viejo).
+          if (String(cfg.accountId || '') !== String(pick.id)) {
+            await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(pick.id) }));
+            logger.info(`[hgcash] accountId resuelto vía API: ${pick.id} (${pick.currency || '?'}/${pick.status || '?'})`);
+          }
+          return String(pick.id);
+        }
+      }
+    } catch (_) {}
+    // 2) Fallback: lo cacheado (salvo que estemos forzando un refresh tras 403).
+    if (!force && cfg.accountId) return cfg.accountId;
+    // 3) Fallback: último movimiento conocido.
     const mov = await BankMovement.findOne({ accountId: { $ne: null } }).sort({ createdAt: -1 }).select('accountId').lean();
     return mov ? mov.accountId : null;
   } catch (_) { return null; }
@@ -11833,7 +11861,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
     }
 
-    const accountId = await resolveHgcashAccountId();
+    let accountId = await resolveHgcashAccountId();
     if (!accountId) return res.status(400).json({ error: 'No se pudo determinar la cuenta hgcash a debitar (accountId).' });
 
     // Resolver el CBU/CVU de 22 dígitos. Si vino un alias, lo buscamos.
@@ -11859,15 +11887,29 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     if (!claimed) return res.status(409).json({ error: 'El pago ya está siendo procesado.' });
 
     const webhookUrl = `${req.protocol}://${req.get('host')}/api/hgcash/webhook`;
-    const result = await hgcashPay.createCashOut({
-      accountId,
+    const buildCashOut = (acct) => hgcashPay.createCashOut({
+      accountId: acct,
       amount: payout.amount,
       toCBU: resolvedCbu,
       toName: payout.titular || lookupName || undefined,
       concept: `Retiro Sala de Juegos - ${payout.username}`,
-      externalID: payout.id, // idempotencia
+      externalID: payout.id, // idempotencia (mismo externalID = no duplica)
       webhookUrl
     });
+    let result = await buildCashOut(accountId);
+
+    // Auto-recuperación: si hgcash rechaza por NO tener acceso a esa cuenta (403),
+    // el accountId estaba viejo (cambio de cuenta/token). Forzamos re-resolver desde
+    // la API y reintentamos UNA vez con la cuenta correcta. El externalID es el mismo,
+    // así que aunque el primer intento hubiera entrado, no se paga dos veces.
+    if (!result.ok && result.httpStatus === 403) {
+      const fresh = await resolveHgcashAccountId({ force: true });
+      if (fresh && String(fresh) !== String(accountId)) {
+        logger.warn(`[hgcash-pay] 403 con accountId=${accountId}; reintentando con accountId=${fresh}`);
+        accountId = fresh;
+        result = await buildCashOut(accountId);
+      }
+    }
 
     if (!result.ok) {
       // 409 Duplicate External ID = ya se había mandado este pago → no es error real.

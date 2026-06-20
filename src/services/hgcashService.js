@@ -42,6 +42,25 @@ async function lookupAlias(aliasOrCvu) {
   }
 }
 
+// Lista las cuentas hgcash a las que el TOKEN actual tiene acceso. Es la fuente de
+// verdad para resolver el accountId a debitar: si cambiás de cuenta/token, esto
+// devuelve la cuenta nueva (evita el 403 "No tienes acceso a esta cuenta" por usar
+// un accountId viejo cacheado). GET /accounts → { data: [{ id, currency, status, ... }] }.
+// @returns { ok, data: [accounts] } | { ok:false, error, httpStatus }
+async function getAccounts() {
+  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+  try {
+    const r = await axios.get(`${BASE}/accounts`, { headers: _headers(), timeout: 15000 });
+    const data = (r.data && Array.isArray(r.data.data)) ? r.data.data : (Array.isArray(r.data) ? r.data : []);
+    return { ok: true, data };
+  } catch (e) {
+    const httpStatus = e.response && e.response.status;
+    const detail = e.response ? `HTTP ${httpStatus} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.message;
+    logger.warn(`[hgcash-pay] get-accounts falló: ${detail}`);
+    return { ok: false, error: detail, httpStatus };
+  }
+}
+
 // Crea un pago saliente (cash-out). El destino debe ser un CBU/CVU de 22 dígitos.
 // `externalID` da idempotencia: si se reintenta con el mismo, hgcash devuelve 409
 // (Duplicate External ID) en vez de pagar dos veces.
@@ -75,4 +94,4 @@ async function createCashOut({ accountId, amount, toCBU, toName, toCUIT, concept
   }
 }
 
-module.exports = { isEnabled, lookupAlias, createCashOut, getToken };
+module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getToken };

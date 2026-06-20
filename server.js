@@ -3125,7 +3125,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     // JavaScript (XSS-safe) and is scoped to the admin path only.
     // publisher_admin también entra al panel /adminprivado2026 (vista limitada),
     // por eso recibe la misma cookie que los otros roles administrativos.
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
     if (adminRoles.includes(userObj.role)) {
       // Set two httpOnly cookies: one for page access, one for API calls.
       // Neither can be read by client-side scripts (XSS-safe).
@@ -3296,7 +3296,7 @@ app.get('/api/admin/me', async (req, res) => {
     const decoded = jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] });
     // publisher_admin también accede al panel (vista limitada) y por eso entra
     // en la lista de roles permitidos para /api/admin/me.
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
     if (!adminRoles.includes(decoded.role)) {
       return res.status(403).json({ error: 'Acceso denegado' });
     }
@@ -3867,7 +3867,7 @@ app.post('/api/auth/login-otp-verify', authLimiter, async (req, res) => {
 
     // Set admin cookies if applicable (incluye publisher_admin que también
     // usa la UI del panel administrativo en /adminprivado2026, en vista limitada).
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin'];
+    const adminRoles = ['admin', 'depositor', 'withdrawer', 'publisher_admin', 'comunidad'];
     if (adminRoles.includes(userObj.role)) {
       const adminCookieToken = jwt.sign(
         { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },

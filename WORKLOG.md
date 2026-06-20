@@ -8,6 +8,19 @@
 
 ## Sesión 2026-06-20
 
+### 54. FIX rol comunidad: se deslogueaba al dar F5 / recargar la página
+- **Síntoma:** el Admin Comunidad perdía la sesión al refrescar (F5) o reiniciar la página y tenía que
+  loguearse de nuevo. Con admin/depositor/withdrawer/publisher_admin NO pasaba (quedaban logueados).
+- **Causa raíz:** la persistencia de sesión del panel va por la cookie httpOnly `admin_api_session`. Había
+  DOS listas de roles que omitían `comunidad`:
+  1. **Login** (server.js L3128 normal y L3870 por OTP): la cookie solo se seteaba para
+     `['admin','depositor','withdrawer','publisher_admin']` → comunidad nunca recibía la cookie.
+  2. **`GET /api/admin/me`** (L3299, el endpoint que rehidrata la sesión al cargar la página): rechazaba a
+     `comunidad` (403) aunque tuviera cookie → logout igual.
+- **Fix:** se agregó `'comunidad'` a las 3 listas (login, login-OTP, /api/admin/me). Ahora recibe la cookie
+  al loguearse y `/api/admin/me` la acepta → la sesión sobrevive al F5 como el resto de los roles admin.
+- **Validado:** `node --check` OK (server.js). Back necesita redeploy.
+
 ### 53. FIX pago automático hgcash: 403 "No tienes acceso a esta cuenta" al cambiar de cuenta/token
 - **Síntoma:** tras cambiar de cuenta hgcash (token nuevo en `HGCASH_API_TOKEN`), el pago directo
   automático (cash-out) fallaba con `HTTP 403 {"error":"No tienes acceso a esta cuenta"}`.

@@ -588,6 +588,34 @@
                                 <span class="icon icon-save"></span> Guardar Comunidad
                             </button>
                         </div>
+                        <!-- Porcentajes de reembolso (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="refundPercentsHeader">
+                            <h3>🎁 Porcentajes de reembolso</h3>
+                        </div>
+                        <div class="cbu-form" id="refundPercentsForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Porcentaje que se le devuelve al cliente sobre su <b>pérdida neta</b> (cargas − retiros) de cada período.
+                                Solo el admin general puede modificarlos. Se aplican al instante a los reembolsos nuevos.
+                            </p>
+                            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
+                                <div class="form-group" style="flex:1;min-width:120px;">
+                                    <label>📅 Diario %</label>
+                                    <input type="number" id="refundPctDaily" min="0" max="100" step="0.1" style="width:100%;">
+                                </div>
+                                <div class="form-group" style="flex:1;min-width:120px;">
+                                    <label>📆 Semanal %</label>
+                                    <input type="number" id="refundPctWeekly" min="0" max="100" step="0.1" style="width:100%;">
+                                </div>
+                                <div class="form-group" style="flex:1;min-width:120px;">
+                                    <label>🗓️ Mensual %</label>
+                                    <input type="number" id="refundPctMonthly" min="0" max="100" step="0.1" style="width:100%;">
+                                </div>
+                            </div>
+                            <button class="btn-primary" onclick="saveRefundPercents()">
+                                <span class="icon icon-save"></span> Guardar porcentajes
+                            </button>
+                            <div id="refundPctMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
+                        </div>
                         <!-- Banco automático (hgcash / Urbana) -->
                         <div class="panel-subheader" style="margin-top: 24px;">
                             <h3>🏦 Banco automático (hgcash)</h3>
@@ -1897,6 +1925,18 @@
                     <input type="hidden" id="iuInfluencer" value="">
                     <div id="iuTableWrap" style="color:#fff;">Cargando…</div>
                     <div id="iuPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:14px;"></div>
+                </div>
+            </div>
+
+            <!-- Modal: ranking de influencers por historias (score combinado) -->
+            <div id="influencerRankingModal" class="modal hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:10001;align-items:center;justify-content:center;">
+                <div style="background:#1a1a2e;border:1px solid rgba(212,175,55,0.4);border-radius:12px;padding:22px;max-width:1080px;width:98%;max-height:93vh;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h2 style="margin:0;color:#d4af37;font-size:19px;">🏆 Ranking de influencers (por historias)</h2>
+                        <button onclick="closeInfluencerRankingModal()" style="background:none;border:none;color:#888;font-size:24px;cursor:pointer;">✕</button>
+                    </div>
+                    <p id="irSubtitle" style="color:#888;font-size:12px;margin:0 0 14px;"></p>
+                    <div id="irTableWrap" style="color:#fff;">Cargando…</div>
                 </div>
             </div>
 

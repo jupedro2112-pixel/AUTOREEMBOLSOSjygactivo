@@ -2012,6 +2012,21 @@ async function delayClockClear(userId) {
   }
 }
 
+// Comunidad: cuando un cliente cuyo chat está en estado 'comunidad' vuelve a
+// escribir, re-avisar a los agentes de Comunidad (badge + sonido en el panel)
+// aunque ya no estén mirando esa pestaña. Sin esto, un cliente derivado que
+// responde después de ser atendido quedaba sin aviso y se generaban demoras.
+// Fire-and-forget: NUNCA frena la entrega del mensaje.
+async function maybeNotifyComunidadActivity(userId, username) {
+  if (!userId) return;
+  try {
+    const cs = await ChatStatus.findOne({ userId }).select('status username').lean();
+    if (cs && cs.status === 'comunidad') {
+      notifyAdmins('comunidad_activity', { userId, username: username || cs.username || null });
+    }
+  } catch (_) { /* nunca rompe la entrega del mensaje */ }
+}
+
 // ============================================
 // MIDDLEWARE DE AUTENTICACIÓN
 // ============================================
@@ -5514,6 +5529,8 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       // CORREGIDO: También emitir al usuario (para que vea su propio mensaje en tiempo real)
       io.to(`user_${req.user.userId}`).emit('new_message', message);
       io.to(`user_${req.user.userId}`).emit('message_sent', message);
+      // Comunidad: si el chat está en esa sección, re-avisar al agente de Comunidad.
+      maybeNotifyComunidadActivity(req.user.userId, req.user.username).catch(() => {});
     } else {
       // Admin enviando mensaje - notificar al usuario
       // SLA: respuesta de texto del agente — resolver el reloj de demora (fire-and-forget).
@@ -5586,6 +5603,28 @@ async function getRefundNonDepositCredits(username, fromDate, toDate) {
   return result[0]?.total || 0;
 }
 
+// Porcentajes de reembolso (diario/semanal/mensual). Editables desde el panel
+// (solo admin general) vía Config['refundPercents']. Defaults: 20/10/5.
+// Se clampean a [0,100]; un valor inválido cae al default de su tipo.
+const REFUND_PCT_DEFAULTS = { daily: 20, weekly: 10, monthly: 5 };
+async function getRefundPercents() {
+  try {
+    const cfg = await getConfig('refundPercents', null);
+    const d = cfg || {};
+    const clamp = (v, def) => {
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 && n <= 100 ? n : def;
+    };
+    return {
+      daily: clamp(d.daily, REFUND_PCT_DEFAULTS.daily),
+      weekly: clamp(d.weekly, REFUND_PCT_DEFAULTS.weekly),
+      monthly: clamp(d.monthly, REFUND_PCT_DEFAULTS.monthly)
+    };
+  } catch (_) {
+    return { ...REFUND_PCT_DEFAULTS };
+  }
+}
+
 app.get('/api/refunds/status', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -5638,10 +5677,12 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     logger.info(`[REFUND] status — usuario: ${username} weekly depositos:${weeklyDeposits} retiros:${weeklyWithdrawals} netLoss:${weeklyNetLoss}`);
     logger.info(`[REFUND] status — usuario: ${username} monthly depositos:${monthlyDeposits} retiros:${monthlyWithdrawals} netLoss:${monthlyNetLoss}`);
 
-    const dailyPotential = Math.round(dailyNetLoss * 0.20);
-    const weeklyPotential = Math.round(weeklyNetLoss * 0.10);
-    const monthlyPotential = Math.round(monthlyNetLoss * 0.05);
-    
+    // Porcentajes configurables desde el panel (default 8/3/3).
+    const pct = await getRefundPercents();
+    const dailyPotential = Math.round(dailyNetLoss * (pct.daily / 100));
+    const weeklyPotential = Math.round(weeklyNetLoss * (pct.weekly / 100));
+    const monthlyPotential = Math.round(monthlyNetLoss * (pct.monthly / 100));
+
     res.json({
       user: {
         username,
@@ -5652,21 +5693,21 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
         ...dailyStatus,
         potentialAmount: dailyPotential,
         netAmount: dailyNetLoss,
-        percentage: 20,
+        percentage: pct.daily,
         period: yesterdayRange.dateStr
       },
       weekly: {
         ...weeklyStatus,
         potentialAmount: weeklyPotential,
         netAmount: weeklyNetLoss,
-        percentage: 10,
+        percentage: pct.weekly,
         period: `${lastWeekRange.fromDateStr} a ${lastWeekRange.toDateStr}`
       },
       monthly: {
         ...monthlyStatus,
         potentialAmount: monthlyPotential,
         netAmount: monthlyNetLoss,
-        percentage: 5,
+        percentage: pct.monthly,
         period: `${lastMonthRange.fromDateStr} a ${lastMonthRange.toDateStr}`
       }
     });
@@ -5747,10 +5788,12 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         });
       }
 
-      // Calcular monto del reembolso (20% para daily)
-      const refundAmount = Math.round(netLoss * 0.20);
+      // Calcular monto del reembolso (% diario configurable, default 8%)
+      const pct = await getRefundPercents();
+      const dailyPct = pct.daily;
+      const refundAmount = Math.round(netLoss * (dailyPct / 100));
 
-      logger.info('[REFUND] daily — calculado para', username, 'netLoss:', netLoss, 'refund:', refundAmount);
+      logger.info('[REFUND] daily — calculado para', username, 'netLoss:', netLoss, 'pct:', dailyPct, 'refund:', refundAmount);
       
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount);
       
@@ -5770,7 +5813,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         type: 'daily',
         amount: refundAmount,
         netAmount: netLoss,
-        percentage: 20,
+        percentage: dailyPct,
         period: dateStr,
         // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
         periodKey: 'daily:' + dateStr,
@@ -5804,7 +5847,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         success: true,
         message: `¡Reembolso diario de $${refundAmount} acreditado!`,
         amount: refundAmount,
-        percentage: 20,
+        percentage: dailyPct,
         netAmount: netLoss,
         nextClaim: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
       });
@@ -5889,10 +5932,12 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         });
       }
 
-      // Calcular monto del reembolso (10% para weekly)
-      const refundAmount = Math.round(netLoss * 0.10);
+      // Calcular monto del reembolso (% semanal configurable, default 3%)
+      const pct = await getRefundPercents();
+      const weeklyPct = pct.weekly;
+      const refundAmount = Math.round(netLoss * (weeklyPct / 100));
 
-      logger.info('[REFUND] weekly — calculado para', username, 'netLoss:', netLoss, 'refund:', refundAmount);
+      logger.info('[REFUND] weekly — calculado para', username, 'netLoss:', netLoss, 'pct:', weeklyPct, 'refund:', refundAmount);
       
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount);
       
@@ -5912,7 +5957,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         type: 'weekly',
         amount: refundAmount,
         netAmount: netLoss,
-        percentage: 10,
+        percentage: weeklyPct,
         period: `${fromDateStr} a ${toDateStr}`,
         // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
         periodKey: 'weekly:' + fromDateStr,
@@ -5946,7 +5991,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         success: true,
         message: `¡Reembolso semanal de $${refundAmount} acreditado!`,
         amount: refundAmount,
-        percentage: 10,
+        percentage: weeklyPct,
         netAmount: netLoss,
         nextClaim: status.nextClaim
       });
@@ -6031,10 +6076,12 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         });
       }
 
-      // Calcular monto del reembolso (5% para monthly)
-      const refundAmount = Math.round(netLoss * 0.05);
+      // Calcular monto del reembolso (% mensual configurable, default 3%)
+      const pct = await getRefundPercents();
+      const monthlyPct = pct.monthly;
+      const refundAmount = Math.round(netLoss * (monthlyPct / 100));
 
-      logger.info('[REFUND] monthly — calculado para', username, 'netLoss:', netLoss, 'refund:', refundAmount);
+      logger.info('[REFUND] monthly — calculado para', username, 'netLoss:', netLoss, 'pct:', monthlyPct, 'refund:', refundAmount);
       
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount);
       
@@ -6054,7 +6101,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         type: 'monthly',
         amount: refundAmount,
         netAmount: netLoss,
-        percentage: 5,
+        percentage: monthlyPct,
         period: `${fromDateStr} a ${toDateStr}`,
         // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
         periodKey: 'monthly:' + fromDateStr.slice(0, 7),
@@ -6088,7 +6135,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         success: true,
         message: `¡Reembolso mensual de $${refundAmount} acreditado!`,
         amount: refundAmount,
-        percentage: 5,
+        percentage: monthlyPct,
         netAmount: netLoss,
         nextClaim: status.nextClaim
       });
@@ -6137,6 +6184,56 @@ app.get('/api/refunds/all', authMiddleware, adminMiddleware, async (req, res) =>
     });
   } catch (error) {
     console.error('Error obteniendo todos los reembolsos:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// PORCENTAJES DE REEMBOLSO — config (solo admin general)
+// ============================================
+// Permite ajustar los % de reembolso diario/semanal/mensual desde el panel.
+// adminMiddleware deja entrar a depositor/withdrawer/comunidad, por eso se
+// re-chequea role==='admin' explícito: SOLO el admin general puede ver/editar.
+app.get('/api/admin/refund-percents', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede ver los porcentajes de reembolso.' });
+    }
+    const percents = await getRefundPercents();
+    res.json({ percents, defaults: REFUND_PCT_DEFAULTS });
+  } catch (error) {
+    console.error('Error obteniendo porcentajes de reembolso:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/refund-percents', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede modificar los porcentajes de reembolso.' });
+    }
+    const cur = await getRefundPercents();
+    const b = req.body || {};
+    // Validación: cada % debe ser un número entre 0 y 100. Ausente = mantener el actual.
+    const pick = (v, def) => {
+      if (v === undefined || v === null || v === '') return def;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0 || n > 100) return NaN;
+      return n;
+    };
+    const next = {
+      daily: pick(b.daily, cur.daily),
+      weekly: pick(b.weekly, cur.weekly),
+      monthly: pick(b.monthly, cur.monthly)
+    };
+    if (Number.isNaN(next.daily) || Number.isNaN(next.weekly) || Number.isNaN(next.monthly)) {
+      return res.status(400).json({ error: 'Cada porcentaje debe ser un número entre 0 y 100.' });
+    }
+    await setConfig('refundPercents', next);
+    logger.info(`[refund-percents] actualizado por ${req.user.username}: diario=${next.daily}% semanal=${next.weekly}% mensual=${next.monthly}%`);
+    res.json({ success: true, percents: next });
+  } catch (error) {
+    console.error('Error guardando porcentajes de reembolso:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -7242,6 +7339,9 @@ io.on('connection', (socket) => {
         // Confirmar al usuario y entregar el mensaje via sala (evitar duplicado)
         socket.emit('message_sent', message);
         io.to(`user_${socket.userId}`).emit('new_message', message);
+
+        // Comunidad: si el chat está en esa sección, re-avisar al agente de Comunidad.
+        maybeNotifyComunidadActivity(socket.userId, socket.username).catch(() => {});
       } else {
         // Admin/depositor/withdrawer enviando mensaje - notificar al usuario específico
         logger.debug(`[SEND_MESSAGE] Looking up socket for user ${receiverId}`);
@@ -7623,6 +7723,38 @@ async function initializeData() {
     }
   } catch (e) {
     logger.error(`[startup-migration] Falló purga one-shot de ChatStatus vacíos: ${e.message}`);
+  }
+
+  // One-shot migration (guardada con flag): VENCE todos los PromoBonus activos
+  // viejos. A pedido del owner (2026-06-21) se sacaron los bonos automáticos que
+  // venían dando los motores de encuesta / estrategia por voto (50%/100%, vigencia
+  // larga). Como TODOS los PromoBonus son automáticos (los bonos manuales del
+  // agente van directo a JUGAYGANA, no por acá), limpiamos la pizarra: a partir de
+  // ahora el único motor de bonos es Inactividad, ya capeado a 30% / 2h. Corre UNA
+  // sola vez; los bonos NUEVOS (creados después) no se tocan.
+  try {
+    const flag = await Config.findOne({ key: 'migration_clear_old_promobonus_done' }).lean();
+    if (!flag || flag.value !== true) {
+      let cleared = 0;
+      try {
+        const PromoBonusModel = require('./src/models/PromoBonus');
+        const r = await PromoBonusModel.updateMany(
+          { status: 'active' },
+          { $set: { status: 'expired' } }
+        );
+        cleared = (r && (r.modifiedCount != null ? r.modifiedCount : r.nModified)) || 0;
+      } catch (e) {
+        logger.error(`[startup-migration] No se pudieron vencer los PromoBonus viejos: ${e.message}`);
+      }
+      logger.info(`[startup-migration] PromoBonus viejos vencidos (one-shot): ${cleared}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_clear_old_promobonus_done' },
+        { key: 'migration_clear_old_promobonus_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] Falló limpieza one-shot de PromoBonus viejos: ${e.message}`);
   }
 
   if (process.env.PROXY_URL) {
@@ -9949,6 +10081,23 @@ app.get('/api/admin/influencer-stories', authMiddleware, adminMiddleware, async 
     res.json(data);
   } catch (err) {
     logger.error(`[influencer-stories GET] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// GET /api/admin/influencer-stories/ranking?campaign=CODE
+// Ranking de influencers de la campaña, de mejor a peor, por score combinado
+// (ROAS + retención de fieles + ticket promedio + costo por click). El front
+// puede reordenar por cualquier columna; este es el orden por defecto (score).
+app.get('/api/admin/influencer-stories/ranking', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const campaign = String(req.query.campaign || '').trim();
+    if (!campaign) return res.status(400).json({ error: 'campaign es requerido' });
+    const data = await publisherAnalytics.getInfluencerStoriesRanking(campaign);
+    if (!data) return res.status(404).json({ error: 'Campaña inexistente' });
+    res.json(data);
+  } catch (err) {
+    logger.error(`[influencer-stories ranking] ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -13174,7 +13323,9 @@ async function _runInactividadTick() {
     const cfg = mergeInactividadConfig(await getConfig('inactividadConfig'));
     const r = await inactividadService.tick({
       cfg: cfg,
-      models: { User: User, InactividadFire: InactividadFire, PromoBonus: PromoBonus },
+      // Transaction es necesario: el motor ahora segmenta por ÚLTIMA CARGA real
+      // (no por último ingreso), para darle bono solo a la gente que no carga hace ≥7d.
+      models: { User: User, InactividadFire: InactividadFire, PromoBonus: PromoBonus, Transaction: Transaction },
       sendPushFn: sendNotificationToAllUsers,
       logger: logger,
       now: new Date()
@@ -13805,7 +13956,10 @@ async function _getActivePromoBonus(username) {
     { username: u, status: 'active', expiresAt: { $lte: now } },
     { $set: { status: 'expired' } }
   ).catch(() => {});
-  const b = await PromoBonus.findOne({ username: u, status: 'active', expiresAt: { $gt: now } })
+  // Sólo bonos de carga (percent > 0) para el banner "% en la carga". Los regalos
+  // de monto fijo (percent 0, ej. regalo ticket alto) se entregan por push / soporte
+  // y se trackean aparte — no se muestran en este banner para no mostrar "0%".
+  const b = await PromoBonus.findOne({ username: u, status: 'active', percent: { $gt: 0 }, expiresAt: { $gt: now } })
     .sort({ activatedAt: -1 })
     .lean();
   return b || null;
@@ -13919,7 +14073,13 @@ async function _strategySendStep(cfg, step, enrollments) {
   logger.info(`[bonus-strategy] paso ${step}: enviado a ${usernames.length} usuario(s)`);
 }
 
+// REACTIVADA (owner 2026-06-22): la "estrategia de bonos por voto" (escalonada
+// 15%→30%) vuelve a estar disponible, pero con TOPE de 30% y vigencia ≤2h. El tope
+// lo refuerzan la validación del POST de config y activateChargeBonuses. Sólo corre
+// si el owner la activa (isActive). Para apagarla del todo, poné el flag en true.
+const BONUS_STRATEGY_DISABLED = false;
 async function _runBonusStrategy() {
+  if (BONUS_STRATEGY_DISABLED) return;
   try {
     const cfg = await BonusStrategyConfig.findOne({ key: 'default' }).lean();
     if (!cfg || !cfg.isActive) return;
@@ -13951,9 +14111,18 @@ app.get('/api/admin/bonus-strategy', authMiddleware, adminMiddleware, async (req
     ]);
     const byStep = { 0: 0, 1: 0, 2: 0 };
     for (const g of agg) byStep[g._id] = g.count;
+    const cfgObj = cfg.toObject();
+    // Clamp de display: si quedó un singleton viejo (50%/100%), lo mostramos
+    // capeado a 30% / 120min para que el panel refleje el tope real que se aplica.
+    for (const s of ['step1', 'step2']) {
+      if (cfgObj[s]) {
+        cfgObj[s].percent = Math.min(30, Number(cfgObj[s].percent) || 0);
+        cfgObj[s].durationMinutes = Math.min(120, Number(cfgObj[s].durationMinutes) || 120);
+      }
+    }
     res.json({
       success: true,
-      config: cfg.toObject(),
+      config: cfgObj,
       stats: {
         inscriptos: byStep[0] + byStep[1] + byStep[2],
         sinPasos: byStep[0],
@@ -13974,8 +14143,9 @@ app.post('/api/admin/bonus-strategy', authMiddleware, adminMiddleware, async (re
     const cfg = await _getBonusStrategyConfig();
     const _step = (src, dst) => {
       if (!src) return;
-      if (src.percent != null) dst.percent = Math.max(1, Math.min(1000, Number(src.percent) || 0));
-      if (src.durationMinutes != null) dst.durationMinutes = Math.max(5, Number(src.durationMinutes) || 120);
+      // Tope de negocio: bono ≤30% y vigencia ≤120min (2h).
+      if (src.percent != null) dst.percent = Math.max(1, Math.min(30, Number(src.percent) || 0));
+      if (src.durationMinutes != null) dst.durationMinutes = Math.max(5, Math.min(120, Number(src.durationMinutes) || 120));
       if (typeof src.title === 'string') dst.title = src.title.slice(0, 120);
       if (typeof src.body === 'string') dst.body = src.body.slice(0, 300);
     };
@@ -14376,14 +14546,29 @@ app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (
 // ============================================================
 // RECUPERACIÓN DE INACTIVOS — config de la escalera 7/14/30 días.
 // ============================================================
+// Recuperación de inactivos = único motor de bonos automáticos. Reglas de negocio
+// (owner 2026-06-21): solo a quien NO carga hace ≥7d, bono ≤30%, vence en ≤2h.
+// Los topes se fuerzan acá (merge) Y en inactividadService (defensa en profundidad).
+const REFUND_INACT_MAX_PCT = 30;       // tope de % de bono
+const REFUND_INACT_MAX_VIG_HORAS = 2;  // tope de vigencia (horas)
+const REGALO_TA_MAX_ARS = 3000;        // tope del regalo de reactivación ticket alto
 const INACTIVIDAD_DEFAULTS = {
   isActive: false,
-  bonoVigenciaHoras: 72,
+  bonoVigenciaHoras: 2,
   pasos: [
-    { dias: 7,  tipo: 'bono',   percent: 50,  montoARS: 0 },
-    { dias: 14, tipo: 'bono',   percent: 100, montoARS: 0 },
-    { dias: 30, tipo: 'regalo', percent: 0,   montoARS: 5000 }
-  ]
+    { dias: 7,  tipo: 'bono', percent: 30, montoARS: 0 },
+    { dias: 14, tipo: 'bono', percent: 30, montoARS: 0 }
+  ],
+  // Regalo de reactivación para clientes de TICKET ALTO (≥$30.000 de ticket
+  // promedio) que dejaron de cargar. "Muy de vez en cuando": 1 vez por mes máx.
+  // Monto fijo ≤$3.000, se reclama con soporte (no es bono %). Apagado por defecto.
+  regaloTicketAlto: {
+    enabled: false,
+    dias: 14,
+    montoARS: 3000,
+    minTicketARS: 30000,
+    vigenciaHoras: 48
+  }
 };
 
 function mergeInactividadConfig(saved) {
@@ -14394,14 +14579,27 @@ function mergeInactividadConfig(saved) {
     return {
       dias: _encNum(p.dias, 7, 1, 365),
       tipo: (p.tipo === 'regalo') ? 'regalo' : 'bono',
-      percent: _encNum(p.percent, 50, 0, 500),
+      // % de bono capeado a 30 (el owner no puede subirlo de ahí).
+      percent: _encNum(p.percent, 30, 0, REFUND_INACT_MAX_PCT),
       montoARS: _encNum(p.montoARS, 0, 0, 10000000)
     };
   }).sort(function (a, b) { return a.dias - b.dias; });
+  const rtaIn = s.regaloTicketAlto || {};
+  const d = INACTIVIDAD_DEFAULTS.regaloTicketAlto;
+  const regaloTicketAlto = {
+    enabled: rtaIn.enabled === true,
+    dias: _encNum(rtaIn.dias, d.dias, 1, 365),
+    // Regalo capeado a $3.000 (tope duro).
+    montoARS: _encNum(rtaIn.montoARS, d.montoARS, 1, REGALO_TA_MAX_ARS),
+    minTicketARS: _encNum(rtaIn.minTicketARS, d.minTicketARS, 0, 100000000),
+    vigenciaHoras: _encNum(rtaIn.vigenciaHoras, d.vigenciaHoras, 1, 168)
+  };
   return {
     isActive: s.isActive === true,
-    bonoVigenciaHoras: _encNum(s.bonoVigenciaHoras, 72, 1, 720),
-    pasos: pasos
+    // Vigencia capeada a 2h (después el botón de reclamo desaparece solo).
+    bonoVigenciaHoras: _encNum(s.bonoVigenciaHoras, 2, 1, REFUND_INACT_MAX_VIG_HORAS),
+    pasos: pasos,
+    regaloTicketAlto: regaloTicketAlto
   };
 }
 
@@ -14432,18 +14630,108 @@ app.get('/api/admin/inactividad/stats', authMiddleware, adminMiddleware, async (
     const cfg = mergeInactividadConfig(await getConfig('inactividadConfig'));
     const now = Date.now();
     const tramos = [];
+    // Inactivos = sin CARGA real (excluye regalos/devoluciones) hace ≥ p.dias.
+    // Coherente con el motor (que ahora segmenta por última carga, no por ingreso).
+    const GIFT_SOURCES = ['install_bonus', 'welcome_gift', 'payout_refund'];
     for (const p of cfg.pasos) {
       const desde = new Date(now - p.dias * 86400000);
-      const count = await User.countDocuments({
-        lastLogin: { $lte: desde, $ne: null },
-        notificationPlan: { $ne: 'solo_reembolsos' }
-      });
+      const agg = await Transaction.aggregate([
+        { $match: { type: 'deposit', $or: [
+          { 'metadata.source': { $exists: false } },
+          { 'metadata.source': { $nin: GIFT_SOURCES } }
+        ] } },
+        { $group: { _id: '$username', last: { $max: '$timestamp' } } },
+        { $match: { last: { $lte: desde } } },
+        { $count: 'n' }
+      ]);
+      const count = (agg[0] && agg[0].n) || 0;
       tramos.push({ dias: p.dias, tipo: p.tipo, percent: p.percent, montoARS: p.montoARS, inactivos: count });
     }
     const ultimos = await InactividadFire.find({}).sort({ firedAt: -1 }).limit(20).lean();
     res.json({ success: true, tramos: tramos, ultimos: ultimos });
   } catch (err) {
     logger.error(`GET /api/admin/inactividad/stats: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================================
+// SEGUIMIENTO DE ESTRATEGIAS DE REACTIVACIÓN — solo admin general
+// ----------------------------------------------------------------
+// Tablero unificado: como TODOS los bonos automáticos quedan registrados como
+// PromoBonus (con sourceRuleCode), agregamos por estrategia y por día para ver
+// qué se dispara, cuánto cada día, cuántos reciben y cuántos reclaman.
+//   creados   = PromoBonus generados (cuántos reciben)
+//   reclamados= PromoBonus marcados 'used' (cuántos reclaman el bono %)
+//   ingreso   = suma de la carga asociada a los bonos reclamados (cargaMonto)
+// Nota: los regalos de ticket alto se reclaman con soporte (no se marcan 'used'
+//   automáticamente), así que para esa estrategia mirá "creados/enviados".
+// ============================================================
+const _REACT_STRATEGY_LABELS = {
+  'inactividad': 'Inactividad (bono %)',
+  'regalo_ticket_alto': 'Regalo ticket alto',
+  'encuesta': 'Encuesta'
+};
+app.get('/api/admin/reactivacion/stats', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el admin general puede ver el seguimiento de estrategias.' });
+    }
+    const days = Math.min(180, Math.max(1, parseInt(req.query.days, 10) || 14));
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const [byStrategy, byDay] = await Promise.all([
+      PromoBonus.aggregate([
+        { $match: { activatedAt: { $gte: since } } },
+        { $group: {
+          _id: '$sourceRuleCode',
+          name: { $first: '$sourceRuleName' },
+          creados: { $sum: 1 },
+          reclamados: { $sum: { $cond: [{ $eq: ['$status', 'used'] }, 1, 0] } },
+          activos: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+          expirados: { $sum: { $cond: [{ $eq: ['$status', 'expired'] }, 1, 0] } },
+          ingreso: { $sum: { $cond: [{ $eq: ['$status', 'used'] }, { $ifNull: ['$cargaMonto', 0] }, 0] } }
+        } },
+        { $sort: { creados: -1 } }
+      ]),
+      PromoBonus.aggregate([
+        { $match: { activatedAt: { $gte: since } } },
+        { $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$activatedAt', timezone: ART_TZ } },
+          creados: { $sum: 1 },
+          reclamados: { $sum: { $cond: [{ $eq: ['$status', 'used'] }, 1, 0] } }
+        } },
+        { $sort: { _id: -1 } }
+      ])
+    ]);
+
+    const strategies = byStrategy.map(function (s) {
+      const code = s._id || '(sin código)';
+      return {
+        code: code,
+        label: _REACT_STRATEGY_LABELS[code] || s.name || code,
+        creados: s.creados || 0,
+        reclamados: s.reclamados || 0,
+        activos: s.activos || 0,
+        expirados: s.expirados || 0,
+        tasaReclamo: s.creados > 0 ? Math.round((s.reclamados / s.creados) * 1000) / 10 : 0,
+        ingreso: Math.round(s.ingreso || 0)
+      };
+    });
+    const totals = strategies.reduce(function (t, s) {
+      t.creados += s.creados; t.reclamados += s.reclamados; t.ingreso += s.ingreso;
+      return t;
+    }, { creados: 0, reclamados: 0, ingreso: 0 });
+    totals.tasaReclamo = totals.creados > 0 ? Math.round((totals.reclamados / totals.creados) * 1000) / 10 : 0;
+
+    res.json({
+      days: days,
+      strategies: strategies,
+      byDay: byDay.map(function (d) { return { date: d._id, creados: d.creados, reclamados: d.reclamados }; }),
+      totals: totals
+    });
+  } catch (err) {
+    logger.error(`GET /api/admin/reactivacion/stats: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

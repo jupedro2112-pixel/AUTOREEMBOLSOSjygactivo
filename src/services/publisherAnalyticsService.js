@@ -20,7 +20,7 @@
  * y las devoluciones de retiros rechazados (metadata.source in install_bonus /
  * welcome_gift / payout_refund) del cómputo de cargas reales.
  */
-const { User, Transaction, Campaign, InfluencerStory } = require('../models');
+const { User, Transaction, Campaign, InfluencerStory, CampaignClick } = require('../models');
 
 // === Umbrales de negocio (confirmados con el owner) ===
 const ACTIVE_DAYS = 7;        // ≤7d desde última carga = activo
@@ -34,6 +34,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Cuántos clientes devolver por segmento en el detalle (ordenados por total
 // cargado desc). El ranking no devuelve listas, sólo conteos.
 const CLIENTS_PER_SEGMENT_CAP = 100;
+
+// === Ranking de influencers por historias (score combinado balanceado) ===
+// Pesos (owner 2026-06-22): ROAS 35% + retención de fieles 30% + ticket 20% + CPC 15%.
+// Cada métrica se normaliza a 0..1 con un tope fijo y se combina. Score 0..100.
+const INF_SCORE_WEIGHTS = { roas: 0.35, loyal: 0.30, ticket: 0.20, cpc: 0.15 };
+const INF_ROAS_CAP = 2;        // ROAS neto 2x = puntaje máximo de rentabilidad
+const INF_TICKET_CAP = 50000;  // ticket promedio $50.000 = puntaje máximo
+const INF_CPC_CAP = 2000;      // costo por click ≥ $2.000 = puntaje 0 (más barato = mejor)
 
 /**
  * Carga las estadísticas de cargas/retiros por username.
@@ -393,7 +401,8 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
     .select('username createdAt').lean();
   const usernames = users.map(u => u.username);
 
-  // Cargas (sin regalos) y retiros de toda la vida de esos usuarios.
+  // Cargas (sin regalos) y retiros de toda la vida de esos usuarios. Guardamos
+  // también la ÚLTIMA carga por usuario (para "cliente activo" = cargó ≤7d).
   const depByUser = Object.create(null);
   const witByUser = Object.create(null);
   if (usernames.length) {
@@ -408,8 +417,8 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
     for (const tx of deposits) {
       const a = tx.amount || 0;
       let d = depByUser[tx.username];
-      if (!d) { depByUser[tx.username] = { total: a, count: 1, first: a }; }
-      else { d.total += a; d.count += 1; }
+      if (!d) { depByUser[tx.username] = { total: a, count: 1, first: a, last: tx.timestamp }; }
+      else { d.total += a; d.count += 1; d.last = tx.timestamp; } // sorted asc → last = más reciente
     }
     const witAgg = await Transaction.aggregate([
       { $match: { type: 'withdrawal', username: { $in: usernames } } },
@@ -418,16 +427,28 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
     for (const w of witAgg) witByUser[w._id] = w.total;
   }
 
-  const mkBucket = () => ({ registros: 0, clientes: 0, depositCount: 0, deposits: 0, withdrawals: 0, ftdCount: 0, ftdAmount: 0 });
+  // Clicks de la campaña (CampaignClick es por campaña, no por influencer, y
+  // tiene TTL de 90 días). Se atribuyen a cada historia por ventana horaria,
+  // igual que los usuarios. Para historias de +90 días puede no haber clicks.
+  const clickMs = [];
+  try {
+    const clicks = await CampaignClick.find({ campaignCode: code }).select('clickedAt').lean();
+    for (const c of clicks) if (c.clickedAt) clickMs.push(new Date(c.clickedAt).getTime());
+  } catch (_) { /* sin clicks disponibles */ }
+
+  const now = Date.now();
+  const activeCutoff = now - ACTIVE_DAYS * DAY_MS;
+
+  const mkBucket = () => ({ registros: 0, clientes: 0, depositCount: 0, deposits: 0, withdrawals: 0, ftdCount: 0, ftdAmount: 0, loyalCount: 0, activeCount: 0, clicks: 0 });
   const buckets = stories.map(() => mkBucket());
   const before = mkBucket();
   const postedMs = stories.map(s => new Date(s.postedAt).getTime());
 
-  // Índice de la última historia cuyo postedAt <= createdAt (-1 = antes de todas).
-  const assignIndex = (createdMs) => {
+  // Índice de la última historia cuyo postedAt <= ts (-1 = antes de todas).
+  const assignIndex = (ts) => {
     let idx = -1;
     for (let i = 0; i < postedMs.length; i++) {
-      if (postedMs[i] <= createdMs) idx = i; else break;
+      if (postedMs[i] <= ts) idx = i; else break;
     }
     return idx;
   };
@@ -443,8 +464,17 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
       b.deposits += dep.total;
       b.ftdCount += 1;
       b.ftdAmount += dep.first;
+      if (dep.count >= LOYAL_MIN_DEPOSITS) b.loyalCount += 1;           // cliente fiel (≥5 cargas)
+      if (dep.last && new Date(dep.last).getTime() >= activeCutoff) b.activeCount += 1; // sigue activo (cargó ≤7d)
     }
     b.withdrawals += (witByUser[u.username] || 0);
+  }
+
+  // Clicks por ventana de historia.
+  for (const cm of clickMs) {
+    const idx = assignIndex(cm);
+    const b = idx === -1 ? before : buckets[idx];
+    b.clicks += 1;
   }
 
   const finalize = (b, story, i) => {
@@ -464,6 +494,16 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
       net: Math.round(net),
       ftdCount: b.ftdCount,
       ftdAmount: Math.round(b.ftdAmount),
+      // Conversión registro→cliente (cargó al menos una vez).
+      conversionRate: b.registros > 0 ? b.clientes / b.registros : null,
+      // Retención: clientes fieles (≥5 cargas) y clientes que siguen activos (cargaron ≤7d).
+      loyalCount: b.loyalCount,
+      loyalRate: b.clientes > 0 ? b.loyalCount / b.clientes : null,
+      activeCount: b.activeCount,
+      activeRate: b.clientes > 0 ? b.activeCount / b.clientes : null,
+      avgTicket: b.depositCount > 0 ? Math.round(b.deposits / b.depositCount) : null,
+      clicks: b.clicks,
+      cpc: b.clicks > 0 ? Math.round(cost / b.clicks) : null,
       cpaPerRegistro: b.registros > 0 ? Math.round(cost / b.registros) : null,
       cpaPerCliente: b.clientes > 0 ? Math.round(cost / b.clientes) : null,
       roasNet: cost > 0 ? net / cost : null,
@@ -479,8 +519,14 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
     t.depositCount += r.depositCount; t.deposits += r.deposits;
     t.withdrawals += r.withdrawals; t.net += r.net;
     t.ftdCount += r.ftdCount; t.ftdAmount += r.ftdAmount;
+    t.loyalCount += r.loyalCount; t.activeCount += r.activeCount; t.clicks += r.clicks;
     return t;
-  }, { cost: 0, registros: 0, clientes: 0, depositCount: 0, deposits: 0, withdrawals: 0, net: 0, ftdCount: 0, ftdAmount: 0 });
+  }, { cost: 0, registros: 0, clientes: 0, depositCount: 0, deposits: 0, withdrawals: 0, net: 0, ftdCount: 0, ftdAmount: 0, loyalCount: 0, activeCount: 0, clicks: 0 });
+  totals.conversionRate = totals.registros > 0 ? totals.clientes / totals.registros : null;
+  totals.loyalRate = totals.clientes > 0 ? totals.loyalCount / totals.clientes : null;
+  totals.activeRate = totals.clientes > 0 ? totals.activeCount / totals.clientes : null;
+  totals.avgTicket = totals.depositCount > 0 ? Math.round(totals.deposits / totals.depositCount) : null;
+  totals.cpc = totals.clicks > 0 ? Math.round(totals.cost / totals.clicks) : null;
   totals.cpaPerRegistro = totals.registros > 0 ? Math.round(totals.cost / totals.registros) : null;
   totals.cpaPerCliente = totals.clientes > 0 ? Math.round(totals.cost / totals.clientes) : null;
   totals.roasNet = totals.cost > 0 ? totals.net / totals.cost : null;
@@ -493,6 +539,100 @@ async function getInfluencerStoryAnalysis(campaignCode, influencer) {
     stories: storyRows,
     before: beforeRow,
     totals
+  };
+}
+
+// Puntaje 0..100 de un influencer a partir de sus totales (historias).
+// Score combinado balanceado: ROAS 35% + retención de fieles 30% + ticket 20% + CPC 15%.
+// Cada componente se normaliza a 0..1 con topes fijos (ver constantes INF_*).
+function _influencerScore(totals) {
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  const roasNet = (totals.roasNet == null) ? 0 : totals.roasNet;
+  const roasScore = clamp01(roasNet / INF_ROAS_CAP);
+  const loyalScore = clamp01(totals.loyalRate || 0);
+  const ticketScore = clamp01((totals.avgTicket || 0) / INF_TICKET_CAP);
+  // CPC: más barato = mejor. Si no hay clicks (TTL 90d), queda neutro (0.5) para
+  // no castigar injustamente a historias viejas sin dato de clicks.
+  const cpcScore = (totals.cpc == null || totals.clicks === 0)
+    ? 0.5
+    : clamp01(1 - (totals.cpc / INF_CPC_CAP));
+  const w = INF_SCORE_WEIGHTS;
+  const score = 100 * (w.roas * roasScore + w.loyal * loyalScore + w.ticket * ticketScore + w.cpc * cpcScore);
+  return {
+    score: Math.round(score),
+    components: {
+      roasScore: Math.round(roasScore * 100),
+      loyalScore: Math.round(loyalScore * 100),
+      ticketScore: Math.round(ticketScore * 100),
+      cpcScore: Math.round(cpcScore * 100)
+    }
+  };
+}
+
+/**
+ * Ranking de influencers de UNA campaña, de mejor a peor, por score combinado
+ * (ROAS, retención de fieles, ticket promedio, costo por click). Reúsa
+ * getInfluencerStoryAnalysis por influencer y agrega su score + métricas clave.
+ *
+ * Incluye a todos los influencers conocidos de la campaña (Campaign.influencers)
+ * y a cualquier `acquisitionInfluencer` presente en usuarios atribuidos.
+ * @param {string} campaignCode
+ */
+async function getInfluencerStoriesRanking(campaignCode) {
+  const code = String(campaignCode || '').toUpperCase().trim();
+  if (!code) return null;
+  const campaign = await Campaign.findOne({ code }).select('publisher influencers').lean();
+  if (!campaign) return null;
+
+  // Nombres de influencer: los de la lista de la campaña + los presentes en users.
+  const fromList = (campaign.influencers || []).map(i => i.name).filter(Boolean);
+  const fromUsers = await User.distinct('acquisitionInfluencer', { acquisitionCampaign: code, acquisitionInfluencer: { $ne: null } });
+  const seen = new Set();
+  const names = [];
+  for (const n of [...fromList, ...fromUsers]) {
+    const k = String(n || '').trim();
+    if (!k || seen.has(k.toLowerCase())) continue;
+    seen.add(k.toLowerCase());
+    names.push(k);
+  }
+
+  const rows = [];
+  for (const name of names) {
+    const a = await getInfluencerStoryAnalysis(code, name);
+    if (!a) continue;
+    const t = a.totals || {};
+    const { score, components } = _influencerScore(t);
+    rows.push({
+      influencer: name,
+      storiesCount: (a.stories || []).length,
+      registros: t.registros || 0,
+      clientes: t.clientes || 0,
+      conversionRate: t.conversionRate,
+      loyalCount: t.loyalCount || 0,
+      loyalRate: t.loyalRate,
+      activeCount: t.activeCount || 0,
+      activeRate: t.activeRate,
+      avgTicket: t.avgTicket,
+      cost: Math.round(t.cost || 0),
+      deposits: Math.round(t.deposits || 0),
+      net: Math.round(t.net || 0),
+      clicks: t.clicks || 0,
+      cpc: t.cpc,
+      roasNet: t.roasNet,
+      roasGross: t.roasGross,
+      score,
+      scoreComponents: components
+    });
+  }
+
+  rows.sort((a, b) => (b.score - a.score) || ((b.net || 0) - (a.net || 0)));
+
+  return {
+    campaignCode: code,
+    publisher: campaign.publisher,
+    weights: INF_SCORE_WEIGHTS,
+    caps: { roas: INF_ROAS_CAP, ticket: INF_TICKET_CAP, cpc: INF_CPC_CAP },
+    influencers: rows
   };
 }
 
@@ -694,6 +834,7 @@ module.exports = {
   getDailyBreakdown,
   getInfluencerBreakdown,
   getInfluencerStoryAnalysis,
+  getInfluencerStoriesRanking,
   getInfluencerUsers,
   // Exportados por si se quieren testear / ajustar
   ACTIVE_DAYS,

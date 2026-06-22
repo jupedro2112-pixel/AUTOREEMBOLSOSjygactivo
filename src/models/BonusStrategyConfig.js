@@ -3,18 +3,21 @@
  *
  * Singleton (key 'default'). Define una secuencia escalonada de 2 pasos
  * que recibe cada usuario que vota la encuesta de notificaciones:
- *   paso 1 → push con bono de carga del 50%
- *   paso 2 → push con bono de carga del 100%
+ *   paso 1 → push con bono de carga del 15%
+ *   paso 2 → push con bono de carga del 30% (TOPE)
  * El plan que votó (suave/normal/activo) define CADA CUÁNTO le llega cada
  * paso, contado desde que se inscribió (votó). solo_reembolsos no entra.
+ *
+ * REGLA (owner 2026-06-22): el bono de cada paso es ≤30% (escalonado 15/20/25/30)
+ * y dura ≤2h. El tope lo refuerzan la validación del endpoint y activateChargeBonuses.
  *
  * isActive = la estrategia está lanzada; el cron procesa las inscripciones.
  */
 const mongoose = require('mongoose');
 
 const stepSchema = new mongoose.Schema({
-  percent: { type: Number, default: 50, min: 1, max: 1000 },
-  durationMinutes: { type: Number, default: 120, min: 5 },
+  percent: { type: Number, default: 15, min: 1, max: 30 },
+  durationMinutes: { type: Number, default: 120, min: 5, max: 120 },
   title: { type: String, default: '' },
   body: { type: String, default: '' }
 }, { _id: false });
@@ -34,17 +37,17 @@ const bonusStrategyConfigSchema = new mongoose.Schema({
   step1: {
     type: stepSchema,
     default: () => ({
-      percent: 50, durationMinutes: 120,
-      title: '🎁 Tenés un bono del 50%',
-      body: 'Te activamos un 50% extra para tu próxima carga. Cargá ahora y pedí tu bono al agente.'
+      percent: 15, durationMinutes: 120,
+      title: '🎁 Tenés un bono del 15%',
+      body: 'Te activamos un 15% extra para tu próxima carga. Cargá ahora y pedí tu bono al agente — ¡dura 2 horas!'
     })
   },
   step2: {
     type: stepSchema,
     default: () => ({
-      percent: 100, durationMinutes: 120,
-      title: '🔥 Bono del 100% — ¡doble carga!',
-      body: 'Te activamos un 100% de bono. Cargá ahora y se te duplica. Por tiempo limitado.'
+      percent: 30, durationMinutes: 120,
+      title: '🔥 Bono del 30% para vos',
+      body: 'Te activamos un 30% de bono para tu próxima carga. Cargá ahora y aprovechá — por tiempo limitado (2 horas).'
     })
   },
 

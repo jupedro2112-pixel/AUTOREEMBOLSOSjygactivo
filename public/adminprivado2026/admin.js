@@ -980,18 +980,42 @@ function renderComunidadBadge() {
     }
 }
 
-// Al derivar un chat a Comunidad: suma al badge + sonido + toast + notificación.
-function bumpComunidadAlert() {
-    comunidadAlertCount++;
-    renderComunidadBadge();
+// userIds ya contados en el badge (mientras el admin no entró a la pestaña).
+// Evita que un cliente que escribe muchos mensajes infle el contador: el badge
+// cuenta CHATS distintos esperando, no mensajes.
+const _comunidadSeenUsers = new Set();
+let _lastComunidadAlertAt = 0; // throttle del aviso sonoro/toast
+
+// Avisa de actividad en Comunidad (derivación o cliente que vuelve a escribir):
+// suma al badge si es un chat nuevo + sonido/toast/notificación (con throttle).
+//   userId: el cliente; kind: 'derive' (derivación) | 'activity' (re-escribió).
+function bumpComunidadAlert(userId, kind) {
+    const isNew = !userId || !_comunidadSeenUsers.has(userId);
+    if (userId) _comunidadSeenUsers.add(userId);
+    if (isNew) {
+        comunidadAlertCount++;
+        renderComunidadBadge();
+    }
+    // El aviso ruidoso se limita a 1 cada 3s para no spamear si llegan varios
+    // mensajes seguidos, pero el badge siempre se actualiza al instante.
+    const now = Date.now();
+    if (now - _lastComunidadAlertAt < 3000) return;
+    _lastComunidadAlertAt = now;
     try { playNotificationSound(); } catch (_) {}
-    showToast('🔔 Nuevo chat en COMUNIDAD — entrá a la pestaña Comunidad', 'info');
-    try { showBrowserNotification('🔔 Comunidad', 'Derivaron un chat a la sección Comunidad', ''); } catch (_) {}
+    const isActivity = kind === 'activity';
+    showToast(isActivity
+        ? '🔔 Un cliente de COMUNIDAD respondió — revisá la pestaña Comunidad'
+        : '🔔 Nuevo chat en COMUNIDAD — entrá a la pestaña Comunidad', 'info');
+    try {
+        showBrowserNotification('🔔 Comunidad',
+            isActivity ? 'Un cliente de Comunidad respondió' : 'Derivaron un chat a la sección Comunidad', '');
+    } catch (_) {}
 }
 
 // Al entrar a la pestaña Comunidad: limpiar el aviso.
 function clearComunidadAlert() {
     comunidadAlertCount = 0;
+    _comunidadSeenUsers.clear();
     renderComunidadBadge();
 }
 
@@ -1137,7 +1161,7 @@ function initSocket() {
             if (currentTab === 'open' || currentTab === 'comunidad') loadConversations(true);
             // ALERTA para el agente de Comunidad (solo a quien ve esa sección).
             if (['admin', 'comunidad'].includes(currentAdmin?.role) && currentTab !== 'comunidad') {
-                bumpComunidadAlert();
+                bumpComunidadAlert(data.userId, 'derive');
             }
             return;
         }
@@ -1148,6 +1172,22 @@ function initSocket() {
         conversationsCacheByTab.delete('comunidad');
         loadConversations(true);
         showToast(dest === 'open' ? 'Chat enviado a Abiertos' : 'Chat enviado a pagos', 'info');
+    });
+
+    // ACTIVIDAD EN COMUNIDAD: un cliente ya derivado volvió a escribir. Re-avisar
+    // al agente de Comunidad (badge + sonido) si no está mirando esa pestaña, así
+    // no se le pierde el chat al estar respondiendo en "Abiertos".
+    socket.on('comunidad_activity', (data) => {
+        if (!data || !data.userId) return;
+        // Refrescar la lista de Comunidad para que el chat suba con el nuevo mensaje.
+        conversationsCacheByTab.delete('comunidad');
+        if (currentTab === 'comunidad') {
+            loadConversations(true);
+            return; // ya la está viendo, no hace falta alertar
+        }
+        if (['admin', 'comunidad'].includes(currentAdmin?.role)) {
+            bumpComunidadAlert(data.userId, 'activity');
+        }
     });
     
     // USER TYPING
@@ -5168,6 +5208,62 @@ async function loadCBUConfig() {
     loadCommunityConfig();
     // Cargar la config del banco automático (hgcash)
     loadHgcashConfig();
+    // Cargar los porcentajes de reembolso (solo admin general)
+    loadRefundPercents();
+}
+
+// ====== Porcentajes de reembolso (solo admin general) ======
+async function loadRefundPercents() {
+    const form = document.getElementById('refundPercentsForm');
+    const header = document.getElementById('refundPercentsHeader');
+    try {
+        const r = await authFetch('/api/admin/refund-percents');
+        if (!r.ok) {
+            // Sólo admin general puede verlo: si no, ocultamos la card.
+            if (form) form.style.display = 'none';
+            if (header) header.style.display = 'none';
+            return;
+        }
+        if (form) form.style.display = '';
+        if (header) header.style.display = '';
+        const j = await r.json();
+        const p = j.percents || {};
+        const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+        set('refundPctDaily', p.daily);
+        set('refundPctWeekly', p.weekly);
+        set('refundPctMonthly', p.monthly);
+    } catch (e) {
+        console.error('Error cargando porcentajes de reembolso:', e);
+    }
+}
+
+async function saveRefundPercents() {
+    const msg = document.getElementById('refundPctMsg');
+    const num = (id) => {
+        const el = document.getElementById(id);
+        return el ? el.value : '';
+    };
+    const body = {
+        daily: num('refundPctDaily'),
+        weekly: num('refundPctWeekly'),
+        monthly: num('refundPctMonthly')
+    };
+    try {
+        const r = await authFetch('/api/admin/refund-percents', {
+            method: 'POST',
+            body: JSON.stringify(body)
+        });
+        const j = await r.json();
+        if (!r.ok) {
+            if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = j.error || 'No se pudo guardar.'; }
+            return;
+        }
+        const p = j.percents || {};
+        if (msg) { msg.style.color = '#00c853'; msg.textContent = `✅ Guardado: diario ${p.daily}% · semanal ${p.weekly}% · mensual ${p.monthly}%`; }
+        showToast('Porcentajes de reembolso actualizados', 'success');
+    } catch (e) {
+        if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = 'Error de conexión.'; }
+    }
 }
 
 async function loadHgcashConfig() {
@@ -10356,23 +10452,89 @@ async function loadInactivos() {
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
     try {
         const headers = { 'Authorization': `Bearer ${currentToken}` };
-        const [cfgR, statsR] = await Promise.all([
+        const [cfgR, statsR, reactR] = await Promise.all([
             fetch(`${API_URL}/api/admin/inactividad/config`, { headers }),
-            fetch(`${API_URL}/api/admin/inactividad/stats`, { headers })
+            fetch(`${API_URL}/api/admin/inactividad/stats`, { headers }),
+            fetch(`${API_URL}/api/admin/reactivacion/stats?days=14`, { headers })
         ]);
         const cfg = (await cfgR.json()).config || {};
         const stats = await statsR.json();
-        _inactivosRender(cfg, stats);
+        let react = null;
+        try { react = reactR.ok ? await reactR.json() : null; } catch (_) { react = null; }
+        _inactivosRender(cfg, stats, react);
     } catch (e) {
         body.innerHTML = '<div style="color:#ff6b6b;text-align:center;padding:24px;">Error cargando.</div>';
     }
 }
 
-function _inactivosRender(cfg, stats) {
+// Tope del regalo de ticket alto (espejo del backend, para los inputs del panel).
+const REGALO_TA_MAX_ARS_UI = 3000;
+
+// Tablero de seguimiento de las estrategias de reactivación (qué se dispara,
+// cuántos reciben, cuántos reclaman, por estrategia + por día). Datos de
+// /api/admin/reactivacion/stats (agrega los PromoBonus por sourceRuleCode).
+function _reactivacionDashboardHtml(react) {
+    if (!react || !Array.isArray(react.strategies)) return '';
+    const strategies = react.strategies;
+    const totals = react.totals || { creados: 0, reclamados: 0, ingreso: 0, tasaReclamo: 0 };
+    const byDay = (react.byDay || []).slice(0, 14);
+    const money = n => '$' + (Number(n) || 0).toLocaleString('es-AR');
+    let h = '';
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">📊 Seguimiento de estrategias de reactivación <span style="color:#777;font-weight:400;">(últimos ' + (react.days || 14) + ' días)</span></h3>';
+    h += '<div style="background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:18px;">';
+    // Tarjetas resumen
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-bottom:12px;">';
+    h += '<div style="background:rgba(0,0,0,0.3);border:1px solid rgba(108,170,255,0.25);border-radius:8px;padding:10px;text-align:center;"><div style="font-size:19px;font-weight:900;color:#6cf;">' + totals.creados + '</div><div style="font-size:10px;color:#bbb;">Bonos enviados</div></div>';
+    h += '<div style="background:rgba(0,0,0,0.3);border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:10px;text-align:center;"><div style="font-size:19px;font-weight:900;color:#4caf50;">' + totals.reclamados + '</div><div style="font-size:10px;color:#bbb;">Reclamados</div></div>';
+    h += '<div style="background:rgba(0,0,0,0.3);border:1px solid rgba(255,215,0,0.25);border-radius:8px;padding:10px;text-align:center;"><div style="font-size:19px;font-weight:900;color:#ffd700;">' + (totals.tasaReclamo || 0) + '%</div><div style="font-size:10px;color:#bbb;">Tasa de reclamo</div></div>';
+    h += '<div style="background:rgba(0,0,0,0.3);border:1px solid rgba(76,175,80,0.25);border-radius:8px;padding:10px;text-align:center;"><div style="font-size:16px;font-weight:900;color:#4caf50;">' + money(totals.ingreso) + '</div><div style="font-size:10px;color:#bbb;">$ cargado por reclamos</div></div>';
+    h += '</div>';
+    // Tabla por estrategia
+    if (strategies.length) {
+        h += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11.5px;">';
+        h += '<thead><tr style="color:#6cf;text-align:left;background:#15152a;">'
+            + '<th style="padding:6px;">Estrategia</th>'
+            + '<th style="padding:6px;text-align:right;">Enviados</th>'
+            + '<th style="padding:6px;text-align:right;">Reclamados</th>'
+            + '<th style="padding:6px;text-align:right;">Tasa</th>'
+            + '<th style="padding:6px;text-align:right;">Activos</th>'
+            + '<th style="padding:6px;text-align:right;">$ Reclamos</th></tr></thead><tbody>';
+        strategies.forEach(function (s) {
+            h += '<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">'
+                + '<td style="padding:6px;color:#fff;font-weight:600;">' + _escInac(s.label) + '</td>'
+                + '<td style="padding:6px;text-align:right;color:#6cf;">' + s.creados + '</td>'
+                + '<td style="padding:6px;text-align:right;color:#4caf50;">' + s.reclamados + '</td>'
+                + '<td style="padding:6px;text-align:right;color:#ffd700;">' + (s.tasaReclamo || 0) + '%</td>'
+                + '<td style="padding:6px;text-align:right;color:#aaa;">' + (s.activos || 0) + '</td>'
+                + '<td style="padding:6px;text-align:right;color:#4caf50;">' + money(s.ingreso) + '</td></tr>';
+        });
+        h += '</tbody></table></div>';
+    } else {
+        h += '<div style="color:#777;font-size:11px;">Todavía no hay datos de estrategias en el período.</div>';
+    }
+    // Mini serie por día
+    if (byDay.length) {
+        h += '<div style="margin-top:12px;"><div style="color:#888;font-size:10px;text-transform:uppercase;margin-bottom:5px;">Por día (enviados · reclamados)</div>';
+        h += '<div style="display:flex;flex-direction:column;gap:3px;">';
+        byDay.forEach(function (d) {
+            h += '<div style="display:flex;gap:8px;font-size:11px;align-items:center;">'
+                + '<span style="color:#777;width:90px;">' + _escInac(d.date) + '</span>'
+                + '<span style="color:#6cf;">📤 ' + d.creados + '</span>'
+                + '<span style="color:#4caf50;">✅ ' + d.reclamados + '</span></div>';
+        });
+        h += '</div></div>';
+    }
+    h += '<p style="color:#777;font-size:10px;margin:10px 0 0;">Los regalos de ticket alto se reclaman con soporte (no se marcan "reclamado" solos): mirá "Enviados" para esa fila.</p>';
+    h += '</div>';
+    return h;
+}
+
+function _inactivosRender(cfg, stats, react) {
     const body = document.getElementById('inactivosBody');
     if (!body) return;
     const active = cfg.isActive === true;
     const pasos = cfg.pasos || [];
+    const rta = cfg.regaloTicketAlto || {};
     const tramos = (stats && stats.tramos) || [];
     const ultimos = (stats && stats.ultimos) || [];
     const selStyle = 'background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:6px;font-size:11px;font-weight:800;';
@@ -10417,15 +10579,35 @@ function _inactivosRender(cfg, stats) {
             + '<td style="padding:5px;text-align:center;"><select id="inacInp_' + i + '_tipo" style="' + selStyle + '">'
             + '<option value="bono"' + (p.tipo !== 'regalo' ? ' selected' : '') + '>Bono %</option>'
             + '<option value="regalo"' + (p.tipo === 'regalo' ? ' selected' : '') + '>Regalo $</option></select></td>'
-            + '<td style="padding:5px;text-align:center;">' + _encInput('inacInp_' + i + '_percent', p.percent, 0, 500) + '</td>'
+            + '<td style="padding:5px;text-align:center;">' + _encInput('inacInp_' + i + '_percent', p.percent, 0, 30) + '</td>'
             + '<td style="padding:5px;text-align:center;">' + _encInput('inacInp_' + i + '_monto', p.montoARS, 0, 10000000) + '</td>'
             + '</tr>';
     });
     h += '</table>';
-    h += '<div style="margin-top:10px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Vigencia del bono/regalo (horas)</label>'
-        + '<input type="number" id="inacInp_vigencia" value="' + (cfg.bonoVigenciaHoras || 72) + '" min="1" max="720" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
+    h += '<div style="margin-top:10px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Vigencia del bono (horas · máx 2)</label>'
+        + '<input type="number" id="inacInp_vigencia" value="' + (cfg.bonoVigenciaHoras || 2) + '" min="1" max="2" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
+    h += '<p style="color:#777;font-size:10px;margin:8px 0 0;">El bono % está topeado a 30% y vence en 2h (después el botón de reclamo desaparece solo).</p>';
     h += '<button onclick="inactivosSaveConfig()" style="margin-top:12px;width:100%;background:linear-gradient(135deg,#d4af37,#ffd700);color:#000;border:none;border-radius:9px;padding:11px;font-weight:900;font-size:13px;cursor:pointer;">💾 Guardar escalera</button>';
     h += '</div>';
+
+    // --- Regalo de reactivación TICKET ALTO ---
+    const rtaOn = rta.enabled === true;
+    h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">💎 Regalo para clientes de ticket alto</h3>';
+    h += '<div style="background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:12px;margin-bottom:18px;">';
+    h += '<p style="color:#aaa;font-size:11px;margin:0 0 10px;">Regalo de monto fijo (máx $' + REGALO_TA_MAX_ARS_UI + ') para clientes de ticket alto que dejaron de cargar. "De vez en cuando": máximo 1 vez por mes por cliente. Se reclama con soporte (no es bono %).</p>';
+    h += '<label style="display:flex;align-items:center;gap:8px;color:#fff;font-size:12px;margin-bottom:10px;cursor:pointer;">'
+        + '<input type="checkbox" id="rtaInp_enabled" ' + (rtaOn ? 'checked' : '') + ' style="width:auto;"> Activar regalo de ticket alto</label>';
+    h += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;">';
+    h += '<div><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Días sin cargar</label>' + _encInput('rtaInp_dias', rta.dias != null ? rta.dias : 14, 1, 365) + '</div>';
+    h += '<div><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Monto regalo ($ · máx ' + REGALO_TA_MAX_ARS_UI + ')</label>' + _encInput('rtaInp_monto', rta.montoARS != null ? rta.montoARS : 3000, 1, REGALO_TA_MAX_ARS_UI) + '</div>';
+    h += '<div><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Ticket prom. mínimo ($)</label>' + _encInput('rtaInp_minticket', rta.minTicketARS != null ? rta.minTicketARS : 30000, 0, 100000000) + '</div>';
+    h += '<div><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Vigencia (horas · máx 168)</label>' + _encInput('rtaInp_vig', rta.vigenciaHoras != null ? rta.vigenciaHoras : 48, 1, 168) + '</div>';
+    h += '</div>';
+    h += '<button onclick="inactivosSaveConfig()" style="margin-top:12px;width:100%;background:linear-gradient(135deg,#8e44ad,#b06fd6);color:#fff;border:none;border-radius:9px;padding:11px;font-weight:900;font-size:13px;cursor:pointer;">💎 Guardar regalo ticket alto</button>';
+    h += '</div>';
+
+    // --- Seguimiento de estrategias de reactivación ---
+    h += _reactivacionDashboardHtml(react);
 
     // --- Últimos disparos ---
     h += '<h3 style="color:#d4af37;font-size:13px;margin:0 0 8px;">🔎 Últimos disparos</h3>';
@@ -10486,6 +10668,18 @@ async function inactivosSaveConfig() {
         const vigEl = document.getElementById('inacInp_vigencia');
         const vig = parseInt(vigEl && vigEl.value, 10);
         if (isFinite(vig)) cfg.bonoVigenciaHoras = vig;
+        // Regalo de ticket alto (si los inputs están en pantalla).
+        const rtaEnabledEl = document.getElementById('rtaInp_enabled');
+        if (rtaEnabledEl) {
+            const num = (id, def) => { const v = parseInt((document.getElementById(id) || {}).value, 10); return isFinite(v) ? v : def; };
+            cfg.regaloTicketAlto = {
+                enabled: rtaEnabledEl.checked === true,
+                dias: num('rtaInp_dias', 14),
+                montoARS: num('rtaInp_monto', 3000),
+                minTicketARS: num('rtaInp_minticket', 30000),
+                vigenciaHoras: num('rtaInp_vig', 48)
+            };
+        }
         const r = await fetch(`${API_URL}/api/admin/inactividad/config`, {
             method: 'PUT',
             headers: { 'Authorization': `Bearer ${currentToken}`, 'Content-Type': 'application/json' },
@@ -11094,8 +11288,12 @@ async function _renderTabInfluencers(container) {
         container.innerHTML = '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">Este publicista no tiene influencers cargados.<br>Agregalos desde <strong>Publicistas y pautas → Editar campaña</strong> para ver el desglose.</div>';
         return;
     }
+    // Código de campaña para el ranking por historias (los influencers de un
+    // publicista comparten campaña en la práctica; tomamos el primero con código).
+    const rankCampCode = (rows.find(r => r.campaignCode) || {}).campaignCode || '';
     container.innerHTML = `
         <p style="color:#888;font-size:11.5px;margin:0 0 10px;">Clientes del publicista desglosados por el influencer que los trajo. "Sin influencer" = usuarios sin asignar (orgánicos del link o creados antes de cargar la lista).</p>
+        ${rankCampCode ? `<div style="margin:0 0 12px;"><button onclick="openInfluencerRanking('${_safe(rankCampCode)}')" style="padding:8px 14px;background:linear-gradient(135deg,#d4af37,#f0c850);border:none;color:#1a1a2e;border-radius:7px;cursor:pointer;font-size:12.5px;font-weight:800;">🏆 Ranking por historias (mejor → peor)</button></div>` : ''}
         <div style="overflow-x:auto;max-height:360px;overflow-y:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
                 <thead><tr style="background:#15152a;color:#6cf;text-align:left;position:sticky;top:0;">
@@ -11348,6 +11546,7 @@ function renderStoriesTable() {
 
     const roasTxt = v => v == null ? '—' : (v.toFixed(2) + 'x');
     const roasColor = v => v == null ? '#888' : (v >= roasTarget ? '#4caf50' : '#ff6666');
+    const pctTxt = v => v == null ? '—' : (Math.round(v * 100) + '%');
     const verdict = (r) => {
         if (!r.cost || r.cost <= 0) return '<span style="color:#888;">sin costo</span>';
         const ok = (r.roasNet != null && r.roasNet >= roasTarget) || (r.cpaPerRegistro != null && r.cpaPerRegistro <= cpaT);
@@ -11362,13 +11561,22 @@ function renderStoriesTable() {
         return;
     }
 
+    // Celdas de retención/calidad reutilizadas en fila normal, "antes" y total.
+    const cellsCalidad = (r, dim) => `
+            <td style="padding:8px;text-align:right;color:${dim ? '#888' : '#6cf'};">${pctTxt(r.conversionRate)}</td>
+            <td style="padding:8px;text-align:right;color:${dim ? '#888' : '#ffd700'};white-space:nowrap;">${r.loyalCount || 0}<div style="color:#666;font-size:10px;">${pctTxt(r.loyalRate)}</div></td>
+            <td style="padding:8px;text-align:right;color:${dim ? '#888' : '#4caf50'};white-space:nowrap;">${r.activeCount || 0}<div style="color:#666;font-size:10px;">${pctTxt(r.activeRate)}</div></td>
+            <td style="padding:8px;text-align:right;color:${dim ? '#888' : '#fff'};white-space:nowrap;">${r.avgTicket == null ? '—' : _isFmtMoney(r.avgTicket)}</td>
+            <td style="padding:8px;text-align:right;color:${dim ? '#888' : '#aaa'};white-space:nowrap;">${r.cpc == null ? '—' : _isFmtMoney(r.cpc)}${r.clicks ? `<div style="color:#666;font-size:10px;">${r.clicks} clk</div>` : ''}</td>`;
+
     const row = (r) => `
         <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
             <td style="padding:8px;color:#fff;white-space:nowrap;">${r.number ? '<b>#' + r.number + '</b> ' : ''}${fmtDate(r.postedAt)}${r.label ? `<div style="color:#888;font-size:10px;">${_safe(r.label)}</div>` : ''}</td>
             <td style="padding:8px;text-align:right;color:#d4af37;white-space:nowrap;">${_isFmtMoney(r.cost)}</td>
             <td style="padding:8px;text-align:right;color:#fff;">${r.registros}</td>
             <td style="padding:8px;text-align:right;color:#fff;">${r.clientes}</td>
-            <td style="padding:8px;text-align:right;color:${r.cpaPerRegistro != null && r.cpaPerRegistro <= cpaT ? '#4caf50' : '#aaa'};white-space:nowrap;">${r.cpaPerRegistro == null ? '—' : _isFmtMoney(r.cpaPerRegistro)}${r.cpaPerCliente != null ? `<div style="color:#666;font-size:10px;">cli: ${_isFmtMoney(r.cpaPerCliente)}</div>` : ''}</td>
+            ${cellsCalidad(r, false)}
+            <td style="padding:8px;text-align:right;color:${r.cpaPerRegistro != null && r.cpaPerRegistro <= cpaT ? '#4caf50' : '#aaa'};white-space:nowrap;">${r.cpaPerRegistro == null ? '—' : _isFmtMoney(r.cpaPerRegistro)}</td>
             <td style="padding:8px;text-align:right;color:#4caf50;white-space:nowrap;">${_isFmtMoney(r.deposits)}</td>
             <td style="padding:8px;text-align:right;color:${r.net >= 0 ? '#fff' : '#ff6666'};white-space:nowrap;">${_isFmtMoney(r.net)}</td>
             <td style="padding:8px;text-align:right;font-weight:bold;color:${roasColor(r.roasNet)};">${roasTxt(r.roasNet)}</td>
@@ -11385,6 +11593,7 @@ function renderStoriesTable() {
             <td style="padding:8px;text-align:right;color:#666;">—</td>
             <td style="padding:8px;text-align:right;color:#aaa;">${before.registros}</td>
             <td style="padding:8px;text-align:right;color:#aaa;">${before.clientes}</td>
+            ${cellsCalidad(before, true)}
             <td style="padding:8px;text-align:right;color:#666;">—</td>
             <td style="padding:8px;text-align:right;color:#4caf50;">${_isFmtMoney(before.deposits)}</td>
             <td style="padding:8px;text-align:right;color:${before.net >= 0 ? '#aaa' : '#ff6666'};">${_isFmtMoney(before.net)}</td>
@@ -11401,6 +11610,11 @@ function renderStoriesTable() {
                     <th style="padding:8px;text-align:right;">Costo</th>
                     <th style="padding:8px;text-align:right;">Regist.</th>
                     <th style="padding:8px;text-align:right;">Cargaron</th>
+                    <th style="padding:8px;text-align:right;" title="Registros que cargaron al menos una vez">Conv.</th>
+                    <th style="padding:8px;text-align:right;" title="Clientes fieles (≥5 cargas)">Fieles</th>
+                    <th style="padding:8px;text-align:right;" title="Clientes que siguen activos (cargaron ≤7 días)">Activos</th>
+                    <th style="padding:8px;text-align:right;" title="Ticket promedio por carga">Ticket</th>
+                    <th style="padding:8px;text-align:right;" title="Costo por click (clicks de la campaña en la ventana de la historia)">CPC</th>
                     <th style="padding:8px;text-align:right;">CPA</th>
                     <th style="padding:8px;text-align:right;">$ Cargado</th>
                     <th style="padding:8px;text-align:right;">$ Neto</th>
@@ -11417,6 +11631,7 @@ function renderStoriesTable() {
                     <td style="padding:8px;text-align:right;color:#d4af37;">${_isFmtMoney(t.cost)}</td>
                     <td style="padding:8px;text-align:right;color:#fff;">${t.registros || 0}</td>
                     <td style="padding:8px;text-align:right;color:#fff;">${t.clientes || 0}</td>
+                    ${cellsCalidad(t, false)}
                     <td style="padding:8px;text-align:right;color:#aaa;">${t.cpaPerRegistro == null ? '—' : _isFmtMoney(t.cpaPerRegistro)}</td>
                     <td style="padding:8px;text-align:right;color:#4caf50;">${_isFmtMoney(t.deposits)}</td>
                     <td style="padding:8px;text-align:right;color:${(t.net || 0) >= 0 ? '#fff' : '#ff6666'};">${_isFmtMoney(t.net)}</td>
@@ -11426,7 +11641,7 @@ function renderStoriesTable() {
                 </tr></tfoot>
             </table>
         </div>
-        <p style="color:#666;font-size:11px;margin:10px 0 0;">Atribución por horario: cada historia se queda con los registros desde que subió hasta la próxima. Cargas/neto son de toda la vida de esos clientes (cohorte), así que el ROAS puede seguir subiendo con el tiempo.</p>`;
+        <p style="color:#666;font-size:11px;margin:10px 0 0;">Atribución por horario: cada historia se queda con los registros desde que subió hasta la próxima. <b>Conv.</b>=registros que cargaron · <b>Fieles</b>=clientes con ≥5 cargas · <b>Activos</b>=cargaron en los últimos 7 días · <b>CPC</b>=costo por click (clicks de la campaña en la ventana; se borran a los 90 días). Cargas/neto son de toda la vida de esos clientes (cohorte), así que el ROAS puede subir con el tiempo.</p>`;
 }
 
 async function submitNewStory() {
@@ -11530,6 +11745,107 @@ function openInfluencerUsersIdx(i) {
 }
 window.openInfluencerStoriesIdx = openInfluencerStoriesIdx;
 window.openInfluencerUsersIdx = openInfluencerUsersIdx;
+
+// ============================================
+// RANKING DE INFLUENCERS POR HISTORIAS (score combinado, ordenable)
+// ============================================
+let _rankingState = null;
+let _rankingSort = 'score'; // columna de orden actual
+
+async function openInfluencerRanking(campaignCode) {
+    _rankingState = null;
+    _rankingSort = 'score';
+    document.getElementById('irSubtitle').textContent = '';
+    document.getElementById('irTableWrap').innerHTML = 'Cargando…';
+    showModal('influencerRankingModal');
+    try {
+        const r = await fetch(`${API_URL}/api/admin/influencer-stories/ranking?campaign=${encodeURIComponent(campaignCode)}`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        _rankingState = r.ok ? await r.json() : null;
+    } catch (e) { _rankingState = null; }
+    if (!_rankingState) {
+        document.getElementById('irTableWrap').innerHTML = '<span style="color:#ff6666;">Error cargando el ranking</span>';
+        return;
+    }
+    const w = _rankingState.weights || {};
+    document.getElementById('irSubtitle').innerHTML =
+        `Publicista <b>${_safe(_rankingState.publisher || '')}</b> · campaña <b>${_safe(_rankingState.campaignCode)}</b>. `
+        + `Score combinado: ROAS ${Math.round((w.roas || 0) * 100)}% + fieles ${Math.round((w.loyal || 0) * 100)}% + ticket ${Math.round((w.ticket || 0) * 100)}% + CPC ${Math.round((w.cpc || 0) * 100)}%. `
+        + `Tocá un encabezado para reordenar.`;
+    renderInfluencerRankingTable();
+}
+
+function rankSortBy(key) { _rankingSort = key; renderInfluencerRankingTable(); }
+
+function renderInfluencerRankingTable() {
+    if (!_rankingState) return;
+    const wrap = document.getElementById('irTableWrap');
+    const rows = (_rankingState.influencers || []).slice();
+    if (rows.length === 0) {
+        wrap.innerHTML = '<div style="color:#888;font-size:13px;padding:14px;text-align:center;">No hay influencers con historias en esta campaña.</div>';
+        return;
+    }
+    // Orden: numérico desc por la métrica elegida (null al final).
+    const key = _rankingSort;
+    rows.sort((a, b) => {
+        const va = a[key], vb = b[key];
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        return vb - va;
+    });
+
+    const pctTxt = v => v == null ? '—' : (Math.round(v * 100) + '%');
+    const roasTxt = v => v == null ? '—' : (v.toFixed(2) + 'x');
+    const medal = (i) => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1) + 'º';
+    const scoreColor = s => s >= 70 ? '#4caf50' : s >= 40 ? '#d4af37' : '#ff6666';
+    const arrow = (k) => key === k ? ' ▾' : '';
+    const th = (k, label, alignR) => `<th onclick="rankSortBy('${k}')" style="padding:8px;cursor:pointer;text-align:${alignR ? 'right' : 'left'};white-space:nowrap;${key === k ? 'color:#fff;' : ''}" title="Ordenar por ${label}">${label}${arrow(k)}</th>`;
+
+    wrap.innerHTML = `
+        <div style="overflow-x:auto;max-height:60vh;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#15152a;color:#6cf;position:sticky;top:0;">
+                    <th style="padding:8px;text-align:left;">#</th>
+                    <th style="padding:8px;text-align:left;">Influencer</th>
+                    ${th('score', 'Score', true)}
+                    ${th('roasNet', 'ROAS', true)}
+                    ${th('loyalRate', 'Fieles', true)}
+                    ${th('activeRate', 'Activos', true)}
+                    ${th('avgTicket', 'Ticket', true)}
+                    ${th('cpc', 'CPC', true)}
+                    ${th('conversionRate', 'Conv.', true)}
+                    ${th('clientes', 'Clientes', true)}
+                    ${th('net', '$ Neto', true)}
+                    ${th('storiesCount', 'Hist.', true)}
+                </tr></thead>
+                <tbody>
+                    ${rows.map((r, i) => `
+                        <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                            <td style="padding:8px;color:#aaa;">${medal(i)}</td>
+                            <td style="padding:8px;color:#fff;font-weight:600;">${_safe(r.influencer)}</td>
+                            <td style="padding:8px;text-align:right;font-weight:800;color:${scoreColor(r.score)};">${r.score}</td>
+                            <td style="padding:8px;text-align:right;color:#fff;">${roasTxt(r.roasNet)}</td>
+                            <td style="padding:8px;text-align:right;color:#ffd700;">${r.loyalCount || 0}<div style="color:#666;font-size:10px;">${pctTxt(r.loyalRate)}</div></td>
+                            <td style="padding:8px;text-align:right;color:#4caf50;">${r.activeCount || 0}<div style="color:#666;font-size:10px;">${pctTxt(r.activeRate)}</div></td>
+                            <td style="padding:8px;text-align:right;color:#d4af37;white-space:nowrap;">${r.avgTicket == null ? '—' : _isFmtMoney(r.avgTicket)}</td>
+                            <td style="padding:8px;text-align:right;color:#aaa;white-space:nowrap;">${r.cpc == null ? '—' : _isFmtMoney(r.cpc)}${r.clicks ? `<div style="color:#666;font-size:10px;">${r.clicks} clk</div>` : ''}</td>
+                            <td style="padding:8px;text-align:right;color:#6cf;">${pctTxt(r.conversionRate)}</td>
+                            <td style="padding:8px;text-align:right;color:#fff;">${r.clientes || 0}</td>
+                            <td style="padding:8px;text-align:right;color:${(r.net || 0) >= 0 ? '#fff' : '#ff6666'};white-space:nowrap;">${_isFmtMoney(r.net)}</td>
+                            <td style="padding:8px;text-align:right;color:#888;">${r.storiesCount || 0}</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
+        </div>
+        <p style="color:#666;font-size:11px;margin:10px 0 0;">El mismo influencer puede tener historias rentables y otras no: para ver historia por historia, cerrá este ranking y tocá <b>📖 Historias</b> en la fila del influencer. <b>Fieles</b>=clientes con ≥5 cargas · <b>Activos</b>=cargaron ≤7 días · <b>CPC</b>=costo por click (los clicks se borran a los 90 días, así que en historias viejas puede faltar).</p>`;
+}
+
+function closeInfluencerRankingModal() { hideModal('influencerRankingModal'); _rankingState = null; }
+window.openInfluencerRanking = openInfluencerRanking;
+window.rankSortBy = rankSortBy;
+window.closeInfluencerRankingModal = closeInfluencerRankingModal;
 
 // ============================================
 // USUARIOS DE UN INFLUENCER — ver + reasignar (corregir errores del agente)

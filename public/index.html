@@ -630,19 +630,19 @@
                     <div class="dash-refunds">
                         <div class="dash-refunds-title">🎁 REEMBOLSOS</div>
                         <div class="dash-refunds-row">
-                            <button id="dailyRefundBtn" class="refund-btn daily" title="Reembolso Diario 20%">
+                            <button id="dailyRefundBtn" class="refund-btn daily" title="Reembolso Diario">
                                 <span class="refund-label-full">📅<br>Diario</span>
                                 <span class="refund-label-short">📅</span>
                                 <span class="refund-amount" id="dailyRefundAmount">$0</span>
                                 <span class="refund-timer" id="dailyRefundTimer"></span>
                             </button>
-                            <button id="weeklyRefundBtn" class="refund-btn weekly" title="Reembolso Semanal 10% (Lun-Mar)">
+                            <button id="weeklyRefundBtn" class="refund-btn weekly" title="Reembolso Semanal (Lun-Mar)">
                                 <span class="refund-label-full">📆<br>Semanal</span>
                                 <span class="refund-label-short">📆</span>
                                 <span class="refund-amount" id="weeklyRefundAmount">$0</span>
                                 <span class="refund-timer" id="weeklyRefundTimer"></span>
                             </button>
-                            <button id="monthlyRefundBtn" class="refund-btn monthly" title="Reembolso Mensual 5% (Desde día 7)">
+                            <button id="monthlyRefundBtn" class="refund-btn monthly" title="Reembolso Mensual (Desde día 7)">
                                 <span class="refund-label-full">🗓️<br>Mensual</span>
                                 <span class="refund-label-short">🗓️</span>
                                 <span class="refund-amount" id="monthlyRefundAmount">$0</span>
@@ -1218,13 +1218,13 @@
             </div>
             <div style="display:flex;flex-direction:column;gap:12px;padding:10px 0;">
                 <button onclick="VIP.refunds.showRefundModal('daily');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;">
-                    📅 Reembolso Diario (20% pérdidas de ayer)
+                    📅 Reembolso Diario (<span id="unifiedDailyPct">20</span>% pérdidas de ayer)
                 </button>
                 <button onclick="VIP.refunds.showRefundModal('weekly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a6b3a,#2d9b56);">
-                    📆 Reembolso Semanal (10% pérdidas semana)
+                    📆 Reembolso Semanal (<span id="unifiedWeeklyPct">10</span>% pérdidas semana)
                 </button>
                 <button onclick="VIP.refunds.showRefundModal('monthly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a3a6b,#2d5b9b);">
-                    🗓️ Reembolso Mensual (5% pérdidas mes)
+                    🗓️ Reembolso Mensual (<span id="unifiedMonthlyPct">5</span>% pérdidas mes)
                 </button>
                 <button onclick="VIP.ui.hideModal('unifiedRefundModal')" class="btn btn-secondary">Cerrar</button>
             </div>

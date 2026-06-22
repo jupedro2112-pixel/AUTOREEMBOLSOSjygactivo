@@ -352,9 +352,10 @@ async function activateChargeBonuses(rule, usernames, models, logger) {
   const PromoBonus = models && models.PromoBonus;
   if (!PromoBonus) return 0;
   const cb = rule.chargeBonus || {};
-  const percent = Number(cb.percent) || 0;
+  // Tope de negocio (owner 2026-06-21): TODO bono automático ≤ 30% y ≤ 2h.
+  const percent = Math.min(30, Number(cb.percent) || 0);
   if (percent <= 0 || !usernames || usernames.length === 0) return 0;
-  const durationMin = Math.max(5, Number(cb.durationMinutes) || 120);
+  const durationMin = Math.min(120, Math.max(5, Number(cb.durationMinutes) || 120));
   const now = new Date();
   const expiresAt = new Date(now.getTime() + durationMin * 60 * 1000);
   const normUsers = [...new Set(usernames.map(u => String(u || '').toLowerCase()).filter(Boolean))];

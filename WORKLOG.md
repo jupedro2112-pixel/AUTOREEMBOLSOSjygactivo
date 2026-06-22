@@ -4,7 +4,140 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-20**
+> **Última actualización: 2026-06-22**
+
+## Sesión 2026-06-22
+
+### 60. Estrategia por voto reactivada (≤30%) + regalo ticket alto $3.000 + tablero de reactivación
+- **Estrategia por voto (BonusStrategyConfig):** reactivada (estaba apagada en #57). Ahora **escalonada y
+  capeada a 30%** (defaults 15% → 30%) y vigencia ≤2h. `BONUS_STRATEGY_DISABLED=false`; validación del POST
+  `_step` capea percent ≤30 y duración ≤120min; el GET clampea para mostrar (por si quedó un singleton viejo
+  50/100); modelo `BonusStrategyConfig` con `stepSchema` max 30 y defaults 15/30. El runtime ya estaba protegido
+  por el cap de `activateChargeBonuses` (#58).
+- **Regalo de reactivación TICKET ALTO ($3.000):** nuevo, dentro de `inactividadService`. Para clientes de
+  ticket alto (ticket promedio ≥ `minTicketARS`, default $30.000) que dejaron de cargar ≥ `dias` (default 14):
+  un **regalo de monto fijo ≤$3.000**, **máximo 1 vez por mes** (fireKey con mes ART), vigencia configurable
+  (default 48h, máx 7d). Se entrega por **push** ("reclamá con soporte") y se registra como `PromoBonus`
+  (`sourceRuleCode:'regalo_ticket_alto'`, `montoFijoARS`, percent 0). Si un cliente califica para el regalo,
+  ese tick recibe el regalo en lugar del bono %. La agregación de inactividad ahora trae también total+cantidad
+  de cargas (para el ticket promedio). Config en `inactividadConfig.regaloTicketAlto` (defaults + caps en
+  `mergeInactividadConfig`, tope `REGALO_TA_MAX_ARS=3000`). Apagado por defecto.
+- **Banner de bono:** `_getActivePromoBonus` ahora filtra `percent > 0` → los regalos (percent 0) no aparecen
+  como "0%" en el banner de "% en la carga"; se entregan por push/soporte y se trackean aparte.
+- **Tablero de seguimiento de reactivación:** nuevo `GET /api/admin/reactivacion/stats?days=` (solo admin
+  general) que agrega TODOS los `PromoBonus` por `sourceRuleCode` y por día: **enviados** (creados),
+  **reclamados** (status used), tasa de reclamo, activos, e **ingreso** (cargaMonto de los reclamados). En el
+  panel, sección **Inactivos** → card "📊 Seguimiento de estrategias de reactivación" (tarjetas + tabla por
+  estrategia + serie por día). Los regalos se reclaman con soporte (no se marcan used solos) → para esos se
+  mira "Enviados". La sección Inactivos ahora también tiene la card "💎 Regalo para clientes de ticket alto"
+  para activar/configurar; el input de % de la escalera y la vigencia se capean en la UI (30% / 2h).
+- **Validado:** `node --check` OK (server.js, inactividadService.js, BonusStrategyConfig.js, admin.js).
+  Back necesita redeploy.
+
+### 59. Analítica de historias de influencer: conversión, retención y ranking por score combinado
+- **Pedido:** análisis más detallado de historias por influencer — conversión por historia, retención por
+  historia, y un **ranking de influencers** (mejor→peor) según retención de clientes fieles, ticket promedio,
+  ROAS promedio y costo por click. Clave: una historia de un influencer puede ser rentable y otra del MISMO
+  influencer no, así que se necesita ver historia por historia + el influencer agregado + el ranking.
+- **Backend (`publisherAnalyticsService.js`):**
+  - `getInfluencerStoryAnalysis` enriquecido: por historia (y en totales) ahora calcula **conversión**
+    (registros→clientes), **clientes fieles** (≥5 cargas, count + %), **clientes activos** (cargaron ≤7d,
+    count + %), **ticket promedio**, **clicks** y **CPC** (costo/clicks). Trackea la última carga por usuario.
+  - Clicks: `CampaignClick` es por campaña (no por influencer) y TTL 90d → se atribuyen por ventana horaria
+    igual que los usuarios; en historias de +90d puede no haber dato. Aclarado en la UI.
+  - Nuevo `getInfluencerStoriesRanking(campaignCode)` + helper `_influencerScore(totals)`: score 0-100
+    **combinado balanceado** (decisión owner): ROAS 35% + retención de fieles 30% + ticket 20% + CPC 15%.
+    Normaliza cada métrica con topes fijos (`INF_ROAS_CAP=2`, `INF_TICKET_CAP=50000`, `INF_CPC_CAP=2000`);
+    CPC sin clicks → neutro 0.5 (no castiga historias viejas). Ordena por score desc (desempate por neto).
+- **Endpoint:** `GET /api/admin/influencer-stories/ranking?campaign=CODE` (adminMiddleware).
+- **Panel (`adminprivado2026`):**
+  - Tabla de historias (modal 📖 Historias) ampliada con columnas Conv. / Fieles / Activos / Ticket / CPC,
+    en filas, "antes de la 1ª historia" y total.
+  - Pestaña "🎬 Por influencer" → botón **"🏆 Ranking por historias"** que abre `influencerRankingModal`:
+    tabla **ordenable** por cualquier columna (score, ROAS, fieles, activos, ticket, CPC, conversión, clientes,
+    neto, #historias), con medallas 🥇🥈🥉 y el desglose del score. Funciones `openInfluencerRanking`/
+    `rankSortBy`/`renderInfluencerRankingTable`/`closeInfluencerRankingModal`.
+- **Validado:** `node --check` OK (server.js, publisherAnalyticsService.js, admin.js). Back necesita redeploy.
+
+## Sesión 2026-06-21
+
+### 58. Reembolsos vueltos a 20/10/5 (editables) + tope global 30% en TODO bono + limpieza de bonos viejos
+- **Reembolsos:** el owner pidió **volver a 20% diario / 10% semanal / 5% mensual** (revierte el 8/3/3 de la #56),
+  PERO manteniendo la edición desde el panel. Solo se cambió `REFUND_PCT_DEFAULTS` a `{20,10,5}` en server.js
+  (+ fallback en refunds.js y placeholders del HTML). El mecanismo de Config `refundPercents` + card del panel
+  (solo admin general) queda igual: si el owner nunca toca el panel, rige 20/10/5.
+- **Tope global de bono 30%/2h:** `notificationRulesService.activateChargeBonuses` (el 3er punto que crea
+  PromoBonus, usado por reglas de notificación con chargeBonus) ahora clampea `percent ≤30` y `durationMinutes ≤120`.
+  Con esto, los TRES puntos que crean bonos quedan capeados: inactividad (≤30/2h), encuesta (bono apagado),
+  activateChargeBonuses (≤30/2h). No queda ningún motor que pueda dar >30%.
+- **Limpieza de bonos viejos (one-shot):** migración en `initializeData` (flag `migration_clear_old_promobonus_done`)
+  que VENCE todos los `PromoBonus` activos al arrancar. Como todos los PromoBonus son automáticos (los bonos
+  manuales del agente van directo a JUGAYGANA), esto deja la pizarra limpia: se sacan los 50%/100% viejos de
+  encuesta/estrategia y el motor capeado de inactividad los repuebla. Corre UNA sola vez; los bonos nuevos no se tocan.
+- **Reactivación de gente:** el motor de Inactividad ES la herramienta de reactivación (push + bono al que no
+  carga hace ≥7d), ya capeado a 30%/2h. No se agregó otro motor: el tope 30% aplica a cualquier bono automático.
+- **Validado:** `node --check` OK (server.js, notificationRulesService.js, refunds.js). Back necesita redeploy.
+
+### 57. Estrategia de bonos reordenada: bono SOLO a inactivos (no carga ≥7d), ≤30% y ≤2h
+- **Pedido del owner:** hoy se da mucho bono automático a gente ACTIVA y los bonos duran "miles de minutos"
+  (caso visto: 50% · vence en 3774 min · "regla inactividad"). Querían: gente ACTIVA (cargó hace <7d) NO recibe
+  bono automático, solo notificaciones de enganche según su plan; gente INACTIVA (no carga hace ≥7d) sí, pero
+  bono **≤30%** y reclamable **≤2h** (después desaparece el botón solo).
+- **Decisiones (vía preguntas):** escalera **7d → 30%** y **14d → 30%** (sin regalo); **apagar** los bonos de
+  los motores que apuntan a gente activa (encuesta + estrategia por voto).
+- **Motor de inactividad (`src/services/inactividadService.js`) — reescrito:**
+  - Segmenta por **última CARGA real** (Transaction type:'deposit', excluye regalos/devoluciones), NO por último
+    ingreso (`lastLogin`) como antes. Inactivo = su última carga fue hace ≥ `minDias`. Una sola agregación.
+  - **Topes duros en código:** bono `MAX_BONUS_PERCENT=30`, vigencia `MAX_VIGENCIA_HORAS=2` (clampea aunque la
+    config diga más). `fireKey` ahora usa el día de la última carga (si vuelve a cargar y se ausenta, reinicia).
+  - Recibe el modelo `Transaction` (server.js `_runInactividadTick` lo pasa). Mensajes cambiados a "hace X días
+    que no cargás… dura 2 horas".
+- **Defaults/caps de config (`server.js`):** `INACTIVIDAD_DEFAULTS` ahora 7d/14d a 30% y `bonoVigenciaHoras:2`.
+  `mergeInactividadConfig` clampea `percent ≤30` y `bonoVigenciaHoras ≤2` (constantes `REFUND_INACT_MAX_PCT=30`,
+  `REFUND_INACT_MAX_VIG_HORAS=2`). La card de stats de Inactivos ahora cuenta por **última carga** (coherente).
+- **Apagados (bonos a gente activa):**
+  - **Encuesta (`encuestaService.cohortWeek`):** se quitaron los slots de BONO (`bDays = []`). La encuesta ahora
+    manda SOLO incentivos de enganche ("jugá, divertite, estamos cargando"). Reversible: volver a `bonusDays(bonoN)`.
+  - **Estrategia de bonos por voto (`_runBonusStrategy`):** neutralizada con `BONUS_STRATEGY_DISABLED=true`
+    (early-return). El panel/endpoints quedan; no dispara bonos.
+- **Las "notificaciones normales por plan"** (reglas PLAN-ACTIVO/NORMAL/SUAVE en notificationRulesService) ya eran
+  `bonus:none` (puro enganche) → se mantienen como están. No hay otro motor automático de bono.
+- **OJO (config existente):** los topes (30%/2h) se aplican solos al leer la config aunque en producción haya
+  quedado la vieja (50%/72h). Pero los **pasos** guardados (ej. si había un 3er paso de regalo $5.000 a 30d) se
+  conservan hasta que el owner entre a la sección **Inactivos** y guarde, o se fuerce. Los bonos YA creados
+  (ej. el de 50%/63h) siguen vigentes hasta vencer/usarse — los NUEVOS ya salen capeados.
+- **Validado:** `node --check` OK (server.js, inactividadService.js, encuestaService.js). Back necesita redeploy.
+
+### 56. Reembolsos: bajados a 8/3/3 + porcentajes EDITABLES desde el panel (solo admin general)
+- **Pedido:** bajar los reembolsos (eran 20% diario / 10% semanal / 5% mensual) a **8% diario, 3% semanal,
+  3% mensual**, y poder cambiarlos fácil desde el panel sin tocar código (solo el admin general).
+- **Backend (`server.js`):** los % dejan de estar hardcodeados. Nuevo `Config['refundPercents']` con helper
+  `getRefundPercents()` (defaults `{daily:8, weekly:3, monthly:3}`, clamp 0-100). Lo usan `/api/refunds/status`
+  y los 3 claims (`/api/refunds/claim/{daily|weekly|monthly}`) → el monto y el campo `percentage` salen del
+  config. Nuevos endpoints **`GET/POST /api/admin/refund-percents`** (authMiddleware+adminMiddleware **+ check
+  explícito `role==='admin'`** → SOLO admin general; depositor/withdrawer/comunidad reciben 403).
+- **Cliente (`public/js/refunds.js` + `index.html`):** los % del modal salen ahora de `status.percentage`
+  (no hardcodeados). Se sacaron los "20%/10%/5%" estáticos de los tooltips y los botones del modal unificado
+  ahora tienen `<span id="unified*Pct">` que `updateRefundLabels()` actualiza con el valor real.
+- **Panel (`adminprivado2026`):** nueva card "🎁 Porcentajes de reembolso" en COMANDOS (se oculta si no sos
+  admin general, igual que la card de hgcash). Funciones `loadRefundPercents()`/`saveRefundPercents()`.
+- **Nota:** al estar en Config, el valor sobrevive a redeploys. Si nunca se setea, usa los defaults 8/3/3.
+- **Validado:** `node --check` OK (server.js, admin.js, refunds.js). Back necesita redeploy; front, recargar.
+
+### 55. FIX Comunidad: re-aviso cuando un cliente derivado vuelve a escribir
+- **Síntoma:** al derivar a alguien a Comunidad llega el aviso + badge, pero si el agente lo atiende una vez y
+  pasa a "Abiertos", cuando ese cliente responde NO vuelve a avisar → el chat se pierde y se generan demoras
+  en Comunidad porque el agente está respondiendo en "Abiertos".
+- **Fix backend (`server.js`):** nuevo helper `maybeNotifyComunidadActivity(userId, username)` — cuando un
+  cliente cuyo `ChatStatus.status==='comunidad'` manda un mensaje (rama HTTP `/api/messages/send` y socket
+  `send_message`), emite `notifyAdmins('comunidad_activity', {userId, username})`. Fire-and-forget, no frena
+  la entrega del mensaje.
+- **Fix panel (`admin.js`):** nuevo handler `socket.on('comunidad_activity')` → si el agente (admin/comunidad)
+  NO está en la pestaña Comunidad, re-avisa (badge + sonido + toast). `bumpComunidadAlert(userId, kind)` ahora
+  cuenta **chats distintos** (Set `_comunidadSeenUsers`, no infla con un cliente que escribe mucho) y tiene
+  **throttle de 3s** en el aviso sonoro. La derivación pasa `(userId,'derive')`; la re-actividad `(userId,'activity')`.
+  Al entrar a la pestaña Comunidad se limpia el set.
+- **Validado:** `node --check` OK (server.js, admin.js). Back necesita redeploy; front, recargar el panel.
 
 ## Sesión 2026-06-20
 

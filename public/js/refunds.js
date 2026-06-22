@@ -25,6 +25,28 @@ VIP.refunds = (function () {
         updateRefundButton('daily', VIP.state.refundStatus.daily);
         updateRefundButton('weekly', VIP.state.refundStatus.weekly);
         updateRefundButton('monthly', VIP.state.refundStatus.monthly);
+        updateRefundLabels();
+    }
+
+    // Actualiza los % visibles (tooltips de los botones del dashboard y los spans
+    // del modal unificado) con el valor real configurado en el panel.
+    function updateRefundLabels() {
+        const s = VIP.state.refundStatus;
+        if (!s) return;
+        const tip = (id, label, t) => {
+            const el = document.getElementById(id);
+            if (el && s[t] && s[t].percentage != null) el.title = `${label} ${s[t].percentage}%`;
+        };
+        tip('dailyRefundBtn', 'Reembolso Diario', 'daily');
+        tip('weeklyRefundBtn', 'Reembolso Semanal (Lun-Mar)', 'weekly');
+        tip('monthlyRefundBtn', 'Reembolso Mensual (Desde día 7)', 'monthly');
+        const pctSpan = (id, t) => {
+            const el = document.getElementById(id);
+            if (el && s[t] && s[t].percentage != null) el.textContent = s[t].percentage;
+        };
+        pctSpan('unifiedDailyPct', 'daily');
+        pctSpan('unifiedWeeklyPct', 'weekly');
+        pctSpan('unifiedMonthlyPct', 'monthly');
     }
 
     function updateRefundButton(type, data) {
@@ -92,10 +114,16 @@ VIP.refunds = (function () {
         }
 
         const typeData = VIP.state.refundStatus[type];
+        // Los porcentajes son configurables desde el panel; los tomamos del estado
+        // (campo `percentage` que devuelve /api/refunds/status) en vez de hardcodear.
+        const pctOf = (t) => {
+            const p = VIP.state.refundStatus[t] && VIP.state.refundStatus[t].percentage;
+            return (p !== undefined && p !== null) ? p : { daily: 20, weekly: 10, monthly: 5 }[t];
+        };
         const titles = {
-            daily:   '📅 Reembolso Diario (20%)',
-            weekly:  '📆 Reembolso Semanal (10%)',
-            monthly: '🗓️ Reembolso Mensual (5%)'
+            daily:   `📅 Reembolso Diario (${pctOf('daily')}%)`,
+            weekly:  `📆 Reembolso Semanal (${pctOf('weekly')}%)`,
+            monthly: `🗓️ Reembolso Mensual (${pctOf('monthly')}%)`
         };
         const periodLabels = {
             daily:   '📊 PÉRDIDAS DE AYER',

@@ -60,9 +60,13 @@ const VENTANA_HORARIA = [
 // Máximo 1 slot por día; los horarios se reparten en la ventana 18:00–21:30.
 function cohortWeek(cohortCfg, cfg) {
   const slots = [];
-  const bonoN = Math.max(0, Number(cohortCfg && cohortCfg.bonosPorSemana) || 0);
+  // DESACTIVADO (owner 2026-06-21): la encuesta ya NO reparte bonos. La gente
+  // activa (la que vota un plan y usa la sala) recibe SOLO notificaciones de
+  // enganche ("jugá, divertite, estamos cargando"). El único bono automático
+  // sale del motor de inactividad (gente que no carga hace ≥7d, ≤30%, ≤2h).
+  // Para reactivar los bonos de encuesta, volvé a poner `bonusDays(bonoN)`.
   const incN  = Math.max(0, Number(cohortCfg && cohortCfg.incentivosPorSemana) || 0);
-  const bDays = bonusDays(bonoN);
+  const bDays = [];
   const bSet = {};
   bDays.forEach(function (d) { bSet[d] = true; });
   const percents = (Array.isArray(cfg.bonoPercents) && cfg.bonoPercents.length) ? cfg.bonoPercents : [50, 100];

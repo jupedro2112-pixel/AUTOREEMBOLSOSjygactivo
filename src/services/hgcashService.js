@@ -94,4 +94,39 @@ async function createCashOut({ accountId, amount, toCBU, toName, toCUIT, concept
   }
 }
 
-module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getToken };
+// Resuelve el id de la TRANSACCIÓN real (ledger) a partir del id del REQUEST que
+// devolvió createCashOut. El recibo PDF se pide con el id de transacción, no del
+// request. Puede devolver transactionId=null si todavía no se procesó.
+// GET /transaction-requests/{id}/transaction-id → { transactionId }
+async function getTransactionIdForRequest(requestId) {
+  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+  if (!requestId) return { ok: false, error: 'requestId vacío' };
+  try {
+    const r = await axios.get(`${BASE}/transaction-requests/${encodeURIComponent(requestId)}/transaction-id`, { headers: _headers(), timeout: 15000 });
+    return { ok: true, transactionId: (r.data && r.data.transactionId) || null };
+  } catch (e) {
+    const httpStatus = e.response && e.response.status;
+    const detail = e.response ? `HTTP ${httpStatus} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.message;
+    logger.warn(`[hgcash-pay] get-transaction-id falló (${requestId}): ${detail}`);
+    return { ok: false, error: detail, httpStatus };
+  }
+}
+
+// Trae una URL firmada para descargar el PDF del comprobante de un pago. La URL
+// VENCE en 1 hora (por eso conviene resolverla on-demand, no guardarla).
+// GET /transactions/{id}/receipt → { signedUrl }
+async function getReceiptUrl(transactionId) {
+  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+  if (!transactionId) return { ok: false, error: 'transactionId vacío' };
+  try {
+    const r = await axios.get(`${BASE}/transactions/${encodeURIComponent(transactionId)}/receipt`, { headers: _headers(), timeout: 20000 });
+    return { ok: true, signedUrl: (r.data && r.data.signedUrl) || null };
+  } catch (e) {
+    const httpStatus = e.response && e.response.status;
+    const detail = e.response ? `HTTP ${httpStatus} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.message;
+    logger.warn(`[hgcash-pay] get-receipt falló (${transactionId}): ${detail}`);
+    return { ok: false, error: detail, httpStatus };
+  }
+}
+
+module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getTransactionIdForRequest, getReceiptUrl, getToken };

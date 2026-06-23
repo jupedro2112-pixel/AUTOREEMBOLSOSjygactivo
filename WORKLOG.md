@@ -8,6 +8,30 @@
 
 ## Sesión 2026-06-23
 
+### 63. Comprobante PDF automático al pagar un retiro (API hgcash)
+- **Pedido:** cuando se confirma un pago (cash-out hgcash), mandarle al cliente el **comprobante PDF** automáticamente.
+- **API:** `GET /transactions/{txId}/receipt` → `{ signedUrl }` (PDF, **vence en 1h**). El `{txId}` es el id de la
+  TRANSACCIÓN real (≠ id del REQUEST que devuelve `POST /transactions`). Se resuelve con
+  `GET /transaction-requests/{reqId}/transaction-id` → `{ transactionId }`, o viene en el webhook `transaction_associated`.
+- **Implementación:**
+  - `src/services/hgcashService.js`: nuevas `getTransactionIdForRequest(reqId)` y `getReceiptUrl(txId)`.
+  - `PendingPayout`: nuevos `hgTxId` (id de transacción real) y `receiptSentAt` (idempotencia). Aclarado que
+    `hgTransactionId` guarda el id del REQUEST.
+  - `server.js`:
+    - `handlePayoutStatusWebhook`: captura `p.transactionId` → `hgTxId`; en `DONE` dispara `maybeSendPayoutReceipt`.
+    - `resolvePayoutTxId(payout)`: devuelve `hgTxId` o lo pide a la API con el reqId y lo cachea.
+    - `maybeSendPayoutReceipt(payout)`: resuelve el txId (3 reintentos x4s por si tarda en asociarse), reclama
+      atómico `receiptSentAt` (no duplica entre webhook DONE + pago inmediato) y manda al cliente un mensaje con un
+      **link PERMANENTE nuestro** `/api/payout-receipt/:id`.
+    - Endpoint PÚBLICO `GET /api/payout-receipt/:payoutId` (sin auth, clave = payout.id UUID): en cada visita resuelve
+      un **signedUrl fresco** de hgcash y redirige (302). Así el link nunca queda vencido (la URL firmada dura 1h).
+    - También se dispara en el camino DONE-inmediato del endpoint `POST /api/admin/payouts/:id/pay`.
+  - El link se auto-linkea en el chat del cliente (`public/js/chat.js`). Pago por "otro banco" NO manda PDF (no hay
+    transacción hgcash).
+- **Validado:** `node --check` OK (server.js, hgcashService.js, PendingPayout.js). Back necesita redeploy.
+- **PENDIENTE (paso 3):** panel hgcash en tiempo real (saldo en vivo `GET /accounts` + entrantes/salientes en vivo por
+  socket + badge de estados + destrabe de pagos colgados `GET /transaction/{id}/status`).
+
 ### 62. FIX CRÍTICO doble/triple carga hgcash: 1 transferencia se acreditaba 2-3 veces
 - **Incidente (VipAnto591):** un comprobante de $35.000 generó **3 cargas** (1 manual del agente + 2 automáticas).
   Confirmado en JUGAYGANA (depósitos 13:13:57 manual, 13:16:59 auto, 13:17:51 auto). **No es aislado:** el barrido

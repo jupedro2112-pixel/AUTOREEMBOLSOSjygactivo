@@ -33,7 +33,9 @@ const pendingPayoutSchema = new mongoose.Schema({
   },
 
   // Datos del cash-out en hgcash
-  hgTransactionId: { type: String, default: null, index: true }, // id de la transacción hgcash
+  hgTransactionId: { type: String, default: null, index: true }, // id del REQUEST del cash-out (createCashOut)
+  hgTxId: { type: String, default: null },                       // id de la TRANSACCIÓN real (ledger) → para el comprobante PDF
+  receiptSentAt: { type: Date, default: null },                  // cuándo se le envió el comprobante PDF al cliente (idempotencia)
   hgStatus: { type: String, default: null },                     // PENDING/PROCESSING/DONE/ERROR...
   resolvedCbu: { type: String, default: null },                  // CBU/CVU 22 díg. usado para pagar
   lookupName: { type: String, default: null },                   // titular real del CBU (alias-lookup)

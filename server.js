@@ -1571,6 +1571,69 @@ async function notifyPayoutPaid(payout) {
   }
 }
 
+// Resuelve el id de la TRANSACCIÓN real (para el comprobante PDF) a partir del payout.
+// Usa el hgTxId si ya lo tenemos; si no, lo pide a la API con el id del REQUEST
+// (que guardamos en hgTransactionId) y lo cachea. Devuelve null si todavía no está.
+async function resolvePayoutTxId(payout) {
+  if (!payout) return null;
+  if (payout.hgTxId) return payout.hgTxId;
+  const reqId = payout.hgTransactionId; // ojo: este campo guarda el id del REQUEST del cash-out
+  if (!reqId) return null;
+  try {
+    const r = await hgcashPay.getTransactionIdForRequest(reqId);
+    if (r.ok && r.transactionId) {
+      const txId = String(r.transactionId);
+      try { await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTxId: txId } }); } catch (_) {}
+      return txId;
+    }
+  } catch (_) {}
+  return null;
+}
+
+// Envía AUTOMÁTICAMENTE el comprobante PDF del pago al cliente cuando el retiro se
+// confirma (DONE). El mensaje lleva un link PERMANENTE nuestro (/api/payout-receipt/:id)
+// que en cada click resuelve un signedUrl fresco de hgcash (la URL firmada vence en 1h,
+// por eso no la mandamos directa). Idempotente: marca receiptSentAt y reclama atómico
+// para no enviar dos veces (webhook DONE + pago inmediato).
+async function maybeSendPayoutReceipt(payout) {
+  try {
+    if (!hgcashPay.isEnabled()) return;
+    let cur = await PendingPayout.findOne({ id: payout.id }).lean();
+    if (!cur || cur.receiptSentAt) return;
+
+    // El id de transacción puede tardar unos segundos en asociarse: reintentar.
+    let txId = await resolvePayoutTxId(cur);
+    for (let i = 0; i < 3 && !txId; i++) {
+      await new Promise(r => setTimeout(r, 4000));
+      cur = await PendingPayout.findOne({ id: payout.id }).lean();
+      if (!cur || cur.receiptSentAt) return;
+      txId = await resolvePayoutTxId(cur);
+    }
+    if (!txId) { logger.warn(`[hgcash-pay] sin txId para comprobante payout=${payout.id} (se omite el envío)`); return; }
+
+    // Reclamo atómico del envío (no duplicar entre webhook y pago inmediato).
+    const claimed = await PendingPayout.findOneAndUpdate(
+      { id: payout.id, receiptSentAt: null },
+      { $set: { receiptSentAt: new Date() } }, { new: true }
+    );
+    if (!claimed) return; // otro proceso ya lo envió
+
+    const link = `${PUBLIC_BASE_URL}/api/payout-receipt/${payout.id}`;
+    const content = `🧾✅ Comprobante de tu pago de $${Number(payout.amount).toLocaleString('es-AR')}:\n${link}`;
+    const msg = await Message.create({
+      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+      receiverId: payout.userId, receiverRole: 'user', content, type: 'system', timestamp: new Date(), read: false
+    });
+    const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: payout.userId, receiverRole: 'user', content, timestamp: new Date(), type: 'system' };
+    io.to(`user_${payout.userId}`).emit('new_message', data);
+    io.to(`chat_${payout.userId}`).emit('new_message', data);
+    notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
+    logger.info(`[hgcash-pay] comprobante PDF enviado a ${payout.username} payout=${payout.id} txId=${txId}`);
+  } catch (e) {
+    logger.warn(`[hgcash-pay] maybeSendPayoutReceipt falló: ${e.message}`);
+  }
+}
+
 // Procesa el webhook de estado de un cash-out (pago saliente). Matchea por externalID
 // (que es nuestro payout.id) o por el id de la transacción hgcash.
 async function handlePayoutStatusWebhook(p) {
@@ -1589,11 +1652,18 @@ async function handlePayoutStatusWebhook(p) {
     if (hgId && !payout.hgTransactionId) {
       await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTransactionId: hgId } });
     }
+    // El webhook 'transaction_associated' trae el id de la TRANSACCIÓN real (≠ request)
+    // → lo guardamos para poder pedir el comprobante PDF.
+    if (p.transactionId && !payout.hgTxId) {
+      await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTxId: String(p.transactionId) } });
+      payout.hgTxId = String(p.transactionId);
+    }
 
     if (status === 'DONE') {
       if (payout.status === 'paid') return; // idempotente
       await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'paid', hgStatus: status, paidAt: new Date() } });
       await notifyPayoutPaid(payout);
+      maybeSendPayoutReceipt(payout).catch(() => {}); // comprobante PDF automático (con reintentos)
       logger.info(`[hgcash-pay] PAGADO payout=${payout.id} user=${payout.username} $${payout.amount}`);
     } else if (status === 'ERROR' || status === 'CANCELLED') {
       const reason = p.errorCode || p.error || status;
@@ -1948,6 +2018,33 @@ app.post('/api/hgcash/webhook', async (req, res) => {
   } catch (error) {
     logger.error(`[hgcash] webhook error: ${error.message}`);
     if (!res.headersSent) res.status(500).json({ error: 'error interno' });
+  }
+});
+
+// Comprobante PDF de un pago (link PERMANENTE que se le manda al cliente). En cada
+// visita resuelve un signedUrl FRESCO de hgcash (la URL firmada vence en 1h) y redirige.
+// Público (sin auth): la clave es el payout.id (UUID inadivinable) y muestra el recibo
+// del propio pago del cliente. NO requiere authMiddleware (como el webhook).
+app.get('/api/payout-receipt/:payoutId', async (req, res) => {
+  try {
+    if (!hgcashPay.isEnabled()) return res.status(503).send('Comprobante no disponible en este momento.');
+    const payout = await PendingPayout.findOne({ id: String(req.params.payoutId || '') }).lean();
+    if (!payout) return res.status(404).send('Comprobante no encontrado.');
+    let txId = payout.hgTxId;
+    if (!txId && payout.hgTransactionId) {
+      const r = await hgcashPay.getTransactionIdForRequest(payout.hgTransactionId);
+      if (r.ok && r.transactionId) {
+        txId = String(r.transactionId);
+        try { await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTxId: txId } }); } catch (_) {}
+      }
+    }
+    if (!txId) return res.status(404).send('El comprobante todavía no está disponible. Probá de nuevo en unos minutos.');
+    const rec = await hgcashPay.getReceiptUrl(txId);
+    if (!rec.ok || !rec.signedUrl) return res.status(404).send('No se pudo obtener el comprobante. Probá más tarde.');
+    return res.redirect(302, rec.signedUrl);
+  } catch (e) {
+    logger.warn(`[hgcash-pay] endpoint payout-receipt falló: ${e.message}`);
+    return res.status(500).send('Error al obtener el comprobante.');
   }
 });
 
@@ -12183,7 +12280,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     // Si hgcash confirmó el pago en el acto (DONE), avisamos al cliente ya mismo
     // (el aviso por webhook DONE es idempotente, no duplica). Si quedó 'paying',
     // el aviso lo dispara el webhook al confirmarse.
-    if (isDone) { await notifyPayoutPaid(claimed); }
+    if (isDone) { await notifyPayoutPaid(claimed); maybeSendPayoutReceipt(claimed).catch(() => {}); }
 
     logger.info(`[hgcash-pay] cash-out iniciado payout=${id} user=${payout.username} $${payout.amount} hgId=${hgId} status=${hgStatus} por ${req.user.username}`);
     res.json({ success: true, status: isDone ? 'paid' : 'paying', hgTransactionId: hgId, hgStatus });

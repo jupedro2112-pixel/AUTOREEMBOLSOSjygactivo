@@ -12533,6 +12533,42 @@ app.post('/api/admin/payouts/:id/sync', authMiddleware, withdrawerMiddleware, as
   }
 });
 
+// LIMPIEZA de pagos VIEJOS colgados (botón del panel, solo admin general). Resuelve
+// los PendingPayout viejos (paying/failed más viejos que `hours`, default 2h) para que
+// dejen de aparecer: consulta el estado real en hgcash y marca DONE→paid (SILENCIOSO,
+// no re-avisa ni re-paga), ERROR/CANCELLED→cancelled. Los que siguen REALMENTE
+// pendientes NO se tocan (se reportan). NUNCA mueve plata.
+app.post('/api/admin/payouts/cleanup-old', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const hours = Math.max(1, Math.min(720, parseInt(req.body && req.body.hours, 10) || 2));
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const olds = await PendingPayout.find({ status: { $in: ['paying', 'failed'] }, createdAt: { $lt: cutoff } })
+      .sort({ createdAt: 1 }).limit(500).lean();
+    const enabled = hgcashPay.isEnabled();
+    let paid = 0, cancelled = 0, pendingLeft = 0;
+    for (const p of olds) {
+      let set = null;
+      if (enabled && p.hgTransactionId) {
+        const st = await hgcashPay.getTransactionStatus(p.hgTransactionId);
+        const S = (st.ok && st.status) ? String(st.status).toUpperCase() : null;
+        if (S === 'DONE') { set = { status: 'paid', hgStatus: 'DONE', paidAt: p.paidAt || new Date(), receiptSentAt: p.receiptSentAt || new Date() }; paid++; }
+        else if (S === 'ERROR' || S === 'CANCELLED') { set = { status: 'cancelled', paidVia: 'dismissed', hgStatus: S, chipsReturned: false, error: `Limpieza: ${S} en hgcash` }; cancelled++; }
+        else { pendingLeft++; } // realmente pendiente o sin estado → NO tocar
+      } else {
+        // sin token o sin transacción para consultar: queda pendiente de revisión (no se cancela a ciegas).
+        pendingLeft++;
+      }
+      if (set) await PendingPayout.updateOne({ id: p.id, status: { $in: ['paying', 'failed'] } }, { $set: set });
+    }
+    logger.info(`[hgcash-pay] cleanup-old por ${req.user.username}: total=${olds.length} paid=${paid} cancelled=${cancelled} pendingLeft=${pendingLeft}`);
+    res.json({ success: true, total: olds.length, paid, cancelled, pendingLeft });
+  } catch (error) {
+    logger.warn(`[hgcash-pay] cleanup-old falló: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // GESTIÓN DE USUARIOS (ADMIN)
 // ============================================

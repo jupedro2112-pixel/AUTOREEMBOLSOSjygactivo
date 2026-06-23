@@ -672,6 +672,7 @@
                                     <option value="ignored">Ignorados (salientes)</option>
                                 </select>
                                 <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
+                                <button class="btn btn-sm" onclick="cleanupOldPayouts()" title="Resolver y ocultar los pagos viejos colgados (en proceso/fallidos de hace más de 2h)" style="margin-left:auto;background:#7a1010;color:#fff;border:none;border-radius:6px;padding:6px 11px;font-size:12px;cursor:pointer;">🧹 Limpiar pagos viejos colgados</button>
                             </div>
                             <div id="hgcashBalanceBox" style="margin:10px 0;padding:10px 14px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:13px;color:#dfe;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
                                 <span style="opacity:.8;">💰 Saldo hgcash:</span>

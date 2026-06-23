@@ -5435,6 +5435,21 @@ function _hgcashPanelVisible() {
     return !!(sec && sec.classList.contains('active') && panel && panel.style.display !== 'none');
 }
 
+// Limpia los pagos VIEJOS colgados (en proceso/fallidos de hace +2h): consulta hgcash y
+// marca los ya pagados como pagados (en silencio) y descarta los fallidos. NO mueve plata
+// ni avisa al cliente. Los que sigan realmente pendientes NO se tocan.
+async function cleanupOldPayouts() {
+    if (!confirm('¿Limpiar los pagos VIEJOS colgados (en proceso/fallidos de hace más de 2 horas)?\n\n• Los que ya se pagaron quedan marcados como pagados (en silencio, sin avisar al cliente)\n• Los fallidos se descartan\n• NO mueve plata\n• Los que sigan realmente pendientes NO se tocan')) return;
+    try {
+        const r = await authFetch('/api/admin/payouts/cleanup-old', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hours: 2 })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo limpiar', 'error'); return; }
+        showToast('Listo: ' + (j.paid || 0) + ' marcados pagados, ' + (j.cancelled || 0) + ' descartados' + (j.pendingLeft ? ', ' + j.pendingLeft + ' siguen pendientes (revisalos)' : ''), 'success');
+    } catch (e) { showToast('Error al limpiar', 'error'); }
+}
+
 let _hgcashLiveTimer = null;
 let _hgcashLiveThrottle = 0;
 // Refresco en vivo: sólo si el panel está visible. El saldo se refresca siempre; los

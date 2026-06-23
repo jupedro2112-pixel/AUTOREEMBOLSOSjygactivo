@@ -8,6 +8,18 @@
 
 ## Sesión 2026-06-23
 
+### 67. Botón "Limpiar pagos viejos colgados" en el panel (sin terminal) + script
+- **Pedido:** el owner no maneja terminal → necesita limpiar los pagos viejos colgados con un clic.
+- **Endpoint `POST /api/admin/payouts/cleanup-old`** (solo admin general): resuelve los PendingPayout viejos
+  (paying/failed más viejos que `hours`, default 2h, máx 500): consulta hgcash y marca DONE→`paid` (SILENCIOSO,
+  no re-avisa ni re-paga), ERROR/CANCELLED→`cancelled`. Los que siguen realmente pendientes (o sin token/tx) NO se
+  tocan (se reportan en `pendingLeft`). NUNCA mueve plata.
+- **Panel:** botón **"🧹 Limpiar pagos viejos colgados"** en el header de Movimientos hgcash (sección Comandos,
+  admin general). Confirmación + toast con el resumen (pagados/descartados/pendientes). Función `cleanupOldPayouts()`.
+- **Script equivalente** (para terminal): `scripts/hgcash-cleanup-old-payouts.js` (dry-run por defecto, `--apply`,
+  `--no-verify`, `--hours=N`).
+- **Validado:** `node --check` OK (server.js, admin.js). Back necesita redeploy; panel, recargar.
+
 ### 66. FIX URGENTE regresión de pagos: el banner resucitaba pagos viejos + pago no se confirmaba solo
 - **Incidente:** tras #65, el banner de pago del chat pasó a mostrar pagos `paying`/`failed` (no solo
   `pending_review`). Resultado: aparecían pagos VIEJOS colgados (ej. "PAGO EN PROCESO $29.000") en el chat de un

@@ -8,6 +8,47 @@
 
 ## Sesión 2026-06-23
 
+### 62. FIX CRÍTICO doble/triple carga hgcash: 1 transferencia se acreditaba 2-3 veces
+- **Incidente (VipAnto591):** un comprobante de $35.000 generó **3 cargas** (1 manual del agente + 2 automáticas).
+  Confirmado en JUGAYGANA (depósitos 13:13:57 manual, 13:16:59 auto, 13:17:51 auto). **No es aislado:** el barrido
+  de logs (6 días) mostró ~99 pares sospechosos y al menos otro caso DURO (VipBelen037, $30.000 cargado 3 veces).
+- **Causa raíz (2 fallas que se combinan):**
+  1. **El claim atómico protege documentos, no la plata real.** El movimiento se reclama por `movementId` y el
+     comprobante por su `id`. Eso evita cargar 2 veces el MISMO documento, pero NO la misma TRANSFERENCIA cuando hay
+     (a) **varios `BankMovement` de una sola transferencia** (hgcash reenvía con otro `id`, mismo `coelsaCode` — el
+     webhook dedupea solo por `movementId`), y/o (b) **varios `Comprobante` matcheables** del mismo recibo (un
+     comprobante duplicado igual se guardaba con `bankMatchStatus:'none'` → seguía siendo candidato). Cada movimiento
+     agarra un comprobante distinto → ambos cargan, sin disparar el guard de ambigüedad.
+  2. **La carga manual antes de que llegue el movimiento no protegía.** `hgcashConsumeOnManualDeposit` sólo mira
+     movimientos que YA existen. Cuando el agente carga a mano y el aviso del banco llega después, se auto-carga igual.
+- **Fix (idempotencia anclada en `coelsaCode` = el "DNI" único de cada transferencia + red de seguridad):**
+  - **Modelo nuevo `HgcashCharge`** (`src/models/HgcashCharge.js`): índice ÚNICO en `chargeKey`. Candado atómico entre
+    instancias (AWS EB multi-instancia).
+  - **`hgcashAutoCarga` (server.js):** antes de acreditar reclama `chargeKey = coelsaCode || externalId`. Si ya existe
+    (11000) → **NO recarga**, marca el movimiento `duplicate` y avisa. Una transferencia = una carga. Si la carga falla
+    en JUGAYGANA, el candado se BORRA (deleteOne) para permitir reintento legítimo.
+  - **Red de seguridad (mismo `hgcashAutoCarga`):** si ya hubo una carga del MISMO monto a ese usuario hace pocos
+    minutos (config `duplicateGuardMinutes`, default 8), **no carga sola → `needs_review`** + aviso "verificá si son 2
+    transferencias reales y cargá a mano". Cubre el caso manual-y-después-webhook (VipAnto591) y duplicados sin coelsa.
+  - **Comprobantes `duplicate` excluidos de candidatos** en `hgcashMatchFromMovement` (`status: { $ne:'duplicate' }`).
+  - **`hgcashConsumeOnManualDeposit`** ahora también consume movimientos `needs_review` (al cargar a mano se limpian).
+  - **Estados nuevos** `duplicate` y `needs_review` en `BankMovement.matchStatus` y `Comprobante.bankMatchStatus`;
+    badges + filtros en el panel (`admin.js`/`index.html`).
+- **Para el agente:** en el 95% NADA cambia (carga automática igual). Sólo aparece un aviso nuevo "⚠️ POSIBLE
+  DUPLICADO — revisá y cargá a mano" cuando hay monto repetido en ventana corta. La atribución del usuario sale del
+  chat; un movimiento frenado se limpia solo si el agente carga a mano ese monto.
+- **Reporte de afectados (one-shot, SOLO LECTURA):** `scripts/hgcash-duplicates-report.js` — agrupa `BankMovement`
+  por `coelsaCode` y lista DEFINITIVOS (mismo coelsa cargado 2+ veces, con sobrante total a descontar) vs PROBABLES
+  (mismo usuario+monto en ventana, a revisar). Correr: `node scripts/hgcash-duplicates-report.js`.
+- **Mitigación inmediata recomendada:** poner hgcash en modo SOMBRA desde el panel hasta desplegar este fix.
+- **Validado:** `node --check` OK (server.js, HgcashCharge.js, BankMovement.js, Comprobante.js, admin.js, script).
+  Back necesita redeploy; panel, recargar.
+- **PENDIENTE (próximos pasos pactados):** (2) comprobante PDF automático al pagar un retiro (API hgcash
+  `GET /transactions/{id}/receipt`); (3) panel hgcash en tiempo real (saldo en vivo `GET /accounts` + entrantes/
+  salientes en vivo por socket + destrabe de pagos colgados `GET /transaction/{id}/status`). NOTA: la API hgcash NO
+  tiene listado de movimientos entrantes (sólo webhook) → la confiabilidad del webhook (regla WAF "Skip" en Cloudflare)
+  es clave. Opción de fondo a evaluar: `checkouts` (links de cobro por cliente) eliminaría el matcheo de comprobantes.
+
 ### 61. FIX CRÍTICO retiro fantasma: el rechazo dejaba de acuñar saldo que el cliente nunca tuvo
 - **Incidente:** un cliente pidió pago automático de $565.000 (lo tenía, se le pagó). Después solicitó
   $200.000 y $92.000 **sin tener fondos** (saldo real $991). Esos retiros igual generaron `PendingPayout`,

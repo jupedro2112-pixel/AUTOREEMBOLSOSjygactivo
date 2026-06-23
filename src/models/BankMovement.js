@@ -54,7 +54,9 @@ const bankMovementSchema = new mongoose.Schema({
     // error: falló la carga tras matchear
     // manual_charged: un operador cargó manual a ese usuario (consume el movimiento
     // para que no se auto-cargue después cuando JUGAYGANA se recupere).
-    enum: ['pending', 'claiming', 'shadow_matched', 'auto_charged', 'manual_charged', 'no_match', 'ignored', 'error'],
+    // duplicate: re-entrega de una transferencia ya acreditada (mismo coelsa) → NO se cargó de nuevo.
+    // needs_review: posible duplicado (mismo usuario+monto que una carga reciente) → frenado para revisión manual.
+    enum: ['pending', 'claiming', 'shadow_matched', 'auto_charged', 'manual_charged', 'no_match', 'ignored', 'error', 'duplicate', 'needs_review'],
     default: 'pending',
     index: true
   },

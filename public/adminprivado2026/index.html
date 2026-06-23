@@ -663,8 +663,11 @@
                                 <select id="hgcashMovFilter" onchange="loadHgcashMovements(1)" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 9px;border-radius:6px;font-size:12px;">
                                     <option value="">Todos</option>
                                     <option value="pending">Pendientes (sin match)</option>
+                                    <option value="needs_review">⚠️ Revisar (posible duplicado)</option>
                                     <option value="shadow_matched">Match (sombra)</option>
                                     <option value="auto_charged">Cargados (auto)</option>
+                                    <option value="manual_charged">Cargados (manual)</option>
+                                    <option value="duplicate">Duplicados (no cargados)</option>
                                     <option value="error">Con error</option>
                                     <option value="ignored">Ignorados (salientes)</option>
                                 </select>

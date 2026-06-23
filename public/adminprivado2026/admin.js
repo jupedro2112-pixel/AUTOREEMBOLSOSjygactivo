@@ -5325,7 +5325,9 @@ function hgcashStatusBadge(st) {
         manual_charged: ['Cargado manual ✓', '#0f8a2f'],
         no_match:       ['Sin match', '#888'],
         ignored:        ['Saliente', '#666'],
-        error:          ['Error', '#dc3545']
+        error:          ['Error', '#dc3545'],
+        duplicate:      ['Duplicado (no cargado)', '#7a1010'],
+        needs_review:   ['⚠️ Revisar (posible duplicado)', '#b5651d']
     };
     const [label, color] = map[st] || [st || '—', '#888'];
     return '<span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;white-space:nowrap;">' + escapeHtml(label) + '</span>';

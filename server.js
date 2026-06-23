@@ -71,6 +71,7 @@ const ChatDelay = require('./src/models/ChatDelay');
 const Comprobante = require('./src/models/Comprobante');
 const comprobanteAi = require('./src/services/comprobanteAiService');
 const BankMovement = require('./src/models/BankMovement');
+const HgcashCharge = require('./src/models/HgcashCharge');
 const PendingPayout = require('./src/models/PendingPayout');
 const hgcashPay = require('./src/services/hgcashService');
 const { generateReferralCode } = require('./src/utils/referralCode');
@@ -1369,7 +1370,7 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
 // raceWindowMinutes: ventana CORTA para el matcheo DESDE la transferencia (solo cubre
 //   el caso raro en que el comprobante llega segundos ANTES que el webhook). Mantenerla
 //   chica evita que una transferencia nueva cargue contra un comprobante viejo/sobrante.
-const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'] };
+const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'], duplicateGuardMinutes: 8 };
 
 async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
@@ -1503,16 +1504,19 @@ async function hgcashConsumeOnManualDeposit(userId, username, amount) {
     if (!userId || !(Number(amount) > 0)) return false;
 
     // Candidatos: movimientos matcheados a ese usuario, todavía no cargados.
+    // Incluye 'needs_review' (frenados por la red de seguridad) para que, si el
+    // agente confirma y carga a mano, ese movimiento quede consumido y no quede
+    // colgado como pendiente en el panel.
     const cands = await BankMovement.find({
       matchedUserId: userId,
-      matchStatus: { $in: ['pending', 'error'] }
+      matchStatus: { $in: ['pending', 'error', 'needs_review'] }
     }).sort({ createdAt: -1 }).limit(10).lean();
     const target = cands.find(m => _amountsEqual(m.amount, amount));
     if (!target) return false;
 
     // Claim atómico (evita choque con un reintento automático).
     const claimed = await BankMovement.findOneAndUpdate(
-      { movementId: target.movementId, matchStatus: { $in: ['pending', 'error'] } },
+      { movementId: target.movementId, matchStatus: { $in: ['pending', 'error', 'needs_review'] } },
       { $set: { matchStatus: 'manual_charged', chargedAt: new Date() } },
       { new: true }
     );
@@ -1659,11 +1663,71 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     return;
   }
 
+  // ── IDEMPOTENCIA POR TRANSFERENCIA REAL (coelsa) ─────────────────────────
+  // Candado ATÓMICO entre instancias: la MISMA transferencia (mismo coelsaCode)
+  // se acredita UNA sola vez, sin importar cuántos movimientos/comprobantes haya.
+  // Si hgcash reenvía el movimiento con otro id (o hay 2 docs del mismo recibo),
+  // el segundo intento choca con el índice único y NO se carga de nuevo.
+  const chargeKey = String(movement.coelsaCode || movement.externalId || '').trim();
+  let chargeLocked = false;
+  if (chargeKey) {
+    try {
+      await HgcashCharge.create({
+        chargeKey, userId: user.id, username: user.username,
+        amount: Number(amount), movementId: movement.movementId, comprobanteId: comprobante.id
+      });
+      chargeLocked = true;
+    } catch (lockErr) {
+      if (lockErr && lockErr.code === 11000) {
+        // Esta transferencia YA fue acreditada → NO recargar (duplicado real).
+        await BankMovement.updateOne({ movementId: movement.movementId },
+          { $set: { matchStatus: 'duplicate', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `duplicado: coelsa ${chargeKey} ya acreditada` } });
+        await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'duplicate' } });
+        await _emitAdminOnlyChatNote(user.id, user.username,
+          `🏦 ⚠️ Movimiento DUPLICADO de la misma transferencia (coelsa ${chargeKey}) — NO se cargó de nuevo (ya estaba acreditado).`);
+        logger.warn(`[hgcash] DUPLICADO bloqueado coelsa=${chargeKey} user=${user.username} mov=${movement.movementId}`);
+        return;
+      }
+      // Otro error de DB: no bloqueamos la carga por eso (la red de seguridad de abajo igual protege).
+      logger.warn(`[hgcash] no se pudo crear el candado de carga (coelsa=${chargeKey}): ${lockErr.message}`);
+    }
+  }
+
+  // ── RED DE SEGURIDAD ─────────────────────────────────────────────────────
+  // ¿Ya hubo una carga del MISMO monto a este usuario hace pocos minutos (manual
+  // o automática)? Cubre el caso "el agente cargó a mano y DESPUÉS llega el aviso
+  // del banco" (no hay coelsa que linkee la manual) y cualquier duplicado sin
+  // coelsa confiable. No carga sola: la deja para revisión manual (nunca pierde
+  // plata, sólo pide confirmar si son 2 transferencias reales).
+  try {
+    const _hgCfg = await getHgcashConfig();
+    const guardMin = Number(_hgCfg.duplicateGuardMinutes) >= 0 ? Number(_hgCfg.duplicateGuardMinutes) : 8;
+    if (guardMin > 0) {
+      const sinceGuard = new Date(Date.now() - guardMin * 60 * 1000);
+      const recent = await Transaction.findOne({
+        userId: user.id, type: 'deposit', amount: Number(amount), timestamp: { $gte: sinceGuard }
+      }).lean();
+      if (recent) {
+        if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
+        await BankMovement.updateOne({ movementId: movement.movementId },
+          { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `posible duplicado: ya hubo carga de $${Number(amount)} hace <${guardMin}min` } });
+        await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review' } });
+        await _emitAdminOnlyChatNote(user.id, user.username,
+          `🏦 ⚠️ POSIBLE DUPLICADO — a este cliente ya se le cargó $${Number(amount).toLocaleString('es-AR')} hace pocos minutos. NO se cargó automático.\nVerificá si son DOS transferencias REALES (dos comprobantes con N° distinto) y, si corresponde, cargá a mano.`);
+        logger.warn(`[hgcash] HOLD posible duplicado user=${user.username} $${amount} mov=${movement.movementId}`);
+        return;
+      }
+    }
+  } catch (guardErr) {
+    logger.warn(`[hgcash] red de seguridad falló (sigue la carga): ${guardErr.message}`);
+  }
+
   // Modo auto: cargar de verdad en JUGAYGANA.
   let charged = false; // true una vez que la acreditación se confirmó (evita reintentos que dupliquen)
   try {
     const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)', user.jugayganaUserId || null);
     if (!result.success) {
+      if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
       return;
     }
@@ -1722,7 +1786,8 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       // NO reintentar (sería doble carga). Solo dejamos constancia.
       logger.error(`[hgcash] carga OK pero falló paso posterior user=${user.username}: ${e.message}`);
     } else {
-      // La carga no llegó a confirmarse → fallo reintentable.
+      // La carga no llegó a confirmarse → liberar el candado y dejarlo reintentable.
+      if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, e.message, dataDesc, user);
       logger.error(`[hgcash] auto-carga excepción user=${user.username}: ${e.message}`);
     }
@@ -1748,6 +1813,7 @@ async function hgcashMatchFromMovement(movement) {
     const candidates = await Comprobante.find({
       isComprobante: true,
       autoCharged: { $ne: true },
+      status: { $ne: 'duplicate' }, // un comprobante re-enviado/duplicado NO es objetivo de carga
       bankMatchStatus: { $in: ['none', 'pending'] },
       createdAt: { $gte: since }
     }).sort({ createdAt: -1 }).limit(80).lean();

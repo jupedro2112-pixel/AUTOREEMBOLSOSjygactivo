@@ -36,7 +36,8 @@
   },
   "optionalDependencies": {
     "@aws-sdk/client-s3": "^3.600.0",
-    "@aws-sdk/s3-request-presigner": "^3.600.0"
+    "@aws-sdk/s3-request-presigner": "^3.600.0",
+    "mupdf": "^1.27.0"
   },
   "devDependencies": {
     "eslint": "^8.54.0",

@@ -8,6 +8,22 @@
 
 ## Sesión 2026-06-23
 
+### 64. Comprobante de pago enviado COMO FOTO (rasterizado del PDF) + link al PDF oficial
+- **Pedido:** que el comprobante (#63) le llegue al cliente como **foto** en el chat, no solo como link.
+- **Cómo:** se baja el PDF (`hgcashPay.fetchReceiptPdf`), se **rasteriza la 1ª página a PNG** y se manda como
+  mensaje `type:'image'` (data URL base64). Después se manda el **link al PDF oficial** (#63) como segundo mensaje.
+  Si la foto no se puede generar, se manda solo el link (fallback).
+- **Dependencia (OPCIONAL, sin riesgo de romper el deploy):** `mupdf@^1.27.0` — WebAssembly, **sin binarios nativos**.
+  - Va en `optionalDependencies` → si fallara la instalación en EB, `npm ci` NO se cae (lo saltea).
+  - `src/services/pdfImageService.js`: `pdfBufferToPng(buffer)` carga mupdf **lazy** con `import()` dinámico (mupdf es
+    ESM) dentro de try/catch; ante cualquier error devuelve `null` → el caller manda el link. Nunca tira.
+  - Probado localmente: PDF real → PNG válido; buffer inválido → null (fallback) sin romper. `npm ci --dry-run` OK
+    (lockfile en sync). `node_modules` queda gitignoreado.
+- **`server.js` `maybeSendPayoutReceipt`:** intenta foto (cap 4MB) y siempre manda el link; `data:image/png;base64`
+  se renderiza en el chat del cliente (`public/js/chat.js` ya soporta imágenes data URL).
+- **Validado:** `node --check` OK (server.js, pdfImageService.js, hgcashService.js). Back necesita redeploy
+  (corre `npm ci` → instala mupdf).
+
 ### 63. Comprobante PDF automático al pagar un retiro (API hgcash)
 - **Pedido:** cuando se confirma un pago (cash-out hgcash), mandarle al cliente el **comprobante PDF** automáticamente.
 - **API:** `GET /transactions/{txId}/receipt` → `{ signedUrl }` (PDF, **vence en 1h**). El `{txId}` es el id de la

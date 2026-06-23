@@ -74,6 +74,7 @@ const BankMovement = require('./src/models/BankMovement');
 const HgcashCharge = require('./src/models/HgcashCharge');
 const PendingPayout = require('./src/models/PendingPayout');
 const hgcashPay = require('./src/services/hgcashService');
+const pdfImage = require('./src/services/pdfImageService');
 const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
@@ -1618,17 +1619,42 @@ async function maybeSendPayoutReceipt(payout) {
     );
     if (!claimed) return; // otro proceso ya lo envió
 
+    // Helper para emitir un mensaje del sistema al cliente (chat + socket + admins).
+    const _sendClientMsg = async (content, type) => {
+      const msg = await Message.create({
+        id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+        receiverId: payout.userId, receiverRole: 'user', content, type, timestamp: new Date(), read: false
+      });
+      const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: payout.userId, receiverRole: 'user', content, timestamp: new Date(), type };
+      io.to(`user_${payout.userId}`).emit('new_message', data);
+      io.to(`chat_${payout.userId}`).emit('new_message', data);
+      notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
+    };
+
+    // 1) Mandar el comprobante COMO FOTO (rasterizar la 1ª página del PDF). Best-effort:
+    //    si falla (dep opcional ausente, error de descarga/render, imagen muy grande),
+    //    se manda sólo el link. Nunca rompe el flujo de pago.
+    let photoSent = false;
+    try {
+      const pdf = await hgcashPay.fetchReceiptPdf(txId);
+      if (pdf.ok && pdf.buffer && pdf.buffer.length) {
+        const png = await pdfImage.pdfBufferToPng(pdf.buffer);
+        if (png && png.length && png.length < 4 * 1024 * 1024) {
+          await _sendClientMsg(`data:image/png;base64,${png.toString('base64')}`, 'image');
+          photoSent = true;
+        }
+      }
+    } catch (e) {
+      logger.warn(`[hgcash-pay] comprobante como foto falló (se manda link): ${e.message}`);
+    }
+
+    // 2) Link al PDF oficial (siempre). Si no se pudo mandar la foto, este es el comprobante principal.
     const link = `${PUBLIC_BASE_URL}/api/payout-receipt/${payout.id}`;
-    const content = `🧾✅ Comprobante de tu pago de $${Number(payout.amount).toLocaleString('es-AR')}:\n${link}`;
-    const msg = await Message.create({
-      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
-      receiverId: payout.userId, receiverRole: 'user', content, type: 'system', timestamp: new Date(), read: false
-    });
-    const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: payout.userId, receiverRole: 'user', content, timestamp: new Date(), type: 'system' };
-    io.to(`user_${payout.userId}`).emit('new_message', data);
-    io.to(`chat_${payout.userId}`).emit('new_message', data);
-    notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
-    logger.info(`[hgcash-pay] comprobante PDF enviado a ${payout.username} payout=${payout.id} txId=${txId}`);
+    const linkMsg = photoSent
+      ? `🧾 Comprobante oficial (PDF): ${link}`
+      : `🧾✅ Comprobante de tu pago de $${Number(payout.amount).toLocaleString('es-AR')}:\n${link}`;
+    await _sendClientMsg(linkMsg, 'system');
+    logger.info(`[hgcash-pay] comprobante enviado a ${payout.username} payout=${payout.id} txId=${txId} foto=${photoSent}`);
   } catch (e) {
     logger.warn(`[hgcash-pay] maybeSendPayoutReceipt falló: ${e.message}`);
   }

@@ -129,4 +129,20 @@ async function getReceiptUrl(transactionId) {
   }
 }
 
-module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getTransactionIdForRequest, getReceiptUrl, getToken };
+// Descarga los BYTES del PDF del comprobante: resuelve un signedUrl fresco y baja
+// el archivo. Devuelve { ok, buffer }. La signedUrl es de descarga directa (presignada),
+// no necesita el token. Best-effort: ante cualquier error devuelve ok:false.
+async function fetchReceiptPdf(transactionId) {
+  const r = await getReceiptUrl(transactionId);
+  if (!r.ok || !r.signedUrl) return { ok: false, error: r.error || 'sin signedUrl' };
+  try {
+    const resp = await axios.get(r.signedUrl, { responseType: 'arraybuffer', timeout: 20000 });
+    return { ok: true, buffer: Buffer.from(resp.data) };
+  } catch (e) {
+    const detail = e.response ? `HTTP ${e.response.status}` : e.message;
+    logger.warn(`[hgcash-pay] descarga del PDF de recibo falló (${transactionId}): ${detail}`);
+    return { ok: false, error: detail };
+  }
+}
+
+module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getTransactionIdForRequest, getReceiptUrl, fetchReceiptPdf, getToken };

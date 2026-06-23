@@ -1190,6 +1190,11 @@ function initSocket() {
         }
     });
     
+    // hgcash: movimiento nuevo / cambio de estado → refrescar el panel en vivo (si está abierto).
+    socket.on('hgcash_movement', () => {
+        if (typeof hgcashLiveRefresh === 'function') hgcashLiveRefresh(false);
+    });
+
     // USER TYPING
     socket.on('user_typing', (data) => {
         if (data.userId === selectedUserId) {
@@ -2632,12 +2637,36 @@ async function loadPayoutBanner(userId) {
     const el = document.getElementById('chatPayoutBanner');
     if (!el) return;
     try {
-        const r = await authFetch('/api/admin/payouts?userId=' + encodeURIComponent(userId) + '&status=pending_review');
+        // Trae el payout más reciente del cliente en estados accionables (pending_review,
+        // paying, failed) → así también mostramos los pagos COLGADOS para destrabarlos.
+        const r = await authFetch('/api/admin/payouts?userId=' + encodeURIComponent(userId));
         if (!r.ok) { el.style.display = 'none'; return; }
         const j = await r.json();
         const p = (j.payouts || [])[0];
         if (!p) { el.style.display = 'none'; el.innerHTML = ''; return; }
         el.style.display = '';
+
+        // Pago COLGADO (en proceso o fallido): banner con botón para destrabar (sync).
+        if (p.status === 'paying' || p.status === 'failed') {
+            const montoS = '$' + Number(p.amount).toLocaleString('es-AR');
+            const isFail = p.status === 'failed';
+            el.style.padding = '9px 14px';
+            el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
+            el.style.background = isFail ? 'linear-gradient(90deg,#a02020,#7a1010)' : 'linear-gradient(90deg,#8a6d1f,#6a5215)';
+            const syncBtn = '<button onclick="syncPayout(\'' + escapeHtml(p.id) + '\')" title="Consultar el estado real en hgcash y actualizar" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🔄 Sincronizar estado</button>';
+            const retryBtn = (isFail && j.payEnabled) ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">💸 Reintentar pago</button>' : '';
+            const otherBtn = isFail ? '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">🏦 Pagar con otro banco</button>' : '';
+            const cancelBtn2 = isFail ? '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar (devolver fichas)</button>' : '';
+            const dismissBtn2 = (currentAdmin?.role === 'admin') ? '<button onclick="dismissPayout(\'' + escapeHtml(p.id) + '\')" title="Limpiar este pago" style="background:rgba(0,0,0,0.35);color:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">🗑️ Descartar</button>' : '';
+            el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;font-size:12.5px;">' +
+                '<span style="font-size:18px;">' + (isFail ? '❌' : '⏳') + '</span>' +
+                '<div style="flex:1;min-width:160px;"><strong>' + (isFail ? 'PAGO FALLÓ' : 'PAGO EN PROCESO') + ': ' + montoS + '</strong>' +
+                '<div style="font-size:11px;opacity:0.92;">Titular: ' + escapeHtml(p.titular || '-') + ' · ' + escapeHtml(p.hgStatus || p.status) + (p.error ? ' · ' + escapeHtml(String(p.error).slice(0, 80)) : '') + '</div>' +
+                '<div style="font-size:10.5px;opacity:0.8;">' + (isFail ? 'Reintentá, pagá por otro banco, o rechazá.' : 'Si tarda, tocá Sincronizar para traer el estado real de hgcash.') + '</div></div>' +
+                syncBtn + retryBtn + otherBtn + cancelBtn2 + dismissBtn2 +
+                '</div>';
+            return;
+        }
         el.style.padding = '9px 14px';
         el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
         el.style.background = 'linear-gradient(90deg,#7a1fa2,#5a1580)';
@@ -2738,6 +2767,17 @@ async function dismissPayout(id) {
             showToast(j.error || 'Error', 'error');
         }
     } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// Destrabar un pago colgado: consulta el estado real en hgcash y actualiza el payout.
+async function syncPayout(id) {
+    try {
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/sync', { method: 'POST' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo sincronizar', 'error'); return; }
+        showToast('Estado actualizado: ' + (j.status || j.hgStatus || 'ok'), 'success');
+        if (selectedUserId) loadPayoutBanner(selectedUserId);
+    } catch (e) { showToast('Error al sincronizar', 'error'); }
 }
 
 function renderFireBonusBanner(user) {
@@ -5290,6 +5330,8 @@ async function loadHgcashConfig() {
         if (form) form.style.display = '';
         if (movPanel) movPanel.style.display = '';
         loadHgcashMovements(1);
+        loadHgcashBalance();
+        startHgcashLive();
         const j = await r.json();
         const c = j.config || {};
         const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
@@ -5337,6 +5379,7 @@ async function loadHgcashMovements(page = 1) {
     const body = document.getElementById('hgcashMovBody');
     const pag = document.getElementById('hgcashMovPagination');
     if (!body) return;
+    window._hgcashPage = page;
     const status = (document.getElementById('hgcashMovFilter') || {}).value || '';
     try {
         const qs = new URLSearchParams({ page: String(page) });
@@ -5385,6 +5428,49 @@ async function loadHgcashMovements(page = 1) {
     } catch (e) {
         body.innerHTML = '<tr><td colspan="10" style="color:#888;text-align:center;">Error cargando movimientos</td></tr>';
     }
+}
+
+// ── Saldo en vivo + actualización en tiempo real del panel hgcash ──────────
+async function loadHgcashBalance() {
+    const el = document.getElementById('hgcashBalanceVal');
+    if (!el) return;
+    try {
+        const r = await authFetch('/api/admin/hgcash/balance');
+        if (!r.ok) { el.textContent = '—'; return; }
+        const j = await r.json();
+        if (!j.enabled) { el.textContent = 'integración apagada'; return; }
+        if (!j.accounts || !j.accounts.length) { el.textContent = 's/cuentas'; return; }
+        el.innerHTML = j.accounts.map(a => {
+            const net = (a.netBalance != null ? a.netBalance : a.balance) || 0;
+            const cur = a.currency || 'ARS';
+            const nm = a.name ? (escapeHtml(a.name) + ': ') : '';
+            const st = (a.status && !/operativa|operative|active/i.test(a.status)) ? ' <span style="color:#dc3545;">(' + escapeHtml(a.status) + ')</span>' : '';
+            return nm + '<b>$' + Number(net).toLocaleString('es-AR') + '</b> ' + escapeHtml(cur) + st;
+        }).join(' &nbsp;|&nbsp; ');
+    } catch (e) { el.textContent = '—'; }
+}
+
+function _hgcashPanelVisible() {
+    const sec = document.getElementById('commandsSection');
+    const panel = document.getElementById('hgcashMovementsPanel');
+    return !!(sec && sec.classList.contains('active') && panel && panel.style.display !== 'none');
+}
+
+let _hgcashLiveTimer = null;
+let _hgcashLiveThrottle = 0;
+// Refresco en vivo: sólo si el panel está visible. El saldo se refresca siempre; los
+// movimientos sólo si el agente está en la página 1 (no le reseteamos la vista si paginó).
+function hgcashLiveRefresh(force) {
+    if (!_hgcashPanelVisible()) return;
+    const now = Date.now();
+    if (!force && now - _hgcashLiveThrottle < 2500) return;
+    _hgcashLiveThrottle = now;
+    loadHgcashBalance();
+    if ((window._hgcashPage || 1) === 1) loadHgcashMovements(1);
+}
+function startHgcashLive() {
+    if (_hgcashLiveTimer) return;
+    _hgcashLiveTimer = setInterval(() => hgcashLiveRefresh(true), 25000);
 }
 
 async function saveHgcashConfig() {

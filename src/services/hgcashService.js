@@ -129,6 +129,24 @@ async function getReceiptUrl(transactionId) {
   }
 }
 
+// Estado de un pago saliente (cash-out) por su id de REQUEST. Sirve para destrabar
+// un payout que quedó en 'paying' (webhook perdido). GET /transaction/{id}/status.
+async function getTransactionStatus(requestId) {
+  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+  if (!requestId) return { ok: false, error: 'requestId vacío' };
+  try {
+    const r = await axios.get(`${BASE}/transaction/${encodeURIComponent(requestId)}/status`, { headers: _headers(), timeout: 15000 });
+    const data = r.data || {};
+    const status = data.status || data.state || null;
+    return { ok: true, status: status ? String(status) : null, data };
+  } catch (e) {
+    const httpStatus = e.response && e.response.status;
+    const detail = e.response ? `HTTP ${httpStatus} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.message;
+    logger.warn(`[hgcash-pay] get-status falló (${requestId}): ${detail}`);
+    return { ok: false, error: detail, httpStatus };
+  }
+}
+
 // Descarga los BYTES del PDF del comprobante: resuelve un signedUrl fresco y baja
 // el archivo. Devuelve { ok, buffer }. La signedUrl es de descarga directa (presignada),
 // no necesita el token. Best-effort: ante cualquier error devuelve ok:false.
@@ -145,4 +163,4 @@ async function fetchReceiptPdf(transactionId) {
   }
 }
 
-module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getTransactionIdForRequest, getReceiptUrl, fetchReceiptPdf, getToken };
+module.exports = { isEnabled, lookupAlias, getAccounts, createCashOut, getTransactionIdForRequest, getTransactionStatus, getReceiptUrl, fetchReceiptPdf, getToken };

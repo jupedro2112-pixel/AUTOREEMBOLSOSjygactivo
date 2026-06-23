@@ -673,6 +673,12 @@
                                 </select>
                                 <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
                             </div>
+                            <div id="hgcashBalanceBox" style="margin:10px 0;padding:10px 14px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:13px;color:#dfe;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                                <span style="opacity:.8;">💰 Saldo hgcash:</span>
+                                <span id="hgcashBalanceVal" style="font-weight:700;">cargando…</span>
+                                <button class="btn btn-secondary btn-sm" onclick="loadHgcashBalance()" title="Actualizar saldo">🔄</button>
+                                <span id="hgcashLiveDot" style="margin-left:auto;font-size:11px;color:#7CFC00;" title="Se actualiza solo cuando entra/cambia un movimiento">● en vivo</span>
+                            </div>
                             <div style="overflow-x:auto;">
                                 <table class="data-table" style="min-width:1000px;">
                                     <thead>

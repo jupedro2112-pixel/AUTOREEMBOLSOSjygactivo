@@ -8,6 +8,28 @@
 
 ## Sesión 2026-06-23
 
+### 65. Panel hgcash en TIEMPO REAL: saldo en vivo + actualización por socket + destrabe de pagos
+- **Pedido (paso 3):** control de transacciones hgcash en tiempo real dentro de VipCargas, para que el agente no
+  entre más a hg.cash.
+- **Saldo en vivo:** endpoint `GET /api/admin/hgcash/balance` (solo admin general, cache 15s) que usa `GET /accounts`
+  de hgcash (`balance`/`netBalance`/`status`). Widget "💰 Saldo hgcash" arriba de la tabla de movimientos +
+  `loadHgcashBalance()`.
+- **Tiempo real:** `_emitHgcashUpdate()` (server) emite `notifyAdmins('hgcash_movement')` cuando entra un movimiento
+  nuevo (webhook) o se concreta una auto-carga. El panel escucha `socket.on('hgcash_movement')` → `hgcashLiveRefresh()`
+  (throttle 2.5s, solo si el panel está visible; refresca movimientos página 1 + saldo). Además auto-refresco cada 25s
+  mientras el panel está abierto (`startHgcashLive`), sin resetear la vista si el agente paginó (`window._hgcashPage`).
+- **Destrabe de pagos colgados:** `GET /transaction/{id}/status` (hgcash) vía `hgcashPay.getTransactionStatus`.
+  Endpoint `POST /api/admin/payouts/:id/sync` (withdrawer) que consulta el estado real y REUSA
+  `handlePayoutStatusWebhook` para mapear (DONE→paid+aviso+comprobante; ERROR/CANCELLED→failed). En el panel, el banner
+  de pago del chat ahora también muestra pagos `paying`/`failed` con botones **🔄 Sincronizar estado** (+ Reintentar/
+  Otro banco/Rechazar/Descartar según estado). Función `syncPayout()`.
+- **Sin romper nada:** el flujo `pending_review` del banner queda igual; solo se agrega la rama paying/failed. El saldo
+  cachea 15s. Endpoints admin-only.
+- **Validado:** `node --check` OK (server.js, hgcashService.js, admin.js). Back necesita redeploy; panel, recargar.
+- **Limitación conocida (API hgcash):** NO hay listado de movimientos ENTRANTES por API (solo webhook) → la
+  reconciliación de cargas depende de la confiabilidad del webhook (regla WAF "Skip" en Cloudflare para
+  `/api/hgcash/webhook`). El saldo y los pagos salientes sí se consultan por API.
+
 ### 64. Comprobante de pago enviado COMO FOTO (rasterizado del PDF) + link al PDF oficial
 - **Pedido:** que el comprobante (#63) le llegue al cliente como **foto** en el chat, no solo como link.
 - **Cómo:** se baja el PDF (`hgcashPay.fetchReceiptPdf`), se **rasteriza la 1ª página a PNG** y se manda como

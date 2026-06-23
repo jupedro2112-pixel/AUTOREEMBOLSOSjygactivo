@@ -1706,6 +1706,12 @@ async function handlePayoutStatusWebhook(p) {
   }
 }
 
+// Avisa al panel (en vivo) que hubo un cambio en los movimientos hgcash, para que
+// refresque la tabla sin recargar. Fire-and-forget; nunca rompe nada.
+function _emitHgcashUpdate(kind) {
+  try { notifyAdmins('hgcash_movement', { kind: kind || 'update', at: Date.now() }); } catch (_) {}
+}
+
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
 async function hgcashAutoCarga({ movement, comprobante, mode }) {
@@ -1875,6 +1881,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     await maybeSendRecoveryMessage(user);
 
     await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.`);
+    _emitHgcashUpdate('cargado');
     logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
   } catch (e) {
     if (charged) {
@@ -2036,6 +2043,7 @@ app.post('/api/hgcash/webhook', async (req, res) => {
     // Responder 2xx YA (el banco reintenta si no; el matcheo corre aparte).
     res.status(200).json({ ok: true });
 
+    if (isNew) _emitHgcashUpdate('movimiento'); // panel en vivo (entrantes y salientes)
     if (isNew && doc.direction === 'Inbound') {
       BankMovement.findOne({ movementId: doc.movementId }).lean()
         .then(fresh => { if (fresh) return hgcashMatchFromMovement(fresh); })
@@ -12158,6 +12166,32 @@ app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (r
   }
 });
 
+// Saldo EN VIVO de la(s) cuenta(s) hgcash (GET /accounts). Para que el agente vea la
+// plata real sin entrar a hg.cash. Solo admin general. Cache de 15s para no martillar
+// la API de hgcash con el refresco en vivo del panel.
+let _hgcashBalanceCache = { at: 0, accounts: null };
+app.get('/api/admin/hgcash/balance', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    if (!hgcashPay.isEnabled()) return res.json({ enabled: false, accounts: [] });
+    const now = Date.now();
+    if (_hgcashBalanceCache.accounts && (now - _hgcashBalanceCache.at) < 15000) {
+      return res.json({ enabled: true, accounts: _hgcashBalanceCache.accounts, cached: true });
+    }
+    const acc = await hgcashPay.getAccounts();
+    if (!acc.ok) return res.status(502).json({ error: 'No se pudo consultar el saldo: ' + (acc.error || 's/detalle') });
+    const accounts = (Array.isArray(acc.data) ? acc.data : []).map(a => ({
+      id: a.id, name: a.name || null, currency: a.currency || null,
+      balance: a.balance, netBalance: a.netBalance, pendingFees: a.pendingFees, status: a.status || null
+    }));
+    _hgcashBalanceCache = { at: now, accounts };
+    res.json({ enabled: true, accounts });
+  } catch (error) {
+    logger.warn(`[hgcash] balance endpoint falló: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // PAGOS AUTOMÁTICOS (retiros) — el agente verifica y confirma, se paga por hgcash
 // ============================================
@@ -12471,6 +12505,27 @@ app.post('/api/admin/payouts/:id/dismiss', authMiddleware, withdrawerMiddleware,
     res.json({ success: true });
   } catch (error) {
     console.error('Error descartando payout:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Destrabar un pago: consulta el estado REAL en hgcash y actualiza el payout. Sirve
+// cuando quedó en 'paying' porque se perdió el webhook (DONE→paid+aviso+recibo;
+// ERROR/CANCELLED→failed). Reusa el handler del webhook para mapear el estado.
+app.post('/api/admin/payouts/:id/sync', authMiddleware, withdrawerMiddleware, async (req, res) => {
+  try {
+    if (!hgcashPay.isEnabled()) return res.status(400).json({ error: 'Pago automático no configurado.' });
+    const payout = await PendingPayout.findOne({ id: req.params.id }).lean();
+    if (!payout) return res.status(404).json({ error: 'Pago no encontrado.' });
+    if (!payout.hgTransactionId) return res.status(400).json({ error: 'Este pago no tiene transacción hgcash para consultar.' });
+    const st = await hgcashPay.getTransactionStatus(payout.hgTransactionId);
+    if (!st.ok || !st.status) return res.status(502).json({ error: 'No se pudo consultar el estado en hgcash: ' + (st.error || 's/estado') });
+    // Reusa el mapeo del webhook (DONE→paid + aviso + comprobante; ERROR/CANCELLED→failed).
+    await handlePayoutStatusWebhook({ externalID: payout.id, id: payout.hgTransactionId, status: st.status });
+    const fresh = await PendingPayout.findOne({ id: payout.id }).select('status hgStatus').lean();
+    res.json({ success: true, status: fresh ? fresh.status : payout.status, hgStatus: st.status });
+  } catch (error) {
+    logger.warn(`[hgcash-pay] sync payout falló: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

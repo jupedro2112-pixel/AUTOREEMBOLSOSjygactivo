@@ -2644,6 +2644,13 @@ async function loadPayoutBanner(userId) {
         const dest = escapeHtml(p.alias || p.cbu || '-');
         const titular = escapeHtml(p.titular || '-');
         const monto = '$' + Number(p.amount).toLocaleString('es-AR');
+        // Anti retiro fantasma: si el descuento en JUGAYGANA no se confirmó al solicitar,
+        // avisamos al agente y resaltamos el banner. Si rechaza, NO se devuelven fichas solas.
+        const debitUnconfirmed = (p.debitConfirmed === false);
+        if (debitUnconfirmed) el.style.background = 'linear-gradient(90deg,#a02020,#7a1010)';
+        const debitWarn = debitUnconfirmed
+            ? '<div style="margin-top:5px;font-size:11px;font-weight:800;color:#ffe08a;background:rgba(0,0,0,0.32);padding:5px 8px;border-radius:6px;">⚠️ Descuento NO confirmado en JUGAYGANA — verificá el saldo real antes de pagar. Si rechazás, NO se devuelven fichas automáticamente.</div>'
+            : '';
         const payBtn = j.payEnabled
             ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">💸 Pagar ' + monto + '</button>'
             : '<span style="color:#ffd;font-size:11px;">Pago automático no configurado (falta token). Pagá manual.</span>';
@@ -2655,7 +2662,7 @@ async function loadPayoutBanner(userId) {
             '<span style="font-size:18px;">💸</span>' +
             '<div style="flex:1;min-width:160px;"><strong>RETIRO PENDIENTE: ' + monto + '</strong>' +
             '<div style="font-size:11px;opacity:0.92;">Titular: ' + titular + ' · CBU/alias: ' + dest + '</div>' +
-            '<div style="font-size:10.5px;opacity:0.8;">Verificá los datos antes de pagar.</div></div>' +
+            '<div style="font-size:10.5px;opacity:0.8;">Verificá los datos antes de pagar.</div>' + debitWarn + '</div>' +
             payBtn +
             '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🏦 Pagar con otro banco</button>' +
             '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar (devolver fichas)</button>' +
@@ -2682,13 +2689,16 @@ async function payPayout(id) {
 }
 
 async function cancelPayout(id) {
-    if (!confirm('¿Rechazar este pago? NO se paga y se le DEVUELVEN las fichas al cliente (re-crédito en JUGAYGANA).')) return;
+    if (!confirm('¿Rechazar este pago? NO se paga. Si el descuento original está CONFIRMADO, se le devuelven las fichas; si NO está confirmado, se cancela SIN devolver (revisá el saldo en JUGAYGANA y devolvé a mano si corresponde).')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
         const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
         const j = await r.json();
         if (r.ok && j.success) {
-            showToast(j.chipsReturned ? 'Pago rechazado · fichas devueltas ✅' : 'Pago rechazado (revisá: no se pudieron devolver las fichas)', j.chipsReturned ? 'success' : 'error');
+            const msg = j.skippedRefund
+                ? 'Pago rechazado SIN devolver fichas (descuento NO confirmado) — verificá en JUGAYGANA y devolvé a mano si corresponde'
+                : (j.chipsReturned ? 'Pago rechazado · fichas devueltas ✅' : 'Pago rechazado (revisá: no se pudieron devolver las fichas)');
+            showToast(msg, (j.skippedRefund || !j.chipsReturned) ? 'error' : 'success');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error', 'error');

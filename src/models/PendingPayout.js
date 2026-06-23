@@ -50,6 +50,17 @@ const pendingPayoutSchema = new mongoose.Schema({
   // Link al retiro original (Transaction)
   withdrawalTxId: { type: String, default: null },
 
+  // ANTI RETIRO FANTASMA: confirmación de que el descuento en JUGAYGANA ocurrió de
+  // verdad al solicitar el retiro. JUGAYGANA puede devolver "éxito" sin descontar
+  // (saldo del listado ShowUsers desactualizado tras un pago grande → WithdrawMoney
+  // falso-positivo). balanceBefore/After son las lecturas de saldo antes/después del
+  // retiro; debitConfirmed=true SÓLO si el saldo bajó al menos el monto retirado.
+  // Si es false → el RECHAZO no devuelve fichas a ciegas (devolverlas acuñaría saldo
+  // que el cliente nunca tuvo descontado). null = pago viejo previo a esta verificación.
+  balanceBefore: { type: Number, default: null },
+  balanceAfter: { type: Number, default: null },
+  debitConfirmed: { type: Boolean, default: null },
+
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true

@@ -8172,6 +8172,24 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
 
     await recordUserActivity(req.user.userId, 'withdrawal', amountNum);
 
+    // ANTI RETIRO FANTASMA: confirmar que el descuento OCURRIÓ DE VERDAD. JUGAYGANA
+    // puede devolver un "éxito" sin descontar (el saldo del listado ShowUsers queda
+    // desactualizado tras un pago grande → WithdrawMoney falso-positivo y el chequeo
+    // de saldo pasa con un saldo viejo y alto). Releemos el saldo y exigimos que haya
+    // bajado al menos el monto retirado. Si no se confirma, igual creamos el pago
+    // (decisión: no bloquear al cliente) pero lo marcamos para REVISIÓN MANUAL: el
+    // rechazo NO devolverá fichas a ciegas (eso es lo que acuñaba saldo fantasma).
+    const balanceBefore = available;
+    let balanceAfter = null;
+    let debitConfirmed = false; // por defecto NO confirmado (si la lectura falla → revisión)
+    try {
+      const afterRes = await jugayganaMovements.getUserBalanceWithRetry(username);
+      if (afterRes && afterRes.success) {
+        balanceAfter = Number(afterRes.balance) || 0;
+        debitConfirmed = (balanceBefore - balanceAfter) >= (amountNum - 1);
+      }
+    } catch (_) { /* lectura flaky → queda sin confirmar (revisión manual) */ }
+
     // Registrar Transaction (igual que en /api/admin/withdrawal). Sin esto, los
     // retiros self-service no aparecían en el dashboard de transacciones.
     try {
@@ -8203,10 +8221,23 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
         amount: amountNum, titular: titularT, cbu: cbuT, alias: aliasT,
         status: 'pending_review',
         withdrawalTxId: result.data?.transfer_id || result.data?.transferId || null,
+        balanceBefore, balanceAfter, debitConfirmed,
         createdAt: new Date()
       });
     } catch (ppErr) {
       logger.warn(`[withdrawal/request] no se pudo crear PendingPayout para ${user.username}: ${ppErr.message}`);
+    }
+
+    // Si NO pudimos confirmar el descuento, avisamos al agente (nota interna en el
+    // chat) para que verifique el saldo real en JUGAYGANA antes de pagar/rechazar.
+    if (debitConfirmed !== true) {
+      logger.warn(`[withdrawal/request] DESCUENTO NO CONFIRMADO ${user.username} $${amountNum} (saldoAntes=${balanceBefore}, saldoDespués=${balanceAfter}) → pago marcado para revisión manual`);
+      try {
+        await _emitAdminOnlyChatNote(user.id, user.username,
+          `⚠️ Retiro de $${amountNum.toLocaleString('es-AR')} solicitado SIN descuento confirmado en JUGAYGANA ` +
+          `(saldo antes $${Number(balanceBefore).toLocaleString('es-AR')} → después ${balanceAfter == null ? '¿?' : '$' + Number(balanceAfter).toLocaleString('es-AR')}). ` +
+          `Verificá el saldo real ANTES de pagar. Si lo rechazás, NO se devolverán fichas automáticamente.`);
+      } catch (_) {}
     }
 
     // Guardar datos bancarios para la próxima vez (si el usuario lo pidió).
@@ -12108,6 +12139,22 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
       { new: true }
     );
     if (!payout) return res.status(400).json({ error: 'No se pudo rechazar (ya está pagado o en proceso).' });
+
+    // ANTI RETIRO FANTASMA: si al solicitar NO se confirmó que el descuento en
+    // JUGAYGANA ocurrió de verdad (debitConfirmed===false), NO devolvemos fichas a
+    // ciegas: devolverlas acuñaría saldo que el cliente nunca tuvo descontado (fue lo
+    // que pasó con el retiro de 565k → 200k/92k). Se cancela el pago y se deja nota
+    // para que el agente verifique en JUGAYGANA y, si corresponde, devuelva a mano.
+    // Pagos viejos (debitConfirmed null/undefined) siguen con el comportamiento previo.
+    if (payout.debitConfirmed === false) {
+      const Wf = Number(payout.amount);
+      await PendingPayout.updateOne({ id }, { $set: { chipsReturned: false } });
+      await _emitAdminOnlyChatNote(payout.userId, payout.username,
+        `⚠️ Retiro de $${Wf.toLocaleString('es-AR')} RECHAZADO SIN devolución automática: el descuento original NO está confirmado ` +
+        `(posible retiro sin saldo real). Revisá el historial en JUGAYGANA; si al cliente SÍ se le había descontado, devolvé a mano.`);
+      logger.warn(`[payout-cancel] descuento no confirmado payout=${id} user=${payout.username} $${Wf} → NO se devolvieron fichas (revisión manual)`);
+      return res.json({ success: true, chipsReturned: false, skippedRefund: true });
+    }
 
     // Devolver el saldo en JUGAYGANA. Si la ÚLTIMA carga del cliente incluyó bonus,
     // se devuelve esa porción como BONUS (capeada al monto del retiro) y el resto como

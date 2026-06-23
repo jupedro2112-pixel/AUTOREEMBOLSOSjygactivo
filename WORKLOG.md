@@ -4,7 +4,38 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-22**
+> **Última actualización: 2026-06-23**
+
+## Sesión 2026-06-23
+
+### 61. FIX CRÍTICO retiro fantasma: el rechazo dejaba de acuñar saldo que el cliente nunca tuvo
+- **Incidente:** un cliente pidió pago automático de $565.000 (lo tenía, se le pagó). Después solicitó
+  $200.000 y $92.000 **sin tener fondos** (saldo real $991). Esos retiros igual generaron `PendingPayout`,
+  y al darles **"Rechazar"** se le **devolvieron** $200.000 y $92.000 en fichas (DEPOSIT en JUGAYGANA) que
+  hubo que sacar a mano. Capturas: JUGAYGANA mostraba DEPOSIT 200k/92k (la devolución) + WITHDRAW 200k/92k
+  (la corrección manual), saldo siempre 991 → **no hubo descuento original**.
+- **Causa raíz:** tras el pago grande, el saldo del listado **ShowUsers** de JUGAYGANA quedó **desactualizado
+  (alto)**. Entonces (1) el chequeo de saldo de `/api/withdrawal/request` pasó con el saldo viejo, y (2)
+  `jugaygana.withdrawFromUser` devolvió **falso éxito** (`WithdrawMoney` no chequea saldo; éxito = `success`
+  o `transfer_id`) sin descontar nada. Se creó el `PendingPayout` **sin descuento real**. El **cancel
+  re-acreditaba el monto completo a ciegas** (`depositToUser`), confiando en "el self-retiro ya descontó" →
+  acuñaba fichas.
+- **Fix (defensa en ambas puntas + flag de revisión; decisión owner: permitir pero marcar, no bloquear):**
+  - **Al solicitar (`/api/withdrawal/request`):** tras `withdrawFromUser`, se relee el saldo
+    (`getUserBalanceWithRetry`) y se exige que haya **bajado al menos el monto** (`debitConfirmed`). Se guardan
+    `balanceBefore/balanceAfter/debitConfirmed` en el `PendingPayout`. Si no se confirma, **igual se crea** el
+    pago pero queda marcado y se deja **nota interna** al agente ("verificá el saldo real antes de pagar; si
+    rechazás, no se devuelven fichas solas").
+  - **Al rechazar (`/api/admin/payouts/:id/cancel`):** si `debitConfirmed===false` → **NO devuelve fichas**;
+    cancela y deja nota para devolver a mano si corresponde (`skippedRefund:true`). Pagos viejos
+    (`debitConfirmed` null/undefined) **siguen con el comportamiento previo** (compatibilidad).
+  - **Modelo `PendingPayout`:** nuevos campos `balanceBefore`, `balanceAfter`, `debitConfirmed` (default null).
+  - **Panel (`adminprivado2026`):** el banner del retiro se pinta **rojo** + cartel "⚠️ Descuento NO confirmado"
+    cuando `debitConfirmed===false`; el `confirm()` y el toast del rechazo aclaran que puede no devolver fichas.
+- **Nota:** sólo cambia el camino de **rechazo** ante descuento no confirmado; **pagar** un retiro flageado no
+  se bloquea (el agente verifica el saldo real). El riesgo de falso flag (lectura lenta) sólo cuesta que, si se
+  rechaza ese retiro, la devolución se haga a mano.
+- **Validado:** `node --check` OK (server.js, PendingPayout.js, admin.js). Back necesita redeploy; panel, recargar.
 
 ## Sesión 2026-06-22
 

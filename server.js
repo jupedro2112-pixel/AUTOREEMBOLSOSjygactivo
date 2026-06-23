@@ -12341,6 +12341,9 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     // (el aviso por webhook DONE es idempotente, no duplica). Si quedó 'paying',
     // el aviso lo dispara el webhook al confirmarse.
     if (isDone) { await notifyPayoutPaid(claimed); maybeSendPayoutReceipt(claimed).catch(() => {}); }
+    // Si quedó 'paying', re-chequear el estado a los ~7s (por si el webhook no llega):
+    // confirma el pago casi al instante sin esperar el poller de 45s.
+    else { setTimeout(function () { _pollPayingPayouts(); }, 7000); }
 
     logger.info(`[hgcash-pay] cash-out iniciado payout=${id} user=${payout.username} $${payout.amount} hgId=${hgId} status=${hgStatus} por ${req.user.username}`);
     res.json({ success: true, status: isDone ? 'paid' : 'paying', hgTransactionId: hgId, hgStatus });
@@ -13628,6 +13631,34 @@ async function _runInactividadTick() {
 }
 setTimeout(function () { _runInactividadTick(); }, 5 * 60 * 1000);
 setInterval(function () { _runInactividadTick(); }, 6 * 60 * 60 * 1000);
+
+// POLLER: confirma AUTOMÁTICAMENTE los pagos en proceso (status 'paying'). El webhook
+// de hgcash puede no llegar (p.ej. Cloudflare bloqueando /api/hgcash/webhook) → sin esto
+// el pago queda "en proceso" y hay que sincronizar a mano. Consulta el estado real en
+// hgcash y, si está DONE, marca pagado + avisa al cliente + manda el comprobante (TODO
+// idempotente vía handlePayoutStatusWebhook: status==='paid' corta, receiptSentAt no
+// duplica). Solo pagos RECIENTES (últimas 2h) para NO resucitar ni spamear pagos viejos.
+async function _pollPayingPayouts() {
+  try {
+    if (!hgcashPay.isEnabled()) return;
+    const since = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const paying = await PendingPayout.find({ status: 'paying', createdAt: { $gte: since } })
+      .sort({ createdAt: -1 }).limit(25).lean();
+    for (const p of paying) {
+      if (!p.hgTransactionId) continue;
+      try {
+        const st = await hgcashPay.getTransactionStatus(p.hgTransactionId);
+        if (st.ok && st.status) {
+          await handlePayoutStatusWebhook({ externalID: p.id, id: p.hgTransactionId, status: st.status });
+        }
+      } catch (_) {}
+    }
+  } catch (err) {
+    logger.warn('[hgcash-pay] poll paying payouts error: ' + err.message);
+  }
+}
+setTimeout(function () { _pollPayingPayouts(); }, 90 * 1000);
+setInterval(function () { _pollPayingPayouts(); }, 45 * 1000);
 
 
 // ============================================================

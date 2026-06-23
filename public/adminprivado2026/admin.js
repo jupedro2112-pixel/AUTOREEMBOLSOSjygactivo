@@ -2637,36 +2637,15 @@ async function loadPayoutBanner(userId) {
     const el = document.getElementById('chatPayoutBanner');
     if (!el) return;
     try {
-        // Trae el payout más reciente del cliente en estados accionables (pending_review,
-        // paying, failed) → así también mostramos los pagos COLGADOS para destrabarlos.
-        const r = await authFetch('/api/admin/payouts?userId=' + encodeURIComponent(userId));
+        // SOLO el retiro actual a verificar (pending_review). Los pagos en proceso/fallidos
+        // NO se muestran acá (se confirman solos por el poller del back) para no resucitar
+        // pagos viejos ni arriesgar un re-pago.
+        const r = await authFetch('/api/admin/payouts?userId=' + encodeURIComponent(userId) + '&status=pending_review');
         if (!r.ok) { el.style.display = 'none'; return; }
         const j = await r.json();
         const p = (j.payouts || [])[0];
         if (!p) { el.style.display = 'none'; el.innerHTML = ''; return; }
         el.style.display = '';
-
-        // Pago COLGADO (en proceso o fallido): banner con botón para destrabar (sync).
-        if (p.status === 'paying' || p.status === 'failed') {
-            const montoS = '$' + Number(p.amount).toLocaleString('es-AR');
-            const isFail = p.status === 'failed';
-            el.style.padding = '9px 14px';
-            el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
-            el.style.background = isFail ? 'linear-gradient(90deg,#a02020,#7a1010)' : 'linear-gradient(90deg,#8a6d1f,#6a5215)';
-            const syncBtn = '<button onclick="syncPayout(\'' + escapeHtml(p.id) + '\')" title="Consultar el estado real en hgcash y actualizar" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🔄 Sincronizar estado</button>';
-            const retryBtn = (isFail && j.payEnabled) ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">💸 Reintentar pago</button>' : '';
-            const otherBtn = isFail ? '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">🏦 Pagar con otro banco</button>' : '';
-            const cancelBtn2 = isFail ? '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar (devolver fichas)</button>' : '';
-            const dismissBtn2 = (currentAdmin?.role === 'admin') ? '<button onclick="dismissPayout(\'' + escapeHtml(p.id) + '\')" title="Limpiar este pago" style="background:rgba(0,0,0,0.35);color:#fff;border:1px solid rgba(255,255,255,0.25);border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">🗑️ Descartar</button>' : '';
-            el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;font-size:12.5px;">' +
-                '<span style="font-size:18px;">' + (isFail ? '❌' : '⏳') + '</span>' +
-                '<div style="flex:1;min-width:160px;"><strong>' + (isFail ? 'PAGO FALLÓ' : 'PAGO EN PROCESO') + ': ' + montoS + '</strong>' +
-                '<div style="font-size:11px;opacity:0.92;">Titular: ' + escapeHtml(p.titular || '-') + ' · ' + escapeHtml(p.hgStatus || p.status) + (p.error ? ' · ' + escapeHtml(String(p.error).slice(0, 80)) : '') + '</div>' +
-                '<div style="font-size:10.5px;opacity:0.8;">' + (isFail ? 'Reintentá, pagá por otro banco, o rechazá.' : 'Si tarda, tocá Sincronizar para traer el estado real de hgcash.') + '</div></div>' +
-                syncBtn + retryBtn + otherBtn + cancelBtn2 + dismissBtn2 +
-                '</div>';
-            return;
-        }
         el.style.padding = '9px 14px';
         el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
         el.style.background = 'linear-gradient(90deg,#7a1fa2,#5a1580)';

@@ -8,6 +8,28 @@
 
 ## Sesión 2026-06-23
 
+### 66. FIX URGENTE regresión de pagos: el banner resucitaba pagos viejos + pago no se confirmaba solo
+- **Incidente:** tras #65, el banner de pago del chat pasó a mostrar pagos `paying`/`failed` (no solo
+  `pending_review`). Resultado: aparecían pagos VIEJOS colgados (ej. "PAGO EN PROCESO $29.000") en el chat de un
+  cliente, en cascada (al resolver uno aparecía otro viejo). Además el botón **"Reintentar pago"** en `failed`
+  podía **RE-PAGAR un retiro viejo** (pérdida de plata). Y los pagos nuevos no se confirmaban solos: quedaban
+  `paying` (el webhook de hgcash no llega — probable Cloudflare) y había que tocar "Sincronizar" a mano.
+- **Fix:**
+  - **Banner revertido a SOLO `pending_review`** (`loadPayoutBanner`): se quitó la rama paying/failed con los
+    botones Sincronizar/Reintentar. El banner vuelve a mostrar únicamente el retiro actual a verificar, como antes.
+    Elimina el riesgo de re-pago y la cascada de pagos viejos.
+  - **Poller `_pollPayingPayouts` (server.js):** cada 45s (1er run a los 90s) consulta el estado real en hgcash
+    (`getTransactionStatus`) de los pagos `paying` RECIENTES (últimas 2h) y, si están DONE, los confirma vía
+    `handlePayoutStatusWebhook` (marca pagado + avisa + manda comprobante, TODO idempotente). Así los pagos se
+    confirman SOLOS aunque no llegue el webhook, sin resucitar pagos viejos (>2h no se tocan).
+  - **Re-chequeo rápido:** el endpoint `/payouts/:id/pay`, si el cash-out queda `paying`, dispara un poll a los 7s
+    → el pago se confirma casi al instante sin esperar el poller.
+- **OJO (acción del owner):** revisar si algún cliente recibió **doble pago** por el botón "Reintentar" (movimientos
+  hgcash salientes duplicados al mismo CBU). "Sincronizar" NO movía plata (solo estado); "Reintentar" sí.
+- **Causa de fondo (pendiente):** el webhook de estado de pago (`/api/hgcash/webhook` topic TRANSACTION_REQUEST) no
+  llega → regla WAF "Skip" en Cloudflare para esa ruta. El poller es el respaldo mientras tanto.
+- **Validado:** `node --check` OK (server.js, admin.js). Back necesita redeploy; panel, recargar.
+
 ### 65. Panel hgcash en TIEMPO REAL: saldo en vivo + actualización por socket + destrabe de pagos
 - **Pedido (paso 3):** control de transacciones hgcash en tiempo real dentro de VipCargas, para que el agente no
   entre más a hg.cash.

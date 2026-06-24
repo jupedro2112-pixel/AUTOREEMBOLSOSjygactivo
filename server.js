@@ -8761,7 +8761,8 @@ const getDepositsInPeriod = async (username, daysBack) => {
 // requireDeposits > 0 marca que la RECOMPENSA (no el reclamo diario) requiere actividad del mes
 const FIRE_MILESTONES = [
   { day: 10, reward: 10000,  type: 'cash',           requireDeposits: 20000,  depositDays: 30, desc: 'Recompensa Fueguito 10 días' },
-  { day: 15, reward: 0,      type: 'next_load_bonus', requireDeposits: 20000,  depositDays: 30, desc: '30% en próxima carga' },
+  // Hito día 15 (bono % en próxima carga) SACADO (owner 2026-06-24): se quitaron los
+  // bonos en la carga. Quedan solo los premios en EFECTIVO (día 10/20/30).
   { day: 20, reward: 50000,  type: 'cash',           requireDeposits: 100000, depositDays: 30, desc: 'Recompensa Fueguito 20 días' },
   { day: 30, reward: 200000, type: 'cash',           requireDeposits: 300000, depositDays: 45, desc: 'Recompensa Fueguito 30 días' }
 ];
@@ -13139,20 +13140,44 @@ function _rouletteHasAppInstalled(u) {
   return false;
 }
 
+// "Cliente activo" para la ruleta (owner 2026-06-24): MÁS DE 10 cargas REALES
+// (deposits, sin contar regalos/devoluciones) en los últimos 30 días. Devuelve
+// { active, count }. Ante error de lectura NO bloquea (no castiga por un fallo de DB).
+const ROULETTE_MIN_CARGAS_30D = 10; // "más de" esto → activo (11+)
+async function _rouletteIsActiveClient(userId, username) {
+  try {
+    const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+    const count = await Transaction.countDocuments({
+      $or: [{ userId: userId }, { username: username }],
+      type: 'deposit',
+      'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'payout_refund'] },
+      timestamp: { $gte: since }
+    });
+    return { active: count > ROULETTE_MIN_CARGAS_30D, count };
+  } catch (e) {
+    logger.warn(`[roulette] chequeo cliente activo falló: ${e.message}`);
+    return { active: true, count: null }; // fail-open: no bloquear por un error de DB
+  }
+}
+
 // GET /api/roulette/status — estado del giro de HOY del user actual.
 app.get('/api/roulette/status', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
     const username = req.user.username;
     const dateKey = _rouletteDateKeyART();
-    // Gate: solo users con la PWA instalada (token FCM en contexto standalone).
+    // Gate: PWA instalada (token FCM standalone) Y cliente ACTIVO (>10 cargas/30d).
     const u = await User.findOne({ id: userId }, { fcmTokenContext: 1, fcmTokens: 1 }).lean();
-    const eligible = _rouletteHasAppInstalled(u);
+    const appOk = _rouletteHasAppInstalled(u);
+    const act = await _rouletteIsActiveClient(userId, username);
+    const eligible = appOk && act.active;
     const spin = await DailyRouletteSpin.findOne({ userId, dateKey }).lean();
     res.json({
       success: true,
       eligible,
-      needsAppNotifs: !eligible,
+      needsAppNotifs: !appOk,
+      needsActive: appOk && !act.active, // app OK pero no llega a las cargas mínimas
+      minCargas: ROULETTE_MIN_CARGAS_30D,
       dateKey,
       prizes: ROULETTE_PRIZES,
       alreadySpun: !!spin,
@@ -13432,12 +13457,21 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     const username = req.user.username;
     const dateKey = _rouletteDateKeyART();
 
-    // Gate: solo users con la PWA instalada (token FCM en contexto standalone).
+    // Gate: PWA instalada (token FCM en contexto standalone).
     const u = await User.findOne({ id: userId }, { fcmTokenContext: 1, fcmTokens: 1 }).lean();
     if (!_rouletteHasAppInstalled(u)) {
       return res.status(403).json({
         error: 'Solo podés girar si tenés la app instalada con notificaciones aceptadas.',
         needsAppNotifs: true
+      });
+    }
+    // Gate: solo clientes ACTIVOS (más de 10 cargas en los últimos 30 días).
+    const act = await _rouletteIsActiveClient(userId, username);
+    if (!act.active) {
+      return res.status(403).json({
+        error: `La ruleta es solo para clientes activos. Necesitás más de ${ROULETTE_MIN_CARGAS_30D} cargas en los últimos 30 días.`,
+        needsActive: true,
+        minCargas: ROULETTE_MIN_CARGAS_30D
       });
     }
 
@@ -13792,7 +13826,11 @@ setInterval(function () { _runEncuestaTick(); }, 5 * 60 * 1000);
 const inactividadService = require('./src/services/inactividadService');
 const InactividadFire = require('./src/models/InactividadFire');
 
+// APAGADO (owner 2026-06-24): se sacaron TODOS los bonos automáticos. El motor de
+// inactividad (bono % + regalo ticket alto a inactivos) NO dispara. Para reactivar, false.
+const INACTIVIDAD_DISABLED = true;
 async function _runInactividadTick() {
+  if (INACTIVIDAD_DISABLED) return;
   try {
     const cfg = mergeInactividadConfig(await getConfig('inactividadConfig'));
     const r = await inactividadService.tick({
@@ -14579,7 +14617,8 @@ async function _strategySendStep(cfg, step, enrollments) {
 // 15%→30%) vuelve a estar disponible, pero con TOPE de 30% y vigencia ≤2h. El tope
 // lo refuerzan la validación del POST de config y activateChargeBonuses. Sólo corre
 // si el owner la activa (isActive). Para apagarla del todo, poné el flag en true.
-const BONUS_STRATEGY_DISABLED = false;
+// APAGADA (owner 2026-06-24): se sacaron TODOS los bonos automáticos. Para reactivarla, false.
+const BONUS_STRATEGY_DISABLED = true;
 async function _runBonusStrategy() {
   if (BONUS_STRATEGY_DISABLED) return;
   try {

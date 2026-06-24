@@ -8,6 +8,25 @@
 
 ## Sesión 2026-06-24
 
+### 71. Se SACARON todos los bonos automáticos (queda el 100% recuperación Comunidad) + ruleta solo activos
+- **Decisión owner:** sacar TODOS los bonos automáticos. Se mantiene SOLO la oferta `/sys_recover_100` (100% de
+  recuperación de Comunidad, post-carga). Se mantienen también: premios en efectivo del fueguito (día 10/20/30),
+  reembolsos, bono por instalar app.
+- **Apagados (kill switches en código, reversibles poniendo el flag en false):**
+  - **Estrategia por voto:** `BONUS_STRATEGY_DISABLED = true`.
+  - **Inactividad** (bono % + regalo ticket alto): `INACTIVIDAD_DISABLED = true` (early-return en `_runInactividadTick`).
+  - **Bonos % de reglas de notificación:** `CHARGE_BONUSES_DISABLED = true` en `notificationRulesService.activateChargeBonuses`
+    (las notis de enganche siguen saliendo, pero ya NO crean PromoBonus). La estrategia por voto también lo usaba → doble apagado.
+  - **Fueguito día 15** (bono en próxima carga): hito SACADO de `FIRE_MILESTONES` (quedan solo los de efectivo).
+    La migración #70 (`migration_clear_fire_nextload_done`) ya limpia los `pendingNextLoadBonus` que quedaron.
+  - (encuesta ya estaba apagada desde #57).
+- **Ruleta diaria — solo CLIENTES ACTIVOS:** activo = MÁS DE 10 cargas reales (deposits, sin regalos/devoluciones)
+  en los últimos 30 días (`_rouletteIsActiveClient`, const `ROULETTE_MIN_CARGAS_30D=10`). El status devuelve
+  `eligible=appOk && active` (la card se oculta si no califica) + `needsActive`; el spin bloquea con 403 si no es activo.
+  Fail-open ante error de DB (no castiga por un fallo de lectura).
+- **Resultado:** ningún motor crea PromoBonus automático. Lo único que "regala" automático es la oferta de Comunidad.
+- **Validado:** `node --check` OK (server.js, notificationRulesService.js). Back necesita redeploy.
+
 ### 70. El "bono 100% a clientes activos" era el FUEGUITO (hito día 15) → bajado a 30%
 - **Diagnóstico:** el owner reportaba bonos del 100% a clientes ACTIVOS. Verificado que NINGÚN motor de bonos los
   crea (inactividad/notificaciones/estrategia/encuesta TODOS capean a ≤30%). El 100% salía del **FUEGUITO**: el hito

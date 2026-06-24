@@ -348,7 +348,12 @@ function _lastMonthInArt() {
 // Cuando una regla con chargeBonus dispara, cada usuario que recibió el
 // push queda con una bonificación vigente (un % extra sobre su próxima
 // carga, válido por 1 sola carga). Reemplaza cualquier bono activo previo.
+// APAGADO (owner 2026-06-24): se sacaron TODOS los bonos automáticos en la carga.
+// Las reglas de notificación siguen mandando el push de enganche, pero ya NO crean
+// PromoBonus. Para reactivar los bonos automáticos, poné CHARGE_BONUSES_DISABLED=false.
+const CHARGE_BONUSES_DISABLED = true;
 async function activateChargeBonuses(rule, usernames, models, logger) {
+  if (CHARGE_BONUSES_DISABLED) return 0;
   const PromoBonus = models && models.PromoBonus;
   if (!PromoBonus) return 0;
   const cb = rule.chargeBonus || {};

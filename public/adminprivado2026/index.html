@@ -616,6 +616,30 @@
                             </button>
                             <div id="refundPctMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>
+                        <!-- Premios del Fueguito (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="fireMilestonesHeader">
+                            <h3>🔥 Premios del Fueguito</h3>
+                        </div>
+                        <div class="cbu-form" id="fireMilestonesForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Premios en <b>efectivo</b> que gana el cliente al llegar a X días de racha. El
+                                <b>requisito</b> es cuánto tiene que haber cargado (en los últimos N días) para poder
+                                reclamarlo (0 = sin requisito). Si pierde un día, la racha se reinicia. Solo el admin general.
+                            </p>
+                            <div style="overflow-x:auto;">
+                                <table class="data-table" style="min-width:680px;font-size:12px;">
+                                    <thead><tr>
+                                        <th>Día de racha</th><th>Premio $</th><th>Requisito carga $</th><th>En N días</th><th>Descripción</th><th></th>
+                                    </tr></thead>
+                                    <tbody id="fireMilestonesRows"></tbody>
+                                </table>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="addFireMilestoneRow()" style="margin-top:8px;">+ Agregar premio</button>
+                            <div style="margin-top:10px;">
+                                <button class="btn-primary" onclick="saveFireMilestones()"><span class="icon icon-save"></span> Guardar premios</button>
+                            </div>
+                            <div id="fireMilestonesMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
+                        </div>
                         <!-- Banco automático (hgcash / Urbana) -->
                         <div class="panel-subheader" style="margin-top: 24px;">
                             <h3>🏦 Banco automático (hgcash)</h3>

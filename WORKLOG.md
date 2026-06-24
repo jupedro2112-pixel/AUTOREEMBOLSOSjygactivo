@@ -8,6 +8,19 @@
 
 ## Sesión 2026-06-24
 
+### 72. Premios del Fueguito EDITABLES desde el panel (Config['fireMilestones'])
+- **Pedido:** poder armar/cambiar los premios del fueguito (días + montos + requisitos) sin tocar código.
+- **Backend:** `FIRE_MILESTONES` pasó a ser editable: `getFireMilestones()` lee `Config['fireMilestones']`
+  (normaliza/clampea/ordena/dedup por día; todos type:'cash'); si no hay config usa `FIRE_MILESTONES_DEFAULT`
+  (10/20/30 días = $10k/$50k/$200k). Los 3 endpoints (status, claim, claim-reward) ahora hacen
+  `await getFireMilestones()`. `nextReward` calculado del próximo hito (no hardcodeado).
+  - Endpoints admin (solo admin general): `GET/POST /api/admin/fire-milestones`.
+- **Panel:** card "🔥 Premios del Fueguito" en COMANDOS (al lado de reembolsos): tabla editable con día, premio $,
+  requisito de carga $, en N días, descripción; botones agregar/quitar fila + guardar. `loadFireMilestones`/
+  `addFireMilestoneRow`/`saveFireMilestones` en admin.js.
+- **Nota:** todos los premios son EFECTIVO (se sacaron los bonos en #71). Requisito 0 = sin requisito de carga.
+- **Validado:** `node --check` OK (server.js, admin.js). Back necesita redeploy; panel, recargar.
+
 ### 71. Se SACARON todos los bonos automáticos (queda el 100% recuperación Comunidad) + ruleta solo activos
 - **Decisión owner:** sacar TODOS los bonos automáticos. Se mantiene SOLO la oferta `/sys_recover_100` (100% de
   recuperación de Comunidad, post-carga). Se mantienen también: premios en efectivo del fueguito (día 10/20/30),

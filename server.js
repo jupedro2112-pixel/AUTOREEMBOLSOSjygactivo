@@ -8757,15 +8757,38 @@ const getDepositsInPeriod = async (username, daysBack) => {
 };
 
 // Mínimo de depósitos mensuales para acceder al Fueguito diario
-// Hitos/milestones del Fueguito
-// requireDeposits > 0 marca que la RECOMPENSA (no el reclamo diario) requiere actividad del mes
-const FIRE_MILESTONES = [
-  { day: 10, reward: 10000,  type: 'cash',           requireDeposits: 20000,  depositDays: 30, desc: 'Recompensa Fueguito 10 días' },
-  // Hito día 15 (bono % en próxima carga) SACADO (owner 2026-06-24): se quitaron los
-  // bonos en la carga. Quedan solo los premios en EFECTIVO (día 10/20/30).
-  { day: 20, reward: 50000,  type: 'cash',           requireDeposits: 100000, depositDays: 30, desc: 'Recompensa Fueguito 20 días' },
-  { day: 30, reward: 200000, type: 'cash',           requireDeposits: 300000, depositDays: 45, desc: 'Recompensa Fueguito 30 días' }
+// Hitos/milestones del Fueguito (DEFAULTS). Editables desde el panel → Config['fireMilestones'].
+// requireDeposits > 0 marca que la RECOMPENSA (no el reclamo diario) requiere actividad del mes.
+const FIRE_MILESTONES_DEFAULT = [
+  { day: 10, reward: 10000,  type: 'cash', requireDeposits: 20000,  depositDays: 30, desc: 'Recompensa Fueguito 10 días' },
+  { day: 20, reward: 50000,  type: 'cash', requireDeposits: 100000, depositDays: 30, desc: 'Recompensa Fueguito 20 días' },
+  { day: 30, reward: 200000, type: 'cash', requireDeposits: 300000, depositDays: 45, desc: 'Recompensa Fueguito 30 días' }
 ];
+
+// Lee los premios del fueguito desde Config (editables en el panel); si no hay config
+// válida, usa los defaults. Normaliza/clampea y ordena por día. Todos los premios son
+// EFECTIVO (type:'cash'). Devuelve [] nunca: siempre al menos los defaults.
+async function getFireMilestones() {
+  try {
+    const cfg = await getConfig('fireMilestones', null);
+    if (Array.isArray(cfg) && cfg.length) {
+      const seen = new Set();
+      const out = cfg.map(m => ({
+        day: Math.max(1, Math.min(365, parseInt(m.day, 10) || 0)),
+        reward: Math.max(0, Math.round(Number(m.reward) || 0)),
+        type: 'cash',
+        requireDeposits: Math.max(0, Math.round(Number(m.requireDeposits) || 0)),
+        depositDays: Math.max(1, Math.min(365, parseInt(m.depositDays, 10) || 30)),
+        desc: String(m.desc || '').slice(0, 80) || ('Recompensa Fueguito ' + (parseInt(m.day, 10) || '') + ' días')
+      }))
+      .filter(m => m.day > 0 && m.reward > 0)
+      .sort((a, b) => a.day - b.day)
+      .filter(m => { if (seen.has(m.day)) return false; seen.add(m.day); return true; });
+      if (out.length) return out;
+    }
+  } catch (_) {}
+  return FIRE_MILESTONES_DEFAULT;
+}
 
 app.get('/api/fire/status', authMiddleware, async (req, res) => {
   try {
@@ -8813,7 +8836,8 @@ app.get('/api/fire/status', authMiddleware, async (req, res) => {
       }
     }
 
-    // Construir lista de milestones con estado para la UI
+    // Construir lista de milestones con estado para la UI (premios editables desde el panel)
+    const FIRE_MILESTONES = await getFireMilestones();
     const milestones = FIRE_MILESTONES.map(m => {
       let status;
       if (currentStreak >= m.day) {
@@ -8842,7 +8866,7 @@ app.get('/api/fire/status', authMiddleware, async (req, res) => {
       pendingCashRewardDay,
       pendingCashRewardDesc,
       milestones,
-      nextReward: currentStreak >= 9 ? 10000 : 0
+      nextReward: (FIRE_MILESTONES.find(m => m.day > currentStreak) || {}).reward || 0
     });
   } catch (error) {
     console.error('Error obteniendo estado del fueguito:', error);
@@ -8885,7 +8909,8 @@ app.post('/api/fire/claim', authMiddleware, async (req, res) => {
     let rewardType = 'none';
     let message = `¡Día ${fireStreak.streak} de racha! Seguí así 🔥`;
 
-    // Determinar si se alcanza un hito
+    // Determinar si se alcanza un hito (premios editables desde el panel)
+    const FIRE_MILESTONES = await getFireMilestones();
     const milestone = FIRE_MILESTONES.find(m => m.day === fireStreak.streak);
     if (milestone) {
       if (milestone.type === 'next_load_bonus') {
@@ -8966,8 +8991,9 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'La recompensa expiró. Solo podés reclamarla el mismo día que llegaste al hito.' });
     }
 
-    // Req 6: Verificar requisitos de actividad para este hito específico
+    // Req 6: Verificar requisitos de actividad para este hito específico (premios editables)
     const rewardDay = fireStreak.pendingCashRewardDay || 0;
+    const FIRE_MILESTONES = await getFireMilestones();
     const milestone = FIRE_MILESTONES.find(m => m.day === rewardDay);
     if (milestone && milestone.requireDeposits > 0) {
       const daysBack = milestone.depositDays || 30;
@@ -9116,6 +9142,49 @@ function calcCommission(campaign, stats) {
   }
   return 0;
 }
+
+// ── PREMIOS DEL FUEGUITO (editables desde el panel, solo admin general) ──────
+// GET: devuelve los premios actuales + los defaults. POST: guarda el array nuevo
+// (Config['fireMilestones']). Todos los premios son en EFECTIVO.
+app.get('/api/admin/fire-milestones', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const milestones = await getFireMilestones();
+    res.json({ success: true, milestones, defaults: FIRE_MILESTONES_DEFAULT });
+  } catch (e) {
+    logger.warn(`[fire-milestones] GET falló: ${e.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/fire-milestones', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const arr = Array.isArray(req.body && req.body.milestones) ? req.body.milestones : null;
+    if (!arr) return res.status(400).json({ error: 'Falta el array de premios.' });
+    const seen = new Set();
+    const norm = arr.map(m => ({
+      day: Math.max(1, Math.min(365, parseInt(m.day, 10) || 0)),
+      reward: Math.max(0, Math.round(Number(m.reward) || 0)),
+      type: 'cash',
+      requireDeposits: Math.max(0, Math.round(Number(m.requireDeposits) || 0)),
+      depositDays: Math.max(1, Math.min(365, parseInt(m.depositDays, 10) || 30)),
+      desc: String(m.desc || '').slice(0, 80)
+    }))
+    .filter(m => m.day > 0 && m.reward > 0)
+    .sort((a, b) => a.day - b.day)
+    .filter(m => { if (seen.has(m.day)) return false; seen.add(m.day); return true; })
+    .map(m => ({ ...m, desc: m.desc || ('Recompensa Fueguito ' + m.day + ' días') }));
+    if (!norm.length) return res.status(400).json({ error: 'Cargá al menos un premio válido (día y monto mayores a 0).' });
+    if (norm.length > 30) return res.status(400).json({ error: 'Máximo 30 premios.' });
+    await setConfig('fireMilestones', norm);
+    logger.info(`[fire-milestones] actualizados por ${req.user.username}: ${norm.length} premios`);
+    res.json({ success: true, milestones: norm });
+  } catch (e) {
+    logger.warn(`[fire-milestones] POST falló: ${e.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 
 // Listar todas las campañas con stats resumidas (clicks + registrations).
 // Importante: jugayganaPassword está marcado select:false en el schema, por lo

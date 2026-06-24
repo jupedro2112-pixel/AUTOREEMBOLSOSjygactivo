@@ -5250,6 +5250,8 @@ async function loadCBUConfig() {
     loadHgcashConfig();
     // Cargar los porcentajes de reembolso (solo admin general)
     loadRefundPercents();
+    // Cargar los premios del fueguito (solo admin general)
+    loadFireMilestones();
 }
 
 // ====== Porcentajes de reembolso (solo admin general) ======
@@ -5301,6 +5303,72 @@ async function saveRefundPercents() {
         const p = j.percents || {};
         if (msg) { msg.style.color = '#00c853'; msg.textContent = `✅ Guardado: diario ${p.daily}% · semanal ${p.weekly}% · mensual ${p.monthly}%`; }
         showToast('Porcentajes de reembolso actualizados', 'success');
+    } catch (e) {
+        if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = 'Error de conexión.'; }
+    }
+}
+
+// ====== Premios del Fueguito (solo admin general) ======
+async function loadFireMilestones() {
+    const form = document.getElementById('fireMilestonesForm');
+    const header = document.getElementById('fireMilestonesHeader');
+    try {
+        const r = await authFetch('/api/admin/fire-milestones');
+        if (!r.ok) { // no admin general → ocultar
+            if (form) form.style.display = 'none';
+            if (header) header.style.display = 'none';
+            return;
+        }
+        if (form) form.style.display = '';
+        if (header) header.style.display = '';
+        const j = await r.json();
+        const body = document.getElementById('fireMilestonesRows');
+        if (body) body.innerHTML = '';
+        (j.milestones || []).forEach(m => addFireMilestoneRow(m));
+        if (!(j.milestones || []).length) addFireMilestoneRow();
+    } catch (e) {
+        if (form) form.style.display = 'none';
+        if (header) header.style.display = 'none';
+    }
+}
+
+function addFireMilestoneRow(m) {
+    const body = document.getElementById('fireMilestonesRows');
+    if (!body) return;
+    m = m || {};
+    const tr = document.createElement('tr');
+    const inp = (cls, val, ph, min) => '<input type="' + (cls === 'fm-desc' ? 'text' : 'number') + '" class="' + cls + '" value="' + (val != null ? String(val).replace(/"/g, '&quot;') : '') + '" ' + (min != null ? 'min="' + min + '"' : '') + ' placeholder="' + (ph || '') + '" style="width:100%;background:rgba(0,0,0,0.35);border:1px solid rgba(212,175,55,0.35);color:#fff;padding:5px 7px;border-radius:6px;font-size:12px;">';
+    tr.innerHTML =
+        '<td style="min-width:80px;">' + inp('fm-day', m.day, 'ej. 10', 1) + '</td>' +
+        '<td style="min-width:100px;">' + inp('fm-reward', m.reward, 'ej. 10000', 0) + '</td>' +
+        '<td style="min-width:110px;">' + inp('fm-req', m.requireDeposits, '0 = sin requisito', 0) + '</td>' +
+        '<td style="min-width:80px;">' + inp('fm-days', m.depositDays != null ? m.depositDays : 30, '30', 1) + '</td>' +
+        '<td style="min-width:160px;">' + inp('fm-desc', m.desc, 'descripción') + '</td>' +
+        '<td><button onclick="this.closest(\'tr\').remove()" title="Quitar" style="background:#7a1010;color:#fff;border:none;border-radius:6px;padding:5px 9px;cursor:pointer;">✕</button></td>';
+    body.appendChild(tr);
+}
+
+async function saveFireMilestones() {
+    const msg = document.getElementById('fireMilestonesMsg');
+    const rows = Array.from(document.querySelectorAll('#fireMilestonesRows tr'));
+    const milestones = rows.map(tr => ({
+        day: parseInt((tr.querySelector('.fm-day') || {}).value, 10) || 0,
+        reward: Math.round(Number((tr.querySelector('.fm-reward') || {}).value) || 0),
+        requireDeposits: Math.round(Number((tr.querySelector('.fm-req') || {}).value) || 0),
+        depositDays: parseInt((tr.querySelector('.fm-days') || {}).value, 10) || 30,
+        desc: ((tr.querySelector('.fm-desc') || {}).value || '').trim()
+    })).filter(m => m.day > 0 && m.reward > 0);
+    if (!milestones.length) { if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = 'Cargá al menos un premio con día y monto.'; } return; }
+    try {
+        const r = await authFetch('/api/admin/fire-milestones', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ milestones })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = j.error || 'No se pudo guardar.'; } return; }
+        if (msg) { msg.style.color = '#7CFC00'; msg.textContent = 'Premios guardados ✅ (' + (j.milestones || []).length + ' premios).'; }
+        const body = document.getElementById('fireMilestonesRows');
+        if (body) { body.innerHTML = ''; (j.milestones || []).forEach(m => addFireMilestoneRow(m)); }
+        showToast('Premios del Fueguito actualizados', 'success');
     } catch (e) {
         if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = 'Error de conexión.'; }
     }

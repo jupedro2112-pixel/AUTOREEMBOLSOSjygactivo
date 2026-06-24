@@ -8,6 +8,19 @@
 
 ## Sesión 2026-06-24
 
+### 70. El "bono 100% a clientes activos" era el FUEGUITO (hito día 15) → bajado a 30%
+- **Diagnóstico:** el owner reportaba bonos del 100% a clientes ACTIVOS. Verificado que NINGÚN motor de bonos los
+  crea (inactividad/notificaciones/estrategia/encuesta TODOS capean a ≤30%). El 100% salía del **FUEGUITO**: el hito
+  `day:15` (`FIRE_MILESTONES`) era `type:'next_load_bonus'` = "100% en próxima carga", que ganan los clientes que
+  mantienen la racha 15 días (activos). El sistema marca `pendingNextLoadBonus` y el agente aplica el 100% a mano.
+- **Cambio (decisión owner):** el hito día 15 baja de **100% → 30%**. Es solo texto (el flag es booleano; el agente
+  aplica el % manualmente): se cambió el `desc` del milestone, el mensaje de claim (server.js), el banner + confirm
+  del agente (admin.js) y los textos del cliente (fire.js). El `/sys_recover_100` (oferta de "100% de recuperación"
+  post-carga) es OTRA cosa, no se tocó (es editable desde COMANDOS).
+- **Limpieza de pendientes:** migración one-shot `migration_clear_fire_nextload_done` que pone `pendingNextLoadBonus:
+  false` a TODOS los que lo tenían pendiente → no se les aplica el 100% viejo. Corre una vez en el próximo deploy.
+- **Validado:** `node --check` OK (server.js, admin.js, fire.js). Back necesita redeploy; panel/cliente, recargar.
+
 ### 69. FIX "Limpiar pagos viejos": ahora incluye pending_review y descarta TODOS
 - **Problema:** el botón "🧹 Limpiar pagos viejos colgados" solo tocaba `paying`/`failed` y NO los `pending_review`,
   que son justo los que aparecen en el banner del chat → "no funciona". Además dejaba sin tocar los PENDING/sin-tx.

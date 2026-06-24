@@ -2785,14 +2785,14 @@ function renderFireBonusBanner(user) {
     el.style.background = 'linear-gradient(90deg,#d4820a,#b36904)';
     el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
         '<span style="font-size:18px;">🔥</span>' +
-        '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">FUEGUITO: 100% en la próxima carga</strong>' +
+        '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">FUEGUITO: 30% en la próxima carga</strong>' +
         '<div style="font-size:11px;opacity:0.9;">Premio del día 15 — aplicáselo en la próxima carga y marcalo como aplicado.</div></div>' +
         '<button onclick="applyFireNextLoadBonus(\'' + escapeHtml(String(user.id)) + '\')" style="background:#fff;color:#b36904;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✓ Marcar aplicado</button>' +
         '</div>';
 }
 
 async function applyFireNextLoadBonus(userId) {
-    if (!confirm('¿Marcar el 100% de próxima carga (Fueguito) como aplicado? El cliente no lo va a tener más después de esto.')) return;
+    if (!confirm('¿Marcar el 30% de próxima carga (Fueguito) como aplicado? El cliente no lo va a tener más después de esto.')) return;
     try {
         const r = await authFetch('/api/admin/users/' + encodeURIComponent(userId) + '/fire-next-load-bonus/apply', { method: 'POST' });
         const j = await r.json();

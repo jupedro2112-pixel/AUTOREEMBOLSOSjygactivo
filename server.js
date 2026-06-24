@@ -7954,6 +7954,34 @@ async function initializeData() {
       );
     }
   } catch (e) {
+    logger.error(`[startup-migration] clear_old_promobonus: ${e.message}`);
+  }
+
+  // One-shot: limpiar el premio "100% en próxima carga" del Fueguito que quedó pendiente
+  // (decisión owner 2026-06-24: el hito día 15 baja de 100% a 30%). Saca el flag a todos
+  // los que lo tenían pendiente para que no se les aplique el 100% viejo. Corre UNA vez.
+  try {
+    const flag = await Config.findOne({ key: 'migration_clear_fire_nextload_done' }).lean();
+    if (!flag || flag.value !== true) {
+      let cleared = 0;
+      try {
+        const FireStreakModel = require('./src/models/FireStreak');
+        const r = await FireStreakModel.updateMany(
+          { pendingNextLoadBonus: true },
+          { $set: { pendingNextLoadBonus: false } }
+        );
+        cleared = (r && (r.modifiedCount != null ? r.modifiedCount : r.nModified)) || 0;
+      } catch (e) {
+        logger.error(`[startup-migration] No se pudo limpiar pendingNextLoadBonus: ${e.message}`);
+      }
+      logger.info(`[startup-migration] Fueguito 100% próxima carga pendiente limpiados (one-shot): ${cleared}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_clear_fire_nextload_done' },
+        { key: 'migration_clear_fire_nextload_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
     logger.error(`[startup-migration] Falló limpieza one-shot de PromoBonus viejos: ${e.message}`);
   }
 
@@ -8733,7 +8761,7 @@ const getDepositsInPeriod = async (username, daysBack) => {
 // requireDeposits > 0 marca que la RECOMPENSA (no el reclamo diario) requiere actividad del mes
 const FIRE_MILESTONES = [
   { day: 10, reward: 10000,  type: 'cash',           requireDeposits: 20000,  depositDays: 30, desc: 'Recompensa Fueguito 10 días' },
-  { day: 15, reward: 0,      type: 'next_load_bonus', requireDeposits: 20000,  depositDays: 30, desc: '100% en próxima carga' },
+  { day: 15, reward: 0,      type: 'next_load_bonus', requireDeposits: 20000,  depositDays: 30, desc: '30% en próxima carga' },
   { day: 20, reward: 50000,  type: 'cash',           requireDeposits: 100000, depositDays: 30, desc: 'Recompensa Fueguito 20 días' },
   { day: 30, reward: 200000, type: 'cash',           requireDeposits: 300000, depositDays: 45, desc: 'Recompensa Fueguito 30 días' }
 ];
@@ -8860,10 +8888,10 @@ app.post('/api/fire/claim', authMiddleware, async (req, res) => {
     const milestone = FIRE_MILESTONES.find(m => m.day === fireStreak.streak);
     if (milestone) {
       if (milestone.type === 'next_load_bonus') {
-        // Día 15: 100% en próxima carga (se marca como pendiente para operador)
+        // Día 15: 30% en próxima carga (se marca como pendiente para operador)
         rewardType = 'next_load_bonus';
         fireStreak.pendingNextLoadBonus = true;
-        message = '🎉 ¡15 días de racha! Tenés 100% en tu próxima carga. Un operador te lo aplicará cuando quieras reclamar.';
+        message = '🎉 ¡15 días de racha! Tenés 30% en tu próxima carga. Un operador te lo aplicará cuando quieras reclamar.';
       } else if (milestone.type === 'cash') {
         // Req 6: Siempre setear la recompensa como pendiente, sin verificar depósitos aquí.
         // La verificación de actividad ocurre al reclamar la recompensa (/api/fire/claim-reward).
@@ -11979,7 +12007,7 @@ app.post('/api/admin/users/:userId/fire-next-load-bonus/apply', authMiddleware, 
       { $set: { pendingNextLoadBonus: false } }
     );
     if (!result.matchedCount) {
-      return res.status(400).json({ error: 'El cliente no tiene un 100% de próxima carga pendiente.' });
+      return res.status(400).json({ error: 'El cliente no tiene un bono de próxima carga pendiente.' });
     }
     logger.info(`[fire] pendingNextLoadBonus marcado como aplicado manualmente user=${userId} agent=${req.user?.username}`);
     res.json({ success: true });

@@ -78,7 +78,7 @@ VIP.fire = (function () {
         if (pendingBonusEl) {
             if (VIP.state.fireStatus.pendingNextLoadBonus) {
                 pendingBonusEl.style.display = 'block';
-                pendingBonusEl.innerHTML = '🎉 <strong style="color:#d4af37;">Tenés un 100% en tu próxima carga disponible!</strong> Avisale a un operador cuando quieras usarlo.';
+                pendingBonusEl.innerHTML = '🎉 <strong style="color:#d4af37;">Tenés un 30% en tu próxima carga disponible!</strong> Avisale a un operador cuando quieras usarlo.';
             } else {
                 pendingBonusEl.style.display = 'none';
             }
@@ -114,7 +114,7 @@ VIP.fire = (function () {
                 }
                 let rewardText;
                 if (m.type === 'next_load_bonus') {
-                    rewardText = '100% en próxima carga';
+                    rewardText = '30% en próxima carga';
                 } else {
                     rewardText = m.reward ? `$${m.reward.toLocaleString('es-AR')}` : '-';
                 }
@@ -212,7 +212,7 @@ VIP.fire = (function () {
                 if (data.rewardType === 'cash_pending') {
                     VIP.chat.sendSystemMessage(`🏆 ¡Fueguito día ${data.streak}! Tenés $${data.reward.toLocaleString('es-AR')} para reclamar en el recuadro de Fueguito.`);
                 } else if (data.rewardType === 'next_load_bonus') {
-                    VIP.chat.sendSystemMessage(`🎉 ¡Recompensa Fueguito día 15! Tenés 100% en tu próxima carga. Avisale a un operador cuando quieras usarlo.`);
+                    VIP.chat.sendSystemMessage(`🎉 ¡Recompensa Fueguito día 15! Tenés 30% en tu próxima carga. Avisale a un operador cuando quieras usarlo.`);
                 } else {
                     VIP.chat.sendSystemMessage(`🔥 Día ${data.streak} de racha Fueguito!`);
                 }

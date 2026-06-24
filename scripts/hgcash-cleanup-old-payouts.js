@@ -55,45 +55,39 @@ async function main() {
   const PendingPayout = require('../src/models/PendingPayout');
 
   const cutoff = new Date(Date.now() - HOURS * 60 * 60 * 1000);
-  const olds = await PendingPayout.find({ status: { $in: ['paying', 'failed'] }, createdAt: { $lt: cutoff } })
+  const STATES = ['pending_review', 'paying', 'failed'];
+  const olds = await PendingPayout.find({ status: { $in: STATES }, createdAt: { $lt: cutoff } })
     .sort({ createdAt: 1 }).lean();
 
   console.log(`Modo: ${APPLY ? 'APLICAR ✍️' : 'DRY-RUN (no cambia nada) 👀'} · cutoff: >${HOURS}h · verificar hgcash: ${VERIFY ? 'sí' : 'NO'}`);
-  console.log(`Pagos viejos colgados (paying/failed, más viejos que ${HOURS}h): ${olds.length}\n`);
+  console.log(`Pagos viejos (pending_review/paying/failed, más viejos que ${HOURS}h): ${olds.length}\n`);
 
-  const counts = { paid: 0, cancelled: 0, pending: 0, skipped: 0 };
+  const counts = { paid: 0, cancelled: 0 };
 
   for (const p of olds) {
     const tag = `${p.username || p.userId} · ${fmt(p.amount)} · ${p.status} · ${new Date(p.createdAt).toISOString().slice(0, 16)}`;
-    let decision, set = null;
+    let decision;
+    // Por defecto: DESCARTAR (sacar de la cola). Si verificamos y ya está DONE en hgcash, lo dejamos 'paid'.
+    let set = { status: 'cancelled', paidVia: 'dismissed', chipsReturned: false, error: 'Limpieza de pago viejo (script)' };
+    decision = '🗑️  -> cancelled (descartado)';
 
     if (VERIFY && p.hgTransactionId) {
       const st = await hgcashPay.getTransactionStatus(p.hgTransactionId);
       const S = (st.ok && st.status) ? String(st.status).toUpperCase() : null;
-      if (!st.ok) { decision = `⏭️  no se pudo consultar (${st.error || '?'}) — NO se toca`; counts.skipped++; }
-      else if (S === 'DONE') { decision = '✅ DONE en hgcash -> paid (silencioso)'; counts.paid++; set = { status: 'paid', hgStatus: 'DONE', paidAt: p.paidAt || new Date(), receiptSentAt: p.receiptSentAt || new Date() }; }
-      else if (S === 'ERROR' || S === 'CANCELLED') { decision = `🗑️  ${S} en hgcash -> cancelled`; counts.cancelled++; set = { status: 'cancelled', paidVia: 'dismissed', hgStatus: S, chipsReturned: false, error: `Limpieza: ${S} en hgcash` }; }
-      else { decision = `⏳ ${S || 's/estado'} en hgcash -> REALMENTE PENDIENTE, NO se toca`; counts.pending++; }
-    } else if (VERIFY && !p.hgTransactionId) {
-      decision = '⏭️  sin transacción hgcash para consultar — NO se toca'; counts.skipped++;
-    } else {
-      // --no-verify: marcar como cancelado (limpieza a ciegas).
-      decision = '🗑️  (--no-verify) -> cancelled'; counts.cancelled++;
-      set = { status: 'cancelled', paidVia: 'dismissed', chipsReturned: false, error: 'Limpieza masiva (--no-verify): pago viejo dado por resuelto' };
+      if (S === 'DONE') { decision = '✅ DONE en hgcash -> paid (silencioso)'; set = { status: 'paid', hgStatus: 'DONE', paidAt: p.paidAt || new Date(), receiptSentAt: p.receiptSentAt || new Date() }; }
     }
 
+    if (set.status === 'paid') counts.paid++; else counts.cancelled++;
     console.log(`  ${tag}\n     -> ${decision}`);
-    if (APPLY && set) {
-      await PendingPayout.updateOne({ id: p.id, status: { $in: ['paying', 'failed'] } }, { $set: set });
+    if (APPLY) {
+      await PendingPayout.updateOne({ id: p.id, status: { $in: STATES } }, { $set: set });
     }
   }
 
   console.log('\n==================================================================');
   console.log(`  RESUMEN  ${APPLY ? '(aplicado)' : '(DRY-RUN — nada cambió; agregá --apply para ejecutar)'}`);
-  console.log(`  -> paid (ya pagados):        ${counts.paid}`);
-  console.log(`  -> cancelled (descartados):  ${counts.cancelled}`);
-  console.log(`  -> REALMENTE pendientes:     ${counts.pending}  ${counts.pending ? '⚠️ revisá estos a mano' : ''}`);
-  console.log(`  -> sin tocar (s/dato):       ${counts.skipped}`);
+  console.log(`  -> paid (ya pagados en hgcash): ${counts.paid}`);
+  console.log(`  -> cancelled (descartados):     ${counts.cancelled}`);
   console.log('==================================================================');
 
   await mongoose.disconnect();

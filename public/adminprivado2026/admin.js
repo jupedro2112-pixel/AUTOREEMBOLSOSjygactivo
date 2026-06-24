@@ -5450,14 +5450,17 @@ function _hgcashPanelVisible() {
 // marca los ya pagados como pagados (en silencio) y descarta los fallidos. NO mueve plata
 // ni avisa al cliente. Los que sigan realmente pendientes NO se tocan.
 async function cleanupOldPayouts() {
-    if (!confirm('¿Limpiar los pagos VIEJOS colgados (en proceso/fallidos de hace más de 2 horas)?\n\n• Los que ya se pagaron quedan marcados como pagados (en silencio, sin avisar al cliente)\n• Los fallidos se descartan\n• NO mueve plata\n• Los que sigan realmente pendientes NO se tocan')) return;
+    if (!confirm('¿Limpiar TODOS los pagos viejos (de hace más de 2 horas) para que dejen de aparecer en los chats?\n\n• Los que ya se pagaron quedan marcados como pagados (en silencio)\n• El resto se DESCARTA (sale de la cola)\n• NO mueve plata ni devuelve fichas')) return;
     try {
         const r = await authFetch('/api/admin/payouts/cleanup-old', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hours: 2 })
         });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { showToast(j.error || 'No se pudo limpiar', 'error'); return; }
-        showToast('Listo: ' + (j.paid || 0) + ' marcados pagados, ' + (j.cancelled || 0) + ' descartados' + (j.pendingLeft ? ', ' + j.pendingLeft + ' siguen pendientes (revisalos)' : ''), 'success');
+        if ((j.total || 0) === 0) { showToast('No había pagos viejos para limpiar ✅', 'success'); return; }
+        showToast('Listo: ' + (j.cancelled || 0) + ' descartados' + (j.paid ? ', ' + j.paid + ' marcados pagados' : '') + ' (de ' + j.total + ' viejos). Recargá los chats.', 'success');
+        // Refrescar el banner del chat abierto (si hay) para que desaparezca el pago viejo.
+        if (typeof selectedUserId !== 'undefined' && selectedUserId && typeof loadPayoutBanner === 'function') loadPayoutBanner(selectedUserId);
     } catch (e) { showToast('Error al limpiar', 'error'); }
 }
 

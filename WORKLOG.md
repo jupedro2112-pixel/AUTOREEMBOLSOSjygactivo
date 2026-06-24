@@ -8,6 +8,15 @@
 
 ## Sesión 2026-06-24
 
+### 69. FIX "Limpiar pagos viejos": ahora incluye pending_review y descarta TODOS
+- **Problema:** el botón "🧹 Limpiar pagos viejos colgados" solo tocaba `paying`/`failed` y NO los `pending_review`,
+  que son justo los que aparecen en el banner del chat → "no funciona". Además dejaba sin tocar los PENDING/sin-tx.
+- **Fix:** `POST /api/admin/payouts/cleanup-old` ahora barre **pending_review + paying + failed** más viejos que
+  `hours` (default 2, `0` = todos) y los **DESCARTA** (`cancelled`/dismissed) — salvo los que tienen transacción
+  hgcash confirmada DONE, que quedan `paid` (silencioso). NO mueve plata ni devuelve fichas. El botón refresca el
+  banner del chat abierto y avisa el resumen. Script `hgcash-cleanup-old-payouts.js` actualizado igual.
+- **Validado:** `node --check` OK (server.js, admin.js, script). Back necesita redeploy; panel, recargar.
+
 ### 68. REDISEÑO retiros: descontar fichas al CONFIRMAR el pago (no al solicitar)
 - **Problema:** el self-retiro descontaba las fichas al SOLICITAR; al rechazar había que DEVOLVERLAS con la lógica
   bonus/comunes, que fallaba seguido (devolvía mal / acuñaba saldo).

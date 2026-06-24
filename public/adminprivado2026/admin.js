@@ -2673,7 +2673,7 @@ async function loadPayoutBanner(userId) {
             '<div style="font-size:10.5px;opacity:0.8;">Verificá los datos antes de pagar.</div>' + debitWarn + '</div>' +
             payBtn +
             '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🏦 Pagar con otro banco</button>' +
-            '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar (devolver fichas)</button>' +
+            '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar pago</button>' +
             dismissBtn +
             '</div>';
     } catch (e) {
@@ -2701,16 +2701,20 @@ async function payPayout(id) {
 }
 
 async function cancelPayout(id) {
-    if (!confirm('¿Rechazar este pago? NO se paga. Si el descuento original está CONFIRMADO, se le devuelven las fichas; si NO está confirmado, se cancela SIN devolver (revisá el saldo en JUGAYGANA y devolvé a mano si corresponde).')) return;
+    if (!confirm('¿Rechazar este pago? NO se paga. Como las fichas se descuentan recién al pagar, acá no hay nada que devolver: solo se cancela la solicitud.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
         const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/cancel', { method: 'POST' });
         const j = await r.json();
         if (r.ok && j.success) {
-            const msg = j.skippedRefund
-                ? 'Pago rechazado SIN devolver fichas (descuento NO confirmado) — verificá en JUGAYGANA y devolvé a mano si corresponde'
-                : (j.chipsReturned ? 'Pago rechazado · fichas devueltas ✅' : 'Pago rechazado (revisá: no se pudieron devolver las fichas)');
-            showToast(msg, (j.skippedRefund || !j.chipsReturned) ? 'error' : 'success');
+            // Flujo nuevo: noDeduction = no se había descontado nada (caso normal).
+            // chipsReturned = se había descontado y se devolvió (caso raro: cash-out falló antes).
+            // skippedRefund = pago viejo con descuento no confirmado (compatibilidad).
+            let msg = 'Pago rechazado', tipo = 'success';
+            if (j.skippedRefund) { msg = 'Pago rechazado SIN devolver (descuento NO confirmado) — verificá en JUGAYGANA y devolvé a mano si corresponde'; tipo = 'error'; }
+            else if (j.chipsReturned) { msg = 'Pago rechazado · fichas devueltas ✅'; }
+            else if (j.noDeduction) { msg = 'Pago rechazado (no se habían descontado fichas)'; }
+            showToast(msg, tipo);
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error', 'error');

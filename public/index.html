@@ -1218,13 +1218,13 @@
             </div>
             <div style="display:flex;flex-direction:column;gap:12px;padding:10px 0;">
                 <button onclick="VIP.refunds.showRefundModal('daily');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;">
-                    📅 Reembolso Diario (<span id="unifiedDailyPct">20</span>% pérdidas de ayer)
+                    📅 Reembolso Diario (<span id="unifiedDailyPct">20</span>% de tu NETWIN de ayer)
                 </button>
                 <button onclick="VIP.refunds.showRefundModal('weekly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a6b3a,#2d9b56);">
-                    📆 Reembolso Semanal (<span id="unifiedWeeklyPct">10</span>% pérdidas semana)
+                    📆 Reembolso Semanal (<span id="unifiedWeeklyPct">10</span>% de tu NETWIN semanal)
                 </button>
                 <button onclick="VIP.refunds.showRefundModal('monthly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a3a6b,#2d5b9b);">
-                    🗓️ Reembolso Mensual (<span id="unifiedMonthlyPct">5</span>% pérdidas mes)
+                    🗓️ Reembolso Mensual (<span id="unifiedMonthlyPct">5</span>% de tu NETWIN mensual)
                 </button>
                 <button onclick="VIP.ui.hideModal('unifiedRefundModal')" class="btn btn-secondary">Cerrar</button>
             </div>
@@ -1253,10 +1253,10 @@
                 
                 <!-- Movimientos del período -->
                 <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; margin-bottom: 10px;">
-                    <p id="refundMovementsTitle" style="color: #aaa; font-size: 11px; margin-bottom: 8px; text-align: center;">📊 BASE DE CÁLCULO</p>
-                    <p style="color: #ff9900; font-size: 11px; margin-bottom: 8px; text-align: center;">⚠️ El reembolso se calcula sobre tus <strong>pérdidas netas</strong> (NETWIN), no sobre el balance de depósitos y retiros.</p>
+                    <p id="refundMovementsTitle" style="color: #aaa; font-size: 11px; margin-bottom: 8px; text-align: center;">📊 BASE DEL REEMBOLSO</p>
+                    <p style="color: #ffd700; font-size: 12px; font-weight: bold; margin-bottom: 8px; text-align: center; line-height: 1.5;">🎯 El reembolso es sobre tu <strong>NETWIN</strong> — lo que REALMENTE perdiste jugando (apostado − ganado).<br><span style="color:#ff9900;font-weight:normal;font-size:11px;">NO se calcula sobre lo que cargaste, sino sobre tu pérdida real en el juego.</span></p>
                     <div class="refund-info-row">
-                        <span>Pérdidas del período:</span>
+                        <span>🎮 Tu NETWIN del período (pérdida real):</span>
                         <span id="refundNetAmount" style="color: #ff6b6b;">$0</span>
                     </div>
                 </div>

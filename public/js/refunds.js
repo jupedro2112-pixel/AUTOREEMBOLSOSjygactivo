@@ -126,9 +126,9 @@ VIP.refunds = (function () {
             monthly: `🗓️ Reembolso Mensual (${pctOf('monthly')}%)`
         };
         const periodLabels = {
-            daily:   '📊 PÉRDIDAS DE AYER',
-            weekly:  '📊 PÉRDIDAS DE LA SEMANA PASADA (Lun-Dom)',
-            monthly: '📊 PÉRDIDAS DEL MES PASADO'
+            daily:   '🎮 TU NETWIN DE AYER (pérdida real jugando)',
+            weekly:  '🎮 TU NETWIN DE LA SEMANA PASADA (Lun-Dom)',
+            monthly: '🎮 TU NETWIN DEL MES PASADO'
         };
 
         document.getElementById('refundModalTitle').textContent = titles[type];
@@ -227,9 +227,9 @@ VIP.refunds = (function () {
         }
 
         if (typeData.potentialAmount <= 0) {
-            extraInfo.innerHTML = '<span style="color: #ff8888;">⚠️ No tienes saldo neto positivo para reclamar reembolso</span>';
+            extraInfo.innerHTML = '<span style="color: #ff8888;">⚠️ No tenés pérdida (NETWIN) en el período. El reembolso es sobre lo que perdiste jugando.</span>';
             claimBtn.disabled = true;
-            claimBtn.textContent = '❌ Sin saldo para reembolso';
+            claimBtn.textContent = '❌ Sin pérdida para reembolsar';
             claimBtn.style.background = 'linear-gradient(135deg, #666 0%, #444 100%)';
         } else if (isClaimed) {
             extraInfo.innerHTML = `<span style="color: #ffaa44;">⏳ Ya reclamaste este reembolso. Disponible en: <strong>${timeRemaining}</strong></span>`;

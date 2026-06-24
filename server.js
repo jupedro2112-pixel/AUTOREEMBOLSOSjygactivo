@@ -5852,30 +5852,20 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     const monthlyFrom = new Date(lastMonthRange.fromEpoch * 1000);
     const monthlyTo = new Date(lastMonthRange.toEpoch * 1000);
 
-    // Calcular depósitos y retiros reales del período (no GGR de juegos)
-    const [dailyDepositsAgg, dailyWithdrawalsAgg, weeklyDepositsAgg, weeklyWithdrawalsAgg, monthlyDepositsAgg, monthlyWithdrawalsAgg] = await Promise.all([
-      Transaction.aggregate([{ $match: { username, type: 'deposit', createdAt: { $gte: dailyFrom, $lte: dailyTo } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-      Transaction.aggregate([{ $match: { username, type: 'withdrawal', createdAt: { $gte: dailyFrom, $lte: dailyTo } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-      Transaction.aggregate([{ $match: { username, type: 'deposit', createdAt: { $gte: weeklyFrom, $lte: weeklyTo } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-      Transaction.aggregate([{ $match: { username, type: 'withdrawal', createdAt: { $gte: weeklyFrom, $lte: weeklyTo } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-      Transaction.aggregate([{ $match: { username, type: 'deposit', createdAt: { $gte: monthlyFrom, $lte: monthlyTo } } }, { $group: { _id: null, total: { $sum: '$amount' } } }]),
-      Transaction.aggregate([{ $match: { username, type: 'withdrawal', createdAt: { $gte: monthlyFrom, $lte: monthlyTo } } }, { $group: { _id: null, total: { $sum: '$amount' } } }])
+    // NETWIN/GGR REAL por período (apostado − ganado), MISMA fuente que referidos.
+    // El reembolso es sobre la PÉRDIDA REAL de juego, NO sobre cargas − retiros. Si la
+    // plataforma no responde para un período, ese netLoss queda en 0 (no se preview de más).
+    const jgId = await resolveJugayganaUserId(userId, username);
+    const [dN, wN, mN] = await Promise.all([
+      referralRevenueService.getUserNetwinForDateRange(username, jgId, dailyFrom, dailyTo, 'refund-daily'),
+      referralRevenueService.getUserNetwinForDateRange(username, jgId, weeklyFrom, weeklyTo, 'refund-weekly'),
+      referralRevenueService.getUserNetwinForDateRange(username, jgId, monthlyFrom, monthlyTo, 'refund-monthly')
     ]);
+    const dailyNetLoss = dN.success ? Math.max(0, Number(dN.totalGgr) || 0) : 0;
+    const weeklyNetLoss = wN.success ? Math.max(0, Number(wN.totalGgr) || 0) : 0;
+    const monthlyNetLoss = mN.success ? Math.max(0, Number(mN.totalGgr) || 0) : 0;
 
-    const dailyDeposits = dailyDepositsAgg[0]?.total || 0;
-    const dailyWithdrawals = dailyWithdrawalsAgg[0]?.total || 0;
-    const weeklyDeposits = weeklyDepositsAgg[0]?.total || 0;
-    const weeklyWithdrawals = weeklyWithdrawalsAgg[0]?.total || 0;
-    const monthlyDeposits = monthlyDepositsAgg[0]?.total || 0;
-    const monthlyWithdrawals = monthlyWithdrawalsAgg[0]?.total || 0;
-
-    const dailyNetLoss = Math.max(0, dailyDeposits - dailyWithdrawals);
-    const weeklyNetLoss = Math.max(0, weeklyDeposits - weeklyWithdrawals);
-    const monthlyNetLoss = Math.max(0, monthlyDeposits - monthlyWithdrawals);
-
-    logger.info(`[REFUND] status — usuario: ${username} daily depositos:${dailyDeposits} retiros:${dailyWithdrawals} netLoss:${dailyNetLoss}`);
-    logger.info(`[REFUND] status — usuario: ${username} weekly depositos:${weeklyDeposits} retiros:${weeklyWithdrawals} netLoss:${weeklyNetLoss}`);
-    logger.info(`[REFUND] status — usuario: ${username} monthly depositos:${monthlyDeposits} retiros:${monthlyWithdrawals} netLoss:${monthlyNetLoss}`);
+    logger.info(`[REFUND] status — ${username} NETWIN daily:${dN.totalGgr}→${dailyNetLoss} weekly:${wN.totalGgr}→${weeklyNetLoss} monthly:${mN.totalGgr}→${monthlyNetLoss}`);
 
     // Porcentajes configurables desde el panel (default 8/3/3).
     const pct = await getRefundPercents();
@@ -5959,30 +5949,21 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
       const fromDate = new Date(fromEpoch * 1000);
       const toDate = new Date(toEpoch * 1000);
 
-      // Obtener depósitos REALES del período
-      const periodDeposits = await Transaction.aggregate([
-        { $match: { username, type: 'deposit', createdAt: { $gte: fromDate, $lte: toDate } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      const totalDeposits = periodDeposits[0]?.total || 0;
-
-      // Obtener retiros REALES del período
-      const periodWithdrawals = await Transaction.aggregate([
-        { $match: { username, type: 'withdrawal', createdAt: { $gte: fromDate, $lte: toDate } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      const totalWithdrawals = periodWithdrawals[0]?.total || 0;
-
-      logger.info('[REFUND] daily — usuario:', username, 'depositos:', totalDeposits, 'retiros:', totalWithdrawals);
-
-      // Calcular pérdida real (lo que depositó y NO retiró)
-      const netLoss = Math.max(0, totalDeposits - totalWithdrawals);
+      // NETWIN/GGR REAL del período (apostado − ganado), misma fuente que referidos.
+      // El reembolso es sobre la PÉRDIDA REAL de juego, NO sobre cargas − retiros.
+      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-daily');
+      if (!netRes.success) {
+        logger.warn(`[REFUND] daily — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
+        return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
+      }
+      const netLoss = Math.max(0, Number(netRes.totalGgr) || 0);
+      logger.info('[REFUND] daily — usuario:', username, 'NETWIN(GGR):', netRes.totalGgr, 'netLoss:', netLoss);
 
       if (netLoss === 0) {
-        logger.info('[REFUND] daily — sin pérdida neta para:', username);
+        logger.info('[REFUND] daily — sin pérdida real para:', username);
         return res.json({
           success: false,
-          message: 'No tenés pérdida neta en el período. El reembolso aplica solo sobre depósitos no recuperados vía retiros.',
+          message: 'No tenés pérdida en el período. El reembolso aplica solo sobre lo que perdiste jugando.',
           canClaim: true,
           netAmount: 0
         });
@@ -6103,30 +6084,20 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
       const fromDate = new Date(fromEpoch * 1000);
       const toDate = new Date(toEpoch * 1000);
 
-      // Obtener depósitos REALES del período
-      const periodDeposits = await Transaction.aggregate([
-        { $match: { username, type: 'deposit', createdAt: { $gte: fromDate, $lte: toDate } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      const totalDeposits = periodDeposits[0]?.total || 0;
-
-      // Obtener retiros REALES del período
-      const periodWithdrawals = await Transaction.aggregate([
-        { $match: { username, type: 'withdrawal', createdAt: { $gte: fromDate, $lte: toDate } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      const totalWithdrawals = periodWithdrawals[0]?.total || 0;
-
-      logger.info('[REFUND] weekly — usuario:', username, 'depositos:', totalDeposits, 'retiros:', totalWithdrawals);
-
-      // Calcular pérdida real (lo que depositó y NO retiró)
-      const netLoss = Math.max(0, totalDeposits - totalWithdrawals);
+      // NETWIN/GGR REAL del período (apostado − ganado), misma fuente que referidos.
+      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-weekly');
+      if (!netRes.success) {
+        logger.warn(`[REFUND] weekly — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
+        return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
+      }
+      const netLoss = Math.max(0, Number(netRes.totalGgr) || 0);
+      logger.info('[REFUND] weekly — usuario:', username, 'NETWIN(GGR):', netRes.totalGgr, 'netLoss:', netLoss);
 
       if (netLoss === 0) {
-        logger.info('[REFUND] weekly — sin pérdida neta para:', username);
+        logger.info('[REFUND] weekly — sin pérdida real para:', username);
         return res.json({
           success: false,
-          message: 'No tenés pérdida neta en el período. El reembolso aplica solo sobre depósitos no recuperados vía retiros.',
+          message: 'No tenés pérdida en el período. El reembolso aplica solo sobre lo que perdiste jugando.',
           canClaim: true,
           netAmount: 0
         });
@@ -6247,30 +6218,20 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
       const fromDate = new Date(fromEpoch * 1000);
       const toDate = new Date(toEpoch * 1000);
 
-      // Obtener depósitos REALES del período
-      const periodDeposits = await Transaction.aggregate([
-        { $match: { username, type: 'deposit', createdAt: { $gte: fromDate, $lte: toDate } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      const totalDeposits = periodDeposits[0]?.total || 0;
-
-      // Obtener retiros REALES del período
-      const periodWithdrawals = await Transaction.aggregate([
-        { $match: { username, type: 'withdrawal', createdAt: { $gte: fromDate, $lte: toDate } } },
-        { $group: { _id: null, total: { $sum: '$amount' } } }
-      ]);
-      const totalWithdrawals = periodWithdrawals[0]?.total || 0;
-
-      logger.info('[REFUND] monthly — usuario:', username, 'depositos:', totalDeposits, 'retiros:', totalWithdrawals);
-
-      // Calcular pérdida real (lo que depositó y NO retiró)
-      const netLoss = Math.max(0, totalDeposits - totalWithdrawals);
+      // NETWIN/GGR REAL del período (apostado − ganado), misma fuente que referidos.
+      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-monthly');
+      if (!netRes.success) {
+        logger.warn(`[REFUND] monthly — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
+        return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
+      }
+      const netLoss = Math.max(0, Number(netRes.totalGgr) || 0);
+      logger.info('[REFUND] monthly — usuario:', username, 'NETWIN(GGR):', netRes.totalGgr, 'netLoss:', netLoss);
 
       if (netLoss === 0) {
-        logger.info('[REFUND] monthly — sin pérdida neta para:', username);
+        logger.info('[REFUND] monthly — sin pérdida real para:', username);
         return res.json({
           success: false,
-          message: 'No tenés pérdida neta en el período. El reembolso aplica solo sobre depósitos no recuperados vía retiros.',
+          message: 'No tenés pérdida en el período. El reembolso aplica solo sobre lo que perdiste jugando.',
           canClaim: true,
           netAmount: 0
         });

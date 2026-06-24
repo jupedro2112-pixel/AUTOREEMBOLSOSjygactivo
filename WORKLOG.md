@@ -8,6 +8,25 @@
 
 ## Sesión 2026-06-24
 
+### 73. Reembolsos: ahora sobre el NETWIN/GGR REAL (no sobre cargas − retiros)
+- **Hallazgo:** los reembolsos (diario/semanal/mensual) se calculaban sobre `cargas − retiros` (flujo de caja),
+  NO sobre la pérdida real de juego. Pagaban de más (contaban como "pérdida" plata que el cliente tenía en saldo).
+  Había un comentario "consultar NETWIN (misma fuente que referidos)" pero NUNCA se conectó: el `jugayganaUserId`
+  se usaba solo para validar que la cuenta esté vinculada, y el cálculo seguía siendo depósitos − retiros locales.
+- **Fix:** se conectó `referralRevenueService.getUserNetwinForDateRange(username, jgId, fromDate, toDate, label)`
+  (ya existía, construida para reembolsos: consulta `royalty-statistics` de JUGAYGANA por rango de fechas y devuelve
+  `totalGgr` = apostado − ganado). Ahora `netLoss = max(0, totalGgr)` = **pérdida REAL del juego** en el período.
+  - **Status** (`/api/refunds/status`): 3 llamadas netwin en paralelo (daily/weekly/monthly). Si una falla → ese
+    netLoss = 0 (no preview de más).
+  - **Claims** (`/api/refunds/claim/{daily|weekly|monthly}`): usan netwin; si JUGAYGANA no responde → NO reembolsa
+    (mensaje "no pudimos calcular tu pérdida, probá más tarde"), no paga a ciegas.
+- **% sin cambios** (20/10/5 editables). El reembolso = % × netwin real.
+- **Pendiente conocido (no pedido):** los períodos semanal y mensual se pueden SOLAPAR (semana pasada dentro del
+  mes pasado) → doble reembolso (10%+5%) en esa franja. Se mencionó al owner; no se tocó.
+- **Nota de carga:** el status ahora hace 3 consultas a JUGAYGANA (antes eran aggregates locales). El front NO
+  pollea el status en loop (solo al abrir / tras reclamar / al vencer el contador), así que la carga es ocasional.
+- **Validado:** `node --check` OK (server.js). Back necesita redeploy.
+
 ### 72. Premios del Fueguito EDITABLES desde el panel (Config['fireMilestones'])
 - **Pedido:** poder armar/cambiar los premios del fueguito (días + montos + requisitos) sin tocar código.
 - **Backend:** `FIRE_MILESTONES` pasó a ser editable: `getFireMilestones()` lee `Config['fireMilestones']`

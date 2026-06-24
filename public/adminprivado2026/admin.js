@@ -2690,6 +2690,10 @@ async function payPayout(id) {
         if (r.ok && j.success) {
             showToast(j.status === 'paid' ? 'Pago realizado ✅' : 'Pago iniciado ⏳', 'success');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else if (r.ok && j.insufficient) {
+            // El cliente se jugó las fichas: no se descontó ni se pagó. Se avisó y se cerró el chat.
+            showToast(j.message || 'Saldo insuficiente: no se pagó. Se avisó al cliente.', 'error');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error al pagar', 'error');
         }
@@ -2724,6 +2728,9 @@ async function payOtherBank(id) {
         const j = await r.json();
         if (r.ok && j.success) {
             showToast('Pagado por otro banco ✅', 'success');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else if (r.ok && j.insufficient) {
+            showToast(j.message || 'Saldo insuficiente: no se pagó. Se avisó al cliente.', 'error');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error', 'error');

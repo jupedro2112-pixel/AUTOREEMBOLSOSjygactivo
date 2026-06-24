@@ -1694,8 +1694,11 @@ async function handlePayoutStatusWebhook(p) {
     } else if (status === 'ERROR' || status === 'CANCELLED') {
       const reason = p.errorCode || p.error || status;
       await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', hgStatus: status, error: String(reason).slice(0, 300) } });
+      // Si las fichas ya se descontaron (flujo nuevo confirmado), aclararlo: NO devolver.
+      const yaDescontado = (payout.deductAtPay === true && payout.debitConfirmed === true);
       await _emitAdminOnlyChatNote(payout.userId, payout.username,
-        `💸 ⚠️ El PAGO automático FALLÓ en hgcash (${reason}) — $${Number(payout.amount).toLocaleString('es-AR')} a ${payout.titular || payout.cbu}. Revisá y pagá manual.`);
+        `💸 ⚠️ El PAGO automático FALLÓ en hgcash (${reason}) — $${Number(payout.amount).toLocaleString('es-AR')} a ${payout.titular || payout.cbu}. ` +
+        (yaDescontado ? 'Las fichas YA fueron descontadas: NO devuelvas. Pagá manual ("otro banco") o reintentá.' : 'Revisá y pagá manual.'));
       logger.warn(`[hgcash-pay] FALLÓ payout=${payout.id} status=${status} reason=${reason}`);
     } else {
       // PENDING / AWAITING_REVIEW / PROCESSING → sólo actualizar hgStatus.
@@ -8107,6 +8110,12 @@ async function initializeData() {
       description: 'Oferta de "100% de recuperación" que se envía tras cada carga (manual o automática). NO se envía a clientes con la etiqueta "comunidad" o "no comunidad". Sin variables. Si lo dejás vacío, no se envía.',
       type: 'message',
       response: '🎁 ¿Querés reclamar el 100% de tu carga?\n\nSi jugaste y perdiste lo que cargaste, ¡podés recuperarlo! 💪\n\nPara reclamarlo: sumate a nuestra Comunidad y tené la app instalada. ✅\n\n¡Te esperamos! 🚀'
+    },
+    {
+      name: '/sys_withdrawal_insufficient',
+      description: 'Mensaje automático al cliente cuando, al confirmar el pago, NO alcanza el saldo para descontar el retiro (se jugó las fichas en el mientras). El chat se cierra. Variables: ${amount} (lo que pidió), ${balance} (saldo actual). Si lo dejás vacío, no se envía.',
+      type: 'message',
+      response: '⚠️ No pudimos completar tu retiro de ${amount} porque tu saldo cambió y ya no alcanza. Tu saldo actual es ${balance}. 💡 Si querés retirar, solicitá un nuevo retiro con el monto correcto disponible. ¡Gracias!'
     }
   ];
   for (const cmd of systemCmds) {
@@ -8340,7 +8349,11 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     }
     withdrawLockAcquired = true;
 
-    // Chequear saldo real en JugaYGana ANTES de intentar el retiro.
+    // Chequear saldo real en JugaYGana (sólo validación de UX al solicitar: el cliente
+    // no puede pedir más de lo que tiene EN ESTE MOMENTO). El DESCUENTO REAL de las
+    // fichas ocurre recién cuando el AGENTE confirma el pago (/api/admin/payouts/:id/pay),
+    // NO acá. Así, si el cliente se juega las fichas en el mientras, al confirmar el
+    // descuento falla y no se paga — y al rechazar no hay que devolver nada.
     const balanceResult = await jugayganaMovements.getUserBalance(username);
     if (!balanceResult.success) {
       return res.status(400).json({ error: 'No se pudo verificar tu saldo. Intentá de nuevo en unos minutos.' });
@@ -8356,85 +8369,21 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       });
     }
 
-    // Ejecutar el retiro real en JugaYGana.
-    const result = await jugaygana.withdrawFromUser(
-      username,
-      amountNum,
-      `Retiro Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
-    );
-
-    if (!result.success) {
-      return res.status(400).json({ error: result.error || 'No se pudo procesar el retiro' });
-    }
-
-    await recordUserActivity(req.user.userId, 'withdrawal', amountNum);
-
-    // ANTI RETIRO FANTASMA: confirmar que el descuento OCURRIÓ DE VERDAD. JUGAYGANA
-    // puede devolver un "éxito" sin descontar (el saldo del listado ShowUsers queda
-    // desactualizado tras un pago grande → WithdrawMoney falso-positivo y el chequeo
-    // de saldo pasa con un saldo viejo y alto). Releemos el saldo y exigimos que haya
-    // bajado al menos el monto retirado. Si no se confirma, igual creamos el pago
-    // (decisión: no bloquear al cliente) pero lo marcamos para REVISIÓN MANUAL: el
-    // rechazo NO devolverá fichas a ciegas (eso es lo que acuñaba saldo fantasma).
-    const balanceBefore = available;
-    let balanceAfter = null;
-    let debitConfirmed = false; // por defecto NO confirmado (si la lectura falla → revisión)
-    try {
-      const afterRes = await jugayganaMovements.getUserBalanceWithRetry(username);
-      if (afterRes && afterRes.success) {
-        balanceAfter = Number(afterRes.balance) || 0;
-        debitConfirmed = (balanceBefore - balanceAfter) >= (amountNum - 1);
-      }
-    } catch (_) { /* lectura flaky → queda sin confirmar (revisión manual) */ }
-
-    // Registrar Transaction (igual que en /api/admin/withdrawal). Sin esto, los
-    // retiros self-service no aparecían en el dashboard de transacciones.
-    try {
-      await Transaction.create({
-        id: uuidv4(),
-        type: 'withdrawal',
-        amount: amountNum,
-        username: user.username,
-        userId: user.id,
-        description: `Retiro self-service a ${titularT} (${aliasT})`,
-        adminId: null,
-        adminUsername: null,
-        adminRole: null,
-        transactionId: result.data?.transfer_id || result.data?.transferId,
-        metadata: { source: 'self_service', titular: titularT, cbu: cbuT, alias: aliasT },
-        timestamp: new Date()
-      });
-    } catch (txErr) {
-      // No bloquea: el retiro ya se aplicó en JuegayGana. Queda log para auditar.
-      logger.warn(`[withdrawal/request] no se pudo registrar Transaction para ${user.username}: ${txErr.message}`);
-    }
-
-    // Crear el "pago pendiente": el agente lo verifica en el chat/Pagos y, al
-    // confirmar, se paga automáticamente al CBU del cliente vía hgcash (si está
-    // configurado el token). El saldo en JUGAYGANA YA fue descontado arriba.
+    // Crear el "pago pendiente" SIN descontar fichas (deductAtPay:true). El agente lo
+    // verifica y, al CONFIRMAR el pago, recién ahí se descuentan las fichas (con
+    // verificación anti-fantasma) y, si el descuento sale OK, se paga automático por
+    // hgcash. El saldo del cliente NO baja todavía.
     try {
       await PendingPayout.create({
         id: uuidv4(), userId: user.id, username: user.username,
         amount: amountNum, titular: titularT, cbu: cbuT, alias: aliasT,
         status: 'pending_review',
-        withdrawalTxId: result.data?.transfer_id || result.data?.transferId || null,
-        balanceBefore, balanceAfter, debitConfirmed,
+        deductAtPay: true,         // ← flujo nuevo: descontar al confirmar, no al solicitar
+        balanceBefore: available,  // saldo al solicitar (referencia para el agente)
         createdAt: new Date()
       });
     } catch (ppErr) {
       logger.warn(`[withdrawal/request] no se pudo crear PendingPayout para ${user.username}: ${ppErr.message}`);
-    }
-
-    // Si NO pudimos confirmar el descuento, avisamos al agente (nota interna en el
-    // chat) para que verifique el saldo real en JUGAYGANA antes de pagar/rechazar.
-    if (debitConfirmed !== true) {
-      logger.warn(`[withdrawal/request] DESCUENTO NO CONFIRMADO ${user.username} $${amountNum} (saldoAntes=${balanceBefore}, saldoDespués=${balanceAfter}) → pago marcado para revisión manual`);
-      try {
-        await _emitAdminOnlyChatNote(user.id, user.username,
-          `⚠️ Retiro de $${amountNum.toLocaleString('es-AR')} solicitado SIN descuento confirmado en JUGAYGANA ` +
-          `(saldo antes $${Number(balanceBefore).toLocaleString('es-AR')} → después ${balanceAfter == null ? '¿?' : '$' + Number(balanceAfter).toLocaleString('es-AR')}). ` +
-          `Verificá el saldo real ANTES de pagar. Si lo rechazás, NO se devolverán fichas automáticamente.`);
-      } catch (_) {}
     }
 
     // Guardar datos bancarios para la próxima vez (si el usuario lo pidió).
@@ -12251,6 +12200,100 @@ app.get('/api/admin/payouts', authMiddleware, withdrawerMiddleware, async (req, 
   }
 });
 
+// Avisa al cliente (mensaje editable) que no se pudo retirar porque su saldo cambió, y
+// CIERRA el chat. Se usa cuando, al confirmar el pago, el descuento falla por saldo
+// insuficiente (el cliente se jugó las fichas). Si el cliente vuelve a escribir, el chat
+// se reabre solo en "Abiertos".
+async function _notifyInsufficientAndCloseChat(payout, available, agentUser) {
+  try {
+    const content = await renderSystemCommand(
+      '/sys_withdrawal_insufficient',
+      '⚠️ No pudimos completar tu retiro de ${amount} porque tu saldo cambió y ya no alcanza. Tu saldo actual es ${balance}. 💡 Si querés retirar, solicitá un nuevo retiro con el monto correcto disponible. ¡Gracias!',
+      { amount: Number(payout.amount).toLocaleString('es-AR'), balance: Number(available || 0).toLocaleString('es-AR') }
+    );
+    if (content) {
+      const msg = await Message.create({
+        id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+        receiverId: payout.userId, receiverRole: 'user', content, type: 'system', timestamp: new Date(), read: false
+      });
+      const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: payout.userId, receiverRole: 'user', content, timestamp: new Date(), type: 'system' };
+      io.to(`user_${payout.userId}`).emit('new_message', data);
+      io.to(`chat_${payout.userId}`).emit('new_message', data);
+      notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
+    }
+    // Cerrar el chat (se reabre solo en "Abiertos" si el cliente escribe).
+    try { await delayClockResolve(payout.userId, { responded: false }); } catch (_) {}
+    await ChatStatus.findOneAndUpdate(
+      { userId: payout.userId },
+      { status: 'closed', assignedTo: null, closedAt: new Date(), closedBy: (agentUser && agentUser.userId) || 'system', updatedAt: new Date() },
+      { upsert: true }
+    );
+    notifyAdmins('chat_closed', { userId: payout.userId, by: (agentUser && agentUser.username) || 'sistema', adminId: (agentUser && agentUser.userId) || 'system', isPaymentsTab: true });
+  } catch (e) {
+    logger.warn(`[payout-deduct] aviso insuficiente/cierre falló: ${e.message}`);
+  }
+}
+
+// Descuenta las fichas al CONFIRMAR el pago (flujo deductAtPay). Devuelve:
+//   { ok:true }                     -> descontado y CONFIRMADO; sigue el pago.
+//   { ok:false, insufficient:true } -> saldo insuficiente: ya avisó al cliente + cerró chat + canceló el payout.
+//   { ok:false, error }             -> no se pudo descontar/confirmar: ya marcó 'failed' + nota al agente.
+async function _deductChipsAtConfirm(payout, agentUser) {
+  const amt = Number(payout.amount);
+  const user = await User.findOne({ id: payout.userId });
+  const jgId = (user && user.jugayganaUserId) || null;
+
+  // 1) Saldo actual del cliente.
+  const balRes = await jugayganaMovements.getUserBalance(payout.username);
+  const avail = (balRes && balRes.success) ? (Number(balRes.balance) || 0) : null;
+  if (avail === null) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar' } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente para descontar $${amt.toLocaleString('es-AR')}. Reintentá en unos minutos.`);
+    return { ok: false, error: 'No se pudo verificar el saldo del cliente. Reintentá.' };
+  }
+  // 2) ¿Tiene saldo? Si se jugó las fichas → avisar al cliente, cerrar chat, cancelar.
+  if (avail < amt) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'cancelled', error: `Saldo insuficiente al confirmar (disponible $${avail})`, balanceBefore: avail, debitConfirmed: false } });
+    await _notifyInsufficientAndCloseChat(payout, avail, agentUser);
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `❌ Retiro de $${amt.toLocaleString('es-AR')} NO pagado: saldo insuficiente al confirmar (disponible $${avail.toLocaleString('es-AR')}). Se avisó al cliente y se cerró el chat para que solicite de nuevo.`);
+    return { ok: false, insufficient: true, balance: avail };
+  }
+  // 3) Descontar en JUGAYGANA.
+  const w = await jugaygana.withdrawFromUser(payout.username, amt, `Retiro confirmado - ${payout.username}`);
+  if (!w || !w.success) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo descontar: ' + ((w && w.error) || '') } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo descontar las fichas ($${amt.toLocaleString('es-AR')}) en JUGAYGANA: ${(w && w.error) || 's/detalle'}. Reintentá.`);
+    return { ok: false, error: 'No se pudo descontar las fichas: ' + ((w && w.error) || '') };
+  }
+  // 4) Verificar el descuento (anti-fantasma): el saldo tiene que haber bajado.
+  let after = null, deducted = false;
+  try {
+    const a = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
+    if (a && a.success) { after = Number(a.balance) || 0; deducted = (avail - after) >= (amt - 1); }
+  } catch (_) {}
+  if (!deducted) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', balanceBefore: avail, balanceAfter: after, debitConfirmed: false, error: 'Descuento no confirmado' } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ El descuento de $${amt.toLocaleString('es-AR')} NO se pudo confirmar (saldo antes $${avail.toLocaleString('es-AR')} → después ${after == null ? '¿?' : '$' + Number(after).toLocaleString('es-AR')}). Verificá en JUGAYGANA antes de pagar manual. NO devuelvas a ciegas.`);
+    return { ok: false, error: 'No se pudo confirmar el descuento. Revisá el saldo en JUGAYGANA.' };
+  }
+  // 5) Descuento confirmado → registrar Transaction + marcar el payout.
+  await PendingPayout.updateOne({ id: payout.id }, { $set: { balanceBefore: avail, balanceAfter: after, debitConfirmed: true, withdrawalTxId: w.data?.transfer_id || w.data?.transferId || null } });
+  try { await recordUserActivity(payout.userId, 'withdrawal', amt); } catch (_) {}
+  try {
+    await Transaction.create({
+      id: uuidv4(), type: 'withdrawal', amount: amt,
+      username: payout.username, userId: payout.userId,
+      description: `Retiro confirmado a ${payout.titular || ''} (${payout.alias || payout.cbu || ''})`,
+      adminId: agentUser && agentUser.userId, adminUsername: agentUser && agentUser.username, adminRole: agentUser && agentUser.role,
+      transactionId: w.data?.transfer_id || w.data?.transferId,
+      metadata: { source: 'self_service', confirmedAtPay: true, payoutId: payout.id },
+      timestamp: new Date()
+    });
+  } catch (_) {}
+  try { const uSock = connectedUsers.get(payout.userId); if (uSock && after != null) uSock.emit('balance_updated', { balance: after }); } catch (_) {}
+  return { ok: true, balanceAfter: after };
+}
+
 // El agente CONFIRMA el pago → se ejecuta el cash-out automático en hgcash.
 app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
@@ -12289,6 +12332,20 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     );
     if (!claimed) return res.status(409).json({ error: 'El pago ya está siendo procesado.' });
 
+    // FLUJO NUEVO (deductAtPay): descontar las fichas AHORA, al confirmar. Si el cliente
+    // se jugó las fichas (saldo insuficiente) o no se puede confirmar el descuento → NO
+    // se paga. Solo si el descuento se confirma sigue el cash-out. (Pagos viejos ya tenían
+    // las fichas descontadas al solicitar → no entran acá.)
+    if (claimed.deductAtPay === true) {
+      const ded = await _deductChipsAtConfirm(claimed, req.user);
+      if (!ded.ok) {
+        if (ded.insufficient) {
+          return res.json({ success: false, insufficient: true, message: 'Saldo insuficiente: no se descontó ni se pagó. Se avisó al cliente y se cerró el chat.' });
+        }
+        return res.status(400).json({ error: ded.error || 'No se pudieron descontar las fichas.' });
+      }
+    }
+
     const webhookUrl = `${req.protocol}://${req.get('host')}/api/hgcash/webhook`;
     const buildCashOut = (acct) => hgcashPay.createCashOut({
       accountId: acct,
@@ -12321,6 +12378,12 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
         return res.json({ success: true, message: 'El pago ya estaba en curso (idempotencia).', status: 'paying' });
       }
       await PendingPayout.updateOne({ id }, { $set: { status: 'failed', error: String(result.error).slice(0, 300) } });
+      // Flujo nuevo: las fichas YA se descontaron arriba. NO se devuelven; el agente
+      // paga manual ("otro banco") o reintenta. Nota interna para que quede clarísimo.
+      if (claimed.deductAtPay === true) {
+        await _emitAdminOnlyChatNote(claimed.userId, claimed.username,
+          `💸 ⚠️ El PAGO en hgcash FALLÓ (${result.error}) — pero las fichas YA fueron descontadas correctamente: se le descontó $${Number(claimed.amount).toLocaleString('es-AR')} al cliente. NO devuelvas fichas. Pagá manual ("🏦 Pagar con otro banco") o reintentá el pago.`);
+      }
       return res.status(400).json({ error: 'No se pudo iniciar el pago en hgcash: ' + result.error });
     }
 
@@ -12365,6 +12428,36 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
       { new: true }
     );
     if (!payout) return res.status(400).json({ error: 'No se pudo rechazar (ya está pagado o en proceso).' });
+
+    // FLUJO NUEVO (deductAtPay): las fichas NO se descuentan al solicitar.
+    //  - Si todavía NO se confirmó el pago (debitConfirmed !== true) → NO se descontó nada
+    //    → no hay que devolver: se cancela y listo (acá muere el bug de devoluciones).
+    //  - Si el descuento YA se había confirmado (debitConfirmed === true; ej. el pago en
+    //    hgcash falló DESPUÉS de descontar) → se devuelve el monto COMPLETO como fichas
+    //    (devolución simple, sin split bonus/comunes).
+    if (payout.deductAtPay === true) {
+      const W = Number(payout.amount);
+      if (payout.debitConfirmed === true) {
+        const user = await User.findOne({ id: payout.userId });
+        const jgId = (user && user.jugayganaUserId) || null;
+        let ok = false, data = null;
+        try { const r = await jugaygana.depositToUser(payout.username, W, 'Devolución de retiro rechazado', jgId); if (r && r.success) { ok = true; data = r.data; } } catch (e) { logger.error(`[payout-cancel] devolución (deductAtPay) falló payout=${id}: ${e.message}`); }
+        if (ok) {
+          await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true } });
+          try {
+            await Transaction.create({ id: uuidv4(), type: 'deposit', amount: W, username: payout.username, userId: payout.userId, description: 'Devolución de retiro rechazado', adminId: req.user.userId, adminUsername: req.user.username, adminRole: req.user.role, transactionId: data?.transfer_id || data?.transferId, metadata: { source: 'payout_refund', refundKind: 'chips', payoutId: payout.id }, timestamp: new Date() });
+          } catch (_) {}
+          try { const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username); const uSock = connectedUsers.get(payout.userId); if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance }); } catch (_) {}
+          await _emitAdminOnlyChatNote(payout.userId, payout.username, `↩️ Retiro RECHAZADO: se devolvió $${W.toLocaleString('es-AR')} en fichas (el pago había fallado tras descontar).`);
+          return res.json({ success: true, chipsReturned: true });
+        }
+        await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ Retiro rechazado: NO se pudo devolver $${W.toLocaleString('es-AR')} en fichas. Completalo a mano.`);
+        return res.json({ success: true, chipsReturned: false });
+      }
+      // No se había descontado nada → nada que devolver.
+      await _emitAdminOnlyChatNote(payout.userId, payout.username, `↩️ Retiro de $${W.toLocaleString('es-AR')} RECHAZADO. No se descontaron fichas (descuento al confirmar), así que no hay nada que devolver.`);
+      return res.json({ success: true, chipsReturned: false, noDeduction: true });
+    }
 
     // ANTI RETIRO FANTASMA: si al solicitar NO se confirmó que el descuento en
     // JUGAYGANA ocurrió de verdad (debitConfirmed===false), NO devolvemos fichas a
@@ -12475,15 +12568,37 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
 app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const payout = await PendingPayout.findOneAndUpdate(
-      { id, status: { $in: ['pending_review', 'failed'] } },
+    const payout = await PendingPayout.findOne({ id });
+    if (!payout) return res.status(404).json({ error: 'Pago no encontrado' });
+    if (!['pending_review', 'failed'].includes(payout.status)) {
+      return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
+    }
+
+    // Flujo nuevo: si las fichas todavía NO se descontaron, descontarlas ahora (igual que /pay).
+    // Si el cliente se jugó las fichas → no se paga (avisa + cierra chat).
+    if (payout.deductAtPay === true && payout.debitConfirmed !== true) {
+      const claimed = await PendingPayout.findOneAndUpdate(
+        { id, status: { $in: ['pending_review', 'failed'] } },
+        { $set: { status: 'paying', paidBy: req.user.username, error: null } }, { new: true }
+      );
+      if (!claimed) return res.status(409).json({ error: 'El pago ya está siendo procesado.' });
+      const ded = await _deductChipsAtConfirm(claimed, req.user);
+      if (!ded.ok) {
+        if (ded.insufficient) return res.json({ success: false, insufficient: true, message: 'Saldo insuficiente: no se descontó ni se pagó. Se avisó al cliente y se cerró el chat.' });
+        return res.status(400).json({ error: ded.error || 'No se pudieron descontar las fichas.' });
+      }
+    }
+
+    // Marcar pagado por OTRO BANCO (atómico). Incluye 'paying' por si recién descontamos arriba.
+    const paid = await PendingPayout.findOneAndUpdate(
+      { id, status: { $in: ['pending_review', 'failed', 'paying'] } },
       { $set: { status: 'paid', paidVia: 'other_bank', paidBy: req.user.username, paidAt: new Date(), error: null } },
       { new: true }
     );
-    if (!payout) return res.status(400).json({ error: 'No se pudo marcar como pagado (ya está pagado o en proceso).' });
-    await _emitAdminOnlyChatNote(payout.userId, payout.username,
-      `🏦 Retiro de $${Number(payout.amount).toLocaleString('es-AR')} pagado por OTRO BANCO por ${req.user.username}.`);
-    await notifyPayoutPaid(payout); // aviso editable /sys_payout_paid (no envía si está vacío)
+    if (!paid) return res.status(400).json({ error: 'No se pudo marcar como pagado (ya está pagado o en proceso).' });
+    await _emitAdminOnlyChatNote(paid.userId, paid.username,
+      `🏦 Retiro de $${Number(paid.amount).toLocaleString('es-AR')} pagado por OTRO BANCO por ${req.user.username}.`);
+    await notifyPayoutPaid(paid); // aviso editable /sys_payout_paid (no envía si está vacío)
     res.json({ success: true });
   } catch (error) {
     console.error('Error pagando payout por otro banco:', error);

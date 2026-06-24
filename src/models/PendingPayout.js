@@ -63,6 +63,12 @@ const pendingPayoutSchema = new mongoose.Schema({
   balanceAfter: { type: Number, default: null },
   debitConfirmed: { type: Boolean, default: null },
 
+  // FLUJO NUEVO: descontar las fichas al CONFIRMAR el pago (no al solicitarlo). Si es
+  // true, el self-retiro NO descontó nada al pedir; el descuento ocurre en /pay (o
+  // /pay-other-bank). Si es false/undefined = pago viejo (fichas ya descontadas al
+  // solicitar) → mantiene el comportamiento previo (no re-descontar; devolver al rechazar).
+  deductAtPay: { type: Boolean, default: false },
+
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true

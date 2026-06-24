@@ -6,6 +6,32 @@
 >
 > **Última actualización: 2026-06-23**
 
+## Sesión 2026-06-24
+
+### 68. REDISEÑO retiros: descontar fichas al CONFIRMAR el pago (no al solicitar)
+- **Problema:** el self-retiro descontaba las fichas al SOLICITAR; al rechazar había que DEVOLVERLAS con la lógica
+  bonus/comunes, que fallaba seguido (devolvía mal / acuñaba saldo).
+- **Nuevo flujo (decidido con el owner):**
+  - **Solicitar (`/api/withdrawal/request`):** ya NO descuenta nada. Crea el `PendingPayout` con `deductAtPay:true`
+    (chequea saldo solo como validación de UX). El saldo del cliente NO baja todavía.
+  - **Confirmar (`/api/admin/payouts/:id/pay`):** helper nuevo `_deductChipsAtConfirm` descuenta las fichas AHORA
+    (lee saldo → `withdrawFromUser` → verifica anti-fantasma que el saldo bajó). Solo si el descuento se CONFIRMA
+    sigue el cash-out. Registra la `Transaction` de retiro recién acá.
+    - **Saldo insuficiente (se jugó las fichas):** NO se paga; se marca `cancelled`, se manda mensaje EDITABLE al
+      cliente (`/sys_withdrawal_insufficient`, vars `${amount}`/`${balance}`) y se CIERRA el chat (si el cliente
+      escribe se reabre en "Abiertos"; si pide otro retiro va a Pagos). Helper `_notifyInsufficientAndCloseChat`.
+    - **Pago hgcash falla DESPUÉS de descontar:** NO se devuelven fichas; nota interna "las fichas YA se descontaron
+      ($X), pagá manual / reintentá". Igual en el webhook de error (`handlePayoutStatusWebhook`) si `deductAtPay+confirmado`.
+  - **Rechazar (`/cancel`) con flujo nuevo:** si todavía no se descontó → NO devuelve nada (se acabó el bug). Si ya
+    se había descontado (debitConfirmed===true, ej. cash-out falló) → devuelve el monto COMPLETO como fichas
+    (devolución SIMPLE, sin split bonus/comunes).
+  - **Pagar con otro banco (`/pay-other-bank`) con flujo nuevo:** también descuenta al confirmar antes de marcar pagado.
+- **Compatibilidad:** los pagos VIEJOS (creados antes, con fichas ya descontadas) tienen `deductAtPay` falsy →
+  mantienen el comportamiento previo (pagar = solo cash-out; rechazar = lógica vieja con split). No se re-descuentan.
+- **Modelo:** `PendingPayout.deductAtPay` (Boolean, default false). Comando sembrado `/sys_withdrawal_insufficient`.
+- **Panel:** `payPayout`/`payOtherBank` manejan la respuesta `{insufficient:true}` (toast claro + ocultan banner).
+- **Validado:** `node --check` OK (server.js, PendingPayout.js, admin.js). Back necesita redeploy; panel, recargar.
+
 ## Sesión 2026-06-23
 
 ### 67. Botón "Limpiar pagos viejos colgados" en el panel (sin terminal) + script

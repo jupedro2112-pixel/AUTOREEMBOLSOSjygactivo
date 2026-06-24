@@ -8,6 +8,26 @@
 
 ## Sesión 2026-06-24
 
+### 74. Anti-multicuenta: email único + teléfono único robusto (clave normalizada)
+- **Problema:** se creaban muchas cuentas con el MISMO email o el MISMO teléfono. Causa: (1) NUNCA se chequeaba
+  email duplicado (ni en `register` ni en `register-quick`); (2) el SMS dejó de ser obligatorio al registrarse
+  (commit "registro sin SMS") → el teléfono se verifica recién al retirar; y (3) el chequeo de teléfono era por
+  STRING EXACTO → el mismo número en otro formato (+54.., 011.., con/sin 9) se colaba.
+- **Decisión owner:** el registro queda SIN teléfono (se verifica al retirar, como ahora), PERO un número ya
+  verificado por otro usuario NO se puede volver a verificar (números únicos por usuario) + bloquear emails duplicados.
+- **Fix:**
+  - **`phoneKey`** (nuevo campo en User): clave normalizada del teléfono = solo dígitos, últimos 10 (helper
+    `normalizePhoneKey` en `security.js`). El MISMO número en distinto formato → misma clave.
+  - Los 4 puntos que verifican teléfono (`register`, `change-password`, `change-password/pending`,
+    `verify-phone/confirm`) ahora chequean unicidad por `phoneKey` (no por string exacto) y setean `phoneKey` al verificar.
+  - **Email único:** `register` y `register-quick` ahora rechazan si el email (case-insensitive) ya está en otra
+    cuenta. Solo valida si el cliente cargó email (es opcional). NO rompe las cuentas existentes que ya compartan email.
+  - **Migración one-shot** `migration_backfill_phonekey_done`: rellena `phoneKey` en los usuarios con teléfono ya
+    verificado, para que el chequeo funcione contra los existentes.
+- **No tocado:** los lookups de login-por-teléfono / reset siguen por `phone` exacto (no son unicidad, y cambiarlos
+  arriesgaba romper el login).
+- **Validado:** `node --check` OK (server.js, User.js, security.js). Back necesita redeploy (corre la migración).
+
 ### 73. Reembolsos: ahora sobre el NETWIN/GGR REAL (no sobre cargas − retiros)
 - **Hallazgo:** los reembolsos (diario/semanal/mensual) se calculaban sobre `cargas − retiros` (flujo de caja),
   NO sobre la pérdida real de juego. Pagaban de más (contaban como "pérdida" plata que el cliente tenía en saldo).

@@ -79,7 +79,7 @@ const { generateReferralCode } = require('./src/utils/referralCode');
 const { setRedisClient, getRedisClient } = require('./src/utils/redisClient');
 const { generateAndSendOTP, verifyOTP } = require('./src/services/otpService');
 const { sendSMS } = require('./src/services/smsService');
-const { validateInternationalPhone } = require('./src/middlewares/security');
+const { validateInternationalPhone, normalizePhoneKey } = require('./src/middlewares/security');
 
 // ============================================
 // SEGURIDAD - RATE LIMITING
@@ -2708,10 +2708,10 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
       if (!otpResult.valid) {
         return res.status(400).json({ error: otpResult.error || 'Código de verificación incorrecto o expirado' });
       }
-      // Check if phone is already registered and verified (second line of defense)
-      const existingPhoneUser = await User.findOne({ phone: normalizedPhone, phoneVerified: true }).lean();
+      // Unicidad por clave NORMALIZADA (el mismo número en distinto formato = misma clave).
+      const existingPhoneUser = await User.findOne({ phoneKey: normalizePhoneKey(normalizedPhone), phoneVerified: true }).lean();
       if (existingPhoneUser) {
-        return res.status(400).json({ error: 'Este número de teléfono ya está registrado' });
+        return res.status(400).json({ error: 'Este número de teléfono ya está registrado por otra cuenta' });
       }
     }
     
@@ -2722,6 +2722,16 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
     
     if (existingUser) {
       return res.status(400).json({ error: 'El usuario ya existe' });
+    }
+
+    // Unicidad de EMAIL: no permitir dos cuentas con el mismo email (case-insensitive).
+    // Solo se valida si el cliente cargó un email (es opcional).
+    const normalizedEmail = email ? String(email).toLowerCase().trim() : null;
+    if (normalizedEmail) {
+      const existingEmail = await User.findOne({ email: normalizedEmail }).lean();
+      if (existingEmail) {
+        return res.status(400).json({ error: 'Este email ya está registrado en otra cuenta.' });
+      }
     }
 
     // Resolver código de referido si fue proporcionado
@@ -2790,8 +2800,9 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
       id: userId,
       username,
       password: password,
-      email: email || null,
+      email: normalizedEmail,
       phone: normalizedPhone,
+      phoneKey: hasPhone ? normalizePhoneKey(normalizedPhone) : null,
       phoneVerified: hasPhone,
       phoneVerificationPending: !hasPhone,
       role: 'user',
@@ -2951,6 +2962,15 @@ app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req,
       return res.status(400).json({ error: 'El usuario ya existe' });
     }
 
+    // Unicidad de EMAIL: no permitir dos cuentas con el mismo email (case-insensitive).
+    const normalizedEmail = email ? String(email).toLowerCase().trim() : null;
+    if (normalizedEmail) {
+      const existingEmail = await User.findOne({ email: normalizedEmail }).lean();
+      if (existingEmail) {
+        return res.status(400).json({ error: 'Este email ya está registrado en otra cuenta.' });
+      }
+    }
+
     // Crear en JUGAYGANA primero (igual que el flujo normal).
     let jgResult = null;
     try {
@@ -2980,7 +3000,7 @@ app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req,
       id: userId,
       username,
       password,
-      email: email || null,
+      email: normalizedEmail,
       phone: null,
       phoneVerified: false,
       phoneVerificationPending: true,
@@ -3719,9 +3739,11 @@ app.post('/api/auth/change-password', authMiddleware, authLimiter, async (req, r
       if (!otpCode || String(otpCode).trim().length < 6) {
         return res.status(400).json({ error: 'Se requiere el código de verificación SMS' });
       }
-      // Verificar que el teléfono no esté ya registrado y verificado por otro usuario.
+      // Verificar que el teléfono no esté ya registrado y verificado por otro usuario
+      // (por clave normalizada: detecta el mismo número en distinto formato).
+      const _reqPhoneKey = normalizePhoneKey(requestedPhone);
       const otherUser = await User.findOne({
-        phone: requestedPhone,
+        phoneKey: _reqPhoneKey,
         phoneVerified: true,
         id: { $ne: user.id }
       }).lean();
@@ -3734,6 +3756,7 @@ app.post('/api/auth/change-password', authMiddleware, authLimiter, async (req, r
       }
       // OTP válido: persistir teléfono verificado.
       user.phone = requestedPhone;
+      user.phoneKey = _reqPhoneKey;
       user.phoneVerified = true;
       user.smsConsent = true;
       // Mantener `whatsapp` sincronizado para compatibilidad con vistas que lo siguen leyendo.
@@ -3815,9 +3838,10 @@ app.post('/api/auth/change-password/send-otp', authMiddleware, sensitiveLimiter,
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    // Si otro usuario distinto ya tiene este teléfono verificado, rechazar.
+    // Si otro usuario distinto ya tiene este teléfono verificado, rechazar (por clave normalizada).
+    const _normPhoneKey = normalizePhoneKey(normalizedPhone);
     const otherUser = await User.findOne({
-      phone: normalizedPhone,
+      phoneKey: _normPhoneKey,
       phoneVerified: true,
       id: { $ne: user.id }
     }).lean();
@@ -4346,9 +4370,11 @@ app.post('/api/auth/verify-phone/confirm', authMiddleware, sensitiveLimiter, asy
       });
     }
 
-    // Volver a chequear unicidad por si alguien más verificó ese número entre el send y el confirm.
+    // Volver a chequear unicidad por si alguien más verificó ese número entre el send y el
+    // confirm (por clave normalizada: el mismo número en distinto formato = misma clave).
+    const _vpPhoneKey = normalizePhoneKey(normalizedPhone);
     const existingPhone = await User.findOne({
-      phone: normalizedPhone,
+      phoneKey: _vpPhoneKey,
       phoneVerified: true,
       id: { $ne: req.user.userId }
     }).lean();
@@ -4364,6 +4390,7 @@ app.post('/api/auth/verify-phone/confirm', authMiddleware, sensitiveLimiter, asy
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
     user.phone = normalizedPhone;
+    user.phoneKey = _vpPhoneKey;
     user.phoneVerified = true;
     user.phoneVerificationPending = false;
     user.smsConsent = true;
@@ -7944,6 +7971,41 @@ async function initializeData() {
     }
   } catch (e) {
     logger.error(`[startup-migration] Falló limpieza one-shot de PromoBonus viejos: ${e.message}`);
+  }
+
+  // One-shot: backfill de phoneKey (clave normalizada) en los usuarios con teléfono YA
+  // verificado, para que el chequeo de unicidad por phoneKey funcione contra los existentes.
+  try {
+    const flag = await Config.findOne({ key: 'migration_backfill_phonekey_done' }).lean();
+    if (!flag || flag.value !== true) {
+      let done = 0;
+      try {
+        const UserModel = require('./src/models/User');
+        const users = await UserModel.find({
+          phoneVerified: true, phone: { $nin: [null, ''] },
+          $or: [{ phoneKey: null }, { phoneKey: { $exists: false } }]
+        }).select('id phone').lean();
+        const ops = [];
+        for (const u of users) {
+          const key = normalizePhoneKey(u.phone);
+          if (key) ops.push({ updateOne: { filter: { id: u.id }, update: { $set: { phoneKey: key } } } });
+        }
+        if (ops.length) {
+          const r = await UserModel.bulkWrite(ops, { ordered: false });
+          done = (r && (r.modifiedCount != null ? r.modifiedCount : ops.length)) || ops.length;
+        }
+      } catch (e) {
+        logger.error(`[startup-migration] backfill phoneKey: ${e.message}`);
+      }
+      logger.info(`[startup-migration] phoneKey backfill (one-shot): ${done}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_backfill_phonekey_done' },
+        { key: 'migration_backfill_phonekey_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] backfill phoneKey wrapper: ${e.message}`);
   }
 
   if (process.env.PROXY_URL) {

@@ -217,6 +217,20 @@ const validateInternationalPhone = (phone) => {
 };
 
 /**
+ * Clave NORMALIZADA de un teléfono para chequear unicidad de forma robusta.
+ * Toma solo los dígitos y se queda con los últimos 10 (núcleo del número AR, sin
+ * importar el prefijo país +54 / +549 / 0). Así el MISMO número en distinto formato
+ * cae en la misma clave. Devuelve null si no hay dígitos suficientes.
+ * @param {string} phone
+ * @returns {string|null}
+ */
+const normalizePhoneKey = (phone) => {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (!d || d.length < 8) return null;
+  return d.slice(-10);
+};
+
+/**
  * Middleware de validación de campos de registro
  */
 const validateRegister = (req, res, next) => {
@@ -296,5 +310,6 @@ module.exports = {
   validatePassword,
   normalizePhone,
   validateInternationalPhone,
+  normalizePhoneKey,
   VALID_COUNTRY_CODES
 };

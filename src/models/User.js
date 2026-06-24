@@ -34,10 +34,18 @@ const userSchema = new mongoose.Schema({
     lowercase: true,
     trim: true
   },
-  phone: { 
-    type: String, 
+  phone: {
+    type: String,
     default: null,
     trim: true
+  },
+  // Clave NORMALIZADA del teléfono (solo dígitos, últimos 10) para unicidad robusta:
+  // detecta el MISMO número aunque venga en distinto formato (+54.., 011.., con/sin 9).
+  // Se setea al verificar el teléfono. El chequeo de "número ya usado" se hace por acá.
+  phoneKey: {
+    type: String,
+    default: null,
+    index: true
   },
   phoneVerified: {
     type: Boolean,

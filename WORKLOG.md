@@ -8,6 +8,19 @@
 
 ## Sesión 2026-06-25
 
+### 76. "Error de conexión" intermitente → diagnóstico por logs + graceful shutdown
+- **Diagnóstico (logs EB Jun 14–25):** el server reinició **~48 veces en 11 días**. SIN crashes de código (0
+  uncaughtException, sin stack traces), SIN errores de SMS/SNS. nginx: solo 6× 502 (durante reinicios). El
+  `eb-engine.log` muestra muchísima actividad de deploy. Un deploy falló (Jun 23 19:48, `web.service exit-code 1`).
+- **Causa:** los reinicios eran casi todos **deploys** (semana muy pesada de cambios). Como NO había **graceful
+  shutdown**, EB mataba el proceso de golpe → los pedidos EN CURSO se cortaban → cliente veía "Error de conexión".
+  No es bug de código ni de SMS.
+- **Fix (código):** se agregó **apagado ordenado** en server.js (SIGTERM/SIGINT → `io.close()` + `server.close()`
+  drena pedidos en curso, salida forzada a los 25s). Reduce muchísimo los "Error de conexión" en cada deploy.
+- **Pendiente (config, lo hace el owner en consola EB):** activar **deploys rolling** (una instancia a la vez) para
+  cero downtime. Y evitar deploys innecesarios. (Opción futura: reintento suave en el front para send-otp.)
+- **Validado:** `node --check` OK (server.js).
+
 ### 75. FIX CRÍTICO retiro: 500 "Error del servidor" tras crear el pedido → solicitudes duplicadas + teléfono PY/AR
 - **Incidente (moi1/moi2):** al solicitar retiro salía "Error del servidor" PERO la solicitud entraba (se creaba el
   PendingPayout + se mandaba "Recibimos tu solicitud"). El cliente reintentaba y se duplicaban las solicitudes

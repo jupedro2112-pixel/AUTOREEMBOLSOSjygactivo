@@ -15499,5 +15499,24 @@ if (process.env.VERCEL) {
     server.listen(PORT, () => {
       logger.info(`Server started on port ${PORT} (${process.env.NODE_ENV || 'development'})`);
     });
+
+    // Apagado ORDENADO: al recibir SIGTERM/SIGINT (deploy/reinicio de EB), dejamos de
+    // aceptar conexiones nuevas y terminamos los pedidos EN CURSO antes de salir. Sin
+    // esto, EB mataba el proceso de golpe y los pedidos en vuelo se cortaban → el cliente
+    // veía "Error de conexión". Red de seguridad: salida forzada a los 25s.
+    let _shuttingDown = false;
+    const gracefulShutdown = (signal) => {
+      if (_shuttingDown) return;
+      _shuttingDown = true;
+      logger.info(`[shutdown] ${signal} recibido — cerrando ordenadamente (drenando pedidos en curso)...`);
+      try { io.close(); } catch (_) {}
+      server.close(() => {
+        logger.info('[shutdown] HTTP cerrado, saliendo limpio.');
+        process.exit(0);
+      });
+      setTimeout(() => { logger.warn('[shutdown] timeout de drenado, salida forzada.'); process.exit(0); }, 25000).unref();
+    };
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   })();
 }

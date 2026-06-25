@@ -8,6 +8,19 @@
 
 ## Sesión 2026-06-25
 
+### 77. 2do bug igual al del retiro: install-bonus/claim `amountFmt is not defined` (376×) + análisis logs
+- **Re-análisis de logs a fondo (a pedido del owner):** los 500 "Error del servidor" tenían DOS causas de código
+  (mismo patrón: copiar la respuesta de un handler a otro y dejar una variable de otro scope):
+  - `withdrawal/request: result is not defined` → **341×** (ya arreglado en #75).
+  - `install-bonus/claim: amountFmt is not defined` → **376×** (ARREGLADO acá: usaba `amountFmt`, variable del
+    handler de retiro; el correcto es `INSTALL_BONUS_AMOUNT`). El bono ES idempotente (reserva atómica antes de
+    acreditar) → los 376 NO dieron bono doble; el usuario recibía el bono pero veía "error" → confusión, no pérdida.
+- **"Error de conexión" random SIN deploy (lo aclaró el owner):** NO son reinicios (45 deploys ≈ 48 arranques, casi
+  todos deploy). Es **JUGAYGANA lento**: `ShowUsers timeout of 20000ms` **117×** (~10/día) + `unable to verify the
+  first certificate` (intermitente). Cuando una acción chequea saldo y JUGAYGANA tarda, el pedido se cuelga y el
+  cliente corta → "Error de conexión" con el server arriba. PENDIENTE: bajar timeout + mensaje claro (a definir).
+- **Validado:** `node --check` OK (server.js).
+
 ### 76. "Error de conexión" intermitente → diagnóstico por logs + graceful shutdown
 - **Diagnóstico (logs EB Jun 14–25):** el server reinició **~48 veces en 11 días**. SIN crashes de código (0
   uncaughtException, sin stack traces), SIN errores de SMS/SNS. nginx: solo 6× 502 (durante reinicios). El

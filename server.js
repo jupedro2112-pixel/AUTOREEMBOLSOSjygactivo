@@ -8744,7 +8744,10 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Bono de ${amountFmt} acreditado`,
+      // FIX: antes usaba `amountFmt` (variable de OTRO handler, el de retiro) → no existía
+      // acá → ReferenceError → 500 DESPUÉS de acreditar el bono. El cliente veía error y
+      // reintentaba. El monto correcto es INSTALL_BONUS_AMOUNT.
+      message: `Bono de $${INSTALL_BONUS_AMOUNT.toLocaleString('es-AR')} acreditado`,
       amount: INSTALL_BONUS_AMOUNT,
       newBalance
     });

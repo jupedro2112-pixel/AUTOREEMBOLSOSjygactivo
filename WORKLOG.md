@@ -6,6 +6,26 @@
 >
 > **Última actualización: 2026-06-23**
 
+## Sesión 2026-06-25
+
+### 75. FIX CRÍTICO retiro: 500 "Error del servidor" tras crear el pedido → solicitudes duplicadas + teléfono PY/AR
+- **Incidente (moi1/moi2):** al solicitar retiro salía "Error del servidor" PERO la solicitud entraba (se creaba el
+  PendingPayout + se mandaba "Recibimos tu solicitud"). El cliente reintentaba y se duplicaban las solicitudes
+  (visto: el mismo $37.000 4 veces).
+- **Causa (regresión #68):** la respuesta de `/api/withdrawal/request` todavía referenciaba `result.data` (el viejo
+  `withdrawFromUser` que se eliminó al pasar a descontar-al-confirmar). `result` quedó undefined → ReferenceError →
+  500, PERO DESPUÉS de crear el PendingPayout y mandar el mensaje. `node --check` no lo agarra (es runtime).
+- **Fix:** se sacó la referencia a `result.data` de la respuesta. Además, **dedup**: si ya hay un retiro
+  `pending_review` del MISMO monto creado hace <10 min, no se crea otro (devuelve éxito idempotente).
+- **FIX teléfono PY/AR (mejora del #74):** `normalizePhoneKey` ahora saca el código de país + el "0" inicial
+  (trunk PY/AR) + el "9" de móvil AR → el mismo número con 0 de Paraguay o 9 de Argentina cae en la MISMA clave
+  (antes "últimos 10" no normalizaba el 0 → se colaba). Se actualizó también el chequeo de `verify-phone/send-otp`
+  (faltaba, seguía por string exacto). Migración one-shot V2 (`migration_backfill_phonekey_v2_done`) que recalcula
+  phoneKey de TODOS los verificados con la lógica nueva. Probado: PY con/sin 0 y AR con/sin 9 → misma clave.
+- **PENDIENTE (#2 del owner):** "Error de conexión" intermitente al verificar teléfono / otras opciones → es un
+  TIMEOUT (no un 500), probable lentitud de SMS (AWS SNS) o carga del server. Necesita logs para diagnosticar.
+- **Validado:** `node --check` OK (server.js, security.js). Back necesita redeploy (corre la migración V2).
+
 ## Sesión 2026-06-24
 
 ### 74. Anti-multicuenta: email único + teléfono único robusto (clave normalizada)

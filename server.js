@@ -4318,10 +4318,10 @@ app.post('/api/auth/verify-phone/send-otp', authMiddleware, sensitiveLimiter, sm
       });
     }
 
-    // Si ese teléfono ya está vinculado a OTRA cuenta (verificado), bloqueamos
-    // y le sugerimos recuperar acceso a la cuenta principal en vez de duplicar.
+    // Si ese teléfono ya está vinculado a OTRA cuenta (verificado), bloqueamos ANTES de
+    // mandar el SMS (por clave normalizada: detecta el mismo número en distinto formato).
     const existingPhone = await User.findOne({
-      phone: normalizedPhone,
+      phoneKey: normalizePhoneKey(normalizedPhone),
       phoneVerified: true,
       id: { $ne: req.user.userId }
     }).lean();
@@ -8008,6 +8008,38 @@ async function initializeData() {
     logger.error(`[startup-migration] backfill phoneKey wrapper: ${e.message}`);
   }
 
+  // One-shot V2: RE-calcular phoneKey de TODOS los verificados con la lógica nueva
+  // (la v1 usaba "últimos 10" y no normalizaba el 0 de Paraguay ni el 9 de Argentina).
+  try {
+    const flag = await Config.findOne({ key: 'migration_backfill_phonekey_v2_done' }).lean();
+    if (!flag || flag.value !== true) {
+      let done = 0;
+      try {
+        const UserModel = require('./src/models/User');
+        const users = await UserModel.find({ phoneVerified: true, phone: { $nin: [null, ''] } }).select('id phone phoneKey').lean();
+        const ops = [];
+        for (const u of users) {
+          const key = normalizePhoneKey(u.phone);
+          if (key && key !== u.phoneKey) ops.push({ updateOne: { filter: { id: u.id }, update: { $set: { phoneKey: key } } } });
+        }
+        if (ops.length) {
+          const r = await UserModel.bulkWrite(ops, { ordered: false });
+          done = (r && (r.modifiedCount != null ? r.modifiedCount : ops.length)) || ops.length;
+        }
+      } catch (e) {
+        logger.error(`[startup-migration] backfill phoneKey v2: ${e.message}`);
+      }
+      logger.info(`[startup-migration] phoneKey backfill V2 (one-shot): ${done}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_backfill_phonekey_v2_done' },
+        { key: 'migration_backfill_phonekey_v2_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] backfill phoneKey v2 wrapper: ${e.message}`);
+  }
+
   if (process.env.PROXY_URL) {
     console.log('🔍 Verificando IP pública...');
     await jugaygana.logProxyIP();
@@ -8420,6 +8452,20 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       });
     }
 
+    // Dedup anti-doble-solicitud: si ya hay un retiro pendiente del MISMO monto creado
+    // hace pocos minutos, NO creamos otro (evita duplicados si el cliente reintenta por
+    // un error de red/timeout). Devolvemos éxito idempotente.
+    const recentDup = await PendingPayout.findOne({
+      userId: user.id, amount: amountNum, status: 'pending_review',
+      createdAt: { $gte: new Date(Date.now() - 10 * 60 * 1000) }
+    }).lean();
+    if (recentDup) {
+      return res.json({
+        success: true, duplicate: true,
+        message: `Ya recibimos tu solicitud de retiro de $${amountNum.toLocaleString('es-AR')}. Un agente la está procesando.`
+      });
+    }
+
     // Crear el "pago pendiente" SIN descontar fichas (deductAtPay:true). El agente lo
     // verifica y, al CONFIRMAR el pago, recién ahí se descuentan las fichas (con
     // verificación anti-fantasma) y, si el descuento sale OK, se paga automático por
@@ -8529,11 +8575,13 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
       );
     } catch (e) { /* tracking nunca bloquea la respuesta */ }
 
+    // FIX (regresión #68): antes esta respuesta referenciaba `result.data` (el viejo
+    // withdrawFromUser que se eliminó al pasar a descontar-al-confirmar). Como `result`
+    // ya no existe, tiraba ReferenceError → 500 "Error del servidor" DESPUÉS de haber
+    // creado el PendingPayout y mandado el mensaje → el cliente reintentaba y duplicaba.
     res.json({
       success: true,
-      message: `Retiro de ${amountFmt} solicitado correctamente`,
-      newBalance: result.data?.user_balance_after,
-      transactionId: result.data?.transfer_id || result.data?.transferId
+      message: `Retiro de ${amountFmt} solicitado correctamente`
     });
   } catch (error) {
     logger.error(`Error en withdrawal/request: ${error.message}`);

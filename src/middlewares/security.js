@@ -217,16 +217,26 @@ const validateInternationalPhone = (phone) => {
 };
 
 /**
- * Clave NORMALIZADA de un teléfono para chequear unicidad de forma robusta.
- * Toma solo los dígitos y se queda con los últimos 10 (núcleo del número AR, sin
- * importar el prefijo país +54 / +549 / 0). Así el MISMO número en distinto formato
- * cae en la misma clave. Devuelve null si no hay dígitos suficientes.
+ * Clave NORMALIZADA de un teléfono para chequear unicidad de forma robusta. Saca el
+ * código de país, el "0" inicial (trunk PY/AR) y el "9" de móvil AR, así el MISMO
+ * número en distinto formato (+54.., +549.., 011.., +595.., +5950.. con 0 de Paraguay)
+ * cae en la MISMA clave. Devuelve null si no hay dígitos suficientes.
  * @param {string} phone
  * @returns {string|null}
  */
 const normalizePhoneKey = (phone) => {
-  const d = String(phone || '').replace(/\D/g, '');
+  let d = String(phone || '').replace(/\D/g, '');
   if (!d || d.length < 8) return null;
+  // 1) Quitar el código de país LATAM (3 dígitos primero para no romper 595 vs 5).
+  const COUNTRY_CODES = ['595', '591', '598', '593', '502', '503', '504', '505', '506', '507', '509', '51', '52', '54', '55', '56', '57', '58'];
+  for (const cc of COUNTRY_CODES) {
+    if (d.startsWith(cc) && (d.length - cc.length) >= 8) { d = d.slice(cc.length); break; }
+  }
+  // 2) Quitar "0" inicial (trunk local de PY/AR).
+  d = d.replace(/^0+/, '');
+  // 3) Quitar el "9" de móvil de Argentina (queda 9 + 10 díg = 11).
+  if (d.length === 11 && d.startsWith('9')) d = d.slice(1);
+  // 4) Núcleo: últimos 10 dígitos (o menos).
   return d.slice(-10);
 };
 

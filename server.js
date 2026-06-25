@@ -8437,9 +8437,14 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     // fichas ocurre recién cuando el AGENTE confirma el pago (/api/admin/payouts/:id/pay),
     // NO acá. Así, si el cliente se juega las fichas en el mientras, al confirmar el
     // descuento falla y no se paga — y al rechazar no hay que devolver nada.
-    const balanceResult = await jugayganaMovements.getUserBalance(username);
+    // CON retry (2 intentos): JUGAYGANA es flaky y a veces el lookup de saldo tarda/falla;
+    // el reintento entra la mayoría de las veces. Cada intento ya falla rápido (timeout 12s).
+    const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(username, { maxAttempts: 2, baseDelayMs: 400 });
     if (!balanceResult.success) {
-      return res.status(400).json({ error: 'No se pudo verificar tu saldo. Intentá de nuevo en unos minutos.' });
+      return res.status(503).json({
+        error: 'La plataforma está demorada en este momento. Esperá unos segundos y volvé a intentar el retiro.',
+        code: 'PLATFORM_SLOW'
+      });
     }
     const available = Number(balanceResult.balance) || 0;
     if (available < amountNum) {

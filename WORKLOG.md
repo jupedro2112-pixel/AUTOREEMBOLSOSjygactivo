@@ -8,6 +8,20 @@
 
 ## Sesión 2026-06-25
 
+### 78. JUGAYGANA lento → "Error de conexión": timeout corto + retry + mensaje claro
+- **Causa (logs):** `ShowUsers timeout of 20000ms` 117× → al chequear saldo, JUGAYGANA tardaba 20s y colgaba al
+  cliente → "Error de conexión" con el server arriba.
+- **Fix:**
+  - `lookupUserOrError` (ShowUsers) ahora usa **timeout 12s por-llamada** (antes el global de 20s). Es una LECTURA,
+    debe fallar rápido. NO toca el global de login/createUser (que siguen en 20s).
+  - El **retiro** (`/api/withdrawal/request`) ahora chequea saldo con `getUserBalanceWithRetry` (2 intentos) en vez
+    de `getUserBalance` simple → el reintento entra la mayoría de las veces (JUGAYGANA es flaky).
+  - Mensaje claro al cliente si falla: "La plataforma está demorada, esperá unos segundos" (HTTP 503), en vez de
+    colgar y mostrar "Error de conexión".
+- **No tocado:** los endpoints de DISPLAY de saldo (6436/6455/6919) — ya se benefician del timeout 12s; agregar
+  retry ahí duplicaría la espera sin necesidad.
+- **Validado:** `node --check` OK (server.js, jugaygana.js).
+
 ### 77. 2do bug igual al del retiro: install-bonus/claim `amountFmt is not defined` (376×) + análisis logs
 - **Re-análisis de logs a fondo (a pedido del owner):** los 500 "Error del servidor" tenían DOS causas de código
   (mismo patrón: copiar la respuesta de un handler a otro y dejar una variable de otro scope):

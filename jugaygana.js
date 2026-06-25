@@ -308,10 +308,14 @@ async function lookupUserOrError(username) {
   };
 
   try {
+    // Timeout más corto (12s) que el global (20s): ShowUsers es una LECTURA y debe fallar
+    // RÁPIDO si JUGAYGANA está lento, en vez de colgar al cliente 20s (causaba "Error de
+    // conexión"). El caller (getUserBalanceWithRetry) reintenta. No afecta login/createUser.
     let resp = await client.post('', buildBody(), {
       headers: buildHeaders(),
       validateStatus: () => true,
-      maxRedirects: 0
+      maxRedirects: 0,
+      timeout: 12000
     });
 
     let data = parsePossiblyWrappedJson(resp.data);
@@ -326,7 +330,8 @@ async function lookupUserOrError(username) {
       resp = await client.post('', buildBody(), {
         headers: buildHeaders(),
         validateStatus: () => true,
-        maxRedirects: 0
+        maxRedirects: 0,
+        timeout: 12000
       });
       data = parsePossiblyWrappedJson(resp.data);
       if (isHtmlBlocked(data)) {
@@ -345,7 +350,8 @@ async function lookupUserOrError(username) {
       resp = await client.post('', buildBody(), {
         headers: buildHeaders(),
         validateStatus: () => true,
-        maxRedirects: 0
+        maxRedirects: 0,
+        timeout: 12000
       });
       data = parsePossiblyWrappedJson(resp.data);
       if (isHtmlBlocked(data)) {

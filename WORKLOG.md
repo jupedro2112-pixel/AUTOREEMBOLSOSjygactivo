@@ -8,6 +8,14 @@
 
 ## Sesión 2026-06-26
 
+### 81. Seguridad — rate-limit de SMS/registro a Redis (anti-spam multi-instancia) con fallback a memoria
+- **Problema (deuda de #80):** los limiters por IP de SMS/registro (`smsIpLimiter` 5/15min, `bulkSmsIpLimiter` 1/h, `registerIpLimiter` 3/h) vivían en un `Map` EN MEMORIA por instancia. En AWS EB multi-instancia, cada instancia contaba por su lado → el límite efectivo era ~N× → riesgo de **spam de SMS (cuesta plata real, AWS SNS)** y creación masiva de cuentas para abusar del bono.
+- **Fix:** `createIpSmsLimiter` ahora usa un **contador compartido en Redis** (`INCR` + `EXPIRE`, ventana fija) cuando Redis está disponible → el límite se respeta entre TODAS las instancias. Reusa el mismo cliente node-redis v4 + `getRedisClient()` que ya usa `acquireRefundLock` (patrón probado).
+- **Sin romper nada (clave):** si NO hay Redis (instancia única / Redis no configurado) o si Redis **falla en medio**, cae automáticamente a la lógica EN MEMORIA original (ventana deslizante) vía `try/catch` → comportamiento idéntico al de antes, nunca crashea ni bloquea a un usuario legítimo por un problema de infra. **Los 3 límites quedan idénticos** (5/15min, 1/h, 3/h), así que para el usuario legítimo no cambia nada.
+- **Detalle:** clave Redis `rl:<prefijo>:<ip>` (prefijos `sms`/`bulksms`/`register`); `getRedisClient()` solo devuelve el cliente si está `isReady`; el `Map` de memoria se mantiene como fallback (y su cleanup interval sigue válido).
+- **NO migrado (queda pendiente):** los limiters de `express-rate-limit` (`authLimiter` login, `generalLimiter`, `sensitiveLimiter`) siguen en memoria. Migrarlos necesita la dep `rate-limit-redis` + resolver el orden de arranque (Redis conecta en el bootstrap, después de crear los limiters) y `authLimiter` tiene `skipSuccessfulRequests` (semántica distinta) → se deja para una tanda dedicada con cuidado.
+- **Validado:** `node --check` OK (server.js). Sin migraciones. Back necesita redeploy. (Si no hay Redis configurado en EB, el SMS sigue protegido como hoy por instancia; el beneficio multi-instancia aparece cuando `REDIS_URL`/`REDIS_HOST` esté seteado, que es lo que ya usa el adapter de Socket.IO.)
+
 ### 80. Seguridad — Batch A: cierre de escaladas de privilegio + huecos de plata (sin romper flujos legítimos)
 - **Pedido del owner:** mejorar la seguridad en general sin romper nada. Se auditó todo (auth, inyección, endpoints públicos/webhooks, config/secrets) con agentes de solo-lectura y se verificó cada hallazgo a mano antes de tocar.
 - **Patrón raíz detectado:** `adminMiddleware` deja pasar 4 roles (admin/depositor/withdrawer/comunidad); varios endpoints sensibles se olvidaron de re-chequear `role==='admin'`.

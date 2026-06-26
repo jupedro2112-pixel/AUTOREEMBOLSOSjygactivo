@@ -156,32 +156,53 @@ setInterval(() => {
 }, 30 * 60 * 1000).unref();
 
 /**
- * Creates an IP-based rate limiting middleware using an in-memory Map.
- * @param {Map} store - The Map used to track IP -> timestamps
- * @param {number} windowMs - Time window in milliseconds
- * @param {number} max - Maximum number of requests per window
- * @param {string} message - Error message to return when limit is exceeded
+ * Crea un middleware de rate-limit por IP. Usa un contador compartido en Redis
+ * cuando está disponible (el límite se respeta entre TODAS las instancias) y cae a
+ * un Map en memoria (ventana deslizante) si no hay Redis o si Redis falla. Así, en
+ * multi-instancia el límite deja de ser ~N× (antes cada instancia contaba por su lado).
+ * @param {Map} store - Map de fallback (IP -> timestamps)
+ * @param {number} windowMs - Ventana de tiempo en ms
+ * @param {number} max - Máximo de requests por ventana
+ * @param {string} message - Mensaje de error al exceder el límite
+ * @param {string} keyPrefix - Prefijo de la clave Redis (separa cada limiter)
  */
-function createIpSmsLimiter(store, windowMs, max, message) {
-  return (req, res, next) => {
+function createIpSmsLimiter(store, windowMs, max, message, keyPrefix) {
+  const windowSec = Math.ceil(windowMs / 1000);
+  return async (req, res, next) => {
     const ip = req.ip || req.socket?.remoteAddress;
     if (!ip) {
       return res.status(429).json({ error: message });
     }
+
+    // Camino preferido: contador compartido en Redis (ventana fija con INCR+EXPIRE).
+    const redis = getRedisClient();
+    if (redis) {
+      try {
+        const key = `rl:${keyPrefix}:${ip}`;
+        const count = await redis.incr(key);
+        if (count === 1) {
+          // Primer hit de la ventana: fijar el TTL para que el contador expire solo.
+          await redis.expire(key, windowSec);
+        }
+        if (count > max) {
+          return res.status(429).json({ error: message });
+        }
+        return next();
+      } catch (err) {
+        logger.warn(`Redis rate-limit error (${keyPrefix}), usando fallback en memoria: ${err.message}`);
+        // cae al fallback en memoria de abajo
+      }
+    }
+
+    // Fallback en memoria (ventana deslizante) — comportamiento original sin Redis.
     const now = Date.now();
     const windowStart = now - windowMs;
-
-    // Get existing timestamps for this IP, filter out expired ones
     const timestamps = (store.get(ip) || []).filter(ts => ts > windowStart);
-
     if (timestamps.length >= max) {
       return res.status(429).json({ error: message });
     }
-
-    // Record this request
     timestamps.push(now);
     store.set(ip, timestamps);
-
     next();
   };
 }
@@ -191,7 +212,8 @@ const smsIpLimiter = createIpSmsLimiter(
   smsIpStore,
   15 * 60 * 1000,
   5,
-  'Demasiadas solicitudes de SMS. Por favor, intenta nuevamente más tarde.'
+  'Demasiadas solicitudes de SMS. Por favor, intenta nuevamente más tarde.',
+  'sms'
 );
 
 // 1 bulk SMS request per IP per hour
@@ -199,7 +221,8 @@ const bulkSmsIpLimiter = createIpSmsLimiter(
   bulkSmsIpStore,
   60 * 60 * 1000,
   1,
-  'Demasiadas solicitudes de SMS masivo. Por favor, intenta nuevamente en una hora.'
+  'Demasiadas solicitudes de SMS masivo. Por favor, intenta nuevamente en una hora.',
+  'bulksms'
 );
 
 // Anti-multicuenta: máximo 3 registros por IP por hora. Bloquea la creación
@@ -209,7 +232,8 @@ const registerIpLimiter = createIpSmsLimiter(
   registerIpStore,
   60 * 60 * 1000,
   3,
-  'Demasiados registros desde tu conexión. Esperá una hora antes de crear otra cuenta.'
+  'Demasiados registros desde tu conexión. Esperá una hora antes de crear otra cuenta.',
+  'register'
 );
 
 // ============================================

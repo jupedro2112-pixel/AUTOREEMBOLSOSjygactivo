@@ -11360,6 +11360,65 @@ app.get('/api/admin/central/welcome-bonus', authMiddleware, adminMiddleware, asy
   }
 });
 
+// Chequeo de MULTICUENTA EN EL MOMENTO (lo usa el panel al abrir un chat): para el
+// usuario dado, cuenta cuántas OTRAS cuentas comparten su dispositivo (token FCM), su
+// teléfono y su IP de registro. Devuelve los motivos (cantidad + nombres) y un flag
+// `suspicious` para la alerta roja. Dispositivo/teléfono disparan con 1+; la IP (señal
+// débil: mismo wifi/datos) solo dispara con 2+ otras cuentas (3+ en total).
+app.get('/api/admin/users/:userId/fraud-check', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ id: String(req.params.userId) })
+      .select('id username phone phoneKey registrationIp fcmToken fcmTokens role').lean();
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const tokens = [];
+    if (user.fcmToken) tokens.push(user.fcmToken);
+    if (Array.isArray(user.fcmTokens)) {
+      for (const t of user.fcmTokens) { if (t && t.token) tokens.push(t.token); }
+    }
+    const uniqueTokens = Array.from(new Set(tokens.filter(Boolean)));
+
+    const SAMPLE = 8;
+    const pick = (arr) => arr.slice(0, SAMPLE).map(o => ({ id: o.id, username: o.username, isBlocked: !!o.isBlocked }));
+    const reasons = [];
+
+    // Dispositivo (token FCM compartido) — señal fuerte (mismo celular físico).
+    if (uniqueTokens.length) {
+      const others = await User.find({
+        role: 'user', id: { $ne: user.id },
+        $or: [{ fcmToken: { $in: uniqueTokens } }, { 'fcmTokens.token': { $in: uniqueTokens } }]
+      }).select('id username isBlocked').limit(50).lean();
+      if (others.length) reasons.push({ type: 'device', label: 'el mismo dispositivo', strong: true, count: others.length, accounts: pick(others) });
+    }
+
+    // Teléfono compartido (por clave normalizada si existe, si no por el teléfono) — señal fuerte.
+    if (user.phoneKey || user.phone) {
+      const orq = [];
+      if (user.phoneKey) orq.push({ phoneKey: user.phoneKey });
+      if (user.phone) orq.push({ phone: user.phone });
+      const others = await User.find({
+        role: 'user', id: { $ne: user.id }, $or: orq
+      }).select('id username isBlocked').limit(50).lean();
+      if (others.length) reasons.push({ type: 'phone', label: 'el mismo teléfono', strong: true, count: others.length, accounts: pick(others) });
+    }
+
+    // IP de registro compartida — señal débil (mismo wifi/datos del celu).
+    if (user.registrationIp) {
+      const others = await User.find({
+        role: 'user', id: { $ne: user.id }, registrationIp: user.registrationIp
+      }).select('id username isBlocked').limit(50).lean();
+      if (others.length) reasons.push({ type: 'ip', label: 'la misma IP de registro', strong: false, count: others.length, accounts: pick(others) });
+    }
+
+    const strongHit = reasons.some(r => r.strong && r.count >= 1);
+    const manyIp = reasons.some(r => r.type === 'ip' && r.count >= 2);
+    res.json({ suspicious: strongHit || manyIp, reasons });
+  } catch (error) {
+    console.error('Error en fraud-check:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // Cuentas sospechosas: agrupa usuarios por phone / registrationIp / fcmToken
 // para detectar posibles multicuentas creadas para abusar del bono de instalación.
 // Solo reporta grupos con 2+ cuentas; el admin revisa y decide si bloquear.

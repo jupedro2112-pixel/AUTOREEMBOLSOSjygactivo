@@ -1655,6 +1655,7 @@ async function selectConversation(userId, username) {
 
     // Reset banner de bloqueo y botones hasta que loadUserInfo confirme el estado
     if (elements.chatBlockedBanner) elements.chatBlockedBanner.style.display = 'none';
+    { const _fb = document.getElementById('chatFraudBanner'); if (_fb) { _fb.style.display = 'none'; _fb.innerHTML = ''; } }
     if (elements.chatBlockedReason) elements.chatBlockedReason.textContent = '';
     if (elements.btnBlock) elements.btnBlock.style.display = 'none';
     if (elements.btnUnblock) elements.btnUnblock.style.display = 'none';
@@ -2503,6 +2504,9 @@ async function loadUserInfo(userId) {
 
         // Reflejar estado de bloqueo en el header del chat
         applyBlockStateToChatHeader(user);
+
+        // Alerta de posible multicuenta (fire-and-forget; nunca frena el chat).
+        renderFraudBanner(userId);
 
         // Publicista de adquisición: si el cliente llegó por un link de pauta,
         // mostrar el nombre del publicista al lado del nombre en la cabecera.
@@ -4129,6 +4133,60 @@ async function handleToggleLoginNoPwd(userId, username, enabled) {
 
 window.openUserPasswordModal = openUserPasswordModal;
 window.openBlockModal = openBlockModal;
+
+// === Alerta de POSIBLE MULTICUENTA en el header del chat ===
+// Consulta el fraud-check del usuario y, si es sospechoso, muestra un banner rojo
+// con el detalle (qué comparte y con qué cuentas) + botón para bloquear en el momento.
+async function renderFraudBanner(userId) {
+    const banner = document.getElementById('chatFraudBanner');
+    if (!banner) return;
+    banner.style.display = 'none';
+    banner.innerHTML = '';
+    try {
+        const resp = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/fraud-check`, {
+            headers: { 'Authorization': `Bearer ${currentToken}` }
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        // Race condition: si ya se cambió de chat, no pintar
+        if (userId !== activeConversationId) return;
+        if (!data || !data.suspicious || !Array.isArray(data.reasons) || !data.reasons.length) return;
+
+        const iconFor = (t) => t === 'device' ? '📱' : (t === 'phone' ? '☎️' : '🌐');
+        const rows = data.reasons.map(r => {
+            const accs = Array.isArray(r.accounts) ? r.accounts : [];
+            const names = accs.map(a => escapeHtml(a.username) + (a.isBlocked ? ' 🚫' : '')).join(', ');
+            const extra = (r.count > accs.length) ? ` <span style="opacity:.8">(+${r.count - accs.length} más)</span>` : '';
+            return `<div style="margin-top:5px;">${iconFor(r.type)} Comparte <strong>${escapeHtml(r.label)}</strong> con <strong>${r.count}</strong> cuenta${r.count === 1 ? '' : 's'}: ${names}${extra}</div>`;
+        }).join('');
+
+        banner.innerHTML =
+            `<div style="padding:10px 14px;background:linear-gradient(90deg,#c1860b 0%,#8a5a00 100%);color:#fff;font-size:13px;border-bottom:1px solid #6e4700;cursor:pointer;user-select:none;" onclick="toggleFraudDetail()">`
+            + `<strong>⚠️ POSIBLE MULTICUENTA</strong> — tocá para ver por qué <span id="fraudCaret" style="float:right">▸</span>`
+            + `</div>`
+            + `<div id="chatFraudDetail" style="display:none;padding:9px 14px;background:rgba(0,0,0,0.28);color:#fff;font-size:12.5px;border-bottom:1px solid rgba(0,0,0,0.3);">`
+            + rows
+            + `<button onclick="blockFromFraud('${encodeURIComponent(userId)}')" style="margin-top:9px;background:#dc3545;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:700;">🚫 Bloquear este usuario</button>`
+            + `</div>`;
+        banner.style.display = 'block';
+    } catch (e) { /* best-effort: nunca romper el chat por esto */ }
+}
+function toggleFraudDetail() {
+    const d = document.getElementById('chatFraudDetail');
+    const c = document.getElementById('fraudCaret');
+    if (!d) return;
+    const willOpen = d.style.display === 'none';
+    d.style.display = willOpen ? 'block' : 'none';
+    if (c) c.textContent = willOpen ? '▾' : '▸';
+}
+function blockFromFraud(userId) {
+    const id = decodeURIComponent(userId);
+    let uname = (elements.chatUsername && elements.chatUsername.textContent) || '';
+    uname = uname.replace(/\s*\(.*$/, '').trim(); // sacar el sufijo de publicista si lo hubiera
+    openBlockModal(id, uname);
+}
+window.toggleFraudDetail = toggleFraudDetail;
+window.blockFromFraud = blockFromFraud;
 window.handleBlockUser = handleBlockUser;
 window.handleUnblockUser = handleUnblockUser;
 window.handleToggleVerifyPhone = handleToggleVerifyPhone;

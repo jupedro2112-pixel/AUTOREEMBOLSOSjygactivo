@@ -241,6 +241,7 @@ function securityHeaders(req, res, next) {
     "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://www.facebook.com",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
+    "object-src 'none'",
     "media-src 'self' data: blob:"
   ].join('; '));
   next();
@@ -1995,7 +1996,13 @@ app.post('/api/hgcash/webhook', async (req, res) => {
         return res.status(401).json({ error: 'firma inválida' });
       }
     } else {
-      logger.warn('[hgcash] webhook recibido SIN HGCASH_WEBHOOK_SECRET — no se valida firma (configurá el secreto en SSM)');
+      // Fail-closed en producción: sin secreto no se puede validar la firma → NO se
+      // procesa el webhook (evita inyección de movimientos/cargas falsas). En dev se permite.
+      if (process.env.NODE_ENV === 'production') {
+        logger.error('[hgcash] webhook RECHAZADO en producción: falta HGCASH_WEBHOOK_SECRET en SSM');
+        return res.status(503).json({ error: 'webhook no configurado' });
+      }
+      logger.warn('[hgcash] webhook recibido SIN HGCASH_WEBHOOK_SECRET — no se valida firma (solo dev)');
     }
 
     const p = req.body || {};
@@ -3901,7 +3908,7 @@ app.post('/api/auth/change-password/pending', authMiddleware, authLimiter, async
     }
 
     // Código de acceso temporal al azar (6 dígitos).
-    const pendingCode = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+    const pendingCode = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
 
     user.password = newPassword;
     user.passwordChangedAt = new Date();
@@ -4608,6 +4615,10 @@ app.post('/api/admin/verify-sms-password', authMiddleware, async (req, res) => {
 
 app.post('/api/admin/users/:id/reset-password', authMiddleware, adminMiddleware, async (req, res) => {
   try {
+    // Resetear contraseñas (incluida la de otros admins) es poder de admin general.
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el administrador principal puede resetear contraseñas' });
+    }
     const { id } = req.params;
     const { newPassword } = req.body;
     
@@ -5021,9 +5032,15 @@ app.put('/api/users/:id', authMiddleware, adminMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'No se proporcionaron campos válidos para actualizar' });
     }
     
+    const updateDoc = { $set: updates };
+    // Si cambia el rol, invalidar las sesiones (subir tokenVersion) para que un usuario
+    // degradado no conserve sus privilegios con el token viejo hasta que venza.
+    if (updates.role !== undefined) {
+      updateDoc.$inc = { tokenVersion: 1 };
+    }
     const user = await User.findOneAndUpdate(
       { id },
-      { $set: updates },
+      updateDoc,
       { new: true }
     ).select('-password');
     
@@ -6513,10 +6530,10 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
     
-    if (!amount || amount <= 0) {
+    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
       return res.status(400).json({ error: 'Monto inválido' });
     }
-    
+
     const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
 
     if (result.success) {
@@ -6945,7 +6962,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    if (!amount || amount <= 0) {
+    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
       return res.status(400).json({ error: 'Monto inválido' });
     }
 
@@ -8227,12 +8244,12 @@ async function initializeData() {
 // ENDPOINTS DE MOVIMIENTOS (DEPÓSITOS/RETIROS)
 // ============================================
 
-app.post('/api/movements/deposit', authMiddleware, async (req, res) => {
+app.post('/api/movements/deposit', authMiddleware, depositorMiddleware, async (req, res) => {
   try {
-    const { amount } = req.body;
+    const amount = Number(req.body && req.body.amount);
     const username = req.user.username;
-    
-    if (!amount || amount < 100) {
+
+    if (!Number.isFinite(amount) || amount < 100) {
       return res.status(400).json({ error: 'Monto mínimo $100' });
     }
     
@@ -10687,6 +10704,10 @@ app.post('/api/admin/canal-url', authMiddleware, adminMiddleware, async (req, re
 
 app.put('/api/admin/config/cbu', authMiddleware, adminMiddleware, async (req, res) => {
   try {
+    // El CBU define a dónde va la plata de los depósitos → solo el admin general.
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el administrador principal puede modificar el CBU' });
+    }
     const currentCbu = await getConfig('cbu') || {};
     const newCbu = { ...currentCbu, ...req.body };
     

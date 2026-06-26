@@ -8,6 +8,22 @@
 
 ## Sesión 2026-06-26
 
+### 80. Seguridad — Batch A: cierre de escaladas de privilegio + huecos de plata (sin romper flujos legítimos)
+- **Pedido del owner:** mejorar la seguridad en general sin romper nada. Se auditó todo (auth, inyección, endpoints públicos/webhooks, config/secrets) con agentes de solo-lectura y se verificó cada hallazgo a mano antes de tocar.
+- **Patrón raíz detectado:** `adminMiddleware` deja pasar 4 roles (admin/depositor/withdrawer/comunidad); varios endpoints sensibles se olvidaron de re-chequear `role==='admin'`.
+- **Arreglos aplicados (todos verificados como SEGUROS: el front legítimo no usa los 3 primeros, o el cambio solo restringe a quien no debería):**
+  - **`/api/movements/deposit` (CRÍTICO):** solo tenía `authMiddleware` → cualquier usuario se autocargaba fichas reales (`jugaygana.depositToUser`) sin pago. El front NO lo usa (ruta legacy). Se gateó con `depositorMiddleware` + validación estricta de monto.
+  - **`PUT /api/admin/config/cbu` (CRÍTICO):** sin recheck → un cajero podía cambiar el CBU adonde va la plata de los depósitos. El panel usa `/api/admin/cbu` (otro endpoint), no este. Se agregó guard `role==='admin'`.
+  - **`/api/admin/users/:id/reset-password` (CRÍTICO):** sin recheck → un cajero podía resetear la clave del admin general (takeover total). El panel usa `/api/admin/change-password`. Se agregó guard `role==='admin'`.
+  - **Degradación de rol no cortaba la sesión (ALTO):** `PUT /api/users/:id` cambia `role` (ya solo admin) pero NO subía `tokenVersion` → admin degradado seguía con poderes hasta vencer el token (30–90d). Ahora hace `$inc tokenVersion` cuando cambia el rol.
+  - **`pendingAccessCode` (MEDIO):** código de acceso de 6 díg. generado con `Math.random()` (predecible) → cambiado a `crypto.randomInt`.
+  - **Validación de monto débil (MEDIO):** `amount` string/NaN evadía el guard en `movements/deposit`, `admin/deposit`, `admin/withdrawal` → ahora `Number.isFinite(Number(amount))`.
+  - **Webhook hgcash fail-open (CRÍTICO condicional):** si faltaba `HGCASH_WEBHOOK_SECRET` procesaba SIN validar firma. Ahora **fail-closed en producción** (rechaza con 503 + `logger.error`). ⚠️ **ACCIÓN OWNER ANTES DE DEPLOYAR:** confirmar que `HGCASH_WEBHOOK_SECRET` esté cargado en SSM, si no los webhooks de pago dejarían de procesarse.
+  - **Endurecimiento CSP:** agregado `object-src 'none'`.
+- **Decisión owner (NO restringido):** comandos `/sys_*`, `login-without-password`, `verify-phone` y `canal-url` siguen accesibles a cajeros (los usan en su laburo) — riesgo aceptado a cambio de no cambiarles el flujo.
+- **NO aplicado (riesgo de romper):** `hpp` (aplastaría arrays legítimos en el body JSON: influencers, premios fueguito, acceptStatuses, pasos, usernames). Deuda pendiente RIESGOSA: reemplazar `xss-clean` (deprecado), quitar `'unsafe-inline'` de la CSP (requiere nonces, index.html con mucho JS inline), rate-limiters a Redis (multi-instancia → SMS spam), password mínimo >6.
+- **Validado:** `node --check` OK en server.js. Sin migraciones. Back necesita redeploy (CONFIRMAR el secret de hgcash en SSM primero).
+
 ### 79. Optimización VISUAL + limpieza de código muerto (PWA cliente + panel admin) — SIN cambios de comportamiento
 - **Pedido del owner:** optimizar vipcargas, arreglar bugs visuales y limpiar código de más, **garantizando que no se rompa ni se pierda ninguna funcionalidad**. Alcance: ambas superficies; profundidad: solo seguro (bugs visuales + limpieza). Se auditó todo el front con agentes de solo-lectura y se verificó cada hallazgo a mano antes de tocar.
 - **Bugs visuales arreglados (cliente):**

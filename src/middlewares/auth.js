@@ -80,7 +80,7 @@ const verifyAccessToken = (token) => {
     if (tokenBlacklist.has(token)) {
       throw new Error('Token revocado');
     }
-    return jwt.verify(token, _getJwtSecret());
+    return jwt.verify(token, _getJwtSecret(), { algorithms: ['HS256'] });
   } catch (error) {
     throw error;
   }
@@ -91,7 +91,7 @@ const verifyAccessToken = (token) => {
  */
 const verifyRefreshToken = (token) => {
   try {
-    return jwt.verify(token, _getJwtRefreshSecret());
+    return jwt.verify(token, _getJwtRefreshSecret(), { algorithms: ['HS256'] });
   } catch (error) {
     throw error;
   }

@@ -8,6 +8,18 @@
 
 ## Sesión 2026-06-26
 
+### 83. Seguridad — Batch B: endurecimientos de riesgo cero (defensa en profundidad)
+- **Pedido:** seguir con la deuda de seguridad sin romper nada. Se hicieron los hallazgos BAJOS de la auditoría que son arreglos chicos y 100% seguros (no cambian comportamiento para flujos legítimos):
+  - **JWT con algoritmo fijado:** `verifyAccessToken`/`verifyRefreshToken` en `src/middlewares/auth.js` (usados por las rutas de referidos, que mueven plata) ahora pasan `{ algorithms: ['HS256'] }` — consistente con los `jwt.verify` de server.js, evita confusión de algoritmos. Los tokens ya eran HS256 → sin impacto en sesiones válidas.
+  - **`tokenVersion` normalizado:** 2 guards que usaban `user.tokenVersion && ...` (frágil con tokenVersion 0) pasados a `(decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)` — en `/api/admin/me` (L3640) y en la auth del socket (L7326), igual que el authMiddleware principal. Benigno hoy, pero saca la trampa.
+  - **`X-XSS-Protection: 0`** (antes `1; mode=block`): recomendación moderna (el header viejo introdujo vulnerabilidades en navegadores antiguos; la CSP es la defensa real).
+  - **`User.statics.findByUsername`** (código muerto): regex sin escapar → ahora escapa metacaracteres (anti-ReDoS / inyección de regex). Saca la trampa por si alguien lo usa a futuro.
+- **NO hecho (las 3 "grandes" de la deuda, RIESGOSAS o de producto):**
+  - **`'unsafe-inline'` en la CSP de scripts:** sacarlo requiere nonces/hashes + refactorizar TODOS los `onclick` inline del `index.html` (243 KB) a `addEventListener` → refactor enorme y riesgoso. Diferido.
+  - **`xss-clean` (deprecado):** sacarlo reduciría defensa en profundidad sin ganar (la protección real es el escape en el output, que el front ya hace). No es vuln activa; es deuda para una eventual migración a Express 5. Se deja.
+  - **Mínimo de contraseña (6):** subirlo es decisión de producto (fricción/soporte) más que seguridad pura; el brute-force ya está mitigado por rate-limit. A definir con el owner.
+- **Validado:** `node --check` OK (server.js, auth.js, User.js). Sin migraciones. Back necesita redeploy.
+
 ### 82. Seguridad — rate-limit de login/sensibles (express-rate-limit) a Redis, con fallback a memoria
 - **Continuación de #81:** ahora los limiters de `express-rate-limit` que protegen brute-force: `authLimiter` (10/min: login, register, check-username, change-password, login-otp…) y `sensitiveLimiter` (10/15min: reset password, verify-phone, OTP). También vivían en memoria por instancia → ~N× en multi-instancia.
 - **Fix:** custom Store `RedisBackedRateStore` (server.js, sección rate limiting) que implementa la interfaz de express-rate-limit v7 (`init`/`increment`/`decrement`/`resetKey`) con backend Redis (`INCR`+`EXPIRE`, contador compartido entre instancias). Reusa `getRedisClient()` (node-redis v4) — sin dependencias nuevas. Se aplica vía `store: makeRateStore('auth'|'sensitive')`.

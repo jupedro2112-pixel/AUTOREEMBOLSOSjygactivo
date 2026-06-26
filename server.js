@@ -297,7 +297,7 @@ const registerIpLimiter = createIpSmsLimiter(
 function securityHeaders(req, res, next) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('X-XSS-Protection', '0'); // recomendación moderna: 0 — la CSP es la defensa real
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
   // HSTS: only set in production (HTTPS). In development the server may run
@@ -3637,7 +3637,7 @@ app.get('/api/admin/me', async (req, res) => {
     if (!adminRoles.includes(user.role)) {
       return res.status(403).json({ error: 'Acceso denegado' });
     }
-    if (user.tokenVersion && decoded.tokenVersion !== user.tokenVersion) {
+    if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
       return res.status(401).json({ error: 'Sesión expirada' });
     }
     // Issue a fresh short-lived in-memory token for Socket.IO auth.
@@ -7323,7 +7323,7 @@ io.on('connection', (socket) => {
         socket.emit('authenticated', { success: false, error: 'Sesión no válida' });
         return;
       }
-      if (sockUser.tokenVersion && decoded.tokenVersion !== sockUser.tokenVersion) {
+      if ((decoded.tokenVersion ?? 0) !== (sockUser.tokenVersion ?? 0)) {
         socket.emit('authenticated', { success: false, error: 'Sesión expirada' });
         return;
       }

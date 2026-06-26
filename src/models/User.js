@@ -499,8 +499,10 @@ userSchema.methods.changedPasswordAfter = function(JWTTimestamp) {
 
 // Método estático para buscar por username (case-insensitive)
 userSchema.statics.findByUsername = function(username) {
-  return this.findOne({ 
-    username: { $regex: new RegExp('^' + username + '$', 'i') } 
+  // Escapar metacaracteres de regex (anti-ReDoS / inyección de regex).
+  const escaped = String(username).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return this.findOne({
+    username: { $regex: new RegExp('^' + escaped + '$', 'i') }
   });
 };
 

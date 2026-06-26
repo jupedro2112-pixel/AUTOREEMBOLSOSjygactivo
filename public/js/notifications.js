@@ -17,7 +17,6 @@ VIP.notifications = (function () {
     function requestNotificationPermission() {
         if ('Notification' in window && Notification.permission === 'default') {
             Notification.requestPermission().then(permission => {
-                console.log('🔔 Permiso de notificación:', permission);
             });
         }
     }
@@ -36,7 +35,6 @@ VIP.notifications = (function () {
                 notification.onclick = () => { window.focus(); notification.close(); };
                 setTimeout(() => notification.close(), 5000);
             } catch (e) {
-                console.log('No se pudo mostrar notificación:', e);
             }
         }
     }
@@ -50,7 +48,6 @@ VIP.notifications = (function () {
                 VIP.state.notificationAudioContext = new AudioContext();
             }
         } catch (e) {
-            console.log('AudioContext no soportado');
         }
     }
 
@@ -76,7 +73,6 @@ VIP.notifications = (function () {
                 oscillator.stop(VIP.state.notificationAudioContext.currentTime + 0.4);
             }
         } catch (e) {
-            console.log('Error reproduciendo sonido:', e);
         }
     }
 
@@ -96,7 +92,6 @@ VIP.notifications = (function () {
         const fcmToken  = localStorage.getItem('fcmToken');
         const authToken = localStorage.getItem('userToken');
 
-        console.log('[FCM] sendFcmTokenAfterLogin() fallback - fcmToken:', fcmToken ? 'Sí' : 'No');
 
         if (fcmToken && authToken) {
             try {
@@ -111,12 +106,9 @@ VIP.notifications = (function () {
 
                 const data = await response.json();
                 if (data.success) {
-                    console.log('[FCM] ✅ Token registrado en el servidor (fallback)');
                 } else {
-                    console.log('[FCM] ⚠️ No se pudo registrar el token:', data.error);
                 }
             } catch (error) {
-                console.log('[FCM] ⚠️ Error al registrar token:', error.message);
             }
         }
     }

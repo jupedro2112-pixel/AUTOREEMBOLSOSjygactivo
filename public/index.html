@@ -515,6 +515,13 @@
                     color:#fff; text-decoration:none; display:inline-flex;
                     align-items:center; justify-content:center;
                 }
+                /* Estados del botón de notificaciones (el CSS viejo apuntaba a .header-right, que ya no existe). */
+                .header-toolbar .notification-btn.active { background:linear-gradient(135deg,#00cc6a,#00ff88); color:#000; }
+                .header-toolbar .notification-btn.blocked { background:linear-gradient(135deg,#555,#333); color:#ccc; }
+                /* El botón "Instalar app" usa el estilo violeta del toolbar; se neutraliza el glow verde
+                   heredado de .app-install-btn para que no quede incoherente sobre el fondo violeta. */
+                .header-toolbar .app-install-btn,
+                .header-toolbar .app-install-btn:hover { animation:none; box-shadow:none; text-shadow:none; }
                 .header-toolbar .tb-info {
                     flex:1; min-width:0; display:flex; align-items:center; justify-content:center;
                     gap:6px; background:linear-gradient(135deg,#d4af37,#ffd700); border:none;
@@ -780,8 +787,8 @@
                     padding: 6px 8px;
                     border-bottom: 1px solid rgba(255,255,255,0.06);
                 }
-                #rouletteWinnersList .winner-row, #rouletteModalWinnersList .winner-row:last-child { border-bottom: none; }
-                #rouletteWinnersList .winner-row, #rouletteModalWinnersList .winner-row.is-me {
+                #rouletteWinnersList .winner-row:last-child, #rouletteModalWinnersList .winner-row:last-child { border-bottom: none; }
+                #rouletteWinnersList .winner-row.is-me, #rouletteModalWinnersList .winner-row.is-me {
                     background: rgba(255,215,0,0.08);
                     border-radius: 6px;
                 }
@@ -796,7 +803,7 @@
                     text-overflow: ellipsis;
                     white-space: nowrap;
                 }
-                #rouletteWinnersList .winner-row, #rouletteModalWinnersList .winner-row.is-me .winner-user {
+                #rouletteWinnersList .winner-row.is-me .winner-user, #rouletteModalWinnersList .winner-row.is-me .winner-user {
                     color: #ffd700;
                     font-weight: 800;
                 }

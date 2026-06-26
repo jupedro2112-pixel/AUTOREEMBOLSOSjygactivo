@@ -98,11 +98,22 @@ body {
 .icon-percent::before { content: "%"; }
 .icon-times::before { content: "×"; font-size: 1.2em; }
 .icon-unlock::before { content: "🔓"; }
-.icon-download::before { content: "⬇️"; }
 .icon-eye::before { content: "👁️"; }
 .icon-comment::before { content: "💬"; }
 .icon-ban::before { content: "🚫"; }
 .icon-lock-open::before { content: "🔓"; }
+.icon-edit::before { content: "✏️"; }
+.icon-trash::before { content: "🗑️"; }
+.icon-gift::before { content: "🎁"; }
+.icon-star::before { content: "⭐"; }
+.icon-image::before { content: "🖼️"; }
+.icon-info::before { content: "ℹ️"; }
+.icon-list::before { content: "📋"; }
+.icon-mobile::before { content: "📱"; }
+.icon-undo::before { content: "↩️"; }
+.icon-balance::before { content: "💰"; }
+.icon-exclamation::before { content: "⚠️"; }
+.icon-spinner::before { content: "⏳"; }
 
 /* ============================================
    LOGIN SCREEN
@@ -1455,14 +1466,23 @@ body {
     gap: 10px;
 }
 
-.command-item {
+.command-card {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 12px;
     padding: 12px;
     background: var(--darker);
     border-radius: var(--radius);
     border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.command-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .command-name {
@@ -1475,6 +1495,17 @@ body {
     color: var(--gray);
 }
 
+.command-response {
+    font-size: 12.5px;
+    color: var(--light);
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin: 2px 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 .command-actions {
     display: flex;
     gap: 8px;
@@ -1484,75 +1515,6 @@ body {
     display: flex;
     flex-direction: column;
     gap: 15px;
-}
-
-/* ============================================
-   DATABASE SECTION
-   ============================================ */
-.database-password-section {
-    display: flex;
-    justify-content: center;
-    padding: 40px;
-}
-
-.password-box {
-    background: var(--dark);
-    border-radius: var(--radius-lg);
-    padding: 40px;
-    text-align: center;
-    max-width: 400px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.password-box .icon {
-    font-size: 48px;
-    margin-bottom: 15px;
-    display: block;
-}
-
-.password-box p {
-    margin-bottom: 20px;
-    color: var(--gray);
-}
-
-.password-box input {
-    width: 100%;
-    margin-bottom: 15px;
-}
-
-.database-content {
-    background: var(--dark);
-    border-radius: var(--radius-lg);
-    padding: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.database-actions {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 20px;
-}
-
-.db-btn {
-    padding: 10px 20px;
-    background: var(--darker);
-    border: 1px solid var(--gray-dark);
-    border-radius: var(--radius);
-    color: var(--light);
-    font-size: 14px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.3s ease;
-}
-
-.db-btn:hover {
-    background: rgba(255, 255, 255, 0.05);
-}
-
-.database-table-container {
-    overflow-x: auto;
 }
 
 /* ============================================
@@ -1649,17 +1611,6 @@ body {
     }
 }
 
-/* ============================================
-   ANIMATIONS
-   ============================================ */
-@keyframes spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
 
 /* ============================================
    RESPONSIVE

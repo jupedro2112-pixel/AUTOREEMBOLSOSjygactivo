@@ -4,7 +4,31 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-23**
+> **Última actualización: 2026-06-26**
+
+## Sesión 2026-06-26
+
+### 79. Optimización VISUAL + limpieza de código muerto (PWA cliente + panel admin) — SIN cambios de comportamiento
+- **Pedido del owner:** optimizar vipcargas, arreglar bugs visuales y limpiar código de más, **garantizando que no se rompa ni se pierda ninguna funcionalidad**. Alcance: ambas superficies; profundidad: solo seguro (bugs visuales + limpieza). Se auditó todo el front con agentes de solo-lectura y se verificó cada hallazgo a mano antes de tocar.
+- **Bugs visuales arreglados (cliente):**
+  - **Ruleta:** los 3 selectores `#rouletteWinnersList .winner-row, ...` en `index.html` estaban mal agrupados (la coma dejaba el modificador `:last-child`/`.is-me` pegado solo al modal) → en el home TODAS las filas salían con fondo dorado de "ganaste vos" y sin separadores. Corregido (cada selector lleva su propio modificador).
+  - **Botón notificaciones:** los estados `.active`/`.blocked`/`.compact` apuntaban a `.header-right` (estructura vieja); el botón vive en `.tb-right`. Se reanclaron en el `<style>` inline del toolbar (`.header-toolbar .notification-btn.active/.blocked`) → ahora cambia de color (verde activo / gris bloqueado) en la PWA instalada.
+  - **Botón "Instalar app":** heredaba un glow verde pulsante de `.app-install-btn` sobre el botón violeta del toolbar → incoherente. Se neutralizó (`animation/box-shadow/text-shadow: none`) scopeado al toolbar; `.app-install-btn.show` (visibilidad) intacto.
+  - **Toasts:** `z-index` 10000 → 26000 (`base.css`) para que no queden detrás de los modales de ruleta (25500)/plataforma (20000).
+- **Bugs visuales arreglados (admin):**
+  - **12 íconos en blanco** (`icon-edit/trash/gift/star/image/info/list/mobile/undo/balance/exclamation/spinner`): se usaban en el markup pero no tenían `content` en `admin.css`. Agregados los emoji.
+  - **Sección Comandos** sin estilo de tarjeta: el JS renderiza `.command-card/.command-info/.command-response` pero el CSS solo tenía `.command-item` (viejo). Renombrado a `.command-card` + agregados `.command-info`/`.command-response`.
+- **Limpieza de código muerto (verificada: 0 referencias en HTML/JS/onclick/window.\*):**
+  - `header.css`: **−384 líneas**. Bloques de features muertas tras el rediseño del header: drawer móvil completo, promo-banner, fueguito viejo (`.fire-btn`/`fire-pulse`), `platform-section`/`jugaygana-btn`/`plataforma-btn`, `info-btn`/`support-btn`/`header-left`/`header-center`/`user-action-btns`. Se PRESERVÓ todo lo vivo: `.header` (el header actual es `class="header header-toolbar"`), `.header-right`, `#notificationBtn`/`#appInstallBtn` (media queries de visibilidad), `.app-install-btn`, `.refund-btn`, `golden-shimmer` y el `@media (max-width:768px)`.
+  - `admin.js`: 6 funciones nunca llamadas (`verifyDatabaseAccess`, `exportDatabaseCSV`, `handleCommandKeydown`, `prefetchFrequentConversations`, `renderMessagesUltraFast`, `smsValidarTelefono`) + `escapeHtml` definido DOS veces (se borró la copia muerta de L4452; gana la de L8182 por hoisting) + bloque CSS de la sección database vieja + `@keyframes spin`/`icon-download` duplicados en `admin.css`.
+  - Cliente: 2 stubs vacíos (`handleFindUserByPhone`, `handleResetPasswordByPhone` + exports) y 4 funciones huérfanas (`toggleDrawer` con DOM ya inexistente, `openWinners`, `renderAdSection`, `showPlatformPasswordInfo`/`copyPlatformPassword`) + limpieza de sus listas de export. Se PRESERVARON `copyText` y `showInstallInstructions` (vivas).
+  - **94 `console.log` de debug** eliminados (cliente + admin). Se conservaron TODOS los `console.error`/`console.warn` (manejo de errores). Detección previa confirmó 0 casos de `console.log` como cuerpo de `if` sin llaves y 0 multilínea → borrado seguro de sentencias puras.
+- **NO tocado a propósito (riesgo/valor):**
+  - `responsive.css`: ~29 reglas muertas (mismos elementos inexistentes) PERO dispersas dentro de 20 media queries y una agrupada con una clase viva (`.user-name`). Son no-op (ajustan en breakpoints elementos que no existen) → se dejaron para no arriesgar romper la estructura de los `@media` por limpiar bytes muertos.
+  - **A1 — sidebar del admin inaccesible en celular** (no hay botón ☰ que agregue `.sidebar.open`): bug funcional real en móvil, pero el owner pidió dejarlo por ahora.
+  - `checkUsernameAvailability` (cliente): el chequeo de "usuario disponible" en el registro existe pero nunca se dispara → es una MEJORA pendiente (reconectarlo), no código muerto; se dejó intacto.
+  - `syncPayout` (admin): función del botón "Sincronizar pago colgado" (banner revertido en #66); se dejó por ser útil e inofensiva.
+- **Validado:** `node --check` OK en los 10 JS tocados; llaves balanceadas en `base.css`/`header.css`/`admin.css`. Net **−835 líneas** (46 ins / 881 del). Back NO necesita redeploy de lógica; es front → recargar la PWA y el panel (subir `CACHE_VERSION` del SW si se quiere forzar). Sin migraciones.
 
 ## Sesión 2026-06-25
 

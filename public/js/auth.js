@@ -150,7 +150,6 @@ VIP.auth = (function () {
                 if (checkResult) checkResult.textContent = '';
 
                 await initializeSession(true);
-                console.log('[FCM] Registro exitoso, enviando token FCM...');
                 await VIP.notifications.sendFcmTokenAfterLogin();
 
                 // Meta Pixel — CompleteRegistration (conversión clave, deduplicada con CAPI).
@@ -372,7 +371,6 @@ VIP.auth = (function () {
                 const data = await response.json();
 
                 if (!data.user || !data.user.username) {
-                    console.log('Token válido pero falta información de usuario, recargando...');
                     const userResponse = await fetch(`${VIP.config.API_URL}/api/users/me`, {
                         headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
                     });
@@ -466,11 +464,9 @@ VIP.auth = (function () {
 
     async function ensureUserLoaded(retries = 3) {
         if (VIP.state.currentUser && VIP.state.currentUser.id && VIP.state.currentUser.username) {
-            console.log('✅ Usuario ya cargado completamente:', VIP.state.currentUser.username);
             return true;
         }
 
-        console.log('🔄 Cargando usuario automáticamente...');
 
         for (let i = 0; i < retries; i++) {
             try {
@@ -490,11 +486,9 @@ VIP.auth = (function () {
                         // re-init del pixel para que conversiones posteriores
                         // (Login refresh, RefundClaim, InitiateCheckout) hereden AM.
                         _applyMetaMatching(userData);
-                        console.log('✅ Usuario cargado exitosamente:', VIP.state.currentUser.username);
                         return true;
                     }
                 } else if (response.status === 404) {
-                    console.log(`⏳ Intento ${i + 1}/${retries}: Usuario no encontrado, reintentando...`);
                     await new Promise(resolve => setTimeout(resolve, 500));
                 } else {
                     console.error('Error cargando usuario:', response.status);
@@ -509,7 +503,6 @@ VIP.auth = (function () {
     }
 
     async function initializeSession(afterRegister = false) {
-        console.log('🚀 Inicializando sesión...');
 
         const userLoaded = await ensureUserLoaded(afterRegister ? 5 : 3);
 
@@ -1042,11 +1035,6 @@ VIP.auth = (function () {
     let _vipResetOtpPhone = null;
     let _vipResetToken = null;
 
-    async function handleFindUserByPhone(e) {
-        // ELIMINADO: Este endpoint permitía enumerar usuarios.
-        // El reset de contraseña ahora usa flujo OTP seguro (anti-enumeration).
-        if (e) e.preventDefault();
-    }
 
     async function handleRequestPasswordReset() {
         const phonePrefix = document.getElementById('resetPhonePrefix').value;
@@ -1128,11 +1116,6 @@ VIP.auth = (function () {
         }
     }
 
-    async function handleResetPasswordByPhone(e) {
-        // MANTENIDO por compatibilidad con HTML (resetPassForm) - redirige al nuevo flujo OTP
-        if (e) e.preventDefault();
-        // El nuevo flujo usa handleRequestPasswordReset, handleVerifyResetOtp, handleCompletePasswordReset
-    }
 
     async function handleCompletePasswordReset() {
         const newPassword = document.getElementById('resetPassNew').value;
@@ -1392,8 +1375,6 @@ VIP.auth = (function () {
         handleChangePasswordOtpBack,
         handleChangePasswordTemporalEntry,
         finishTemporalEntry,
-        handleFindUserByPhone,
-        handleResetPasswordByPhone,
         handleRequestPasswordReset,
         handleVerifyResetOtp,
         handleCompletePasswordReset,

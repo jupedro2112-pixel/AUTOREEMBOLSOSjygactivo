@@ -162,45 +162,6 @@
     }
 
     // ---------- Reseñas dentro del pantallazo de pauta (adServiceModal) ----------
-    // Solo lectura (el visitante no está logueado): prueba social compacta.
-    // Si no hay reseñas aprobadas, oculta la sección entera.
-    async function renderAdSection() {
-        const box = document.getElementById('adServiceReviews');
-        if (!box) return;
-        let pub = null;
-        try {
-            const r = await fetch(VIP.config.API_URL + '/api/reviews/public?limit=12');
-            if (r.ok) pub = await r.json();
-        } catch (e) { /* best-effort */ }
-
-        const total = Number((pub && pub.total) || 0);
-        if (!total) { box.style.display = 'none'; box.innerHTML = ''; return; }
-
-        const avg = Number((pub && pub.avgStars) || 0);
-        const withText = ((pub && pub.items) || []).filter(function (it) {
-            const c = (it.comment || '').trim();
-            return c && !/^[1-5] estrellas$/.test(c);
-        }).slice(0, 5);
-
-        let html = '<div style="margin-top:11px;border-top:1px solid rgba(212,175,55,0.3);padding-top:10px;">';
-        html += '<div style="text-align:center;margin-bottom:7px;">';
-        html += '<div style="letter-spacing:2px;">' + _starsHtml(avg, 15) + '</div>';
-        html += '<div style="color:#ffd700;font-weight:900;font-size:12px;margin-top:1px;">' + avg.toFixed(1) + ' / 5 · ' + total + ' opinión' + (total === 1 ? '' : 'es') + '</div>';
-        html += '</div>';
-        if (withText.length > 0) {
-            html += '<div style="display:flex;flex-direction:column;gap:5px;max-height:118px;overflow-y:auto;-webkit-overflow-scrolling:touch;">';
-            for (const it of withText) {
-                html += '<div style="background:rgba(0,0,0,0.30);border-radius:7px;padding:5px 8px;">';
-                html += '<div style="font-size:10px;">' + _starsHtml(it.stars, 10) + ' <span style="color:#888;font-size:9px;margin-left:3px;">' + _esc(it.maskedUsername || '***') + '</span></div>';
-                html += '<div style="color:#ddd;font-size:10.5px;line-height:1.35;margin-top:1px;">"' + _esc(it.comment) + '"</div>';
-                html += '</div>';
-            }
-            html += '</div>';
-        }
-        html += '</div>';
-        box.innerHTML = html;
-        box.style.display = '';
-    }
 
     function openModal() {
         closeModal();
@@ -278,7 +239,7 @@
         }
     }
 
-    VIP.reviews = { initLogin: initLogin, initApp: initApp, openModal: openModal, closeModal: closeModal, setStars: setStars, submit: submit, renderInfoSection: renderInfoSection, renderAdSection: renderAdSection };
+    VIP.reviews = { initLogin: initLogin, initApp: initApp, openModal: openModal, closeModal: closeModal, setStars: setStars, submit: submit, renderInfoSection: renderInfoSection };
 
     document.addEventListener('DOMContentLoaded', function () {
         initLogin();

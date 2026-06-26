@@ -365,7 +365,6 @@ function setupEventListeners() {
             fireBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                console.log('🔥 Fueguito clickeado');
                 VIP.fire.showFireModal();
             });
         }

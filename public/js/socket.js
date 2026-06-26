@@ -14,7 +14,6 @@ VIP.socket = (function () {
             return;
         }
 
-        console.log('🔄 Inicializando socket...');
 
         VIP.state.socket = io({
             // WebSocket primero (baja latencia); si la red lo bloquea —proxies
@@ -28,16 +27,13 @@ VIP.socket = (function () {
         });
 
         VIP.state.socket.on('connect', function () {
-            console.log('✅ Socket conectado - ID:', VIP.state.socket.id);
             VIP.state.socket.emit('authenticate', VIP.state.currentToken);
         });
 
         VIP.state.socket.on('authenticated', function (data) {
             if (data.success) {
-                console.log('✅ Socket autenticado como:', data.role);
                 if (VIP.state.currentUser && VIP.state.currentUser.userId) {
                     VIP.state.socket.emit('join_user_room', { userId: VIP.state.currentUser.userId });
-                    console.log('📢 Unido a sala personal:', VIP.state.currentUser.userId);
                 }
                 VIP.chat.loadMessages(true);
             } else {
@@ -46,13 +42,11 @@ VIP.socket = (function () {
         });
 
         VIP.state.socket.on('reconnect', function (attemptNumber) {
-            console.log('🔄 Socket reconectado (intento:', attemptNumber + ')');
             VIP.state.socket.emit('authenticate', VIP.state.currentToken);
             setTimeout(() => { VIP.chat.loadMessages(true); }, 500);
         });
 
         VIP.state.socket.on('reconnect_attempt', function (attemptNumber) {
-            console.log('🔄 Intentando reconectar... (intento:', attemptNumber + ')');
         });
 
         VIP.state.socket.on('connect_error', function (error) {
@@ -72,7 +66,6 @@ VIP.socket = (function () {
         });
 
         VIP.state.socket.on('push_notification', function (data) {
-            console.log('📱 Notificación push recibida:', data);
             VIP.notifications.showBrowserNotification(
                 data.title || 'Nueva notificación',
                 data.body || '',
@@ -95,19 +88,14 @@ VIP.socket = (function () {
             // positivos cuando el dispositivo está lento procesando el mensaje.
             try { if (typeof ack === 'function') ack({ ok: true }); } catch (_) {}
 
-            console.log('📨 NEW_MESSAGE event received:', data);
-            console.log('📨 Message content:', data.message?.content?.substring(0, 50) || data.content?.substring(0, 50));
-            console.log('📨 Sender role:', data.message?.senderRole || data.senderRole);
             const message = data.message || data;
 
             if (message.id && VIP.state.processedMessageIds.has(message.id)) {
-                console.log('⚠️ Mensaje ya procesado, ignorando:', message.id);
                 return;
             }
 
             const existingMsg = document.querySelector(`[data-message-id="${message.id}"]`);
             if (existingMsg) {
-                console.log('⚠️ Mensaje ya existe en el DOM, ignorando:', message.id);
                 return;
             }
 
@@ -132,7 +120,6 @@ VIP.socket = (function () {
                     const msgDiv = tempEl.querySelector('.message');
                     if (msgDiv) { msgDiv.style.opacity = '1'; msgDiv.style.border = ''; }
                     tempReplaced = true;
-                    console.log('✅ Mensaje temporal reemplazado:', message.id);
                 }
             });
 
@@ -172,7 +159,6 @@ VIP.socket = (function () {
         });
 
         VIP.state.socket.on('message_sent', function (data) {
-            console.log('✅ Mensaje enviado confirmado:', data?.id);
             if (data && data.id) {
                 const tempEl = document.querySelector('[data-temp-id]');
                 if (tempEl) {
@@ -195,7 +181,6 @@ VIP.socket = (function () {
         });
 
         VIP.state.socket.on('disconnect', function () {
-            console.log('🔌 Socket desconectado');
         });
     }
 

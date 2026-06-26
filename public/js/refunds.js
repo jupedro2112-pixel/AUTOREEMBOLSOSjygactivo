@@ -102,7 +102,6 @@ VIP.refunds = (function () {
     }
 
     async function showRefundModal(type) {
-        console.log('🎁 Abriendo modal de reembolso:', type);
 
         if (!VIP.state.refundStatus) {
             VIP.ui.showToast('Cargando información de reembolsos...', 'info');

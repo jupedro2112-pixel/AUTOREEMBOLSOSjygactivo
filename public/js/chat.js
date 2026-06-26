@@ -198,7 +198,6 @@ VIP.chat = (function () {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-            console.log('[loadMessages] Cargando mensajes para:', VIP.state.currentUser.userId);
 
             const response = await fetch(
                 `${VIP.config.API_URL}/api/messages/${VIP.state.currentUser.userId}?limit=15`,
@@ -213,10 +212,7 @@ VIP.chat = (function () {
                 const data = await response.json();
                 const messages = data.messages || [];
 
-                console.log('[loadMessages] Mensajes recibidos:', messages.length);
                 if (messages.length > 0) {
-                    console.log('[loadMessages] Primer mensaje:', messages[0].content.substring(0, 30));
-                    console.log('[loadMessages] Último mensaje:', messages[messages.length - 1].content.substring(0, 30));
                 }
 
                 const messagesHash = messages.map(m => m.id).join(',');
@@ -298,12 +294,10 @@ VIP.chat = (function () {
         setTimeout(scrollToBottom, 300);
 
         if (VIP.state.socket && VIP.state.socket.connected) {
-            console.log('📤 Enviando mensaje por socket...');
             VIP.state.socket.emit('send_message', { content, type: 'text' });
             return;
         }
 
-        console.log('📤 Enviando mensaje por REST API...');
         try {
             const response = await fetch(`${VIP.config.API_URL}/api/messages/send`, {
                 method: 'POST',
@@ -316,7 +310,6 @@ VIP.chat = (function () {
 
             if (response.ok) {
                 const savedMessage = await response.json();
-                console.log('✅ Mensaje guardado:', savedMessage);
                 const tempMsgElement = document.querySelector(`[data-temp-id="${tempId}"]`);
                 if (tempMsgElement) {
                     tempMsgElement.setAttribute('data-message-id', savedMessage.id);

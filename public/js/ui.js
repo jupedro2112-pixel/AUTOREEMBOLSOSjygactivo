@@ -182,7 +182,6 @@ VIP.ui = (function () {
         if (balanceElement) {
             balanceElement.textContent = `$${balance.toLocaleString()}`;
         }
-        console.log('Saldo actualizado:', balance);
     }
 
     function startBalancePolling() {
@@ -206,7 +205,6 @@ VIP.ui = (function () {
         const lastWelcome = parseInt(localStorage.getItem(welcomeKey) || '0');
         const hoursSince  = (Date.now() - lastWelcome) / 3600000;
         if (hoursSince < 24) {
-            console.log('ℹ️ Bienvenida ya enviada recientemente, omitiendo');
             return;
         }
 
@@ -228,10 +226,8 @@ VIP.ui = (function () {
                 // Refrescar el chat para mostrar los mensajes recién creados.
                 setTimeout(() => { try { VIP.chat.loadMessages(); } catch (e) {} }, 300);
                 localStorage.setItem(welcomeKey, Date.now().toString());
-                console.log('✅ Bienvenida solicitada al backend (lado admin)');
             }
         } catch (error) {
-            console.log('No se pudo enviar la bienvenida:', error);
         }
     }
 
@@ -448,7 +444,6 @@ VIP.ui = (function () {
 
         window.deferredPrompt.prompt();
         const { outcome } = await window.deferredPrompt.userChoice;
-        console.log('PWA: Resultado de la instalación:', outcome);
 
         if (outcome === 'accepted') {
             showToast('✅ Instalando app...', 'success');
@@ -636,7 +631,6 @@ window.deferredPrompt = null;
 
 window.addEventListener('beforeinstallprompt', (e) => {
     if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
-        console.log('PWA: ya en standalone, ignorando beforeinstallprompt');
         return;
     }
     window.deferredPrompt = e;
@@ -646,11 +640,9 @@ window.addEventListener('beforeinstallprompt', (e) => {
     if (loginInstallBtn)  { loginInstallBtn.style.display = 'flex'; loginInstallBtn.classList.remove('hidden'); }
     if (headerInstallBtn) { headerInstallBtn.style.display = 'flex'; headerInstallBtn.classList.remove('hidden'); }
     if (appInstallBtn)    { appInstallBtn.style.display = 'flex'; appInstallBtn.classList.add('show'); }
-    console.log('PWA: beforeinstallprompt capturado, botones mostrados');
 });
 
 window.addEventListener('appinstalled', () => {
-    console.log('PWA: App instalada exitosamente');
     const loginInstallBtn  = document.getElementById('installBtn');
     const headerInstallBtn = document.getElementById('headerInstallBtn');
     const appInstallBtn    = document.getElementById('appInstallBtn');
@@ -671,67 +663,6 @@ if (VIP.ui.isAppStandalone()) {
     if (appInstallBtn)    { appInstallBtn.classList.add('hidden'); }
 }
 
-// Mobile drawer toggle
-VIP.ui.toggleDrawer = function() {
-  const drawer = document.getElementById('mobileDrawer');
-  const overlay = document.getElementById('drawerOverlay');
-  if (!drawer || !overlay) return;
-  const isOpen = drawer.classList.contains('open');
-
-  if (isOpen) {
-    drawer.classList.remove('open');
-    overlay.classList.remove('open');
-  } else {
-    const content = document.getElementById('drawerContent');
-    content.innerHTML = '';
-
-    const username = VIP.state.currentUser?.username || 'Usuario';
-
-    const items = [
-      { emoji: '👤', text: username, action: null, style: 'drawer-user' },
-      { emoji: '🔥', text: 'Fueguito Diario', action: () => VIP.fire.showFireModal() },
-      { emoji: '📅', text: 'Reembolso Diario', action: () => VIP.refunds.showRefundModal('daily') },
-      { emoji: '📆', text: 'Reembolso Semanal', action: () => VIP.refunds.showRefundModal('weekly') },
-      { emoji: '🗓️', text: 'Reembolso Mensual', action: () => VIP.refunds.showRefundModal('monthly') },
-      { emoji: '🎰', text: 'Casino', action: () => VIP.ui.openPlatformModal() },
-      { emoji: '📢', text: 'Canal Informativo', action: () => {
-        const btn = document.getElementById('canalInformativoBtn');
-        if (btn && btn.href && btn.href !== '#' && btn.href !== window.location.href) {
-          window.open(btn.href, '_blank');
-        } else {
-          VIP.ui.showToast('Canal informativo no disponible', 'info');
-        }
-      }},
-      { emoji: '🤝', text: 'Mis Referidos', action: () => VIP.ui.openReferralModal() },
-      { emoji: '💬', text: 'Soporte WhatsApp', action: () => window.open('https://wa.link/metawin2026', '_blank') },
-      { emoji: 'ℹ️', text: 'Información', action: () => VIP.ui.showModal('infoModal') },
-      { emoji: '🔔', text: 'Notificaciones', action: () => VIP.notifications.requestNotificationPermission(), pwaOnly: true },
-      { emoji: '📱', text: 'APP', action: () => VIP.ui.installApp(), hideStandalone: true },
-      { emoji: '🔑', text: 'Cambiar contraseña', action: () => VIP.ui.showModal('settingsModal') },
-    ];
-
-    items.forEach(item => {
-      if (item.pwaOnly && !VIP.ui.isAppInstalled()) return;
-      if (item.hideStandalone && VIP.ui.isAppInstalled()) return;
-
-      const btn = document.createElement('button');
-      btn.className = 'drawer-item' + (item.style ? ' ' + item.style : '');
-      btn.innerHTML = `<span class="drawer-item-emoji">${item.emoji}</span> ${item.text}`;
-
-      if (item.action) {
-        btn.addEventListener('click', () => {
-          VIP.ui.toggleDrawer();
-          setTimeout(item.action, 150);
-        });
-      }
-      content.appendChild(btn);
-    });
-
-    drawer.classList.add('open');
-    overlay.classList.add('open');
-  }
-};
-window.toggleDrawer = VIP.ui.toggleDrawer;
 
 // Platform modal — private state (no DOM exposure for sensitive data)
 VIP.ui._platformPasswordVisible = false;
@@ -800,11 +731,6 @@ VIP.ui.goToPlatform = function() {
   VIP.ui.closePlatformModal();
 };
 
-VIP.ui.showPlatformPasswordInfo = function() {
-  VIP.ui.showToast('Tu contraseña es la misma que usás para entrar a VipCargas', 'info');
-};
-// Alias kept for backward compatibility with the onclick handler
-VIP.ui.copyPlatformPassword = VIP.ui.showPlatformPasswordInfo;
 
 VIP.ui.togglePlatformPasswordVisibility = function() {
   const pwdEl = document.getElementById('platformModalPassword');

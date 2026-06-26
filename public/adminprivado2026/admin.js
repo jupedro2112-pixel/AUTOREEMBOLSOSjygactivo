@@ -432,19 +432,16 @@ async function handleLogin(e) {
             try {
                 initSocket();
             } catch (e) {
-                console.log('Socket no disponible:', e);
             }
 
             try {
                 loadConversations();
             } catch (e) {
-                console.log('Error cargando conversaciones:', e);
             }
 
             try {
                 loadStats();
             } catch (e) {
-                console.log('Error cargando stats:', e);
             }
 
             startConversationReconciliation();
@@ -548,7 +545,6 @@ function showPasswordChangeModal() {
 
 function setupRoleBasedUI() {
     const role = currentAdmin?.role;
-    console.log('[Admin Panel] Rol detectado:', currentAdmin?.role);
 
     // ============================================================
     // PUBLISHER_ADMIN — vista limitada
@@ -1075,13 +1071,11 @@ function initSocket() {
     socket = io(SOCKET_OPTIONS);
     
     socket.on('connect', () => {
-        console.log('✅ Socket connected');
         socket.emit('authenticate', currentToken);
     });
     
     socket.on('authenticated', (data) => {
         if (data.success) {
-            console.log('✅ Socket authenticated');
             joinAdminRoom();
         } else {
             console.error('❌ Socket authentication failed');
@@ -1090,16 +1084,11 @@ function initSocket() {
     
     // NEW MESSAGE - INSTANT
     socket.on('new_message', (data) => {
-        console.log('📨 NEW_MESSAGE event received:', data);
-        console.log('📨 Message content:', data.message?.content || data.content);
-        console.log('📨 Sender role:', data.message?.senderRole || data.senderRole);
-        console.log('📨 Sender ID:', data.message?.senderId || data.senderId);
         handleNewMessage(data);
     });
     
     // MESSAGE SENT CONFIRMATION
     socket.on('message_sent', (data) => {
-        console.log('✅ Message sent:', data);
         // Update temp message with real one instead of adding duplicate
         const tempEl = document.querySelector('[data-messageid^="temp-"]');
         if (tempEl) {
@@ -1109,7 +1098,6 @@ function initSocket() {
     
     // CHAT CLOSED - Mantener chat abierto para seguir respondiendo
     socket.on('chat_closed', (data) => {
-        console.log('🔒 Chat cerrado:', data);
         if (data.userId === selectedUserId) {
             showToast('Chat movido a Cerrados. Puedes seguir respondiendo.', 'info');
             // Fix #3: Recargar mensajes para mostrar el mensaje de cierre desde DB
@@ -1124,7 +1112,6 @@ function initSocket() {
     
     // CONVERSATION_UPDATED (para compatibilidad con versiones anteriores del backend)
     socket.on('conversation_updated', (data) => {
-        console.log('🔄 Conversation updated:', data);
         if (data.userId !== selectedUserId) {
             incrementUnreadCount();
             playNotificationSound();
@@ -1134,7 +1121,6 @@ function initSocket() {
     
     // CHAT MOVED TO PAYMENTS
     socket.on('chat_moved', (data) => {
-        console.log('💳 Chat moved:', data);
         const dest = data && data.to;
 
         // Si el chat activo es el que se movió, limpiar el panel.
@@ -1295,12 +1281,10 @@ function initSocket() {
 
     // DISCONNECT
     socket.on('disconnect', () => {
-        console.log('🔌 Socket disconnected');
     });
 
     // RECONNECT - Re-fetch conversations to recover any missed events
     socket.on('reconnect', () => {
-        console.log('🔄 Socket reconnected — re-fetching conversations');
         conversationsCacheByTab.delete(currentTab);
         loadConversations(true);
     });
@@ -1332,12 +1316,10 @@ function handleNewMessage(data) {
     const senderId = message.senderId;
     const receiverId = message.receiverId;
     
-    console.log('📨 handleNewMessage:', message.id, 'from:', senderId, 'to:', receiverId, 'selected:', selectedUserId);
     
     // CORREGIDO: Verificar si el mensaje ya fue procesado (evitar duplicados del socket)
     if (message.id) {
         if (processedMessageIds.has(message.id)) {
-            console.log('⚠️ Mensaje ya procesado (ID en cache), ignorando:', message.id);
             return;
         }
         processedMessageIds.add(message.id);
@@ -1345,7 +1327,6 @@ function handleNewMessage(data) {
     
     // Verificar si el mensaje ya existe en el DOM
     if (message.id && elements.chatMessages.querySelector(`[data-messageid="${message.id}"]`)) {
-        console.log('⚠️ Mensaje ya existe en DOM, ignorando');
         return;
     }
     
@@ -1357,7 +1338,6 @@ function handleNewMessage(data) {
             if (tempContent === message.content.trim()) {
                 // Actualizar el ID temporal al real en lugar de crear duplicado
                 tempEl.dataset.messageid = message.id;
-                console.log('✅ Mensaje temporal actualizado con ID real:', message.id);
                 return;
             }
         }
@@ -1724,7 +1704,6 @@ async function selectConversation(userId, username) {
 function requestNotificationPermission() {
     if ('Notification' in window && Notification.permission === 'default') {
         Notification.requestPermission().then(permission => {
-            console.log('🔔 Permiso de notificación:', permission);
         });
     }
 }
@@ -1750,7 +1729,6 @@ function showBrowserNotification(title, body, icon = '/favicon.ico') {
             // Cerrar automáticamente después de 5 segundos
             setTimeout(() => notification.close(), 5000);
         } catch (e) {
-            console.log('No se pudo mostrar notificación:', e);
         }
     }
 }
@@ -1793,7 +1771,6 @@ async function loadMessages(userId) {
         
         // RACE CONDITION FIX: Ignorar respuesta si ya no es el chat activo
         if (userId !== activeConversationId) {
-            console.log('⚠️ Respuesta de chat antiguo ignorada:', userId, '!= activo:', activeConversationId);
             return;
         }
         
@@ -1804,7 +1781,6 @@ async function loadMessages(userId) {
         renderMessages(messages);
     } catch (error) {
         if (error.name === 'AbortError') {
-            console.log('🚫 Fetch de mensajes cancelado para:', userId);
             return;
         }
         console.error('Error loading messages:', error);
@@ -1921,7 +1897,6 @@ function addMessageToChat(message, isOutgoing = false) {
     if (message.id) {
         const existingById = elements.chatMessages.querySelector(`[data-messageid="${message.id}"]`);
         if (existingById) {
-            console.log('⚠️ Mensaje ya existe por ID, ignorando:', message.id);
             return;
         }
         // Verificar si existe un mensaje temporal con el mismo contenido
@@ -1932,7 +1907,6 @@ function addMessageToChat(message, isOutgoing = false) {
             if (tempContent === message.content && tempTime) {
                 // Actualizar el ID temporal al real
                 tempEl.dataset.messageid = message.id;
-                console.log('✅ Mensaje temporal actualizado con ID real:', message.id);
                 // CORREGIDO: Scroll después de actualizar
                 scrollToBottom();
                 setTimeout(scrollToBottom, 100);
@@ -2035,7 +2009,6 @@ async function sendMessage() {
             // Verificar si el mensaje fue enviado hace menos de 3 segundos
             const msgTimestamp = new Date(msgTime).getTime();
             if (now - msgTimestamp < 3000) {
-                console.log('⚠️ Mensaje duplicado detectado (enviado hace menos de 3s), ignorando');
                 elements.messageInput.value = '';
                 elements.messageInput.style.height = 'auto';
                 return;
@@ -2045,7 +2018,6 @@ async function sendMessage() {
     
     // CORREGIDO: Verificar si ya se envió este contenido recientemente
     if (lastSentMessageContent === messageToSend && (now - lastSentMessageTime) < 5000) {
-        console.log('⚠️ Mensaje duplicado detectado (mismo contenido reciente), ignorando');
         elements.messageInput.value = '';
         elements.messageInput.style.height = 'auto';
         return;
@@ -2482,27 +2454,6 @@ function insertCommand(commandName) {
     hideCommandSuggestions();
 }
 
-// COMANDOS: Manejar teclas de navegación
-function handleCommandKeydown(e) {
-    if (commandSuggestions.length === 0) return;
-    
-    if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        selectedCommandIndex = (selectedCommandIndex + 1) % commandSuggestions.length;
-        updateCommandSelection();
-    } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        selectedCommandIndex = (selectedCommandIndex - 1 + commandSuggestions.length) % commandSuggestions.length;
-        updateCommandSelection();
-    } else if (e.key === 'Tab' || e.key === 'Enter') {
-        if (selectedCommandIndex >= 0) {
-            e.preventDefault();
-            insertCommand(commandSuggestions[selectedCommandIndex].name);
-        }
-    } else if (e.key === 'Escape') {
-        hideCommandSuggestions();
-    }
-}
 
 async function markMessagesAsRead(userId) {
     try {
@@ -2543,7 +2494,6 @@ async function loadUserInfo(userId) {
         
         // RACE CONDITION FIX: Ignorar respuesta si ya no es el chat activo
         if (userId !== activeConversationId) {
-            console.log('⚠️ Respuesta de userInfo de chat antiguo ignorada:', userId);
             return;
         }
         
@@ -3539,7 +3489,6 @@ function deselectChat() {
         </div>
     `;
     
-    console.log('👋 Chat deseleccionado');
 }
 
 async function closeChat() {
@@ -4435,7 +4384,6 @@ function playNotificationSound() {
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.5);
     } catch (e) {
-        console.log('No se pudo reproducir sonido:', e);
     }
 }
 
@@ -4449,12 +4397,6 @@ function updateUserStatus(userId, online) {
 // ============================================
 // UTILITIES
 // ============================================
-function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
 
 function formatMoney(amount) {
     if (amount === undefined || amount === null) return '$0';
@@ -4944,40 +4886,6 @@ function showDatabasePasswordModal() {
     showModal('databasePasswordModal');
 }
 
-async function verifyDatabaseAccess() {
-    const password = document.getElementById('dbPassword').value;
-    
-    if (!password) {
-        showToast('Ingresa la contraseña', 'error');
-        return;
-    }
-    
-    try {
-        const response = await fetch(`${API_URL}/api/admin/database/verify`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-            },
-            body: JSON.stringify({ dbPassword: password })
-        });
-        
-        if (response.ok) {
-            dbAccessGranted = true;
-            dbStoredPassword = password; // Issue #2: guardar para reuso
-            hideModal('databasePasswordModal');
-            document.getElementById('databasePasswordInput').classList.add('hidden');
-            document.getElementById('databaseContent').classList.remove('hidden');
-            loadDatabaseUsers();
-            showToast('Acceso concedido', 'success');
-        } else {
-            showToast('Contraseña incorrecta', 'error');
-        }
-    } catch (error) {
-        console.error('Error verifying database access:', error);
-        showToast('Error al verificar acceso', 'error');
-    }
-}
 
 async function loadDatabaseUsers() {
     if (!dbAccessGranted) return;
@@ -5046,45 +4954,6 @@ function getRoleLabel(role) {
     return labels[role] || role;
 }
 
-async function exportDatabaseCSV() {
-    if (!dbAccessGranted) return;
-    
-    try {
-        // Issue #2: Usar contraseña almacenada para exportar todos los usuarios
-        const password = dbStoredPassword || document.getElementById('dbPassword').value;
-        if (!password) {
-            console.warn('[DB] Contraseña no disponible para exportar, se requiere re-verificación');
-            dbAccessGranted = false;
-            switchSection('database');
-            return;
-        }
-        const response = await fetch(`${API_URL}/api/admin/database/export/csv`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-            },
-            body: JSON.stringify({ dbPassword: password })
-        });
-        
-        if (!response.ok) throw new Error('Failed to export database');
-        
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `base_de_datos_${new Date().toISOString().split('T')[0]}.csv`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-        
-        showToast('Base de datos exportada correctamente', 'success');
-    } catch (error) {
-        console.error('Error exporting database:', error);
-        showToast('Error al exportar base de datos', 'error');
-    }
-}
 
 async function verifyDatabaseAccessFromModal() {
     const password = document.getElementById('dbPasswordInput').value;
@@ -5884,7 +5753,6 @@ function checkAppInstalled() {
     if (window.matchMedia('(display-mode: standalone)').matches || 
         window.navigator.standalone === true) {
         isAppInstalled = true;
-        console.log('✅ App ya instalada (standalone mode)');
         return true;
     }
     return false;
@@ -5892,7 +5760,6 @@ function checkAppInstalled() {
 
 // Inicializar PWA - Escuchar evento beforeinstallprompt
 function initPWA() {
-    console.log('🚀 Inicializando PWA...');
     
     // Verificar si ya está instalada
     if (checkAppInstalled()) {
@@ -5902,7 +5769,6 @@ function initPWA() {
     
     // Escuchar evento beforeinstallprompt
     window.addEventListener('beforeinstallprompt', (e) => {
-        console.log('📱 beforeinstallprompt event recibido');
         // Prevenir que el navegador muestre el prompt automático
         e.preventDefault();
         // Guardar el evento para usarlo después
@@ -5913,7 +5779,6 @@ function initPWA() {
     
     // Escuchar cuando la app es instalada
     window.addEventListener('appinstalled', (e) => {
-        console.log('✅ App instalada exitosamente');
         isAppInstalled = true;
         hideInstallButton();
         deferredInstallPrompt = null;
@@ -5933,7 +5798,6 @@ function showInstallButton() {
     const installBtn = document.getElementById('installAppBtn');
     if (installBtn && !isAppInstalled) {
         installBtn.classList.remove('hidden');
-        console.log('📱 Botón de instalación visible');
     }
 }
 
@@ -5947,10 +5811,8 @@ function hideInstallButton() {
 
 // Manejar click en botón de instalación
 async function handleInstallApp() {
-    console.log('📱 Click en botón de instalación');
     
     if (!deferredInstallPrompt) {
-        console.log('⚠️ No hay prompt de instalación disponible');
         showToast('La instalación no está disponible en este momento', 'info');
         return;
     }
@@ -5960,14 +5822,11 @@ async function handleInstallApp() {
     
     // Esperar la respuesta del usuario
     const { outcome } = await deferredInstallPrompt.userChoice;
-    console.log('📱 Resultado de instalación:', outcome);
     
     if (outcome === 'accepted') {
-        console.log('✅ Usuario aceptó instalar');
         isAppInstalled = true;
         hideInstallButton();
     } else {
-        console.log('❌ Usuario rechazó instalar');
     }
     
     // Limpiar el prompt guardado
@@ -5981,17 +5840,14 @@ async function handleInstallApp() {
 // Registrar Service Worker para notificaciones push
 async function registerServiceWorker() {
     if (!('serviceWorker' in navigator)) {
-        console.log('⚠️ Service Worker no soportado');
         return false;
     }
     
     try {
         const registration = await navigator.serviceWorker.register('/admin-sw.js', { scope: '/adminprivado2026/' });
-        console.log('✅ Service Worker registrado:', registration.scope);
         
         // Escuchar mensajes del service worker
         navigator.serviceWorker.addEventListener('message', (event) => {
-            console.log('📨 Mensaje del SW:', event.data);
             if (event.data.type === 'NEW_MESSAGE') {
                 // Mostrar notificación local si la app está abierta
                 showBrowserNotification(
@@ -6012,12 +5868,10 @@ async function registerServiceWorker() {
 // Solicitar permiso para notificaciones
 async function requestPushPermission() {
     if (!('Notification' in window)) {
-        console.log('⚠️ Notificaciones no soportadas');
         return false;
     }
     
     const permission = await Notification.requestPermission();
-    console.log('🔔 Permiso de notificaciones:', permission);
     
     if (permission === 'granted') {
         await registerServiceWorker();
@@ -6051,60 +5905,10 @@ async function sendPushNotification(userId, message) {
         });
         
         if (response.ok) {
-            console.log('✅ Notificación push enviada');
         }
     } catch (error) {
         console.error('❌ Error enviando notificación push:', error);
     }
-}
-
-// ============================================
-// CHAT ULTRA-RÁPIDO - OPTIMIZACIONES
-// ============================================
-
-// Precargar mensajes de conversaciones frecuentes
-async function prefetchFrequentConversations() {
-    const frequentUsers = conversations.slice(0, 5); // Top 5 conversaciones
-    
-    for (const conv of frequentUsers) {
-        if (!messageCache.has(conv.userId)) {
-            fetch(`${API_URL}/api/messages/${conv.userId}?limit=50`, {
-                headers: { 'Authorization': `Bearer ${currentToken}` }
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.messages) {
-                    messageCache.set(conv.userId, data.messages);
-                    console.log('✅ Prefetch completado para:', conv.username);
-                }
-            })
-            .catch(() => {});
-        }
-    }
-}
-
-// Renderizado ultra-rápido de mensajes
-function renderMessagesUltraFast(messages) {
-    // Usar DocumentFragment para minimizar reflows
-    const fragment = document.createDocumentFragment();
-    
-    messages.forEach(msg => {
-        if (msg.id && processedMessageIds.has(msg.id)) return;
-        
-        const msgDiv = createMessageElement(msg);
-        fragment.appendChild(msgDiv);
-        
-        if (msg.id) {
-            processedMessageIds.add(msg.id);
-        }
-    });
-    
-    // Limpiar y agregar todo de una vez
-    elements.chatMessages.innerHTML = '';
-    elements.chatMessages.appendChild(fragment);
-    
-    // Scroll inmediato sin animación para máxima velocidad
-    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
 // Crear elemento de mensaje optimizado
@@ -7910,16 +7714,6 @@ const SMS_FAKE_PATTERN = /^(\d)\1+$|^1234567890$|^0987654321$|^12345678$|^012345
 
 const SMS_COSTO_POR_MENSAJE = 0.006;
 
-function smsValidarTelefono(phone) {
-    if (!phone || typeof phone !== 'string') return { valid: false, reason: 'Número ausente o inválido' };
-    const digits = phone.replace(/\D/g, '');
-    if (digits.length < 8) return { valid: false, reason: 'Menos de 8 dígitos' };
-    if (digits.length > 15) return { valid: false, reason: 'Más de 15 dígitos' };
-    if (SMS_FAKE_PATTERN.test(digits)) return { valid: false, reason: 'Patrón falso o de prueba' };
-    const hasValidPrefix = SMS_VALID_COUNTRY_CODES.some(code => phone.startsWith(code));
-    if (!hasValidPrefix) return { valid: false, reason: 'Prefijo de país no reconocido' };
-    return { valid: true };
-}
 
 function actualizarContadorSms() {
     const textarea = document.getElementById('smsMensaje');

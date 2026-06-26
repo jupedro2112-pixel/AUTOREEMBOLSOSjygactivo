@@ -2739,7 +2739,8 @@ app.post('/api/upload/presigned-url', authMiddleware, async (req, res) => {
     }
     const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
     const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-    const key = `chat-images/${req.user.userId}/${Date.now()}-${filename}`;
+    const safeName = String(filename).replace(/[^\w.\-]/g, '_').slice(0, 120);
+    const key = `chat-images/${req.user.userId}/${Date.now()}-${safeName}`;
     const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
     const command = new PutObjectCommand({
       Bucket: process.env.S3_BUCKET,
@@ -5640,6 +5641,12 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Tipo de mensaje no válido' });
     }
 
+    // Tope de longitud para texto (evita guardar blobs gigantes; imagen/video tienen
+    // su propio límite más abajo). Un mensaje de chat legítimo es muy corto.
+    if (type === 'text' && typeof content === 'string' && content.length > 8000) {
+      return res.status(400).json({ error: 'El mensaje es demasiado largo.' });
+    }
+
     // SECURITY: For image/video, validate that content is a well-formed https:// URL or an allowed data: URL
     if (type === 'image' || type === 'video') {
       const MAX_BASE64_SIZE = 5 * 1024 * 1024; // 5MB
@@ -7404,6 +7411,11 @@ io.on('connection', (socket) => {
       const allowedMsgTypes = ['text', 'image', 'video'];
       if (!allowedMsgTypes.includes(type)) {
         return socket.emit('error', { message: 'Tipo de mensaje no válido' });
+      }
+
+      // Tope de longitud para texto (evita blobs gigantes por socket).
+      if (type === 'text' && typeof content === 'string' && content.length > 8000) {
+        return socket.emit('error', { message: 'El mensaje es demasiado largo.' });
       }
 
       // SECURITY: For image/video, validate that content is a well-formed https:// URL or an allowed data: URL

@@ -8,6 +8,12 @@
 
 ## Sesión 2026-06-26
 
+### 84. Seguridad — Batch C: tope de longitud de texto en chat + saneo de filename (anti-DoS/storage)
+- **Tope de texto:** el envío de mensajes (HTTP `/api/messages/send` y socket `send_message`) no limitaba la longitud del texto → se podía guardar un blob de varios MB como `type:'text'` (el límite de 5MB solo aplicaba a imagen/video). Ahora rechaza `type:'text'` con `content.length > 8000` (un mensaje de chat real es muy corto; 8000 es holgado). Cero impacto en mensajes legítimos.
+- **Saneo de `filename`:** en `/api/upload/presigned-url` el `filename` se concatenaba crudo a la key de S3. Ahora se sanea (`[^\w.\-]→_`, máx 120 chars) antes de armar la key. BAJO, higiene.
+- **Validado:** `node --check` OK (server.js). Sin migraciones.
+- **NOTA sobre el "10/10":** con esto se cierra prácticamente toda la deuda de seguridad a NIVEL CÓDIGO de bajo riesgo. Los saltos restantes hacia 8-9 son: 2FA para el admin general (mayor valor), acortar la vida de los tokens de usuario (30-90d → afecta UX), sacar `'unsafe-inline'` de la CSP (refactor grande), y endurecer la INFRA (SSM/Atlas/Firebase rules/Cloudflare WAF/monitoreo) — esto último ya NO es código. El "10/10" no es un estado real alcanzable.
+
 ### 83. Seguridad — Batch B: endurecimientos de riesgo cero (defensa en profundidad)
 - **Pedido:** seguir con la deuda de seguridad sin romper nada. Se hicieron los hallazgos BAJOS de la auditoría que son arreglos chicos y 100% seguros (no cambian comportamiento para flujos legítimos):
   - **JWT con algoritmo fijado:** `verifyAccessToken`/`verifyRefreshToken` en `src/middlewares/auth.js` (usados por las rutas de referidos, que mueven plata) ahora pasan `{ algorithms: ['HS256'] }` — consistente con los `jwt.verify` de server.js, evita confusión de algoritmos. Los tokens ya eran HS256 → sin impacto en sesiones válidas.

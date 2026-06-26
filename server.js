@@ -83,10 +83,63 @@ const { validateInternationalPhone, normalizePhoneKey } = require('./src/middlew
 
 // ============================================
 // SEGURIDAD - RATE LIMITING
-// NOTE: Uses in-memory store per instance. In multi-instance deployments each
-// instance counts independently. For consistent distributed rate limiting,
-// configure a Redis store (e.g. rate-limit-redis) via REDIS_URL.
+// NOTE: generalLimiter usa store en memoria por instancia. authLimiter y
+// sensitiveLimiter usan el store Redis de abajo (compartido entre instancias)
+// con fallback a memoria.
 // ============================================
+
+// Store de rate-limit con backend en Redis (contador compartido entre instancias)
+// y FALLBACK automático al MemoryStore de la propia librería. Si no hay Redis o si
+// Redis falla, se comporta EXACTAMENTE como hoy (memoria por instancia). No agrega
+// dependencias. Si la lib no expusiera MemoryStore, makeRateStore devuelve undefined
+// y el limiter usa su store por defecto (= comportamiento actual).
+const ERLMemoryStore = rateLimit.MemoryStore;
+class RedisBackedRateStore {
+  constructor(prefix) {
+    this.prefix = prefix;
+    this.localKeys = false;
+    this.windowMs = 60 * 1000;
+    this.memory = new ERLMemoryStore();
+  }
+  init(options) {
+    this.windowMs = options.windowMs;
+    if (this.memory && typeof this.memory.init === 'function') this.memory.init(options);
+  }
+  _rk(key) { return `erl:${this.prefix}:${key}`; }
+  async increment(key) {
+    const redis = getRedisClient();
+    if (redis) {
+      try {
+        const rk = this._rk(key);
+        const totalHits = await redis.incr(rk);
+        if (totalHits === 1) await redis.expire(rk, Math.ceil(this.windowMs / 1000));
+        return { totalHits, resetTime: new Date(Date.now() + this.windowMs) };
+      } catch (err) {
+        logger.warn(`Redis rate-limit error (${this.prefix}), usando fallback en memoria: ${err.message}`);
+      }
+    }
+    return this.memory.increment(key);
+  }
+  async decrement(key) {
+    const redis = getRedisClient();
+    if (redis) {
+      try { await redis.decr(this._rk(key)); return; } catch (err) { /* fallback */ }
+    }
+    return this.memory.decrement(key);
+  }
+  async resetKey(key) {
+    const redis = getRedisClient();
+    if (redis) {
+      try { await redis.del(this._rk(key)); } catch (err) { /* ignore */ }
+    }
+    return this.memory.resetKey(key);
+  }
+}
+function makeRateStore(prefix) {
+  if (!ERLMemoryStore) return undefined; // sin MemoryStore → store por defecto de la lib
+  return new RedisBackedRateStore(prefix);
+}
+
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 300,
@@ -111,6 +164,7 @@ const authLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  store: makeRateStore('auth'),
   message: { error: 'Demasiados intentos de autenticación. Intenta más tarde.' }
 });
 
@@ -120,6 +174,7 @@ const sensitiveLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  store: makeRateStore('sensitive'),
   message: { error: 'Demasiados intentos. Intenta más tarde.' }
 });
 

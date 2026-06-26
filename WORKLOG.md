@@ -8,6 +8,17 @@
 
 ## Sesión 2026-06-26
 
+### 82. Seguridad — rate-limit de login/sensibles (express-rate-limit) a Redis, con fallback a memoria
+- **Continuación de #81:** ahora los limiters de `express-rate-limit` que protegen brute-force: `authLimiter` (10/min: login, register, check-username, change-password, login-otp…) y `sensitiveLimiter` (10/15min: reset password, verify-phone, OTP). También vivían en memoria por instancia → ~N× en multi-instancia.
+- **Fix:** custom Store `RedisBackedRateStore` (server.js, sección rate limiting) que implementa la interfaz de express-rate-limit v7 (`init`/`increment`/`decrement`/`resetKey`) con backend Redis (`INCR`+`EXPIRE`, contador compartido entre instancias). Reusa `getRedisClient()` (node-redis v4) — sin dependencias nuevas. Se aplica vía `store: makeRateStore('auth'|'sensitive')`.
+- **Diseño a prueba de roturas (clave, porque esto envuelve el LOGIN):**
+  - El store DELEGA al `MemoryStore` de la propia librería como fallback. Ante NO-Redis o CUALQUIER error de Redis (`try/catch`), usa el MemoryStore → **comportamiento idéntico al de hoy** (memoria por instancia). Nunca crashea ni bloquea login por un problema de infra.
+  - `makeRateStore` devuelve `undefined` si la lib no expusiera `MemoryStore` → el limiter usa su store por defecto (= comportamiento actual). Imposible romper el arranque.
+  - `authLimiter` NO usa `skipSuccessfulRequests` (es contador simple) → no hay semántica especial que preservar.
+- **Decisión de alcance (mínimo radio de impacto):** **`generalLimiter` (envuelve TODO `/api/`) NO se tocó** — no es un gate de brute-force (es DoS general, 300/min) y es el más riesgoso de tocar. Queda en memoria.
+- **Limitación honesta:** en este entorno no se puede correr el server (sin node_modules) → `node --check` valida sintaxis pero NO el runtime. El diseño con fallback al MemoryStore de la lib hace que el peor caso sea = comportamiento actual, pero conviene mirar los logs tras el primer deploy (buscar `Redis rate-limit error` o 429 inesperados en login).
+- **Validado:** `node --check` OK (server.js). Sin migraciones. Back necesita redeploy. Beneficio multi-instancia activo cuando `REDIS_URL`/`REDIS_HOST` esté seteado.
+
 ### 81. Seguridad — rate-limit de SMS/registro a Redis (anti-spam multi-instancia) con fallback a memoria
 - **Problema (deuda de #80):** los limiters por IP de SMS/registro (`smsIpLimiter` 5/15min, `bulkSmsIpLimiter` 1/h, `registerIpLimiter` 3/h) vivían en un `Map` EN MEMORIA por instancia. En AWS EB multi-instancia, cada instancia contaba por su lado → el límite efectivo era ~N× → riesgo de **spam de SMS (cuesta plata real, AWS SNS)** y creación masiva de cuentas para abusar del bono.
 - **Fix:** `createIpSmsLimiter` ahora usa un **contador compartido en Redis** (`INCR` + `EXPIRE`, ventana fija) cuando Redis está disponible → el límite se respeta entre TODAS las instancias. Reusa el mismo cliente node-redis v4 + `getRedisClient()` que ya usa `acquireRefundLock` (patrón probado).

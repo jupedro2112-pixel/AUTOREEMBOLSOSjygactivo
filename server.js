@@ -1349,11 +1349,21 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     // Es comprobante → armar huella para dedupe (N° de operación; si no, combo).
     let opKey = _normComprobanteKey(result.operationNumber);
     // Defensa anti falso-duplicado: si el "N° de operación" es en realidad un CBU/cuenta
-    // (coincide con el CBU de origen/destino, o es un número largo de 18+ dígitos), NO lo
-    // usamos como huella — el CBU se repite entre transferencias y marcaría duplicados falsos.
+    // o un CUIT/CUIL, NO lo usamos como huella — esos datos se REPITEN entre transferencias
+    // distintas y marcan duplicados falsos. Caso real: la IA leía el CUIT del destino
+    // (ej. 30-71876498-6) como "N° de operación" → todos los comprobantes a ese destino
+    // chocaban entre sí y se reportaban como "ya utilizado por" el primero que lo mandó.
     const _destDig = _digits(result.destCbu);
     const _origDig = _digits(result.originCbu);
-    if (opKey && ((_destDig && opKey === _destDig) || (_origDig && opKey === _origDig) || /^\d{18,}$/.test(opKey))) {
+    const _rawOp = String(result.operationNumber || '').replace(/\s/g, '');
+    // CUIT/CUIL = 11 dígitos con prefijo válido (20/23/24/27/30/33/34), con o sin guiones.
+    const _looksLikeCuit = /^(20|23|24|27|30|33|34)-?\d{8}-?\d$/.test(_rawOp) || /^(20|23|24|27|30|33|34)\d{9}$/.test(opKey);
+    if (opKey && (
+      (_destDig && opKey === _destDig) ||
+      (_origDig && opKey === _origDig) ||
+      /^\d{18,}$/.test(opKey) ||
+      _looksLikeCuit
+    )) {
       opKey = '';
     }
     let dedupeKey = opKey || null;

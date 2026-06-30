@@ -6,6 +6,17 @@
 >
 > **Última actualización: 2026-06-26**
 
+## Sesión 2026-06-30
+
+### 86. FIX comprobantes: falso "YA UTILIZADO" por leer el CUIT como N° de operación
+- **Síntoma (reportado por el owner, varias veces):** comprobantes NUEVOS y verificados salían como "duplicado", y a veces decían "COMPROBANTE YA UTILIZADO POR: @VIPpocha7" atribuyéndolo a un usuario que NO lo había mandado. Captura: vipPaulo427 manda un comprobante de $4.000 y salta "ya utilizado por @VIPpocha7 op. N°30-71876498-6".
+- **Causa raíz:** `30-71876498-6` es un **CUIT**, no un N° de operación. La IA (`comprobanteAiService`) lo leía y lo devolvía como `numero_operacion`. La defensa anti-falso-duplicado de `analyzeComprobanteFromMessage` (server.js) descartaba la huella solo si coincidía con el CBU (22 díg) o era de 18+ dígitos → **el CUIT de 11 dígitos se colaba** como `dedupeKey`. Como el CUIT del destino (o procesador) se REPITE en todas las transferencias, cada comprobante nuevo chocaba con el primero que tuviera ese CUIT → falso "ya utilizado", atribuido al primero que lo mandó.
+- **Fix (2 capas):**
+  - **Servidor (determinístico):** la defensa ahora también descarta el `opKey` si parece CUIT/CUIL — 11 dígitos con prefijo válido (20/23/24/27/30/33/34), con o sin guiones (`/^(20|23|24|27|30|33|34)-?\d{8}-?\d$/`). Al descartarlo, cae al combo `monto|titularOrigen|cbuOrigen|fecha` (que SÍ distingue transferencias de distintas personas) o a `no_key` (verificá a mano) — nunca a un falso duplicado. Probado: agarra CUITs, no toca N° de operación normales (9-10 díg, alfanuméricos).
+  - **Prompt IA (fuente):** se le aclara explícitamente que NO use el CUIT/CUIL (formato XX-XXXXXXXX-X) como número de operación, porque identifica a una persona y se repite entre transferencias.
+- **Por qué es seguro:** el peor caso de descartar el CUIT es usar el combo de dedup (más débil pero correcto) o pedir verificación manual — JAMÁS marca un falso duplicado. No empeora ningún caso. Sin migración: los comprobantes viejos con CUIT como huella quedan en la DB pero los NUEVOS ya no generan esa huella, así que no vuelven a chocar.
+- **Validado:** `node --check` OK (server.js, comprobanteAiService.js). Back necesita redeploy.
+
 ## Sesión 2026-06-26
 
 ### 85. Alerta de MULTICUENTA en el chat (en el momento, no a posteriori)

@@ -8,6 +8,13 @@
 
 ## Sesión 2026-06-30
 
+### 87. Auto-carga hgcash/Urbana: NO cargar transferencias menores al mínimo ($2000)
+- **Pedido del owner:** el casino tiene mínimo de carga $2000, pero la auto-carga acreditaba transferencias menores. Quiere que si el monto es < $2000 NO se cargue automático; que el comprobante igual se verifique y, si está correcto, se avise que está OK pero NO se cargó por estar bajo el mínimo, para que el agente le pida la diferencia al cliente.
+- **Fix:** en `hgcashAutoCarga` (server.js), después del modo sombra y ANTES de cargar, si `movement.amount < minChargeARS` → NO carga: deja el movimiento y el comprobante en `needs_review` (estados ya existentes, sin enums nuevos) y emite aviso admin-only: "✅ Comprobante CORRECTO (…) — PERO el monto es menor al mínimo ($2.000). NO se cargó automático. 👉 Pedile al cliente que envíe la diferencia y cargá la suma a mano". El movimiento en `needs_review` lo consume la carga manual posterior (`hgcashConsumeOnManualDeposit` ya maneja `needs_review`) → no se pierde plata ni queda colgado.
+- **Mínimo configurable:** nuevo `minChargeARS: 2000` en `HGCASH_DEFAULTS` (lo lee `getHgcashConfig`, default 2000 aunque no esté en la config guardada). Editable por DB si algún día cambia el mínimo; no se expuso campo en el panel (se puede agregar si lo piden).
+- **Alcance:** solo afecta la AUTO-CARGA (modo auto). En modo sombra/manual no cambia nada (el agente decide). La verificación del comprobante (OCR) sigue igual.
+- **Validado:** `node --check` OK (server.js). Sin migraciones. Back necesita redeploy.
+
 ### 86. FIX comprobantes: falso "YA UTILIZADO" por leer el CUIT como N° de operación
 - **Síntoma (reportado por el owner, varias veces):** comprobantes NUEVOS y verificados salían como "duplicado", y a veces decían "COMPROBANTE YA UTILIZADO POR: @VIPpocha7" atribuyéndolo a un usuario que NO lo había mandado. Captura: vipPaulo427 manda un comprobante de $4.000 y salta "ya utilizado por @VIPpocha7 op. N°30-71876498-6".
 - **Causa raíz:** `30-71876498-6` es un **CUIT**, no un N° de operación. La IA (`comprobanteAiService`) lo leía y lo devolvía como `numero_operacion`. La defensa anti-falso-duplicado de `analyzeComprobanteFromMessage` (server.js) descartaba la huella solo si coincidía con el CBU (22 díg) o era de 18+ dígitos → **el CUIT de 11 dígitos se colaba** como `dedupeKey`. Como el CUIT del destino (o procesador) se REPITE en todas las transferencias, cada comprobante nuevo chocaba con el primero que tuviera ese CUIT → falso "ya utilizado", atribuido al primero que lo mandó.

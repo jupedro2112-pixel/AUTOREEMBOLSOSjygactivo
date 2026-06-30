@@ -1461,7 +1461,7 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
 // raceWindowMinutes: ventana CORTA para el matcheo DESDE la transferencia (solo cubre
 //   el caso raro en que el comprobante llega segundos ANTES que el webhook). Mantenerla
 //   chica evita que una transferencia nueva cargue contra un comprobante viejo/sobrante.
-const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'], duplicateGuardMinutes: 8 };
+const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'], duplicateGuardMinutes: 8, minChargeARS: 2000 };
 
 async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
@@ -1856,6 +1856,27 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       `🏦 MATCH hgcash (MODO SOMBRA) — ${dataDesc}\n✅ La transferencia coincide con el comprobante. Lista para cargar (auto-carga DESACTIVADA — cargá vos).`);
     logger.info(`[hgcash] shadow match user=${user.username} amount=$${amount} movement=${movement.movementId}`);
     return;
+  }
+
+  // ── MÍNIMO DE CARGA ──────────────────────────────────────────────────────
+  // Si la transferencia es MENOR al mínimo del casino, NO se carga automático.
+  // El comprobante quedó verificado igual: se avisa al agente para que le pida al
+  // cliente la diferencia y, cuando llegue, se cargue la suma a mano. Se deja el
+  // movimiento en needs_review (lo consume la carga manual; no se pierde plata).
+  try {
+    const _minCfg = await getHgcashConfig();
+    const minCharge = Number(_minCfg.minChargeARS) > 0 ? Number(_minCfg.minChargeARS) : 2000;
+    if (Number(amount) < minCharge) {
+      await BankMovement.updateOne({ movementId: movement.movementId },
+        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `monto $${Number(amount)} menor al mínimo $${minCharge}` } });
+      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
+      await _emitAdminOnlyChatNote(user.id, user.username,
+        `🏦 ✅ Comprobante CORRECTO (${dataDesc}) — PERO el monto es menor al mínimo de carga ($${minCharge.toLocaleString('es-AR')}). NO se cargó automático.\n👉 Pedile al cliente que envíe la diferencia para llegar al mínimo y cargá la suma a mano.`);
+      logger.info(`[hgcash] bajo mínimo user=${user.username} $${amount} < $${minCharge} mov=${movement.movementId}`);
+      return;
+    }
+  } catch (minErr) {
+    logger.warn(`[hgcash] chequeo de mínimo falló (sigue la carga): ${minErr.message}`);
   }
 
   // ── IDEMPOTENCIA POR TRANSFERENCIA REAL (coelsa) ─────────────────────────

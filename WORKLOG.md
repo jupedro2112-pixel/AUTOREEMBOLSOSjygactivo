@@ -6,6 +6,17 @@
 >
 > **Última actualización: 2026-06-26**
 
+## Sesión 2026-07-02
+
+### 88. FIX "bienvenida-fantasma": mensaje de bienvenida viejo apareciendo como enviado por el cliente
+- **Síntoma (owner):** tras cambiar los % de reembolso y editar `/sys_welcome`, la bienvenida a veces sale bien (por "Sistema", con % nuevos) pero en OTROS casos aparece como enviada por el PROPIO CLIENTE y con el texto/porcentajes VIEJOS.
+- **Causa raíz:** el server actual crea la bienvenida como Sistema (`/api/messages/welcome`, con `renderSystemCommand('/sys_welcome')`). Pero **versiones VIEJAS cacheadas de la PWA** (service worker) todavía corren el código anterior, que mandaba la bienvenida vía `/api/messages/send` con el token del cliente → se registraba con `senderRole:'user'` y con el TEXTO HARDCODEADO viejo (20/10/5). El código actual del cliente (`ui.js` → `/api/messages/welcome`) está limpio; el problema son los dispositivos con caché vieja.
+- **Fix (2 capas):**
+  - **Servidor (inmediato, cubre a TODOS incluidos los cacheados):** guard `_isStaleClientWelcome(content)` en `/api/messages/send` (HTTP) y `send_message` (socket): si un usuario (`role==='user'`) manda un mensaje que ES la bienvenida (matchea "Bienvenido a la Sala de Juegos" + "Beneficios exclusivos"/"Reembolso DIARIO/SEMANAL/MENSUAL"), se descarta silenciosamente (no se guarda ni emite; HTTP devuelve `{success:true, ignored:true}`). Marcadores muy específicos → no toca mensajes reales.
+  - **Service worker:** `CACHE_VERSION` v47 → v48 para que los clientes viejos actualicen a `ui.js` limpio (que ya usa `/api/messages/welcome`).
+- **NO tocado (latente, no era la causa):** los textos de bienvenida HARDCODEADOS con % viejos en `server.js:4930` (fallback de `/api/messages/welcome`) y en el seed `/sys_welcome` (`$setOnInsert`) — son dormidos porque `/sys_welcome` está editado; solo reaparecerían si se borra el comando. Se puede limpiar si se quiere.
+- **Validado:** `node --check` OK (server.js). `socket.role` confirmado seteado (L7389). Sin migraciones. Back redeploy; el efecto del SW se ve cuando los clientes recargan la PWA.
+
 ## Sesión 2026-06-30
 
 ### 87. Auto-carga hgcash/Urbana: NO cargar transferencias menores al mínimo ($2000)

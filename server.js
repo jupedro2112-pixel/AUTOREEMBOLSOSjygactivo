@@ -5655,6 +5655,18 @@ app.post('/api/messages/read/:userId', authMiddleware, adminMiddleware, async (r
   }
 });
 
+// Guard anti "bienvenida-fantasma": versiones VIEJAS cacheadas de la PWA mandaban el
+// mensaje de bienvenida como si fuera el propio cliente (senderRole:'user'), con texto
+// hardcodeado y porcentajes viejos → aparecía "enviado por el cliente" con datos viejos.
+// La bienvenida REAL la crea el server (/api/messages/welcome) como "Sistema". Por eso,
+// un mensaje de USUARIO que es la bienvenida siempre es ese bug del cliente viejo → se
+// descarta (no se guarda ni se emite). Marcadores muy específicos → no toca mensajes reales.
+function _isStaleClientWelcome(content) {
+  return typeof content === 'string' &&
+    /¡?Bienvenido a la Sala de Juegos/i.test(content) &&
+    /(Beneficios exclusivos|Reembolso\s+(DIARIO|SEMANAL|MENSUAL))/i.test(content);
+}
+
 app.post('/api/messages/send', authMiddleware, async (req, res) => {
   try {
     const { content, type = 'text', receiverId } = req.body;
@@ -5664,6 +5676,12 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
     if (!content) {
       logger.debug('[API_MESSAGES_SEND] ERROR: content required');
       return res.status(400).json({ error: 'Contenido requerido' });
+    }
+
+    // Bienvenida-fantasma de clientes viejos cacheados → descartar (nunca la manda el cliente).
+    if (req.user.role === 'user' && _isStaleClientWelcome(content)) {
+      logger.info(`[welcome-guard] descartada bienvenida-fantasma (HTTP) de ${req.user.username}`);
+      return res.json({ success: true, ignored: true });
     }
 
     // SECURITY: Validate message type to prevent type confusion
@@ -7436,6 +7454,12 @@ io.on('connection', (socket) => {
       if (!socket.userId) {
         logger.debug('[SEND_MESSAGE] ERROR: not authenticated');
         return socket.emit('error', { message: 'No autenticado' });
+      }
+
+      // Bienvenida-fantasma de clientes viejos cacheados → descartar (nunca la manda el cliente).
+      if (socket.role === 'user' && _isStaleClientWelcome(content)) {
+        logger.info(`[welcome-guard] descartada bienvenida-fantasma (socket) de ${socket.userId}`);
+        return; // no guardar, no emitir
       }
 
       // SECURITY: Validate message type to prevent type confusion

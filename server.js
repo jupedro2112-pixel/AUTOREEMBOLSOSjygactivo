@@ -359,6 +359,44 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ============================================
+// BÚSQUEDA DE USUARIO CASE-INSENSITIVE (camino rápido + red de seguridad)
+// ============================================
+// Camino RÁPIDO: usernameLower (indexado, lo mantiene el pre-save de User +
+// backfill al arranque). Red de seguridad: el regex case-insensitive histórico
+// (COLLSCAN) — SOLO se usa si el camino rápido no encontró nada Y el backfill
+// del arranque todavía no está confirmado en esta instancia. Así el peor caso
+// de este cambio es exactamente el comportamiento de antes: NADIE puede quedar
+// afuera de su cuenta.
+// opts.critical: el LOGIN usa fallback SIEMPRE (aunque el backfill esté OK) —
+// cubre hasta la ventana de un rolling deploy donde una instancia vieja creó
+// un usuario sin el campo. El costo solo se paga cuando el username NO existe
+// (tipeos), que además está rate-limiteado.
+let _usernameLowerReady = false; // la pone en true el backfill del bootstrap
+async function findUserByUsernameCI(username, opts = {}) {
+  const raw = String(username || '').trim();
+  if (!raw) return null;
+  const build = (filter) => {
+    let q = User.findOne(filter);
+    if (opts.select) q = q.select(opts.select);
+    if (opts.lean) q = q.lean();
+    return q;
+  };
+  let user = await build({ usernameLower: raw.toLowerCase() });
+  if (!user && (!_usernameLowerReady || opts.critical)) {
+    user = await build({ username: { $regex: new RegExp('^' + escapeRegex(raw) + '$', 'i') } });
+    if (user) {
+      // Auto-reparación: si el camino lento lo encontró, dejarle el campo
+      // rápido para la próxima (fire-and-forget, no bloquea la respuesta).
+      User.updateOne(
+        { _id: user._id },
+        { $set: { usernameLower: String(user.username || '').toLowerCase() } }
+      ).catch(() => {});
+    }
+  }
+  return user;
+}
+
 function validateUsername(username) {
   if (!username || typeof username !== 'string') return false;
   const sanitized = username.trim();
@@ -2540,10 +2578,8 @@ app.get('/api/auth/check-username', authLimiter, async (req, res) => {
       return res.json({ available: false, message: 'Usuario muy corto' });
     }
     
-    // Buscar case-insensitive
-    const localExists = await User.findOne({ 
-      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') } 
-    });
+    // Buscar case-insensitive (camino rápido indexado + fallback)
+    const localExists = await findUserByUsernameCI(username);
     
     if (localExists) {
       return res.json({ available: false, message: 'Usuario ya registrado' });
@@ -2873,10 +2909,8 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
       }
     }
     
-    // Buscar case-insensitive
-    const existingUser = await User.findOne({ 
-      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') } 
-    });
+    // Buscar case-insensitive (camino rápido indexado + fallback)
+    const existingUser = await findUserByUsernameCI(username);
     
     if (existingUser) {
       return res.status(400).json({ error: 'El usuario ya existe' });
@@ -3113,9 +3147,7 @@ app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req,
       return res.status(400).json({ error: 'Código de pauta inválido o inactivo' });
     }
 
-    const existingUser = await User.findOne({
-      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
-    }).lean();
+    const existingUser = await findUserByUsernameCI(username, { lean: true });
     if (existingUser) {
       return res.status(400).json({ error: 'El usuario ya existe' });
     }
@@ -3278,11 +3310,10 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         dbReadFailed = true;
       }
     } else {
-      // Username-based login
+      // Username-based login. critical:true → el fallback lento queda SIEMPRE
+      // disponible: nadie puede quedar afuera de su cuenta por el camino rápido.
       try {
-        user = await User.findOne({ 
-          username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') } 
-        });
+        user = await findUserByUsernameCI(username, { critical: true });
       } catch (dbErr) {
         logger.error(`[Login] MongoDB read failed for ${username}: ${dbErr.message}`);
         dbReadFailed = true;
@@ -4150,9 +4181,7 @@ app.post('/api/auth/send-register-otp', sensitiveLimiter, smsIpLimiter, async (r
 
     // Validar username si fue proporcionado
     if (username) {
-      const existing = await User.findOne({
-        username: { $regex: new RegExp('^' + escapeRegex(String(username).trim()) + '$', 'i') }
-      }).lean();
+      const existing = await findUserByUsernameCI(String(username).trim(), { lean: true });
       if (existing) {
         return res.status(400).json({ error: 'El nombre de usuario ya está en uso' });
       }
@@ -5070,10 +5099,8 @@ app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Solo el administrador general puede crear otros administradores' });
     }
     
-    // Buscar case-insensitive
-    const existingUser = await User.findOne({ 
-      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') } 
-    });
+    // Buscar case-insensitive (camino rápido indexado + fallback)
+    const existingUser = await findUserByUsernameCI(username);
     if (existingUser) {
       return res.status(400).json({ error: 'El usuario ya existe' });
     }
@@ -8095,6 +8122,25 @@ async function initializeData() {
     logger.error(`[startup-migration] clamp_notifrule_percent (reintenta al próximo arranque): ${e.message}`);
   }
 
+  // Backfill de usernameLower (camino rápido del login case-insensitive). Corre en
+  // CADA arranque (idempotente; cuando no hay nada que rellenar es un no-op barato)
+  // porque también repara usuarios creados por instancias con código viejo durante
+  // un rolling deploy. Recién si terminó OK se habilita el modo rápido puro
+  // (_usernameLowerReady); si falla, esta instancia sigue con el fallback por regex
+  // (comportamiento histórico) — el login NUNCA se puede romper por esto.
+  try {
+    const UserModel = require('./src/models/User');
+    const r = await UserModel.updateMany(
+      { usernameLower: null },
+      [{ $set: { usernameLower: { $toLower: '$username' } } }]
+    );
+    const filled = (r && (r.modifiedCount != null ? r.modifiedCount : r.nModified)) || 0;
+    if (filled > 0) logger.info(`[startup] usernameLower backfill: ${filled} usuarios rellenados`);
+    _usernameLowerReady = true;
+  } catch (e) {
+    logger.error(`[startup] usernameLower backfill falló (el login sigue con el fallback por regex): ${e.message}`);
+  }
+
   // One-shot: backfill de phoneKey (clave normalizada) en los usuarios con teléfono YA
   // verificado, para que el chequeo de unicidad por phoneKey funcione contra los existentes.
   try {
@@ -9771,9 +9817,7 @@ app.post('/api/admin/publisher-admin/create-user', authMiddleware, publisherAdmi
     }
 
     // Username único, case-insensitive (mismo criterio que el resto del sistema).
-    const existingUser = await User.findOne({
-      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
-    });
+    const existingUser = await findUserByUsernameCI(username);
     if (existingUser) {
       return res.status(400).json({ error: 'El usuario ya existe' });
     }
@@ -10129,9 +10173,7 @@ app.post('/api/admin/publisher-admins', authMiddleware, adminMiddleware, async (
       return res.status(400).json({ error: 'La campaña está desactivada — reactivala antes de asignar una cuenta' });
     }
 
-    const existing = await User.findOne({
-      username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') }
-    });
+    const existing = await findUserByUsernameCI(username);
     if (existing) {
       return res.status(400).json({ error: 'Ya existe un usuario con ese username' });
     }
@@ -13197,7 +13239,7 @@ app.post('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =
     }
     
     // Verificar si el usuario ya existe
-    const existingUser = await User.findOne({ username: { $regex: new RegExp('^' + escapeRegex(username) + '$', 'i') } });
+    const existingUser = await findUserByUsernameCI(username);
     if (existingUser) {
       return res.status(400).json({ error: 'El usuario ya existe' });
     }
@@ -13759,7 +13801,7 @@ app.post('/api/admin/roulette/test-spin', authMiddleware, adminMiddleware, async
       return res.status(400).json({ error: 'Falta username' });
     }
     // Verificar que el user exista (para que el owner sepa si tipeó mal).
-    const u = await User.findOne({ username: { $regex: '^' + username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', $options: 'i' } }, { _id: 1, username: 1 }).lean();
+    const u = await findUserByUsernameCI(username, { select: '_id username', lean: true });
     if (!u) {
       return res.status(404).json({ error: `Usuario "${username}" no encontrado` });
     }

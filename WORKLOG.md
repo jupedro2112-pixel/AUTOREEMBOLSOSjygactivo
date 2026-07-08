@@ -8,6 +8,34 @@
 
 ## Sesión 2026-07-08
 
+### 92. PERFORMANCE — Login/registro case-insensitive por índice (usernameLower) con red de seguridad
+- **Problema:** TODAS las búsquedas de usuario case-insensitive usaban regex `^...$/i`, que NO puede
+  usar el índice de `username` → COLLSCAN de la colección entera en cada login, cada chequeo de
+  "usuario disponible" y cada verificación de unicidad al crear cuentas (10 lugares). Crece linealmente
+  con la base; pega peor justo en ráfagas de registro por pauta.
+- **Diseño (a prueba de dejar gente afuera):**
+  - Nuevo campo **`usernameLower`** en User (copia en minúsculas, indexada). Lo mantiene un hook
+    `pre('save')` (cubre TODAS las altas; verificado por grep que no hay renames de username por
+    updateOne/findOneAndUpdate).
+  - **Backfill en CADA arranque** (no one-shot): `updateMany({usernameLower:null},
+    [{$set:{usernameLower:{$toLower:'$username'}}}])` — idempotente, barato cuando no hay nada que
+    rellenar, y repara usuarios creados por instancias con código viejo durante un rolling deploy.
+    Solo si terminó OK se habilita el modo rápido puro (`_usernameLowerReady`).
+  - Helper único **`findUserByUsernameCI(username, {select,lean,critical})`**: busca por
+    `usernameLower` (indexado); si no encuentra Y (`!_usernameLowerReady` O `critical`), cae al
+    regex histórico (COLLSCAN) y si lo encuentra AUTO-REPARA el campo (fire-and-forget).
+  - **El LOGIN usa `critical:true`** → fallback lento disponible SIEMPRE: es imposible que alguien
+    quede afuera de su cuenta por este cambio (peor caso = comportamiento de hoy). El costo del
+    fallback solo se paga con usernames inexistentes (tipeos), y el login está rate-limiteado.
+- **Migrados los 10 call sites:** login (3316), check-username (2582), register (2913),
+  register-quick (3150), verify-phone/registro con username (4184), admin create user (5103 y
+  13242), influencer create (9820), asignar cuenta de campaña (10176), simulación ruleta (13804).
+  Grep: 0 regex de username fuera del helper.
+- **Validado:** `node --check` OK (server.js, User.js). Mongoose 8 (soporta pipeline updates).
+  Back necesita redeploy (crea el índice + corre el backfill). PROBAR tras deploy: login con
+  mayúsculas/minúsculas mezcladas, registro de usuario nuevo, "usuario ya existe" al intentar
+  duplicado con otra capitalización.
+
 ### 91. PERFORMANCE — Batch B (subset seguro): endpoints muertos peligrosos + cache de campañas + render del panel
 - **Contexto:** producción con gente activa (JUGAYGANA/backupviejo quedó como el repo vivo; Spingama
   NUNCA se deployó → cero problema de datos). Del Batch B se aplicó SOLO lo que no toca flujos de

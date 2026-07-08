@@ -14,14 +14,23 @@ const userSchema = new mongoose.Schema({
     unique: true, 
     index: true 
   },
-  username: { 
-    type: String, 
-    required: true, 
-    unique: true, 
+  username: {
+    type: String,
+    required: true,
+    unique: true,
     index: true,
     trim: true,
     minlength: 3,
     maxlength: 30
+  },
+  // Copia en minúsculas del username, indexada. Es el camino RÁPIDO de las
+  // búsquedas case-insensitive (login, check-username, unicidad al crear):
+  // el regex 'i' anclado no puede usar el índice de username → COLLSCAN.
+  // La mantiene el hook pre('save') + backfill al arranque (server.js).
+  usernameLower: {
+    type: String,
+    index: true,
+    default: null
   },
   password: { 
     type: String, 
@@ -519,6 +528,14 @@ userSchema.statics.findByPhone = function(phone) {
     $or: [{ phone }, { whatsapp: phone }] 
   });
 };
+
+// Middleware pre-save: mantener usernameLower sincronizado con username.
+userSchema.pre('save', function(next) {
+  if (this.isModified('username') || !this.usernameLower) {
+    this.usernameLower = String(this.username || '').toLowerCase();
+  }
+  next();
+});
 
 // Middleware pre-save para hashear contraseña
 userSchema.pre('save', async function(next) {

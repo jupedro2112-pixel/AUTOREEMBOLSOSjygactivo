@@ -2167,6 +2167,53 @@ async function hgcashMatchFromComprobante(comprobante) {
 // authMiddleware (lo llama el banco). Valida firma HMAC sobre el body CRUDO,
 // guarda el movimiento (dedupe por id), responde 2xx rápido y matchea en
 // segundo plano. NUNCA carga si la config está apagada (modo sombra por defecto).
+// ============================================
+// FAN-OUT del webhook hgcash → autoreembolsos
+// ============================================
+// hgcash permite UNA sola URL de webhook por cuenta. vipcargas la recibe y la
+// reenvía al proyecto hermano (autoreembolsos, misma cuenta hgcash; cada uno
+// matchea sus propios comprobantes, no hay doble carga). Se reenvía el body
+// CRUDO (bytes exactos) con la firma ORIGINAL (X-HG-Webhook-Signature) para que
+// el destino valide el mismo HMAC con el secret compartido. Fire-and-forget con
+// 1 reintento a los 15s: si el destino está caído o lento, el procesamiento
+// local NO se ve afectado en nada (ni demora la respuesta 200 a hgcash).
+// URL configurable por env/SSM: HGCASH_FANOUT_URL (leída lazy — SSM carga en el
+// bootstrap async). Poner 'off' para desactivar el reenvío sin deploy de código.
+function _hgcashFanoutUrl() {
+  const v = String(process.env.HGCASH_FANOUT_URL || '').trim();
+  if (v.toLowerCase() === 'off') return null;
+  return v || 'https://www.autoreembolsos.com/api/hgcash/webhook';
+}
+
+function _fanoutHgcashWebhook(req) {
+  try {
+    const url = _hgcashFanoutUrl();
+    if (!url) return;
+    const axios = require('axios');
+    const rawBody = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
+    const headers = {
+      'Content-Type': req.get('Content-Type') || 'application/json',
+      'X-Forwarded-By': 'vipcargas'
+    };
+    const sig = req.get('X-HG-Webhook-Signature');
+    if (sig) headers['X-HG-Webhook-Signature'] = sig;
+    // maxRedirects:0 a propósito: un redirect (http→https, www↔apex) rompería la
+    // entrega del POST — mejor que falle y quede visible en los logs.
+    const send = () => axios.post(url, rawBody, { headers, timeout: 8000, maxRedirects: 0 });
+    send().catch((e1) => {
+      logger.warn(`[hgcash-fanout] primer intento falló (${e1.message}) — reintento en 15s`);
+      const t = setTimeout(() => {
+        send().catch((e2) => {
+          logger.warn(`[hgcash-fanout] reenvío a ${url} falló definitivamente: ${e2.message}`);
+        });
+      }, 15000);
+      if (t.unref) t.unref();
+    });
+  } catch (e) {
+    logger.warn(`[hgcash-fanout] error preparando reenvío: ${e.message}`);
+  }
+}
+
 app.post('/api/hgcash/webhook', async (req, res) => {
   try {
     const secret = process.env.HGCASH_WEBHOOK_SECRET || null;
@@ -2188,6 +2235,12 @@ app.post('/api/hgcash/webhook', async (req, res) => {
       }
       logger.warn('[hgcash] webhook recibido SIN HGCASH_WEBHOOK_SECRET — no se valida firma (solo dev)');
     }
+
+    // Fan-out al proyecto hermano (autoreembolsos): recién DESPUÉS de validar la
+    // firma (solo se reenvían webhooks auténticos) y ANTES de cualquier filtro
+    // local (el destino recibe TODO — movimientos y estados de pago — y decide
+    // qué es suyo). Fire-and-forget: no bloquea nada de lo que sigue.
+    _fanoutHgcashWebhook(req);
 
     const p = req.body || {};
     if (!p.id) return res.status(400).json({ error: 'payload sin id' });

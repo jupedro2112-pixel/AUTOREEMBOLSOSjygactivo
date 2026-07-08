@@ -8,6 +8,33 @@
 
 ## Sesión 2026-07-08
 
+### 94. Fan-out del webhook hgcash → autoreembolsos.com (proyecto hermano, misma cuenta hgcash)
+- **Pedido del owner:** hgcash permite UNA sola URL de webhook por cuenta; vipcargas la recibe.
+  Reenviar cada webhook VÁLIDO a autoreembolsos.com (comparte la cuenta hgcash; cada proyecto
+  matchea sus propios comprobantes → no hay doble carga). SIN tocar el procesamiento actual ni
+  la URL configurada en hgcash.
+- **Implementación (`_fanoutHgcashWebhook` en server.js, junto al webhook):**
+  - Se dispara DESPUÉS de validar la firma (solo webhooks auténticos) y ANTES de los filtros
+    locales → el destino recibe TODO (movimientos entrantes Y estados de pago TRANSACTION_REQUEST,
+    que también necesita para sus propios cash-outs).
+  - Reenvía el **body CRUDO** (`req.rawBody`, bytes exactos) + la firma original
+    `X-HG-Webhook-Signature` → autoreembolsos valida el mismo HMAC con el secret compartido
+    (⚠️ debe tener el MISMO `HGCASH_WEBHOOK_SECRET` configurado). Header `X-Forwarded-By: vipcargas`.
+  - **Fire-and-forget** (sin await): jamás demora la respuesta 200 a hgcash ni afecta el
+    procesamiento local. Timeout 8s + 1 reintento a los 15s; después desiste con log
+    `[hgcash-fanout]`. `maxRedirects:0` a propósito (un redirect www↔apex rompería el POST y
+    debe quedar visible en logs, no silenciado).
+  - **URL configurable** por env/SSM `HGCASH_FANOUT_URL` (lectura lazy por el bootstrap SSM);
+    default `https://www.autoreembolsos.com/api/hgcash/webhook` (confirmado por el owner).
+    **Kill switch sin deploy:** setear `HGCASH_FANOUT_URL=off`.
+- **OJO (lado autoreembolsos, no nuestro):** si autoreembolsos.com está detrás de Cloudflare,
+  puede bloquear el POST server-to-server — mismo problema que tuvo vipcargas con su propio
+  webhook (#66): necesitaría regla WAF "Skip" para su ruta /api/hgcash/webhook. Si en los logs
+  aparece `[hgcash-fanout] ... 403` es eso.
+- **Validado:** `node --check` OK (server.js). Back necesita redeploy. PROBAR: tras una carga real,
+  buscar `[hgcash-fanout]` en los logs (ausencia de warns = entregas OK) y verificar que el
+  movimiento apareció en autoreembolsos.
+
 ### 93. PERFORMANCE — Listados de usuarios: proyección campo por campo + 3 endpoints muertos eliminados
 - **Hallazgo clave (mejor de lo esperado):** la sección Usuarios del panel YA estaba paginada
   (`GET /api/admin/users?page=…`, 20 por página, búsqueda server-side) — no hacía falta el

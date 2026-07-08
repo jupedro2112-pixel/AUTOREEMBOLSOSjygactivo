@@ -8,6 +8,31 @@
 
 ## Sesión 2026-07-08
 
+### 93. PERFORMANCE — Listados de usuarios: proyección campo por campo + 3 endpoints muertos eliminados
+- **Hallazgo clave (mejor de lo esperado):** la sección Usuarios del panel YA estaba paginada
+  (`GET /api/admin/users?page=…`, 20 por página, búsqueda server-side) — no hacía falta el
+  refactor grande de paginación. Lo que quedaba: docs completos viajando al pedo y 3 endpoints
+  muertos que dumpeaban la base entera.
+- **Proyección verificada CAMPO POR CAMPO contra el panel:**
+  - `GET /api/admin/users` (paginado, el que usa la sección Usuarios): `select('-password')`
+    arrastraba fcmTokens/tagHistory/withdrawalAccount/acquisitionUtm/adminNotes de cada fila →
+    ahora `USERS_LIST_FIELDS` (17 campos, enumerados leyendo `renderUsers` + `notifUsageCell` +
+    los onclick de la tabla en admin.js). El detalle completo lo sigue trayendo
+    `GET /api/users/:userId` (viewUser/loadUserInfo) — intacto. ⚠️ Columna nueva en la tabla del
+    panel ⇒ sumar el campo al select.
+  - `POST /api/admin/database/users` (sección Base de Datos): trae TODA la base (sin paginar) pero
+    ahora solo las 8 columnas que `renderDatabaseUsers` muestra (username email phone role balance
+    isActive lastLogin createdAt) — el payload baja ~20-50×.
+- **ELIMINADOS 3 endpoints muertos** (0 callers, verificado en admin.js + ambos index.html con JS
+  inline + public/js + scripts): `GET /api/users` (dump completo de la base con doc entero),
+  `GET /api/admin/database` (ídem) y `POST /api/admin/database/export/csv` (botón borrado en #79).
+  El export vivo (`GET /api/admin/users/export/csv`, ya proyectado) y los POST de database
+  (verify/users) quedan. Rollback: `git revert`.
+- **Validado:** `node --check` OK (server.js). Solo queda 1 `User.find()` sin filtro en el repo:
+  el export CSV vivo (proyectado a 5 campos, es su función). PROBAR tras deploy: sección Usuarios
+  (tabla completa con etiquetas, plan de notis, botones SMS/bloquear/clave), modal "Ver detalle",
+  sección Base de Datos, export CSV de usuarios.
+
 ### 92. PERFORMANCE — Login/registro case-insensitive por índice (usernameLower) con red de seguridad
 - **Problema:** TODAS las búsquedas de usuario case-insensitive usaban regex `^...$/i`, que NO puede
   usar el índice de `username` → COLLSCAN de la colección entera en cada login, cada chequeo de

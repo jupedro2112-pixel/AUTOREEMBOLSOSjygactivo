@@ -5058,15 +5058,9 @@ app.post('/api/messages/welcome', authMiddleware, async (req, res) => {
 // RUTAS DE USUARIOS (ADMIN)
 // ============================================
 
-app.get('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const users = await User.find().select('-password').lean();
-    res.json(users);
-  } catch (error) {
-    console.error('Error obteniendo usuarios:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
+// ELIMINADO (2026-07-08, perf #4): GET /api/users — devolvía TODA la colección de
+// usuarios con todos sus campos. 0 callers (el panel usa /api/admin/users paginado
+// y GET /api/users/:userId para el detalle). Si algo externo lo necesitara: git revert.
 
 app.post('/api/users', authMiddleware, adminMiddleware, async (req, res) => {
   try {
@@ -10871,29 +10865,9 @@ app.put('/api/admin/config/cbu', authMiddleware, adminMiddleware, async (req, re
 // BASE DE DATOS - SOLO ADMIN PRINCIPAL
 // ============================================
 
-app.get('/api/admin/database', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Acceso denegado. Solo el administrador principal puede acceder.' });
-    }
-    
-    const users = await User.find().select('-password').lean();
-    const totalMessages = await Message.countDocuments();
-    
-    const adminRoles = ['admin', 'depositor', 'withdrawer', 'comunidad'];
-    const totalAdmins = users.filter(u => adminRoles.includes(u.role)).length;
-    
-    res.json({
-      users,
-      totalUsers: users.length,
-      totalAdmins,
-      totalMessages
-    });
-  } catch (error) {
-    console.error('Error obteniendo base de datos:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
+// ELIMINADO (2026-07-08, perf #4): GET /api/admin/database — devolvía TODA la
+// colección de usuarios. 0 callers (la sección Base de Datos del panel usa
+// POST /api/admin/database/users). Si algo externo lo necesitara: git revert.
 
 // ============================================
 // TRANSACCIONES
@@ -13133,8 +13107,14 @@ app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =>
 
     const total = await User.countDocuments(query);
     const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
+    // Proyección verificada campo por campo contra renderUsers + notifUsageCell +
+    // los onclick de la tabla (admin.js). El detalle completo lo trae aparte
+    // GET /api/users/:userId (viewUser/loadUserInfo). Antes viajaba el doc entero
+    // (fcmTokens, tagHistory, withdrawalAccount, acquisitionUtm, adminNotes…).
+    // ⚠️ Si se agrega una columna nueva a la tabla del panel: sumar el campo acá.
+    const USERS_LIST_FIELDS = 'id username tags accountNumber email phone role balance isActive isBlocked blockReason lastLogin createdAt notificationPlan notifMonthlyCounts phoneVerified loginWithoutPassword';
     const users = await User.find(query)
-      .select('-password')
+      .select(USERS_LIST_FIELDS)
       .sort({ role: 1, username: 1 })
       .skip((page - 1) * limit)
       .limit(limit)
@@ -13402,7 +13382,13 @@ app.post('/api/admin/database/users', authMiddleware, adminMiddleware, dbPasswor
     }
     // Admin general ve TODOS (usuarios y admins)
     
-    const users = await User.find(query).select('-password').sort({ role: 1, username: 1 }).lean();
+    // Proyección verificada campo por campo contra renderDatabaseUsers (admin.js):
+    // la tabla muestra exactamente estas 8 columnas. Antes viajaba el doc completo
+    // (fcmTokens, tagHistory, withdrawalAccount, etc.) de TODA la base.
+    const users = await User.find(query)
+      .select('username email phone role balance isActive lastLogin createdAt')
+      .sort({ role: 1, username: 1 })
+      .lean();
     res.json({ users, total: users.length });
   } catch (error) {
     console.error('Error obteniendo usuarios de base de datos:', error);
@@ -13410,26 +13396,10 @@ app.post('/api/admin/database/users', authMiddleware, adminMiddleware, dbPasswor
   }
 });
 
-// Exportar base de datos a CSV
-app.post('/api/admin/database/export/csv', authMiddleware, adminMiddleware, dbPasswordMiddleware, async (req, res) => {
-  try {
-    const users = await User.find().select('-password').sort({ createdAt: -1 }).lean();
-    
-    // Crear CSV con todos los campos
-    let csv = 'ID,Usuario,Email,Teléfono,Rol,Balance,AccountNumber,Estado,Último Login,Creado,JugayganaUserId,JugayganaUsername,JugayganaSyncStatus\n';
-    
-    users.forEach(user => {
-      csv += `${escapeCsvField(user.id)},${escapeCsvField(user.username)},${escapeCsvField(user.email || '')},${escapeCsvField(user.phone || '')},${escapeCsvField(user.role)},${escapeCsvField(user.balance || 0)},${escapeCsvField(user.accountNumber || '')},${escapeCsvField(user.isActive ? 'Activo' : 'Inactivo')},${escapeCsvField(user.lastLogin || 'Nunca')},${escapeCsvField(user.createdAt || '')},${escapeCsvField(user.jugayganaUserId || '')},${escapeCsvField(user.jugayganaUsername || '')},${escapeCsvField(user.jugayganaSyncStatus || '')}\n`;
-    });
-    
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename=base_de_datos_completa.csv');
-    res.send('\uFEFF' + csv); // BOM para Excel
-  } catch (error) {
-    console.error('Error exportando base de datos:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
+// ELIMINADO (2026-07-08, perf #4): POST /api/admin/database/export/csv — export de
+// toda la base con documento completo por usuario. 0 callers (el botón del panel se
+// eliminó en #79 como código muerto; el export vivo es GET /api/admin/users/export/csv,
+// que ya proyecta 5 campos). Si algo externo lo necesitara: git revert.
 
 // ============================================
 // EXPORTAR USUARIOS A CSV

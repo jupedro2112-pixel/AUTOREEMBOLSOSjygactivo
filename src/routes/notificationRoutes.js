@@ -21,6 +21,13 @@ const { User } = require('../../config/database');
 const NotifTemplate = require('../models/NotifTemplate');
 const ScheduledNotif = require('../models/ScheduledNotif');
 
+// Logs de debug POR-REQUEST (register-token corre en cada carga de la PWA y
+// requireAdmin en cada llamada del panel; stdout es I/O síncrona en hot path).
+// Apagados por default; prender con FCM_DEBUG_LOGS=1. Los console.error quedan.
+const _dlog = process.env.FCM_DEBUG_LOGS === '1'
+  ? (...args) => console.log(...args)
+  : () => {};
+
 // Rate limit para el registro de token FCM: evita que un cliente con un token
 // válido inunde el endpoint. 20 req/min por IP es holgado para el flujo normal
 // (registro al login + refresh periódico).
@@ -114,10 +121,10 @@ async function requireAdmin(req, res, next) {
     token = _getAdminApiSessionCookie(req) || null;
   }
 
-  console.log('[NOTIF-ADMIN] requireAdmin — token source:', req.headers.authorization ? 'Authorization header' : 'cookie');
+  _dlog('[NOTIF-ADMIN] requireAdmin — token source:', req.headers.authorization ? 'Authorization header' : 'cookie');
 
   if (!token) {
-    console.log('[NOTIF-ADMIN] requireAdmin — no token provided, returning 401');
+    _dlog('[NOTIF-ADMIN] requireAdmin — no token provided, returning 401');
     return res.status(401).json({ error: 'Token no proporcionado' });
   }
 
@@ -131,13 +138,13 @@ async function requireAdmin(req, res, next) {
   try {
     decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
   } catch (error) {
-    console.log('[NOTIF-ADMIN] requireAdmin — jwt.verify failed:', error.message);
+    _dlog('[NOTIF-ADMIN] requireAdmin — jwt.verify failed:', error.message);
     return res.status(401).json({ error: 'Token inválido' });
   }
 
   const adminRoles = ['admin', 'depositor', 'withdrawer'];
   if (!adminRoles.includes(decoded.role)) {
-    console.log('[NOTIF-ADMIN] requireAdmin — role not allowed:', decoded.role);
+    _dlog('[NOTIF-ADMIN] requireAdmin — role not allowed:', decoded.role);
     return res.status(403).json({ error: 'No tienes permisos de administrador' });
   }
 
@@ -153,10 +160,10 @@ async function requireAdmin(req, res, next) {
       }
     }
     if (!user || !user.isActive) {
-      console.log('[NOTIF-ADMIN] requireAdmin — user not found or inactive for userId:', decoded.userId);
+      _dlog('[NOTIF-ADMIN] requireAdmin — user not found or inactive for userId:', decoded.userId);
       return res.status(401).json({ error: 'Usuario desactivado o no encontrado' });
     }
-    console.log('[NOTIF-ADMIN] requireAdmin — authenticated:', decoded.username, '(role:', decoded.role + ')');
+    _dlog('[NOTIF-ADMIN] requireAdmin — authenticated:', decoded.username, '(role:', decoded.role + ')');
   } catch (dbError) {
     console.error('[NOTIF-ADMIN] requireAdmin — DB error:', dbError.message);
     return res.status(500).json({ error: 'Error verificando usuario' });
@@ -174,16 +181,16 @@ router.post('/register-token', registerTokenLimiter, async (req, res) => {
     const { fcmToken, fcmTokenContext, notifPermission } = req.body;
     const authHeader = req.headers.authorization;
     
-    console.log('[FCM] Recibida petición de registro de token');
+    _dlog('[FCM] Recibida petición de registro de token');
     
     if (!fcmToken) {
-      console.log('[FCM] Error: FCM Token no proporcionado');
+      _dlog('[FCM] Error: FCM Token no proporcionado');
       return res.status(400).json({ error: 'FCM Token requerido' });
     }
 
     // Verificar token de autenticación
     if (!authHeader) {
-      console.log('[FCM] Error: Auth header no proporcionado');
+      _dlog('[FCM] Error: Auth header no proporcionado');
       return res.status(401).json({ error: 'Token de autenticación requerido' });
     }
 
@@ -195,18 +202,18 @@ router.post('/register-token', registerTokenLimiter, async (req, res) => {
     }
     const decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] });
     
-    console.log('[FCM] JWT decodificado:', { userId: decoded.userId, username: decoded.username });
+    _dlog('[FCM] JWT decodificado:', { userId: decoded.userId, username: decoded.username });
     
     // Buscar usuario por UUID (campo 'id') o por ObjectId (_id)
     let user = await User.findOne({ id: decoded.userId });
     
     if (!user) {
-      console.log('[FCM] Usuario no encontrado por UUID, intentando por _id...');
+      _dlog('[FCM] Usuario no encontrado por UUID, intentando por _id...');
       user = await User.findById(decoded.userId);
     }
     
     if (!user) {
-      console.log('[FCM] Error: Usuario no encontrado en la base de datos');
+      _dlog('[FCM] Error: Usuario no encontrado en la base de datos');
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
@@ -216,7 +223,7 @@ router.post('/register-token', registerTokenLimiter, async (req, res) => {
       return res.status(403).json({ error: 'Cuenta inactiva o bloqueada' });
     }
 
-    console.log('[FCM] Usuario encontrado:', user.username);
+    _dlog('[FCM] Usuario encontrado:', user.username);
 
     const normalizedCtx = fcmTokenContext || 'browser';
     const normalizedPerm = notifPermission || null;
@@ -259,7 +266,7 @@ router.post('/register-token', registerTokenLimiter, async (req, res) => {
     }
     await user.save();
     
-    console.log('[FCM] ✅ Token registrado exitosamente para usuario:', user.username, '(contexto:', normalizedCtx, ', permiso:', normalizedPerm + ')');
+    _dlog('[FCM] ✅ Token registrado exitosamente para usuario:', user.username, '(contexto:', normalizedCtx, ', permiso:', normalizedPerm + ')');
     
     // Notificar a admins en tiempo real sobre el nuevo estado
     if (_io) {

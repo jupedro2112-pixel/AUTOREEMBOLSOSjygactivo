@@ -34,8 +34,13 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v49'; // v49: bonos-fantasma 50/100% eliminados (tope 30%)
+const CACHE_VERSION = 'v50'; // v50: stale-while-revalidate para js/css (v49: bonos-fantasma)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
+
+// Logs por-fetch del SW (corren en CADA request). Apagados por default;
+// poner SW_DEBUG = true para diagnosticar. Los logs de install/activate quedan.
+const SW_DEBUG = false;
+function _slog() { if (SW_DEBUG) console.log.apply(console, arguments); }
 
 const PRECACHE_URLS = [
   '/icons/icon-192x192.png',
@@ -50,6 +55,20 @@ function isNetworkFirst(url) {
     url.includes('/app.js') ||
     url.includes('/manifest.json')
   );
+}
+
+// Módulos JS/CSS propios: stale-while-revalidate — se sirven del caché
+// (rápido, igual que antes) pero se revalidan en background, así un deploy
+// llega a los clientes en la SIGUIENTE carga sin bumpear CACHE_VERSION a mano
+// (causa raíz de los bugs "fantasma" de código viejo cacheado).
+function isStaleWhileRevalidate(url) {
+  try {
+    var u = new URL(url);
+    if (u.origin !== self.location.origin) return false;
+    return u.pathname.indexOf('/js/') === 0 || u.pathname.indexOf('/css/') === 0;
+  } catch (e) {
+    return false;
+  }
 }
 
 // Verifica si una URL pertenece a Cloudflare u otros dominios de seguridad
@@ -219,11 +238,11 @@ self.addEventListener('fetch', function(event) {
   // redirecciones cross-origin (p. ej. Cloudflare Challenge), que Chrome
   // sigue de forma nativa sin que el SW actúe como proxy.
   if (event.request.mode === 'navigate') {
-    console.log('[FCM-SW] Navigation request - respondiendo con red (sin caché):', url);
+    _slog('[FCM-SW] Navigation request - respondiendo con red (sin caché):', url);
     event.respondWith(
       fetch(event.request, { redirect: 'manual' })
         .catch(function() {
-          console.log('[FCM-SW] Red no disponible para navegación:', url);
+          _slog('[FCM-SW] Red no disponible para navegación:', url);
           return new Response('Sin conexión - por favor verificá tu internet.', {
             status: 503,
             headers: { 'Content-Type': 'text/plain; charset=utf-8' }
@@ -235,16 +254,37 @@ self.addEventListener('fetch', function(event) {
 
   // Excluir URLs de Cloudflare, cdn-cgi y cualquier dominio de seguridad.
   if (isCloudflareOrSecurityUrl(url)) {
-    console.log('[FCM-SW] URL de seguridad excluida del caché:', url);
+    _slog('[FCM-SW] URL de seguridad excluida del caché:', url);
     return;
   }
 
   // Excluir API y sockets: siempre van a red.
   if (url.includes('/api/') || url.includes('/socket.io/')) return;
 
+  if (isStaleWhileRevalidate(url)) {
+    event.respondWith(
+      caches.match(event.request).then(function(cached) {
+        var network = fetch(event.request).then(function(response) {
+          if (response && response.status === 200 && response.type === 'basic') {
+            var toCache = response.clone();
+            caches.open(CACHE_NAME).then(function(cache) {
+              cache.put(event.request, toCache);
+            });
+          }
+          return response;
+        }).catch(function() {
+          // Sin red: si había caché ya se devolvió; si no, propagar el fallo.
+          return cached;
+        });
+        return cached || network;
+      })
+    );
+    return;
+  }
+
   if (isNetworkFirst(url)) {
     // Network-first: siempre intenta red para que los deploys sean inmediatos.
-    console.log('[FCM-SW] Network-first para:', url);
+    _slog('[FCM-SW] Network-first para:', url);
     event.respondWith(
       fetch(event.request)
         .then(function(response) {
@@ -257,7 +297,7 @@ self.addEventListener('fetch', function(event) {
           return response;
         })
         .catch(function() {
-          console.log('[FCM-SW] Red no disponible, buscando en caché:', url);
+          _slog('[FCM-SW] Red no disponible, buscando en caché:', url);
           return caches.match(event.request);
         })
     );
@@ -267,10 +307,10 @@ self.addEventListener('fetch', function(event) {
       caches.match(event.request)
         .then(function(cached) {
           if (cached) {
-            console.log('[FCM-SW] Cache hit para:', url);
+            _slog('[FCM-SW] Cache hit para:', url);
             return cached;
           }
-          console.log('[FCM-SW] Cache miss - red para:', url);
+          _slog('[FCM-SW] Cache miss - red para:', url);
           return fetch(event.request).then(function(response) {
             if (response && response.status === 200 && response.type === 'basic') {
               var toCache = response.clone();

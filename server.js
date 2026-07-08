@@ -294,6 +294,22 @@ const registerIpLimiter = createIpSmsLimiter(
 // ============================================
 // SEGURIDAD - HEADERS DE SEGURIDAD
 // ============================================
+// CSP precomputada una vez (antes se armaba el array + join en CADA request).
+const CSP_HEADER_VALUE = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net",
+  "script-src-elem 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self'",
+  "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.google.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://fcm.googleapis.com https://firebaseinstallations.googleapis.com https://www.facebook.com https://connect.facebook.net",
+  "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://www.facebook.com",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "media-src 'self' data: blob:"
+].join('; ');
+
 function securityHeaders(req, res, next) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -309,20 +325,7 @@ function securityHeaders(req, res, next) {
   // 'unsafe-inline' en script-src/style-src es necesario por el stack actual de frontend.
   // worker-src incluye blob: para Workbox/sw.js generados en runtime.
   // connect-src incluye wss: para Socket.IO WebSocket y dominios Firebase necesarios.
-  res.setHeader('Content-Security-Policy', [
-    "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net",
-    "script-src-elem 'self' 'unsafe-inline' https://www.gstatic.com https://www.google.com https://apis.google.com https://cdn.jsdelivr.net https://unpkg.com https://connect.facebook.net",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https:",
-    "font-src 'self'",
-    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.google.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://fcm.googleapis.com https://firebaseinstallations.googleapis.com https://www.facebook.com https://connect.facebook.net",
-    "frame-src 'self' https://*.firebaseapp.com https://*.google.com https://www.facebook.com",
-    "worker-src 'self' blob:",
-    "manifest-src 'self'",
-    "object-src 'none'",
-    "media-src 'self' data: blob:"
-  ].join('; '));
+  res.setHeader('Content-Security-Policy', CSP_HEADER_VALUE);
   next();
 }
 
@@ -790,17 +793,34 @@ function readFileSafe(filePath) {
   }
 }
 
+// Cache en memoria de assets estáticos que se sirven por handler propio
+// (index.html, admin.html/css/js). Estos archivos SOLO cambian con un redeploy
+// (que reinicia el proceso en EB), así que leerlos del disco en cada request
+// era I/O síncrona que bloqueaba el event loop al pedo. No cachea errores
+// (null): si la lectura falla, se reintenta en el próximo request.
+const _fileCache = new Map();
+function readFileCached(filePath) {
+  if (_fileCache.has(filePath)) return _fileCache.get(filePath);
+  const content = readFileSafe(filePath);
+  if (content !== null) _fileCache.set(filePath, content);
+  return content;
+}
+
 // Admin panel HTML (serves the login form + app shell; cookie NOT required
 // here so first-time visitors can authenticate via the login form).
+let _adminHtmlRendered = null;
 app.get(['/adminprivado2026', '/adminprivado2026/'], adminHostCheck, (req, res) => {
-  const adminPath = path.join(__dirname, 'public', 'adminprivado2026', 'index.html');
-  const content = readFileSafe(adminPath);
-  if (!content) return res.status(500).send('Error loading admin page');
-  // Inyectar la URL pública canónica (vipcargas.com) para que el admin
-  // genere los links de pauta con el dominio correcto y no con el de AWS.
-  // El PUBLIC_BASE_URL viene de env var; ver constante más abajo en este archivo.
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://vipcargas.com').replace(/\/$/, '');
-  const rendered = content.replace(/__VIP_PUBLIC_BASE_URL_PLACEHOLDER__/g, publicBaseUrl);
+  if (_adminHtmlRendered === null) {
+    const adminPath = path.join(__dirname, 'public', 'adminprivado2026', 'index.html');
+    const content = readFileCached(adminPath);
+    if (!content) return res.status(500).send('Error loading admin page');
+    // Inyectar la URL pública canónica (vipcargas.com) para que el admin
+    // genere los links de pauta con el dominio correcto y no con el de AWS.
+    // El PUBLIC_BASE_URL viene de env var; ver constante más abajo en este archivo.
+    const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://vipcargas.com').replace(/\/$/, '');
+    _adminHtmlRendered = content.replace(/__VIP_PUBLIC_BASE_URL_PLACEHOLDER__/g, publicBaseUrl);
+  }
+  const rendered = _adminHtmlRendered;
   res.setHeader('Content-Type', 'text/html');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -813,7 +833,7 @@ app.get(['/adminprivado2026', '/adminprivado2026/'], adminHostCheck, (req, res) 
 // requireAdminCookie comment above for the rationale).
 app.get('/adminprivado2026/admin.css', adminHostCheck, (req, res) => {
   const cssPath = path.join(__dirname, 'public', 'adminprivado2026', 'admin.css');
-  const content = readFileSafe(cssPath);
+  const content = readFileCached(cssPath);
   if (!content) return res.status(404).send('Not found');
   res.setHeader('Content-Type', 'text/css');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -823,7 +843,7 @@ app.get('/adminprivado2026/admin.css', adminHostCheck, (req, res) => {
 // Admin JS asset — host check only (same rationale as admin.css above).
 app.get('/adminprivado2026/admin.js', adminHostCheck, (req, res) => {
   const jsPath = path.join(__dirname, 'public', 'adminprivado2026', 'admin.js');
-  const content = readFileSafe(jsPath);
+  const content = readFileCached(jsPath);
   if (!content) return res.status(404).send('Not found');
   res.setHeader('Content-Type', 'application/javascript');
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -993,7 +1013,9 @@ setInterval(() => { _runFcmPrune('cron-24h'); }, FCM_PRUNE_INTERVAL_MS);
 // notificaciones del mismo chat en el dispositivo.
 function _maybeSendPushFallback(receiverId, message) {
   if (!receiverId) return;
-  User.findOne({ id: receiverId })
+  // Solo los campos que usa sendPushIfOffline (corre por cada mensaje de chat
+  // con fallback push; el doc completo era hidratación innecesaria).
+  User.findOne({ id: receiverId }).select('id username fcmToken fcmTokens').lean()
     .then(function (targetUser) {
       const hasTokens = targetUser && (targetUser.fcmToken || (targetUser.fcmTokens && targetUser.fcmTokens.length > 0));
       if (!hasTokens) return;
@@ -2363,14 +2385,18 @@ const authMiddleware = async (req, res, next) => {
   
   try {
     const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
-    
-    // Buscar usuario por 'id' primero, luego por '_id' como fallback
-    let user = await User.findOne({ id: decoded.userId });
-    
+
+    // Buscar usuario por 'id' primero, luego por '_id' como fallback.
+    // Solo los campos que este middleware usa (corre en CADA request; hidratar
+    // el doc completo con fcmTokens/tagHistory/etc. era costo puro).
+    // ⚠️ Si un chequeo futuro necesita otro campo del user: agregarlo acá.
+    const AUTH_USER_FIELDS = 'id username role isActive isBlocked blockReason tokenVersion mustChangePassword';
+    let user = await User.findOne({ id: decoded.userId }).select(AUTH_USER_FIELDS);
+
     if (!user) {
       // Intentar buscar por _id (para usuarios migrados)
       try {
-        user = await User.findById(decoded.userId);
+        user = await User.findById(decoded.userId).select(AUTH_USER_FIELDS);
       } catch (e) {
         // _id inválido, ignorar
       }
@@ -2432,7 +2458,7 @@ const authMiddleware = async (req, res, next) => {
         // and would otherwise be permanently blocked by this middleware.
         try {
           user.mustChangePassword = false;
-          await user.save();
+          await User.updateOne({ _id: user._id }, { $set: { mustChangePassword: false } });
           logger.info(`[authMiddleware] Auto-cleared mustChangePassword for admin ${user.username}`);
         } catch (e) {
           logger.warn(`[authMiddleware] Failed to auto-clear mustChangePassword for ${user.username}: ${e.message}`);
@@ -7803,8 +7829,12 @@ io.on('connection', (socket) => {
   
   socket.on('disconnect', () => {
     logger.debug(`Socket disconnected: ${socket.id}`);
-    
-    if (socket.role === 'admin') {
+
+    // Misma lista de roles que en authenticate: depositor/withdrawer/comunidad
+    // también viven en connectedAdmins. Antes solo se limpiaba 'admin' → los
+    // sockets muertos de los otros roles quedaban en el Map para siempre
+    // (fuga de memoria + emits a sockets desconectados en broadcastStats).
+    if (['admin', 'depositor', 'withdrawer', 'comunidad'].includes(socket.role)) {
       connectedAdmins.delete(socket.userId);
       broadcastStats();
     } else {
@@ -7954,15 +7984,21 @@ async function resolveCampaignFromCookie(req) {
 
 // Renderiza index.html reemplazando los placeholders del server (pixel id,
 // base url pública, y opcionalmente un campaignCode capturado por vanity URL).
+// El HTML con pixel/base-url ya reemplazados se precomputa UNA vez por proceso
+// (242KB × 3 regex por page-view era trabajo síncrono repetido); por request
+// solo se reemplaza el campaignCode, que es lo único variable.
+let _indexHtmlBase = null;
 function renderIndexHtml(extras = {}) {
-  const indexPath = path.join(__dirname, 'public', 'index.html');
-  const content = readFileSafe(indexPath);
-  if (!content) return null;
-  const pixelId = (process.env.META_PIXEL_ID || '').trim();
-  return content
-    .replace(/__META_PIXEL_ID_PLACEHOLDER__/g, pixelId)
-    .replace(/__VIP_PUBLIC_BASE_URL_PLACEHOLDER__/g, PUBLIC_BASE_URL)
-    .replace(/__VIP_CAMPAIGN_CODE_PLACEHOLDER__/g, extras.campaignCode || '');
+  if (_indexHtmlBase === null) {
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    const content = readFileCached(indexPath);
+    if (!content) return null;
+    const pixelId = (process.env.META_PIXEL_ID || '').trim();
+    _indexHtmlBase = content
+      .replace(/__META_PIXEL_ID_PLACEHOLDER__/g, pixelId)
+      .replace(/__VIP_PUBLIC_BASE_URL_PLACEHOLDER__/g, PUBLIC_BASE_URL);
+  }
+  return _indexHtmlBase.replace(/__VIP_CAMPAIGN_CODE_PLACEHOLDER__/g, extras.campaignCode || '');
 }
 
 app.get('/', async (req, res) => {

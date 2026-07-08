@@ -32,11 +32,13 @@ VIP.socket = (function () {
 
         VIP.state.socket.on('authenticated', function (data) {
             if (data.success) {
+                VIP.state.socketAuthed = true;
                 if (VIP.state.currentUser && VIP.state.currentUser.userId) {
                     VIP.state.socket.emit('join_user_room', { userId: VIP.state.currentUser.userId });
                 }
                 VIP.chat.loadMessages(true);
             } else {
+                VIP.state.socketAuthed = false;
                 console.error('❌ Error autenticando socket:', data.error);
             }
         });
@@ -181,12 +183,22 @@ VIP.socket = (function () {
         });
 
         VIP.state.socket.on('disconnect', function () {
+            VIP.state.socketAuthed = false;
         });
+    }
+
+    // Tick del poll de mensajes: es solo RESPALDO del socket. Si el socket está
+    // conectado y autenticado, los mensajes ya llegan en tiempo real por
+    // 'new_message' → se saltea el fetch (antes: ~120 requests/hora por usuario
+    // totalmente redundantes). Si el socket cae, el poll de 30s sigue cubriendo.
+    function _pollTick() {
+        if (VIP.state.socket && VIP.state.socket.connected && VIP.state.socketAuthed) return;
+        VIP.chat.loadMessages();
     }
 
     function startMessagePolling() {
         VIP.chat.loadMessages();
-        VIP.state.messageCheckInterval = setInterval(VIP.chat.loadMessages, 30000);
+        VIP.state.messageCheckInterval = setInterval(_pollTick, 30000);
         initSocket();
     }
 

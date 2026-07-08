@@ -8,6 +8,70 @@
 
 ## Sesión 2026-07-08
 
+### 90. PERFORMANCE — Batch A: optimización general de riesgo bajo (auditoría con 3 agentes)
+- **Pedido del owner:** optimización general de rendimiento/velocidad SIN romper nada. Se auditó
+  todo (queries Mongo, runtime Node/Express, frontend PWA+panel) con 3 agentes de solo-lectura y
+  se verificó cada hallazgo a mano. Se aplicó el batch de riesgo cero/bajo; lo de riesgo medio
+  queda anotado abajo (Batch B).
+- **Backend (server.js):**
+  - **Cache en memoria de assets con handler propio** (`readFileCached` + `_indexHtmlBase` +
+    `_adminHtmlRendered`): antes CADA page-view hacía `fs.readFileSync` de index.html (242KB, + 3
+    regex-replace sobre todo el string) y cada apertura del panel leía admin.js (~600KB) — I/O
+    síncrona que bloqueaba el event loop. Ahora se lee 1 vez por proceso (los archivos solo cambian
+    con redeploy); del index se precomputa pixel/base-url y por request solo se reemplaza el
+    campaignCode. No cachea errores (null) → reintenta.
+  - **authMiddleware con `.select()`** (`AUTH_USER_FIELDS`): corría en cada request autenticado
+    hidratando el doc User COMPLETO (fcmTokens/tagHistory/etc.) para leer 8 campos. Ahora trae solo
+    esos. El self-heal de admins pasó de `user.save()` a `updateOne` puntual.
+    ⚠️ Si un chequeo futuro necesita otro campo del user: agregarlo al select.
+  - **`_maybeSendPushFallback` con select+lean** (por mensaje de chat con fallback push; verificado
+    que `sendPushIfOffline` solo usa `_id/id/username/fcmToken/fcmTokens` y limpia por updateOne).
+  - **FIX fuga `connectedAdmins`:** authenticate mete admin/depositor/withdrawer/comunidad al Map,
+    pero disconnect solo limpiaba `role==='admin'` → sockets muertos de los otros roles quedaban
+    para siempre (fuga + emits a sockets desconectados en broadcastStats) y encima se notificaba
+    `user_disconnected` como si fueran clientes. Ahora disconnect usa la misma lista de roles.
+  - **CSP precomputada** (`CSP_HEADER_VALUE`): antes se armaba el array + join en CADA request.
+- **Índices nuevos en User** (src/models/User.js): `{'fcmTokens.token':1}` (multikey — reclamo del
+  bono instalación, fraud-check multicuenta y logout hacían COLLSCAN) y `{role:1, lastLogin:1}`
+  (audiencias de recuperación/inactividad + cron de reglas cada 5 min). Mongoose los crea al
+  deployar (autoIndex).
+- **Logs por-request apagados tras flag** (`_dlog`, prender con `FCM_DEBUG_LOGS=1`):
+  `notificationRoutes.js` tenía ~5 `console.log` por CADA registro de token FCM (cada carga de la
+  PWA) y 2-3 por CADA request del panel (requireAdmin). Los `console.error` quedan.
+- **PWA cliente:**
+  - **Poll de mensajes = solo respaldo** (`socket.js`): antes cada usuario online pegaba
+    `GET /api/messages` cada 30s AUNQUE el socket entregara todo en tiempo real (~120 req/h por
+    usuario). Ahora el tick se saltea si el socket está conectado+autenticado (flag
+    `VIP.state.socketAuthed`); si el socket cae, el poll de 30s sigue igual. El catch-up al
+    reconectar ya existía (`loadMessages(true)` en authenticated/reconnect).
+  - **Service worker v50 — stale-while-revalidate para `/js/` y `/css/`**: antes cache-first PURO
+    sin revalidación → un deploy no llegaba a usuarios recurrentes hasta bumpear CACHE_VERSION a
+    mano (causa raíz de los bugs "fantasma" #88/#89). Ahora responde del caché (rápido) y revalida
+    en background → el deploy llega en la SIGUIENTE carga. **Ya no hace falta bumpear versión por
+    cambios en js/css** (sí para cambios de estrategia del SW o purga forzada). Logs por-fetch del
+    SW tras flag `SW_DEBUG` (const en el archivo).
+- **Panel admin:** reconciliación de conversaciones 60s → 180s + skip con pestaña oculta (fetch
+  grande + re-render completo; el socket cubre el tiempo real, esto es solo red de seguridad).
+- **NO tocado — Batch B pendiente (riesgo medio, consultar):** `/api/admin/all-chats` y chats por
+  status/categoría traen TODOS los mensajes a memoria (reescribir con aggregation como
+  `/api/conversations`); paginación de `GET /api/users` (trae toda la colección; toca el front);
+  cache TTL en `getConfig` (⚠️ multi-instancia: un cambio de CBU tardaría el TTL en verse en las
+  otras instancias — decidir con el owner); login por regex case-insensitive no usa el índice de
+  username (COLLSCAN por login; requiere collation o usernameLower); ruta vanity `/:code` hace
+  `Campaign.find` de todas las campañas activas por page-view SPA (cachear con TTL corto);
+  `_pollPayingPayouts` hace hasta 25 llamadas hgcash SECUENCIALES por tick (paralelizar);
+  acotar mongoSanitize/xss a `/api/` (coordinar con seguridad); `defer` en scripts del head del
+  panel (colisión de nombres a resolver); event delegation + coalescing en `renderConversations`
+  (re-render total + N listeners por evento de socket); índices single-field redundantes en
+  Message/User/Transaction (requiere `explain()` + drop en Atlas).
+- **Verificado como YA-BIEN por la auditoría (no tocar):** compression() activo, timeouts en TODAS
+  las llamadas externas (axios), FCM en lotes de 500 con logging por-lote, broadcastStats cacheado
+  60s, Socket.IO sin broadcasts globales (todo a rooms), rate-limit Maps con cleanup, admin-sw.js
+  ya network-first para admin.js/css, roulette.js con guarda de visibilidad (patrón modelo).
+- **Validado:** `node --check` OK (server.js, User.js, notificationRoutes.js, socket.js,
+  firebase-messaging-sw.js, admin.js). Back necesita redeploy (activa caches + crea índices);
+  cliente recibe el SW v50 en la próxima recarga.
+
 ### 89. FIX bonos-fantasma 50%/100%: eliminados TODOS los caminos que seguían dando/prometiendo 50-100%
 - **Síntoma (owner):** pidió eliminar los bonos automáticos del 50%/100% (bajados a 15/20/30%), pero
   a usuarios les SEGUÍAN apareciendo ofertas de 50/100% (y al aparecerles hay que respetarlas).

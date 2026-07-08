@@ -464,6 +464,13 @@ userSchema.index({ isActive: 1, role: 1 });
 // Para el feed de reclamos y la vista admin del bono $5.000: filtra por
 // reclamado y ordena por fecha de reclamo sin ordenar en memoria.
 userSchema.index({ installBonusClaimed: 1, installBonusClaimedAt: -1 });
+// Multikey sobre el token FCM del array: lo consultan el reclamo del bono
+// instalación, el fraud-check de multicuenta y el logout/limpieza de tokens
+// (sin esto son COLLSCAN de toda la colección).
+userSchema.index({ 'fcmTokens.token': 1 });
+// Audiencias de recuperación/inactividad y cron de reglas (cada 5 min):
+// countDocuments/find por role + rango de lastLogin.
+userSchema.index({ role: 1, lastLogin: 1 });
 
 // Virtual para verificar si es admin
 userSchema.virtual('isAdmin').get(function() {

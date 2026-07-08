@@ -1296,15 +1296,19 @@ function initSocket() {
     });
 }
 
-// Reconciliación periódica: cada 60 segundos invalidar cache y recargar
-// conversaciones para recuperar cualquier evento perdido por reconexión u otro motivo.
+// Reconciliación periódica: invalidar cache y recargar conversaciones para
+// recuperar cualquier evento perdido por reconexión u otro motivo. Es SOLO red
+// de seguridad (el socket cubre el tiempo real) → cada 180s alcanza; el fetch
+// es grande y dispara un re-render completo. Se saltea con la pestaña oculta
+// (al volver, el socket 'reconnect' y el switch de sección ya recargan).
 let reconciliationInterval = null;
 function startConversationReconciliation() {
     if (reconciliationInterval) clearInterval(reconciliationInterval);
     reconciliationInterval = setInterval(() => {
+        if (document.hidden) return;
         conversationsCacheByTab.delete(currentTab);
         loadConversations(false);
-    }, 60000);
+    }, 180000);
 }
 
 function joinAdminRoom() {

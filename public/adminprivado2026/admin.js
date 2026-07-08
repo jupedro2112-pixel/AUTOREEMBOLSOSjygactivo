@@ -6073,7 +6073,8 @@ function renderSchedules(list) {
         el.innerHTML = '<p style="color:#888;font-size:.85rem;">No hay notificaciones programadas.</p>';
         return;
     }
-    const TYPE_LABELS = { bono_50: 'Bono 50%', bono_100: 'Bono 100%', invitacion: 'Invitación a jugar', regalo: 'Regalo', reembolso: 'Reembolso' };
+    // bono_50/bono_100 quedan solo como label para schedules viejos en la lista (ya no se pueden crear ni se envían).
+    const TYPE_LABELS = { bono_50: 'Bono 50% (ELIMINADO)', bono_100: 'Bono 100% (ELIMINADO)', invitacion: 'Invitación a jugar', regalo: 'Regalo', reembolso: 'Reembolso' };
     const DOW = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
     el.innerHTML = list.map(s => {
         let cuando;
@@ -10089,7 +10090,7 @@ function _bsStepBlock(n, step) {
     let h = '<div style="background:rgba(255,215,0,0.05);border:1px solid rgba(255,215,0,0.25);border-radius:10px;padding:13px;margin-bottom:12px;">';
     h += '<div style="color:#ffd700;font-weight:900;font-size:12px;margin-bottom:8px;">PASO ' + n + ' — bono de ' + (step.percent || 0) + '%</div>';
     h += '<div style="display:flex;gap:8px;margin-bottom:8px;">' +
-        _bsField('bsS' + n + 'Percent', '% de bono', step.percent, 'number', 'min="1" max="1000"') +
+        _bsField('bsS' + n + 'Percent', '% de bono', step.percent, 'number', 'min="1" max="30"') +
         _bsField('bsS' + n + 'Dur', 'Dura (minutos)', step.durationMinutes, 'number', 'min="5"') +
         '</div>';
     h += '<div style="margin-bottom:8px;">' + _bsField('bsS' + n + 'Title', 'Título del push', step.title, 'text', 'maxlength="120"') + '</div>';
@@ -10315,7 +10316,7 @@ function _encuestaRender(cfg, stats, cal, rep) {
     h += '<div style="color:#777;font-size:10px;margin-top:6px;">💰 Solo reembolsos: nunca recibe marketing (solo recordatorios de reembolso).</div>';
     h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">';
     h += '<div style="flex:1;min-width:130px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">% de bonos (separá con coma)</label>'
-        + '<input type="text" id="encInp_percents" value="' + ((cfg.bonoPercents || [50, 100]).join(',')) + '" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
+        + '<input type="text" id="encInp_percents" value="' + ((cfg.bonoPercents || [15, 30]).join(',')) + '" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
     h += '<div style="flex:1;min-width:130px;"><label style="display:block;color:#888;font-size:10px;margin-bottom:3px;">Vigencia del bono (horas)</label>'
         + '<input type="number" id="encInp_vigencia" value="' + (cfg.bonoVigenciaHoras || 48) + '" min="1" max="720" style="width:100%;box-sizing:border-box;background:rgba(0,0,0,0.45);color:#ffd700;border:1px solid rgba(255,215,0,0.35);border-radius:6px;padding:7px;font-size:12px;font-weight:800;"></div>';
     h += '</div>';

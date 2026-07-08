@@ -729,9 +729,10 @@ router.post('/send-to-tag', requireAdmin, async (req, res) => {
 // ============================================
 // ESTRATEGIA DE NOTIFICACIONES (plantillas editables)
 // ============================================
+// OJO: bono_50/bono_100 ELIMINADOS (decisión owner 2026-07-08: tope 30% en lo automático,
+// nunca más prometer 50/100%). Los schedules viejos de esos tipos se desactivan solos
+// (migración one-shot en server.js + guard en _runDueSchedules).
 const NOTIF_TEMPLATE_DEFAULTS = {
-  bono_50:    { label: 'Bono 50%',             title: '🎁 ¡Bono del 50%!',        body: 'Cargá ahora y te damos un 50% extra. ¡Solo por {horas} horas!',        durationHours: 24, hasDuration: true },
-  bono_100:   { label: 'Bono 100%',            title: '🔥 ¡Bono del 100%!',       body: 'Duplicá tu carga: 100% de bono. ¡Aprovechá, vence en {horas} horas!',   durationHours: 12, hasDuration: true },
   invitacion: { label: 'Invitación a jugar',   title: '🎰 ¡Te estamos esperando!', body: 'Entrá ahora y probá tu suerte. ¡Hoy puede ser tu día!',                 durationHours: 0,  hasDuration: false },
   regalo:     { label: 'Regalo',               title: '🎉 ¡Tenés un regalo!',      body: 'Te dejamos un regalo en tu cuenta. Ingresá para reclamarlo.',           durationHours: 0,  hasDuration: false },
   reembolso:  { label: 'Reembolso disponible', title: '💸 Reembolso disponible',   body: 'Tenés un reembolso para reclamar. ¡No lo dejes pasar!',                 durationHours: 0,  hasDuration: false }
@@ -741,8 +742,6 @@ const NOTIF_LAUNCH_PLANS = ['suave', 'normal', 'activo', 'solo_reembolsos', 'tod
 
 // Categoría de tope de cada tipo. El reembolso no tiene tope mensual.
 const NOTIF_TYPE_CATEGORY = {
-  bono_50: 'bonos',
-  bono_100: 'bonos',
   invitacion: 'invitaciones',
   regalo: 'regalos',
   reembolso: null
@@ -870,6 +869,12 @@ router.post('/strategy/test', requireAdmin, async (req, res) => {
 // (los reembolsos no tienen tope). Reutilizado por la ruta y por el worker de
 // notificaciones programadas. Devuelve un objeto con el resultado.
 async function _runStrategyLaunch(type, plan) {
+  // Guard: tipo desconocido/eliminado (ej. bono_50/bono_100 viejos en la DB) → NUNCA
+  // se envía. Sin este guard, un tipo sin categoría caería en la rama "sin tope" del
+  // reembolso y se mandaría a todo el plan.
+  if (!NOTIF_TEMPLATE_DEFAULTS[type]) {
+    return { success: false, error: 'Tipo de plantilla eliminado: ' + type };
+  }
   const tpl = await NotifTemplate.findOne({ type }).lean();
   const { title, body } = _buildNotifContent(tpl, type);
   const data = { kind: 'strategy', type };
@@ -1092,6 +1097,17 @@ async function _runDueSchedules() {
         }
       }
       if (!shouldRun) continue;
+
+      // Schedules de tipos eliminados (bono_50/bono_100): se auto-desactivan y no se
+      // ejecutan (doble cinturón además de la migración one-shot del arranque).
+      if (!NOTIF_TEMPLATE_DEFAULTS[s.type]) {
+        await ScheduledNotif.updateOne(
+          { _id: s._id },
+          { $set: { enabled: false, lastResult: 'Desactivada: tipo eliminado (' + s.type + ')' } }
+        ).catch(() => {});
+        console.log(`[NOTIF-SCHED] ${s._id} desactivada: tipo eliminado (${s.type})`);
+        continue;
+      }
 
       try {
         const r = await _runStrategyLaunch(s.type, s.plan);

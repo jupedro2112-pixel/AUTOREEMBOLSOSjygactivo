@@ -69,10 +69,11 @@ function cohortWeek(cohortCfg, cfg) {
   const bDays = [];
   const bSet = {};
   bDays.forEach(function (d) { bSet[d] = true; });
-  const percents = (Array.isArray(cfg.bonoPercents) && cfg.bonoPercents.length) ? cfg.bonoPercents : [50, 100];
+  const percents = (Array.isArray(cfg.bonoPercents) && cfg.bonoPercents.length) ? cfg.bonoPercents : [15, 30];
 
   bDays.forEach(function (dow, i) {
-    const pct = Number(percents[i % percents.length]) || 50;
+    // Tope 30% (decisión owner 2026-07-08): nunca más bonos automáticos de 50/100.
+    const pct = Math.min(30, Number(percents[i % percents.length]) || 15);
     const m = bonoMsg(pct);
     slots.push({ dow: dow, dia: DOW_NAME[dow], type: 'bono', percent: pct, title: m.title, body: m.body });
   });
@@ -200,7 +201,7 @@ async function tick(deps) {
                 id: 'enc-' + slotKey + '-' + String(u.username).toLowerCase(),
                 userId: u.id || null,
                 username: String(u.username).toLowerCase(),
-                percent: slot.percent,
+                percent: Math.min(30, slot.percent), // tope 30% también acá (defensa en profundidad)
                 sourceRuleCode: 'encuesta',
                 sourceRuleName: 'Encuesta · grupo ' + cohort,
                 activatedAt: now,

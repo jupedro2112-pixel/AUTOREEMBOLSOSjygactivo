@@ -4,7 +4,61 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-06-26**
+> **Última actualización: 2026-07-08**
+
+## Sesión 2026-07-08
+
+### 89. FIX bonos-fantasma 50%/100%: eliminados TODOS los caminos que seguían dando/prometiendo 50-100%
+- **Síntoma (owner):** pidió eliminar los bonos automáticos del 50%/100% (bajados a 15/20/30%), pero
+  a usuarios les SEGUÍAN apareciendo ofertas de 50/100% (y al aparecerles hay que respetarlas).
+  Mismo fix que en el repo nuevo (VIPCARGASANTINO #99), pero auditado y aplicado ACÁ desde cero
+  (pedido explícito del owner: no asumir que los dos repos están iguales).
+- **Causa raíz (barrido completo de ESTE repo con 3 agentes):** los kill switches de #71
+  (BONUS_STRATEGY_DISABLED / INACTIVIDAD_DISABLED / CHARGE_BONUSES_DISABLED) apagan la CREACIÓN en
+  esos 3 motores, pero quedaron 5 fugas:
+  1. **`_getActivePromoBonus` devolvía el `percent` CRUDO de Mongo sin tope** → cualquier PromoBonus
+     viejo activo con 50/100 (vigencia hasta 720h) se seguía mostrando al usuario (banner
+     `promobonus.js`) y al agente (banner del chat), que lo aplicaba a mano en la carga.
+  2. **Plantillas push `bono_50`/`bono_100`** hardcodeadas en `notificationRoutes.js` + worker
+     `_runDueSchedules` cada 60s → un `ScheduledNotif` daily/weekly viejo re-mandaba "¡Bono del
+     100%!" para siempre.
+  3. **Motor de encuesta**: `ENCUESTA_PLAN_DEFAULTS.bonoPercents [50,100]`, validación hasta 500%,
+     `insertMany` sin cap. Hoy semi-apagado por `bDays=[]` (encuestaService), pero latente: revertir
+     UNA línea revivía el 50/100. El panel además pre-rellenaba `50,100` si la config venía vacía →
+     guardar sin tocar el campo RE-SEMBRABA los 50/100.
+  4. **Copy hardcodeado en la PWA** (`index.html`): "Bonos del 50% y 100% en tus cargas" (infoModal
+     1386 + adServiceModal 1440) y "Día 15: 100% en próxima carga" (menú estático del fueguito 1333
+     — hito que YA NI EXISTE, los defaults son 10/20/30 cash).
+  5. **Panel**: opciones "Bono 50%/100%" en programadas + input % de estrategia hasta 1000.
+- **Fix aplicado (misma decisión owner que el repo nuevo: tope 30% solo en lo AUTOMÁTICO; los
+  botones manuales +50/+100 del modal de depósito QUEDAN — herramienta del agente):**
+  - `_getActivePromoBonus` (server.js): **cap de lectura `percent>30 → 30`** — cubre
+    `/api/promo-bonus/mine` y `/api/admin/promo-bonus`. Basura vieja en DB nunca más se ve >30%.
+  - **Migración one-shot `migration_kill_bonus_50_100_done`** (server.js, tras las existentes):
+    vence PromoBonus activos `percent>30` + desactiva ScheduledNotif tipo bono_50/bono_100. El flag
+    solo se setea si TODO salió bien (si falla, reintenta al próximo arranque).
+  - **Plantillas**: bono_50/bono_100 ELIMINADAS de `NOTIF_TEMPLATE_DEFAULTS`, `NOTIF_TYPE_CATEGORY`
+    y de los enums de `NotifTemplate`/`ScheduledNotif`. **Guard en `_runStrategyLaunch`** (tipo
+    desconocido → error, NUNCA envía; sin esto un tipo sin categoría caía en la rama "sin tope" del
+    reembolso y se mandaba a todo el plan) + `_runDueSchedules` auto-desactiva schedules de tipos
+    eliminados (doble cinturón además de la migración).
+  - **Encuesta**: defaults `[50,100]→[15,30]` (server.js + encuestaService), validación
+    `_encNum(p,15,1,30)` (antes 1..500), cap `Math.min(30,…)` en el slot y en el `insertMany`.
+  - **Panel**: sin opciones bono 50/100 en programadas; `TYPE_LABELS` los conserva como
+    "(ELIMINADO)" para schedules viejos; pre-relleno encuesta `50,100→15,30`; input % estrategia
+    max 1000→30 (el modelo ya capeaba a 30); comentario stale "50%->100%" corregido.
+  - **PWA**: copy → "Bonos de hasta el 30%…" (index.html 1386/1440), línea "Día 15: 100%" BORRADA
+    (hito inexistente), `CACHE_VERSION` v48→v49 (purga cachés viejos, patrón #88).
+- **NO tocado (a propósito):** botones +50%/+100% del modal de depósito (manual, decisión owner);
+  `/sys_recover_100` ("recuperá el 100% de lo que perdiste") — es texto de RECUPERACIÓN/Comunidad
+  editable por COMANDOS, no bono de carga (si molesta, se edita desde el panel); ruleta (premios
+  cash fijos, sin %); fueguito (ya en 30%, defaults 10/20/30 cash); `autoEditBonusPercent`
+  (config manual del admin, max 1000 — lo setea el admin a mano).
+- **Validado:** `node --check` OK (server.js, encuestaService, notificationRoutes, NotifTemplate,
+  ScheduledNotif, admin.js, firebase-messaging-sw.js). Grep: 0 referencias vivas a bono_50/100
+  fuera de comentarios/migración/label legacy; 0 "[50, 100]" ni "50% y 100%". Las rutas de
+  plantillas/lanzamiento rechazan los tipos eliminados (validan contra NOTIF_TEMPLATE_TYPES).
+  **Back necesita redeploy** para que corra la migración y aplique el cap de lectura.
 
 ## Sesión 2026-07-02
 

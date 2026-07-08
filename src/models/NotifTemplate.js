@@ -1,14 +1,15 @@
 /**
  * Modelo de Plantillas de Notificación
  * Guarda el contenido editable de cada tipo de notificación push de la
- * estrategia (bono 50%, bono 100%, invitación a jugar, regalo, reembolso).
+ * estrategia (invitación a jugar, regalo, reembolso).
+ * bono_50/bono_100 ELIMINADOS (owner 2026-07-08: tope 30% automático).
  */
 const mongoose = require('mongoose');
 
 const notifTemplateSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['bono_50', 'bono_100', 'invitacion', 'regalo', 'reembolso'],
+    enum: ['invitacion', 'regalo', 'reembolso'],
     required: true,
     unique: true,
     index: true

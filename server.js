@@ -8136,6 +8136,41 @@ async function initializeData() {
     logger.error(`[startup-migration] Falló limpieza one-shot de PromoBonus viejos: ${e.message}`);
   }
 
+  // One-shot: matar los bonos-fantasma del 50/100% (decisión owner 2026-07-08: tope 30%
+  // en todo lo automático). Vence los PromoBonus activos con percent > 30 y desactiva
+  // las notificaciones programadas de tipo bono_50/bono_100 (plantillas eliminadas).
+  // El flag se setea SOLO si todo salió bien; si algo falla, reintenta al próximo arranque.
+  try {
+    const flag = await Config.findOne({ key: 'migration_kill_bonus_50_100_done' }).lean();
+    if (!flag || flag.value !== true) {
+      const PromoBonusModel = require('./src/models/PromoBonus');
+      const rBonus = await PromoBonusModel.updateMany(
+        { status: 'active', percent: { $gt: 30 } },
+        { $set: { status: 'expired' } }
+      );
+      let schedsOff = 0;
+      try {
+        const ScheduledNotifModel = require('./src/models/ScheduledNotif');
+        const rSched = await ScheduledNotifModel.updateMany(
+          { type: { $in: ['bono_50', 'bono_100'] }, enabled: true },
+          { $set: { enabled: false, lastResult: 'Desactivada por migración: tipo eliminado (tope 30%)' } }
+        );
+        schedsOff = (rSched && (rSched.modifiedCount != null ? rSched.modifiedCount : rSched.nModified)) || 0;
+      } catch (e2) {
+        throw new Error('ScheduledNotif bono_50/100: ' + e2.message);
+      }
+      const bonusOff = (rBonus && (rBonus.modifiedCount != null ? rBonus.modifiedCount : rBonus.nModified)) || 0;
+      logger.info(`[startup-migration] kill_bonus_50_100: PromoBonus >30% vencidos: ${bonusOff}; schedules bono_50/100 desactivados: ${schedsOff}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_kill_bonus_50_100_done' },
+        { key: 'migration_kill_bonus_50_100_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] kill_bonus_50_100 (reintenta al próximo arranque): ${e.message}`);
+  }
+
   // One-shot: backfill de phoneKey (clave normalizada) en los usuarios con teléfono YA
   // verificado, para que el chequeo de unicidad por phoneKey funcione contra los existentes.
   try {
@@ -14876,7 +14911,12 @@ async function _getActivePromoBonus(username) {
   const b = await PromoBonus.findOne({ username: u, status: 'active', percent: { $gt: 0 }, expiresAt: { $gt: now } })
     .sort({ activatedAt: -1 })
     .lean();
-  return b || null;
+  if (!b) return null;
+  // Tope de LECTURA (decisión owner 2026-07-08): los bonos automáticos están
+  // capeados a 30%. Aunque quede un PromoBonus viejo en la DB con 50/100%,
+  // ni el usuario ni el agente vuelven a ver más de 30%.
+  if (Number(b.percent) > 30) b.percent = 30;
+  return b;
 }
 
 // GET /api/promo-bonus/mine — el usuario ve su bonificación vigente.
@@ -15238,7 +15278,7 @@ const ENCUESTA_PLAN_DEFAULTS = {
     activo:          { bonosPorSemana: 3, incentivosPorSemana: 5 },
     solo_reembolsos: { bonosPorSemana: 0, incentivosPorSemana: 0 }
   },
-  bonoPercents: [50, 100],
+  bonoPercents: [15, 30], // decisión owner 2026-07-08: NUNCA más 50/100 automático (tope 30%)
   bonoVigenciaHoras: 48,
   quietStartHora: 22,
   quietEndHora: 10,
@@ -15267,7 +15307,7 @@ function mergeEncuestaConfig(saved) {
   });
   let percents = ENCUESTA_PLAN_DEFAULTS.bonoPercents;
   if (Array.isArray(s.bonoPercents) && s.bonoPercents.length) {
-    percents = s.bonoPercents.map(function (p) { return _encNum(p, 50, 1, 500); });
+    percents = s.bonoPercents.map(function (p) { return _encNum(p, 15, 1, 30); });
   }
   return {
     isActive: s.isActive === true,

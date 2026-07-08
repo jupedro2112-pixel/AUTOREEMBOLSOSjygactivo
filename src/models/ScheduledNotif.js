@@ -8,7 +8,10 @@ const mongoose = require('mongoose');
 const scheduledNotifSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['bono_50', 'bono_100', 'invitacion', 'regalo', 'reembolso'],
+    // bono_50/bono_100 eliminados del enum (owner 2026-07-08). Los docs viejos con esos
+    // tipos siguen legibles (el enum solo valida al crear/guardar); el worker los
+    // auto-desactiva y la migración one-shot del arranque los apaga.
+    enum: ['invitacion', 'regalo', 'reembolso'],
     required: true
   },
   plan: {

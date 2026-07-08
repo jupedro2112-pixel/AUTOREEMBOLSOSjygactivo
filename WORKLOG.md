@@ -8,6 +8,39 @@
 
 ## Sesión 2026-07-08
 
+### 91. PERFORMANCE — Batch B (subset seguro): endpoints muertos peligrosos + cache de campañas + render del panel
+- **Contexto:** producción con gente activa (JUGAYGANA/backupviejo quedó como el repo vivo; Spingama
+  NUNCA se deployó → cero problema de datos). Del Batch B se aplicó SOLO lo que no toca flujos de
+  plata (nada de pagos, CBU, login ni depósitos). Cada cambio verificado a mano contra sus callers.
+- **ELIMINADOS 3 endpoints muertos peligrosos** (server.js): `GET /api/admin/chats/:status`,
+  `GET /api/admin/all-chats` y `GET /api/admin/chats/category/:category`. Verificado por grep:
+  0 callers en panel/cliente/scripts (el panel usa `/api/admin/conversations`, aggregation con
+  limit 100). Eran bombas de memoria: all-chats cargaba TODA la colección de mensajes + usuarios a
+  RAM por request (con un token de admin bastaba para tumbar la instancia). Los POST de
+  close/reopen/assign/category quedan intactos. Rollback: `git revert`.
+- **Cache 30s de campañas activas para el vanity por slug** (`_getActiveCampaignsCached`): el
+  branch de slug de `GET /:code` corre en CADA page-view SPA de un segmento (/register, /chat…) y
+  traía TODAS las campañas activas de la DB por request. El matching por CODE exacto NO usa el
+  cache (sigue directo a la DB, indexado) → una campaña nueva funciona por code al instante y por
+  slug a los ≤30s.
+- **Panel — render de la lista de chats:** (a) **delegación de eventos**: un solo listener en el
+  contenedor (antes se re-adjuntaba un listener POR ITEM en cada render); (b) **coalescing por
+  frame** (`requestAnimationFrame`): antes cada evento de socket (chat_updated/new_message/
+  messages_read) disparaba un rebuild COMPLETO de la lista — en horas pico eran ~100 rebuilds/min.
+  Ahora N eventos en el mismo frame = 1 render. El estado se actualiza igual al instante; con
+  pestaña oculta el navegador pausa rAF y pinta al volver. Verificado: ningún caller lee el DOM
+  inmediatamente después de renderConversations(); los otros forEach de `.conversation-item`
+  (selectConversation/cerrar chat) solo togglean clases.
+- **NO tocado a propósito (riesgo/plata):** `_pollPayingPayouts` sigue secuencial (toca PAGOS;
+  con hgcash flaky, paralelizar es riesgo sin urgencia); cache de `getConfig` (multi-instancia:
+  un cambio de CBU tardaría el TTL en verse en otras instancias — plata); login por regex
+  (COLLSCAN pero tocarlo arriesga logins); paginación de /api/users (toca contrato con el front);
+  mongoSanitize/xss por ruta; defer de scripts del panel (colisión de nombres); drop de índices
+  redundantes (requiere explain() en Atlas).
+- **Validado:** `node --check` OK (server.js, admin.js). Back necesita redeploy; panel, recargar.
+  PROBAR tras deploy: links de pauta (por code y por slug), y en el panel: click en conversaciones,
+  buscador, badge de no leídos, cambio de pestañas.
+
 ### 90. PERFORMANCE — Batch A: optimización general de riesgo bajo (auditoría con 3 agentes)
 - **Pedido del owner:** optimización general de rendimiento/velocidad SIN romper nada. Se auditó
   todo (queries Mongo, runtime Node/Express, frontend PWA+panel) con 3 agentes de solo-lectura y

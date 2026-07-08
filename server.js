@@ -870,6 +870,22 @@ function _slugifyPublisher(s) {
     .replace(/^-+|-+$/g, '');                          // trim guiones
 }
 
+// Cache corto (30s) de campañas activas para el matching por SLUG del vanity.
+// Ese branch corre en CADA page-view SPA de un segmento (/register, /chat, …)
+// y traía TODAS las campañas activas de la DB por request. El matching por
+// CODE exacto NO usa este cache (sigue directo a la DB, indexado y barato),
+// así una campaña recién creada funciona por code al instante; por slug
+// aparece a los ≤30s.
+let _campaignSlugCache = { at: 0, items: [] };
+async function _getActiveCampaignsCached() {
+  if (Date.now() - _campaignSlugCache.at < 30000) return _campaignSlugCache.items;
+  const items = await Campaign.find({ isActive: true })
+    .select('code publisher name createdAt')
+    .lean();
+  _campaignSlugCache = { at: Date.now(), items };
+  return items;
+}
+
 // Vanity URL para links de pauta:
 //   - https://vipcargas.com/MI_CODIGO          (matchea por Campaign.code)
 //   - https://vipcargas.com/juan-perez         (matchea por slug del publisher)
@@ -894,13 +910,11 @@ app.get('/:code', async (req, res, next) => {
     if (!campaign) {
       const candidateSlug = _slugifyPublisher(candidate);
       if (candidateSlug) {
-        // Buscar campañas activas y filtrar por slug del publisher en memoria
+        // Filtrar por slug del publisher en memoria sobre el cache de 30s
         // (no hay un campo slug indexado; la cantidad de campañas es chica).
         // Si hay varias, elegimos la creada más recientemente — asumimos que
         // es la activa del publicista.
-        const candidates = await Campaign.find({ isActive: true })
-          .select('code publisher name createdAt')
-          .lean();
+        const candidates = await _getActiveCampaignsCached();
         const matches = candidates.filter(c => _slugifyPublisher(c.publisher) === candidateSlug);
         if (matches.length > 0) {
           matches.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -5306,107 +5320,11 @@ app.get('/api/admin/chat-status/all', authMiddleware, adminMiddleware, async (re
   }
 });
 
-app.get('/api/admin/chats/:status', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { status } = req.params;
-    
-    const chatStatuses = await ChatStatus.find({ 
-      status,
-      category: { $ne: 'pagos' }
-    }).lean();
-    
-    const userIds = chatStatuses.map(cs => cs.userId);
-    
-    const messages = await Message.find({
-      $or: [
-        { senderId: { $in: userIds } },
-        { receiverId: { $in: userIds } }
-      ]
-    }).sort({ timestamp: 1 }).lean();
-    
-    const users = await User.find({ id: { $in: userIds } }).lean();
-    
-    const userMessages = {};
-    messages.forEach(msg => {
-      if (msg.senderRole === 'user') {
-        if (!userMessages[msg.senderId]) userMessages[msg.senderId] = [];
-        userMessages[msg.senderId].push(msg);
-      }
-      if (msg.receiverRole === 'user' && msg.senderRole !== 'user') {
-        if (!userMessages[msg.receiverId]) userMessages[msg.receiverId] = [];
-        userMessages[msg.receiverId].push(msg);
-      }
-    });
-    
-    const filteredChats = [];
-    
-    for (const chatStatus of chatStatuses) {
-      const user = users.find(u => u.id === chatStatus.userId);
-      if (!user) continue;
-      
-      const msgs = userMessages[chatStatus.userId] || [];
-      if (msgs.length === 0) continue;
-      
-      const lastMsg = msgs[msgs.length - 1];
-      const unreadCount = msgs.filter(m => m.receiverRole === 'admin' && !m.read).length;
-      
-      filteredChats.push({
-        userId: chatStatus.userId,
-        username: user.username,
-        lastMessage: lastMsg,
-        unreadCount,
-        assignedTo: chatStatus.assignedTo,
-        closedAt: chatStatus.closedAt,
-        closedBy: chatStatus.closedBy
-      });
-    }
-    
-    filteredChats.sort((a, b) => new Date(b.lastMessage.timestamp) - new Date(a.lastMessage.timestamp));
-    
-    res.json(filteredChats);
-  } catch (error) {
-    console.error('Error obteniendo chats:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-app.get('/api/admin/all-chats', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const messages = await Message.find().lean();
-    const users = await User.find().lean();
-    const chatStatuses = await ChatStatus.find().lean();
-    
-    const userMessages = {};
-    messages.forEach(msg => {
-      if (msg.senderRole === 'user') {
-        if (!userMessages[msg.senderId]) userMessages[msg.senderId] = [];
-        userMessages[msg.senderId].push(msg);
-      }
-      if (msg.receiverRole === 'user') {
-        if (!userMessages[msg.receiverId]) userMessages[msg.receiverId] = [];
-        userMessages[msg.receiverId].push(msg);
-      }
-    });
-    
-    const allChats = Object.keys(userMessages).map(userId => {
-      const user = users.find(u => u.id === userId);
-      const statusInfo = chatStatuses.find(cs => cs.userId === userId) || { status: 'open', assignedTo: null };
-      const msgs = userMessages[userId].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-      
-      return {
-        userId,
-        username: user?.username || 'Desconocido',
-        status: statusInfo.status,
-        messageCount: msgs.length,
-        lastMessage: msgs[msgs.length - 1]
-      };
-    });
-    
-    res.json(allChats);
-  } catch (error) {
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
+// ELIMINADOS (2026-07-08, Batch B de performance): GET /api/admin/chats/:status y
+// GET /api/admin/all-chats. Código muerto (0 callers en panel/cliente/scripts,
+// verificado por grep) y peligrosos: all-chats cargaba TODA la colección de
+// mensajes + usuarios a memoria por request. El panel usa /api/admin/conversations
+// (aggregation con limit). Si algo externo los necesitara: git revert.
 
 app.post('/api/admin/chats/:userId/close', authMiddleware, adminMiddleware, async (req, res) => {
   try {
@@ -5495,63 +5413,9 @@ app.post('/api/admin/chats/:userId/category', authMiddleware, adminMiddleware, a
   }
 });
 
-app.get('/api/admin/chats/category/:category', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { category } = req.params;
-    
-    const chatStatuses = await ChatStatus.find({ category }).lean();
-    const userIds = chatStatuses.map(cs => cs.userId);
-    
-    const messages = await Message.find({
-      $or: [
-        { senderId: { $in: userIds } },
-        { receiverId: { $in: userIds } }
-      ]
-    }).sort({ timestamp: 1 }).lean();
-    
-    const users = await User.find({ id: { $in: userIds } }).lean();
-    
-    const userMessages = {};
-    messages.forEach(msg => {
-      if (msg.senderRole === 'user') {
-        if (!userMessages[msg.senderId]) userMessages[msg.senderId] = [];
-        userMessages[msg.senderId].push(msg);
-      }
-      if (msg.receiverRole === 'user' && msg.senderRole !== 'user') {
-        if (!userMessages[msg.receiverId]) userMessages[msg.receiverId] = [];
-        userMessages[msg.receiverId].push(msg);
-      }
-    });
-    
-    const filteredChats = [];
-    
-    for (const chatStatus of chatStatuses) {
-      const user = users.find(u => u.id === chatStatus.userId);
-      if (!user) continue;
-      
-      const msgs = userMessages[chatStatus.userId] || [];
-      if (msgs.length === 0) continue;
-      
-      const lastMsg = msgs[msgs.length - 1];
-      const unreadCount = msgs.filter(m => m.receiverRole === 'admin' && !m.read).length;
-      
-      filteredChats.push({
-        userId: chatStatus.userId,
-        username: user.username,
-        lastMessage: lastMsg,
-        unreadCount,
-        assignedTo: chatStatus.assignedTo,
-        status: chatStatus.status
-      });
-    }
-    
-    filteredChats.sort((a, b) => new Date(b.lastMessage.timestamp) - new Date(a.lastMessage.timestamp));
-    res.json(filteredChats);
-  } catch (error) {
-    console.error('Error obteniendo chats por categoría:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
+// ELIMINADO (2026-07-08, Batch B): GET /api/admin/chats/category/:category —
+// código muerto (0 callers) con el mismo patrón peligroso de cargar todos los
+// mensajes de la categoría a memoria. Si algo externo lo necesitara: git revert.
 
 // ============================================
 // RUTAS DE MENSAJES

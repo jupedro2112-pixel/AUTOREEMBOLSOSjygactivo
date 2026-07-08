@@ -1548,7 +1548,34 @@ async function prefetchMessages(convs) {
     }
 }
 
+// Render coalescido: en un panel ocupado cada evento de socket (chat_updated,
+// new_message, messages_read…) disparaba un rebuild COMPLETO de la lista por
+// evento. Ahora múltiples llamadas en el mismo frame producen UN solo render
+// (requestAnimationFrame); el estado `conversations` ya queda actualizado al
+// instante, solo se difiere el pintado. Con la pestaña oculta el navegador
+// pausa rAF → se pinta al volver, con el estado más reciente.
+let _renderConvsPending = false;
 function renderConversations() {
+    if (_renderConvsPending) return;
+    _renderConvsPending = true;
+    requestAnimationFrame(() => {
+        _renderConvsPending = false;
+        _renderConversationsNow();
+    });
+}
+
+function _renderConversationsNow() {
+    // Delegación de clicks: UN solo listener en el contenedor (antes se
+    // re-adjuntaba un listener POR ITEM en cada render → miles de listeners
+    // huérfanos por minuto en horas pico).
+    if (!elements.conversationsList._convClickDelegated) {
+        elements.conversationsList._convClickDelegated = true;
+        elements.conversationsList.addEventListener('click', (ev) => {
+            const item = ev.target.closest('.conversation-item');
+            if (!item || !elements.conversationsList.contains(item)) return;
+            selectConversation(item.dataset.userid, item.dataset.username);
+        });
+    }
     if (conversations.length === 0) {
         elements.conversationsList.innerHTML = `
             <div class="empty-state">
@@ -1592,15 +1619,7 @@ function renderConversations() {
         </div>
     `;
     }).join('');
-    
-    // Add click handlers
-    document.querySelectorAll('.conversation-item').forEach(item => {
-        item.addEventListener('click', () => {
-            const userId = item.dataset.userid;
-            const username = item.dataset.username;
-            selectConversation(userId, username);
-        });
-    });
+    // Los clicks los maneja el listener delegado del contenedor (ver arriba).
 }
 
 function searchConversations(query) {

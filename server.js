@@ -8159,6 +8159,18 @@ async function initializeData() {
       } catch (e2) {
         throw new Error('ScheduledNotif bono_50/100: ' + e2.message);
       }
+      // Reglas de notificación en DB con % de bono >30 (el modelo permitía hasta 1000):
+      // se clampean a 30. El motor de creación ya capea a 30 (y está apagado), pero así
+      // tampoco queda config vieja con 50/100 latente en la base.
+      try {
+        const NotificationRuleModel = require('./src/models/NotificationRule');
+        await NotificationRuleModel.updateMany(
+          { 'chargeBonus.percent': { $gt: 30 } },
+          { $set: { 'chargeBonus.percent': 30 } }
+        );
+      } catch (e3) {
+        throw new Error('NotificationRule percent>30: ' + e3.message);
+      }
       const bonusOff = (rBonus && (rBonus.modifiedCount != null ? rBonus.modifiedCount : rBonus.nModified)) || 0;
       logger.info(`[startup-migration] kill_bonus_50_100: PromoBonus >30% vencidos: ${bonusOff}; schedules bono_50/100 desactivados: ${schedsOff}`);
       await Config.findOneAndUpdate(

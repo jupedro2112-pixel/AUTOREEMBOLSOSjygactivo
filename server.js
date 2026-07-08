@@ -8195,18 +8195,6 @@ async function initializeData() {
       } catch (e2) {
         throw new Error('ScheduledNotif bono_50/100: ' + e2.message);
       }
-      // Reglas de notificación en DB con % de bono >30 (el modelo permitía hasta 1000):
-      // se clampean a 30. El motor de creación ya capea a 30 (y está apagado), pero así
-      // tampoco queda config vieja con 50/100 latente en la base.
-      try {
-        const NotificationRuleModel = require('./src/models/NotificationRule');
-        await NotificationRuleModel.updateMany(
-          { 'chargeBonus.percent': { $gt: 30 } },
-          { $set: { 'chargeBonus.percent': 30 } }
-        );
-      } catch (e3) {
-        throw new Error('NotificationRule percent>30: ' + e3.message);
-      }
       const bonusOff = (rBonus && (rBonus.modifiedCount != null ? rBonus.modifiedCount : rBonus.nModified)) || 0;
       logger.info(`[startup-migration] kill_bonus_50_100: PromoBonus >30% vencidos: ${bonusOff}; schedules bono_50/100 desactivados: ${schedsOff}`);
       await Config.findOneAndUpdate(
@@ -8217,6 +8205,30 @@ async function initializeData() {
     }
   } catch (e) {
     logger.error(`[startup-migration] kill_bonus_50_100 (reintenta al próximo arranque): ${e.message}`);
+  }
+
+  // One-shot (flag PROPIO, separado del anterior): clampear a 30 el % de bono de las
+  // NotificationRule viejas en DB (el modelo permitía hasta 1000). Flag separado porque
+  // la DB es compartida: si otra versión del server ya marcó kill_bonus_50_100 sin
+  // incluir este clamp, igual tiene que correr acá.
+  try {
+    const flag = await Config.findOne({ key: 'migration_clamp_notifrule_percent_done' }).lean();
+    if (!flag || flag.value !== true) {
+      const NotificationRuleModel = require('./src/models/NotificationRule');
+      const r = await NotificationRuleModel.updateMany(
+        { 'chargeBonus.percent': { $gt: 30 } },
+        { $set: { 'chargeBonus.percent': 30 } }
+      );
+      const clamped = (r && (r.modifiedCount != null ? r.modifiedCount : r.nModified)) || 0;
+      logger.info(`[startup-migration] clamp_notifrule_percent: reglas clampeadas a 30%: ${clamped}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_clamp_notifrule_percent_done' },
+        { key: 'migration_clamp_notifrule_percent_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] clamp_notifrule_percent (reintenta al próximo arranque): ${e.message}`);
   }
 
   // One-shot: backfill de phoneKey (clave normalizada) en los usuarios con teléfono YA

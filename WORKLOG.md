@@ -4,7 +4,56 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-07-08**
+> **Última actualización: 2026-07-09**
+
+## Sesión 2026-07-09
+
+### 95. Lectura integral del repo + docs vivos (ARCHITECTURE/CLAUDE/WORKLOG) + limpieza de código muerto
+- **Pedido del owner:** leer TODO el repo de punta a punta para tener contexto completo, y que
+  `docs/ARCHITECTURE.md` y `CLAUDE.md` se mantengan actualizados junto con `WORKLOG.md` a medida
+  que se trabaja — así una sesión nueva en Tails arranca sabiendo todo sin re-analizar el repo.
+- **Lectura integral hecha (2026-07-09):** server.js completo (15.7k líneas), los 4 clientes
+  JUGAYGANA, config/database.js, los 28 modelos, models/refunds.js legacy, y (vía agentes
+  lectores) la PWA completa, el panel admin completo y todo src/ (servicios/rutas/middlewares/
+  utils/scripts). Todo lo aprendido quedó volcado en `docs/ARCHITECTURE.md`.
+- **`docs/ARCHITECTURE.md` REESCRITO** (versión 2026-07-09): líneas corregidas (authMiddleware
+  ~L2477, login ~L3341, Socket.IO ~L7325 — el doc viejo apuntaba a posiciones de hace meses),
+  y secciones nuevas: tabla de los 4 clientes JUGAYGANA (con el gotcha de que
+  jugaygana-movements.js NO multiplica ×100), flujo completo de auto-carga hgcash y de pagos
+  deductAtPay, mapa del front (PWA VIP.* + panel), tabla de motores/crons con su estado
+  (encuesta/inactividad/estrategia apagados) e idempotencia por índices únicos, y ~20 trampas.
+- **`CLAUDE.md` actualizado:** la REGLA PERMANENTE ahora cubre los 3 docs vivos (WORKLOG +
+  ARCHITECTURE + CLAUDE), datos corregidos (server.js ~15.7k líneas, líneas reales) y gotchas
+  de primer nivel nuevos (4 clientes JUGAYGANA, bonos apagados por flags, multi-instancia,
+  front frágil por onclick/USERS_LIST_FIELDS).
+- **LIMPIEZA de código muerto (verificado por grep antes de borrar cada cosa):**
+  - **Sección "Base de Datos" del panel ELIMINADA por completo**: era inalcanzable — no existía
+    nav-item `data-section="database"` ni `<section id="databaseSection">` en el HTML (quedó
+    huérfana desde #79). Borrado: branch en switchSection, `loadDatabaseUsers`,
+    `renderDatabaseUsers`, `verifyDatabaseAccessFromModal`, `showDatabasePasswordModal`,
+    `dbAccessGranted/dbStoredPassword` (admin.js), el modal `databasePasswordModal`
+    (index.html) y en el BACKEND los endpoints `POST /api/admin/database/verify` y
+    `POST /api/admin/database/users` (dumpeaba TODA la base sin paginar) + dbPasswordMiddleware
+    + el chequeo fatal de `DB_PASSWORD` (la env queda sin uso; se puede sacar de SSM cuando se
+    quiera). ⚠️ La nota de #93 que decía que la sección Base de Datos "usaba" ese endpoint era
+    incorrecta: la sección ya era inalcanzable. `getRoleLabel` y `escapeCsvField` se CONSERVAN
+    (los usan la tabla de usuarios y el export CSV vivo). Rollback: `git revert`.
+  - **`_suspiciousOpenUser` (admin.js)**: eliminada la rama que llamaba a `openChatByUsername`,
+    función que nunca existió (siempre caía al fallback). Comportamiento idéntico.
+  - **FIX ruleta (roulette.js)**: tras ganar llamaba a `VIP.auth.refreshBalance`, que tampoco
+    existió nunca → el saldo del header NO se refrescaba al ganar. Ahora llama a
+    `VIP.ui.syncBalance()` (el mismo patrón que usan installbonus y withdraw).
+  - **`window.setPasswordChangePending` fantasma**: eliminados los 2 llamados guardados
+    (ui.js y auth.js) — la línea anterior ya seteaba `VIP.state.passwordChangePending` directo.
+  - **NO borrado a propósito**: `_communityRecommendCard` (roulette.js) — es una feature pedida
+    por el owner que nunca se conectó (lee `VIP.state.communityLink*` que nadie setea); quedó
+    documentada en ARCHITECTURE §9 como mejora pendiente (reconectarla desde `loadCommunity()`),
+    igual que `checkUsernameAvailability` en la PWA.
+- **Validado:** `node --check` OK (server.js, admin.js, roulette.js, ui.js, auth.js). Grep: 0
+  referencias vivas a lo eliminado (solo comentarios-lápida). Back necesita redeploy (endpoints
+  eliminados); panel y PWA se actualizan al recargar (SW stale-while-revalidate para /js/).
+  PROBAR tras deploy: panel Cuentas sospechosas → botón "Ver chat" (debe llevar a Usuarios con
+  toast), y en la PWA ganar la ruleta debería refrescar el saldo del header.
 
 ## Sesión 2026-07-08
 

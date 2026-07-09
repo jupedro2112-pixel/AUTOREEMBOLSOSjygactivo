@@ -4381,13 +4381,8 @@ function switchSection(section) {
             document.getElementById('smsSectionContent').classList.remove('hidden');
         }
     }
-    if (section === 'database') {
-        if (!dbAccessGranted) {
-            showDatabasePasswordModal();
-        } else {
-            loadDatabaseUsers();
-        }
-    }
+    // Sección 'database' ELIMINADA (2026-07-09): era código muerto — no existía
+    // nav-item ni <section id="databaseSection"> en el HTML (inalcanzable).
 }
 
 function showModal(modalId) {
@@ -4958,71 +4953,13 @@ async function verifySmsAccessFromModal() {
 }
 
 // ============================================
-// DATABASE SECTION
+// DATABASE SECTION — ELIMINADA (2026-07-09)
+// Código muerto: la sección no tenía nav-item ni <section id="databaseSection">
+// en el HTML (inalcanzable desde #79). Se borraron loadDatabaseUsers,
+// renderDatabaseUsers, verifyDatabaseAccessFromModal, showDatabasePasswordModal,
+// el modal databasePasswordModal y los endpoints del backend. Rollback: git revert.
+// getRoleLabel se CONSERVA: la usan renderUsers y el detalle de usuario.
 // ============================================
-let dbAccessGranted = false;
-let dbStoredPassword = ''; // Issue #2: Almacenar contraseña para reuso sin requerir re-entrada
-
-function showDatabasePasswordModal() {
-    showModal('databasePasswordModal');
-}
-
-
-async function loadDatabaseUsers() {
-    if (!dbAccessGranted) return;
-    
-    try {
-        // Issue #2: Usar contraseña almacenada para evitar pérdida del valor del campo
-        const password = dbStoredPassword || document.getElementById('dbPassword').value;
-        if (!password) {
-            console.warn('[DB] Contraseña no disponible, se requiere re-verificación');
-            dbAccessGranted = false;
-            switchSection('database');
-            return;
-        }
-        const response = await fetch(`${API_URL}/api/admin/database/users`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-            },
-            body: JSON.stringify({ dbPassword: password })
-        });
-        
-        if (!response.ok) throw new Error('Failed to load database users');
-        
-        const data = await response.json();
-        renderDatabaseUsers(data.users || []);
-    } catch (error) {
-        console.error('Error loading database users:', error);
-    }
-}
-
-function renderDatabaseUsers(users) {
-    const tbody = document.getElementById('databaseTableBody');
-    
-    if (!users.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No hay usuarios en la base de datos</td></tr>';
-        return;
-    }
-    
-    tbody.innerHTML = users.map(user => `
-        <tr class="${user.role !== 'user' ? 'admin-row' : ''}">
-            <td>${escapeHtml(user.username)}</td>
-            <td>${user.email || '-'}</td>
-            <td>${user.phone || '-'}</td>
-            <td><span class="role-badge ${user.role}">${getRoleLabel(user.role)}</span></td>
-            <td>${formatMoney(user.balance)}</td>
-            <td>${user.isActive ? 'Activo' : 'Inactivo'}</td>
-            <td>${formatDate(user.lastLogin)}</td>
-            <td>${formatDate(user.createdAt)}</td>
-        </tr>
-    `).join('');
-    
-    // Update count
-    document.getElementById('dbTotalUsers').textContent = users.length;
-    document.getElementById('dbTotalAdmins').textContent = users.filter(u => u.role !== 'user').length;
-}
 
 function getRoleLabel(role) {
     const labels = {
@@ -5033,38 +4970,6 @@ function getRoleLabel(role) {
         comunidad: 'Admin Comunidad'
     };
     return labels[role] || role;
-}
-
-
-async function verifyDatabaseAccessFromModal() {
-    const password = document.getElementById('dbPasswordInput').value;
-    document.getElementById('dbPassword').value = password;
-    
-    try {
-        const response = await fetch(`${API_URL}/api/admin/database/verify`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-            },
-            body: JSON.stringify({ dbPassword: password })
-        });
-        
-        if (response.ok) {
-            dbAccessGranted = true;
-            dbStoredPassword = password; // Issue #2: guardar para reuso
-            hideModal('databasePasswordModal');
-            document.getElementById('databasePasswordInput').classList.add('hidden');
-            document.getElementById('databaseContent').classList.remove('hidden');
-            loadDatabaseUsers();
-            showToast('Acceso concedido', 'success');
-        } else {
-            showToast('Contraseña incorrecta', 'error');
-        }
-    } catch (error) {
-        console.error('Error verifying database access:', error);
-        showToast('Error al verificar acceso', 'error');
-    }
 }
 
 // ============================================
@@ -9279,13 +9184,10 @@ function _suspiciousCopy(btnEl, value) {
 }
 
 function _suspiciousOpenUser(username) {
-    // Mueve al panel de chats abriendo el chat de ese usuario si existe la función.
-    if (typeof openChatByUsername === 'function') {
-        openChatByUsername(username);
-    } else if (typeof switchSection === 'function') {
-        switchSection('users');
-        showToast('Buscá "' + username + '" en la lista de usuarios.', 'info');
-    }
+    // Lleva a la sección Usuarios para buscar la cuenta. (Antes intentaba llamar
+    // a openChatByUsername, una función que nunca existió — rama muerta eliminada.)
+    switchSection('users');
+    showToast('Buscá "' + username + '" en la lista de usuarios.', 'info');
 }
 
 // --- Reembolsos reclamados ---

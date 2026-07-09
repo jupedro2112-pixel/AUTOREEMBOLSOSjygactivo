@@ -976,9 +976,6 @@ VIP.auth = (function () {
             // Éxito: el usuario sale del modo obligatorio pero queda con
             // verificación de teléfono pendiente.
             VIP.state.passwordChangePending = false;
-            if (typeof window.setPasswordChangePending === 'function') {
-                window.setPasswordChangePending(false);
-            }
             VIP.state.sessionPassword = _vipChangePwdPending.newPassword;
             if (VIP.state.currentUser) {
                 VIP.state.currentUser.phone = _vipChangePwdPending.phone;

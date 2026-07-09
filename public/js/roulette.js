@@ -315,8 +315,10 @@
             };
             _renderModal();
             renderHomeCard();
-            // Refrescar saldo del header si la app lo expone.
-            try { if (window.VIP && VIP.auth && typeof VIP.auth.refreshBalance === 'function') VIP.auth.refreshBalance(); } catch (_) {}
+            // Refrescar saldo del header (mismo patrón que installbonus/withdraw).
+            // FIX 2026-07-09: antes llamaba a VIP.auth.refreshBalance, que nunca
+            // existió → el saldo no se refrescaba tras ganar. Lo real es ui.syncBalance.
+            try { if (window.VIP && VIP.ui && typeof VIP.ui.syncBalance === 'function') VIP.ui.syncBalance(); } catch (_) {}
         } catch (e) {
             if (box) box.innerHTML = '<div style="color:#ff8080;padding:20px;">Error de conexión</div>';
         } finally {

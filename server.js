@@ -13391,68 +13391,13 @@ function escapeCsvField(value) {
   return '"' + str.replace(/"/g, '""') + '"';
 }
 
-const DB_PASSWORD = process.env.DB_PASSWORD;
-if (!DB_PASSWORD) {
-  if (process.env.NODE_ENV === 'production') {
-    console.error('⛔ FATAL: DB_PASSWORD no configurado en producción.');
-    process.exit(1);
-  }
-  logger.error('⛔ SEGURIDAD: DB_PASSWORD no configurado. Las rutas de base de datos no funcionarán sin esta variable.');
-}
-
-// Middleware para verificar contraseña de base de datos
-function dbPasswordMiddleware(req, res, next) {
-  if (!DB_PASSWORD) {
-    return res.status(503).json({ error: 'Servicio de base de datos temporalmente no disponible.' });
-  }
-  // Accept dbPassword from body only — never from query string to avoid it
-  // appearing in server logs, referrer headers and browser history.
-  const { dbPassword } = req.body || {};
-  
-  if (!safeCompare(dbPassword, DB_PASSWORD)) {
-    return res.status(401).json({ error: 'Contraseña incorrecta' });
-  }
-  
-  next();
-}
-
-// Verificar acceso a base de datos
-app.post('/api/admin/database/verify', authMiddleware, adminMiddleware, dbPasswordMiddleware, (req, res) => {
-  res.json({ success: true, message: 'Acceso concedido' });
-});
-
-// Obtener todos los usuarios y admins para base de datos
-// CORREGIDO: Usar la misma lógica que /api/admin/users para consistencia
-app.post('/api/admin/database/users', authMiddleware, adminMiddleware, dbPasswordMiddleware, async (req, res) => {
-  try {
-    const userRole = req.user.role;
-    
-    // Construir query según rol (igual que en /api/admin/users)
-    let query = {};
-    if (userRole !== 'admin') {
-      // Depositor y withdrawer solo ven usuarios (no admins)
-      query.role = 'user';
-    }
-    // Admin general ve TODOS (usuarios y admins)
-    
-    // Proyección verificada campo por campo contra renderDatabaseUsers (admin.js):
-    // la tabla muestra exactamente estas 8 columnas. Antes viajaba el doc completo
-    // (fcmTokens, tagHistory, withdrawalAccount, etc.) de TODA la base.
-    const users = await User.find(query)
-      .select('username email phone role balance isActive lastLogin createdAt')
-      .sort({ role: 1, username: 1 })
-      .lean();
-    res.json({ users, total: users.length });
-  } catch (error) {
-    console.error('Error obteniendo usuarios de base de datos:', error);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-// ELIMINADO (2026-07-08, perf #4): POST /api/admin/database/export/csv — export de
-// toda la base con documento completo por usuario. 0 callers (el botón del panel se
-// eliminó en #79 como código muerto; el export vivo es GET /api/admin/users/export/csv,
-// que ya proyecta 5 campos). Si algo externo lo necesitara: git revert.
+// ELIMINADOS (2026-07-09): POST /api/admin/database/verify y POST /api/admin/database/users
+// (+ dbPasswordMiddleware y el chequeo fatal de DB_PASSWORD). La sección "Base de Datos"
+// del panel era inalcanzable (sin nav-item ni <section> desde #79) → 0 callers reales.
+// El endpoint users dumpeaba TODA la base sin paginar. El listado vivo es
+// GET /api/admin/users (paginado). Ya antes se habían eliminado GET /api/admin/database
+// y POST /api/admin/database/export/csv (2026-07-08, perf #4). Si algo externo los
+// necesitara: git revert. La env DB_PASSWORD queda sin uso (se puede sacar de SSM).
 
 // ============================================
 // EXPORTAR USUARIOS A CSV

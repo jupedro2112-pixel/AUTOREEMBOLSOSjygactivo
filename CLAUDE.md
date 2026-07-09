@@ -5,13 +5,20 @@
 > clonar este repo desde GitHub. Por eso el contexto vive ACÁ (en el repo), no en la
 > memoria local del asistente.
 >
-> **REGLA PERMANENTE:** Mantené y ACTUALIZÁ `WORKLOG.md` (en la raíz del repo) tras
-> cada cambio significativo (feature, fix importante, decisión de diseño). Commiteá
-> y pusheá a GitHub para que la próxima sesión pueda seguir donde se dejó. Esta regla
-> aplica siempre, sin que el owner tenga que pedirlo cada vez.
+> **REGLA PERMANENTE (los 3 docs vivos):** tras cada cambio significativo (feature,
+> fix importante, decisión de diseño) mantené actualizados:
+>   1. `WORKLOG.md` — QUÉ se hizo y por qué (diario de sesiones, entrada numerada).
+>   2. `docs/ARCHITECTURE.md` — CÓMO funciona (si el cambio altera un flujo, modelo,
+>      endpoint o agrega una trampa nueva, reflejalo ahí; corregí lo que quede stale).
+>   3. `CLAUDE.md` (este archivo) — solo si cambió algo del CONTEXTO de arranque
+>      (estructura, gotchas de primer nivel, reglas de trabajo).
+> Commiteá y pusheá a GitHub para que la próxima sesión pueda seguir donde se dejó.
+> Esta regla aplica siempre, sin que el owner tenga que pedirlo cada vez. El objetivo:
+> que una sesión nueva en Tails sepa TODO leyendo estos docs, sin re-analizar el repo.
 >
-> Al iniciar una sesión nueva: leé `WORKLOG.md` (estado actual) y, antes de modificar
-> un flujo central, leé `docs/ARCHITECTURE.md` (mapa de modelos, flujos y trampas) +
+> Al iniciar una sesión nueva: leé `WORKLOG.md` (estado actual) y `docs/ARCHITECTURE.md`
+> (mapa completo de modelos, flujos, front y trampas — actualizado 2026-07-09 tras una
+> lectura de punta a punta del repo). Antes de modificar un flujo central, leé además
 > el código puntual del área. El código es la verdad; los docs son el mapa.
 
 ---
@@ -29,9 +36,10 @@ Deploy: AWS Elastic Beanstalk. Dominio público: vipcargas.com. Git user: jupedr
 
 ## Estructura
 
-- `server.js` (~11k líneas) — entry point. ~180 rutas, authMiddleware inline (~L1028),
-  Socket.IO (~L5600), bootstrap async con SSM (final del archivo). Comentario dice
-  "en migración" pero en la práctica sigue creciendo acá.
+- `server.js` (~15.7k líneas) — entry point. ~180 rutas, authMiddleware inline (~L2477),
+  Socket.IO (~L7325), motores cron por setInterval (~L14100+), bootstrap async con SSM
+  (final del archivo). Comentario dice "en migración" pero en la práctica sigue
+  creciendo acá. (Los números de línea derivan con cada cambio — usar grep.)
 - `config/database.js` — el `connectDB` que server.js realmente usa (TTL de mensajes,
   proxy a /src/models). **OJO: hay DOS connectDB** (este y `src/models/index.js`); el
   segundo NO se usa desde server.js. No tocar schemas en config/database.js (sólo
@@ -41,8 +49,11 @@ Deploy: AWS Elastic Beanstalk. Dominio público: vipcargas.com. Git user: jupedr
 - `src/services/jugayganaService.js` — cliente refactorizado (lo usa referidos).
 - `src/services/jugayganaPublisherSessions.js` — pool de sesiones por publicista.
 - `src/models/` — schemas Mongoose canónicos (fuente de verdad).
-- `src/services/` — lógica (referidos, notificaciones, otp, metaCapi, fbAds, analítica publicistas…).
-- `public/` — PWA del cliente. `public/adminprivado2026/` — panel admin (cookie httpOnly).
+- `src/services/` — lógica (referidos, notificaciones, otp, metaCapi, fbAds, hgcash,
+  comprobantes IA, analítica publicistas…).
+- `public/` — PWA del cliente (namespace global `window.VIP`, SW único
+  `firebase-messaging-sw.js`). `public/adminprivado2026/` — panel admin (~12k líneas
+  de admin.js, cookie httpOnly, SW propio `admin-sw.js` con scope /adminprivado2026/).
 
 ## Cosas que NO hay que romper (gotchas)
 
@@ -60,6 +71,22 @@ Deploy: AWS Elastic Beanstalk. Dominio público: vipcargas.com. Git user: jupedr
   cualquier mensaje automático nuevo.
 - **Transaction** (cargas/retiros) es permanente (sin TTL). **Message** tiene TTL de 3
   días. La analítica de clientes se basa en Transaction.
+- **Hay 4 clientes JUGAYGANA** con sesión propia cada uno: `jugaygana.js` (cargas/
+  retiros/reembolsos, montos ×100 centavos), `jugaygana-movements.js` (balance +
+  makeBonus; ⚠️ sus makeDeposit/makeWithdrawal NO multiplican ×100 — no usarlos para
+  plata), `src/services/jugayganaService.js` (referidos/bonus/passwords) y
+  `jugayganaPublisherSessions.js` (pool por publicista). Reusar el que use el flujo.
+- **Bonos automáticos APAGADOS por flags** (owner 2026-06-24): `INACTIVIDAD_DISABLED`
+  y `BONUS_STRATEGY_DISABLED` (server.js) + `CHARGE_BONUSES_DISABLED`
+  (notificationRulesService) + bonos de encuesta con `bDays=[]`. Tope 30% en TODO lo
+  automático (cap de lectura en `_getActivePromoBonus` incluido).
+- **Multi-instancia (AWS EB):** los crons son `setInterval` en CADA instancia; su
+  idempotencia depende de índices únicos (EncuestaFire.slotKey, InactividadFire.fireKey,
+  HgcashCharge.chargeKey, DailyRouletteSpin userId+dateKey). No quitar esos índices.
+- **Front frágil:** cientos de `onclick` inline dependen de funciones en `window.*`
+  (no renombrar exports sin actualizar el HTML/strings). Tabla de usuarios del panel
+  acoplada a `USERS_LIST_FIELDS` del backend (columna nueva ⇒ sumar campo al select).
+  Detalle completo de trampas en `docs/ARCHITECTURE.md` §7.
 
 ## Flujo de trabajo del asistente
 

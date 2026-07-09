@@ -1,180 +1,359 @@
 # ARCHITECTURE — Cómo funciona VIPCARGASANTINO
 
 > Mapa arquitectónico para entender el repo y modificarlo sin romper nada.
-> **No reemplaza leer el código** del área puntual que vayas a tocar — es la verdad
-> y este doc puede quedar viejo. Úsalo como mapa, no como especificación exacta.
-> Si encontrás algo desactualizado acá, corregilo.
+> **No reemplaza leer el código** del área puntual que vayas a tocar — el código es la
+> verdad y este doc puede quedar viejo. Si encontrás algo desactualizado acá, corregilo
+> (regla permanente en CLAUDE.md: este doc se actualiza junto con WORKLOG.md).
+>
+> Última actualización integral: **2026-07-09** (lectura de punta a punta de todo el
+> repo: server.js completo, clientes JUGAYGANA, 28 modelos, servicios, PWA y panel).
+> Los números de línea derivan con cada cambio — usalos como referencia aproximada y
+> confirmá con grep.
 
 Índice:
 1. Visión general del negocio
 2. Modelos de datos y relaciones
 3. Ciclo de request / autenticación / roles
-4. Integración JUGAYGANA
-5. Flujos principales (paso a paso, con punteros a archivos)
-6. Convenciones importantes
-7. Trampas / "no rompas esto"
+4. Integración JUGAYGANA (4 clientes)
+5. Flujos principales (paso a paso)
+6. Front-end: PWA cliente y panel admin
+7. Motores automáticos / crons
+8. Convenciones importantes
+9. Trampas / "no rompas esto"
 
 ---
 
 ## 1. Visión general del negocio
 
 Sala de juegos para Argentina que es un **wrapper sobre JUGAYGANA** (plataforma de
-juego externa, `admin.agentesadmin.bet`). El sistema VIPCARGAS:
-- Capta jugadores y los crea en JUGAYGANA por API.
-- Gestiona **cargas** (depósitos) y **retiros** vía transferencia/CBU.
-- Da **reembolsos** sobre la pérdida (diario/semanal/mensual), **ruleta diaria**,
-  **fueguito** (racha), **referidos** y **campañas/publicistas**.
+juego externa, `admin.agentesadmin.bet`; la web del jugador es `jugaygana44.bet`).
+El sistema VIPCARGAS:
+- Capta jugadores (pauta/publicistas/referidos/orgánico) y los crea en JUGAYGANA por API.
+- Gestiona **cargas** (manuales por agente, o AUTOMÁTICAS vía banco hgcash + IA de
+  comprobantes) y **retiros** (self-service con confirmación de agente y pago
+  automático por hgcash).
+- Da **reembolsos** sobre la pérdida real/NETWIN (diario/semanal/mensual), **ruleta
+  diaria**, **fueguito** (racha), **bono instalación $5.000**, **referidos** (7% del
+  owner-revenue) y **campañas/publicistas** con sub-atribución por influencer.
 - El "saldo real" del jugador vive en JUGAYGANA; VIPCARGAS guarda atribución, bonos,
-  reclamos y un registro de transacciones.
+  reclamos y el registro permanente de transacciones.
 
-La UX del cliente es una PWA (`public/`) con chat en vivo (Socket.IO) + push (FCM).
-Los agentes/admin operan desde `public/adminprivado2026/`.
+UX del cliente: PWA (`public/`) con chat en vivo (Socket.IO) + push (FCM). Los
+agentes operan desde `public/adminprivado2026/`. Deploy: AWS Elastic Beanstalk
+(posible multi-instancia → Redis para socket.io adapter, rate-limits y locks).
+Secrets desde AWS SSM cargados async en el bootstrap (final de server.js).
 
 ## 2. Modelos de datos y relaciones (`src/models/`)
 
-Todos los modelos canónicos viven en `src/models/`. `config/database.js` los re-exporta
-(NO los redefine, salvo ExternalUser y UserActivity que son exclusivos suyos).
+Todos los modelos canónicos viven en `src/models/`. `config/database.js` los
+re-exporta (NO los redefine, salvo **ExternalUser** y **UserActivity** que son
+exclusivos suyos) y es el `connectDB` REAL que usa server.js (TTL de mensajes con
+autorreparación de índice). `src/models/index.js` tiene OTRO connectDB con las
+migraciones de índices de referidos — **NO se usa desde server.js** (solo exporta
+modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
 
-- **User** (`User.js`) — jugadores y staff. Campos clave:
-  - `id` (uuid string, NO el `_id` de Mongo — casi todo el código usa `id`), `username`
-    (único, case-insensitive en queries), `password` (bcrypt), `role`, `balance`,
-    `phone`, `phoneVerified`, `phoneVerificationPending`.
-  - Roles: `user`, `admin`, `depositor`, `withdrawer`, `publisher_admin`.
-  - JUGAYGANA: `jugayganaUserId` (ID numérico del proveedor — clave para operar sin
-    depender del lookup), `jugayganaUsername`, `jugayganaSyncStatus`, `source`.
-  - Atribución: `acquisitionCampaign` (= Campaign.code), `acquisitionSource`
-    ('organic'|'manual'), `createdByEmployeeId/Username`, `acquiredAt`,
-    `acquisitionInfluencer` (sub-etiqueta dentro del publicista; sólo se setea
-    cuando un publisher_admin elige un influencer de la lista de su campaña).
-  - publisher_admin: `publisherCampaignCode` (la Campaign que representa).
-  - FCM: `fcmToken` (legacy/último) + `fcmTokens[]` (multi-dispositivo).
-  - Referidos: `referralCode`, `referredByUserId`, `referralStatus`.
-  - Otros: `mustChangePassword`, `loginWithoutPassword`, `notificationPlan`,
-    `installBonusClaimed`, `withdrawalAccount`, `registrationIp/UserAgent` (anti-multicuenta).
-- **Transaction** (`Transaction.js`) — registro PERMANENTE (sin TTL) de movimientos.
-  `type` ('deposit'|'withdrawal'|'bonus'|'refund'|'transfer'|'referral_commission'|'fire_reward'),
-  `amount`, `bonus`, `username`, `userId`, `timestamp`, `metadata` (ej:
-  `metadata.source` = 'install_bonus'|'welcome_gift' para excluir regalos de los reportes
-  de carga real). **Fuente de la analítica de clientes.**
-- **Campaign** (`Campaign.js`) — publicista/pauta. `code` (inmutable, en la URL),
-  `publisher`, `name`, comisión, `isActive`, creds JUGAYGANA del sub-agente
-  (`jugayganaUsername`, `jugayganaPassword` con `select:false`, texto plano), y
-  `influencers: [{ name, isActive }]` — lista fija (sub-atribución por influencer,
-  sólo para desglosar la analítica del publicista; sin link ni creds propias).
-- **CampaignClick** — clics de links de pauta (TTL 90 días).
-- **InfluencerStory** (`InfluencerStory.js`) — una "historia"/placement de un
-  influencer: `{ campaignCode, influencer, postedAt, cost, label }`. Unidad de
-  seguimiento de costo/ROAS. La atribución de registros a cada historia es por
-  VENTANA HORARIA (createdAt del usuario ∈ [postedAt, postedAt de la próxima)) y se
-  calcula a demanda en `publisherAnalyticsService.getInfluencerStoryAnalysis` (no se
-  persiste el vínculo). Solo admin general. Endpoints `/api/admin/influencer-stories`.
-- **ChatStatus** (`ChatStatus.js`) — estado de la conversación (open/closed/payments),
-  category (cargas/pagos), `lastMessageAt`, `assignedTo`. La lista de Chats del panel se
-  arma desde acá. **Se crea recién cuando el usuario tiene actividad** (ingresa o manda
-  mensaje), no al crear la cuenta — para no mostrar chats vacíos.
-- **Message** (`Message.js`) — mensajes del chat. TTL **3 días** (sobre `timestamp`).
-  `senderRole` define de qué lado aparece (user vs admin/system). `adminOnly:true` =
-  sólo lo ven los admins en el chat. `metadata.kind` marca tipos (ej: 'welcome').
-- **RefundClaim** — reclamos de reembolso (índice único por periodKey evita doble reclamo).
-- **FireStreak** — racha de fueguito.
-- **Referral***: `ReferralCommission` (cálculo mensual por referido), `ReferralPayout`
-  (pago agregado, soporta pagos incrementales/delta), `ReferralEvent` (atribución).
-- **Command** (`Command.js`) — comandos `/...` editables, incluidos los `/sys_*` que son
-  los mensajes automáticos del sistema (editables desde el panel, `isSystem:true`).
-- **PromoBonus / BonusStrategyConfig / StrategyEnrollment / NotificationRule /
-  NotificationRuleSuggestion / NotificationHistory / EncuestaVote / EncuestaFire /
-  InactividadFire / ScheduledNotif / NotifTemplate** — sistema de notificaciones y
-  estrategias automáticas (ver notificationRulesService, encuestaService, inactividadService).
-- **Config** (`Config.js`) — key/value para configuración (CBU, flags de migración, etc.).
+### Núcleo
+- **User** — jugadores y staff. Claves: `id` (uuid string — casi todo el código usa
+  `id`, NO `_id`), `username` + **`usernameLower`** (copia indexada para búsquedas
+  case-insensitive; la mantiene un pre-save + backfill en cada arranque — ver
+  `findUserByUsernameCI`), `password` (bcrypt vía pre-save), `role`, `phone` +
+  **`phoneKey`** (clave normalizada para unicidad — quita país/0/9 AR), `phoneVerified`,
+  `phoneVerificationPending` (bloquea SOLO retiros), `mustChangePassword` (bloquea casi
+  todo vía authMiddleware), `tokenVersion` (revocación de sesiones), `isBlocked`/
+  `blockReason`. JUGAYGANA: `jugayganaUserId` (numérico — clave para operar sin lookup),
+  `jugayganaSyncStatus`, `source`. FCM: `fcmToken` legacy + `fcmTokens[]`
+  (multi-dispositivo, `context:'standalone'` = PWA instalada). Atribución:
+  `acquisitionCampaign/Source/Influencer/Utm`, `createdByEmployeeId`. Referidos:
+  `referralCode`, `referredByUserId`. Meta: `metaFbc/metaFbp/landingUrl`.
+  Anti-multicuenta: `registrationIp/UserAgent`. Panel: `tags[]`, `adminNotes`,
+  `tagHistory`. Otros: `installBonusClaimed`, `notificationPlan`, `notifMonthlyCounts`,
+  `loginWithoutPassword`, `withdrawalAccount`, `pendingAccessCode`.
+- **Transaction** — registro PERMANENTE (sin TTL). `type`: deposit|withdrawal|bonus|
+  refund|transfer|referral_commission|fire_reward. `metadata.source` distingue regalos
+  ('install_bonus','welcome_gift') y devoluciones ('payout_refund') que se EXCLUYEN de
+  los reportes de carga real. **Fuente de toda la analítica.**
+- **Message** — chat. **TTL 3 días** (índice sobre `timestamp`, autorreparado en
+  connectDB). `senderRole` define el lado; `adminOnly:true` = solo lo ven admins;
+  `metadata.kind:'welcome'` = throttle de bienvenida.
+- **ChatStatus** — estado de conversación (open/closed/payments/comunidad + category
+  cargas/pagos). Se crea recién con ACTIVIDAD del usuario (welcome o primer mensaje),
+  no al crear la cuenta. Lleva el reloj SLA (`pendingSince/Preview/Type`).
+- **ChatDelay** — snapshot permanente de demoras de atención que superaron el umbral
+  (sobrevive al TTL de Message). Umbrales: cargas 2min / pagos 30min (configurables).
+
+### Plata / banco automático (hgcash)
+- **BankMovement** — cada movimiento que hgcash notifica por webhook. `matchStatus`:
+  pending→claiming→shadow_matched|auto_charged|manual_charged|needs_review|duplicate|
+  error|ignored. Dedupe por `movementId` único.
+- **Comprobante** — cada imagen que la IA (Claude vision) clasificó como comprobante.
+  `dedupeKey` (N° operación normalizado, descartando CBU/CUIT) + `imageHash` (SHA-256)
+  para detectar reutilización. `bankMatchStatus` para la auto-carga.
+- **HgcashCharge** — candado de idempotencia de la carga automática: índice único por
+  `chargeKey` (coelsaCode) — la MISMA transferencia se acredita UNA sola vez entre
+  instancias. Si la carga falla en JUGAYGANA, el registro se BORRA para permitir retry.
+- **PendingPayout** — retiro self-service pendiente de que un agente confirme.
+  `deductAtPay:true` (flujo actual) = las fichas se descuentan AL CONFIRMAR, no al
+  solicitar. `debitConfirmed` = verificación anti-retiro-fantasma (el saldo tiene que
+  haber bajado de verdad). `status`: pending_review→paying→paid|failed|cancelled.
+
+### Captación / marketing
+- **Campaign** — publicista/pauta. `code` inmutable (va en la URL). Creds JUGAYGANA
+  opcionales del sub-agente (`jugayganaPassword` con `select:false`, texto plano) +
+  `influencers[]` (lista fija para sub-atribución analítica).
+- **CampaignClick** (TTL 90 días), **InfluencerStory** (placement con costo; la
+  atribución de registros es por VENTANA HORARIA calculada a demanda en
+  publisherAnalyticsService).
+- **Referral**: ReferralEvent (atribución, 1 por referido), ReferralCommission
+  (cálculo por período `YYYY-MM`, con liquidación INCREMENTAL/delta —
+  `settledOwnerRevenue`), ReferralPayout (pagos, soporta múltiples por período).
+
+### Notificaciones / retención
+- **NotificationRule** (+ Suggestion con approval-gate 48h, + NotificationHistory con
+  tracking de ROI), **NotifTemplate** (tipos: invitacion|regalo|reembolso — bono_50/100
+  ELIMINADOS), **ScheduledNotif** (once/daily/weekly, worker cada 60s), **PromoBonus**
+  (bono de carga vigente ≤30%, 1 sola carga, cap de LECTURA a 30% en
+  `_getActivePromoBonus`), **BonusStrategyConfig** + **StrategyEnrollment** (estrategia
+  por voto de encuesta — APAGADA), **EncuestaVote/EncuestaFire** (motor encuesta —
+  bonos apagados), **InactividadFire** (motor inactivos — APAGADO).
+- **DailyRouletteSpin** — 1 giro/día (índices únicos userId+dateKey y
+  username+dateKey). Auto-crédito en JUGAYGANA; `credit_failed` → retry desde panel.
+- **Review** (1 por user, moderada), **OtpCode** (TTL 5 min, hash bcrypt, 3 intentos),
+  **FbAdsWebhookQueue** (cola de reintentos al sistema externo fb-ads),
+  **RefundClaim** (índice único userId+type+periodKey contra doble cobro),
+  **FireStreak** (racha fueguito + premios pendientes), **Config** (key/value: cbu,
+  hgcash, refundPercents, fireMilestones, flags de migración one-shot, etc.),
+  **Command** (comandos `/...` y mensajes automáticos `/sys_*`, `isSystem:true`).
 
 ## 3. Ciclo de request / autenticación / roles
 
-- `authMiddleware` (server.js ~L1028): toma JWT del header `Authorization: Bearer` o de
-  la cookie httpOnly `admin_api_session`. Valida firma, busca el User por `id`, chequea
-  `isActive`/`isBlocked`/`tokenVersion` (revocación de sesión). Si `role==='publisher_admin'`
-  aplica lockdown contra `PUBLISHER_ADMIN_ALLOWED_PATHS` (solo puede tocar su whitelist).
-- Middlewares de rol: `adminMiddleware` (admin/depositor/withdrawer), `depositorMiddleware`
-  (admin/depositor), `withdrawerMiddleware` (admin/withdrawer), `publisherAdminMiddleware`
-  (solo publisher_admin). Para acciones sensibles (ej: push masivo) se chequea
-  `req.user.role === 'admin'` explícito.
-- Secrets (`JWT_SECRET`, etc.) se cargan de AWS SSM en el bootstrap async (final de
-  server.js), NO al require. Por eso hay lazy getters en `src/middlewares/auth.js`.
-- El panel admin funciona por cookie (no guarda JWT en localStorage). `GET /api/admin/me`
-  valida la cookie y devuelve un token fresco para Socket.IO.
+- `authMiddleware` (server.js ~L2477): JWT del header `Authorization: Bearer` o de la
+  cookie httpOnly `admin_api_session` (el panel usa cookie). Valida firma HS256, busca
+  el User por `id` con select mínimo (`AUTH_USER_FIELDS` — ⚠️ si un chequeo nuevo
+  necesita otro campo, sumarlo ahí), chequea isActive/isBlocked/`tokenVersion`.
+  publisher_admin: lockdown contra `PUBLISHER_ADMIN_ALLOWED_PATHS`. mustChangePassword:
+  solo deja pasar `MUST_CHANGE_PASSWORD_ALLOWED_PATHS` (admins se auto-limpian).
+- Middlewares de rol: `adminMiddleware` (admin/depositor/withdrawer/comunidad),
+  `depositorMiddleware` (admin/depositor/comunidad), `withdrawerMiddleware`
+  (admin/withdrawer), `publisherAdminMiddleware`. Acciones sensibles re-chequean
+  `req.user.role === 'admin'` explícito (patrón obligatorio — ver #80).
+- **`src/middlewares/auth.js` es OTRO sistema de auth** (access 15m + refresh 7d,
+  blacklist EN MEMORIA no compartida entre instancias) usado SOLO por las rutas de
+  referidos. Lazy getters de JWT_SECRET (SSM carga después del require).
+- Secrets: `loadSecretsFromSSM()` en el bootstrap async → NUNCA leer secrets al
+  require; leerlos en runtime.
+- Cookies admin: `admin_session` (Path=/adminprivado2026) + `admin_api_session`
+  (Path=/api), 8h, SameSite=Strict. `GET /api/admin/me` revalida la cookie contra DB
+  y devuelve un token fresco para Socket.IO.
+- Rate limiting: `generalLimiter` 300/min (keyed por cookie de sesión admin o IP; en
+  memoria), `authLimiter` 10/min y `sensitiveLimiter` 10/15min (Redis compartido con
+  fallback a memoria — `RedisBackedRateStore`), `smsIpLimiter`/`bulkSmsIpLimiter`/
+  `registerIpLimiter` (Redis INCR+EXPIRE con fallback).
+- Socket.IO (~L7325): `authenticate` revalida contra DB (isActive/isBlocked/
+  tokenVersion). Rooms: `admins`, `user_<id>`, `chat_<id>`. Maps `connectedUsers`/
+  `connectedAdmins`. Entrega con ack-timeout 3s → fallback push FCM (socket fantasma).
 
-## 4. Integración JUGAYGANA
+## 4. Integración JUGAYGANA (4 clientes, cada uno con SU sesión)
 
-Tres clientes, cada uno con su sesión:
-- `jugaygana.js` — principal (server.js lo usa). Funciones: `ensureSession`,
-  `createPlatformUser`, `lookupUserOrError` (tri-estado found/not_found/error),
-  `depositToUser`, `withdrawFromUser`, `creditUserBalance` (bonus, acepta
-  `jugayganaUserId` para saltear el lookup), `changeUserPassword`, `getUserNet*`.
-- `jugaygana-movements.js` — endpoint alterno (makeDeposit/Withdrawal/Bonus, getUserBalance).
-- `src/services/jugayganaService.js` — refactor usado por referidos.
-- `src/services/jugayganaPublisherSessions.js` — pool de sesiones por publicista (creds
-  por Campaign) para crear usuarios bajo el sub-agente correcto.
+| Cliente | Usa | Para qué |
+|---|---|---|
+| `jugaygana.js` (raíz) | server.js | **Cargas/retiros/bonos/reembolsos.** `ensureSession` (mutex+retry), `lookupUserOrError` (tri-estado found/not_found/error — NO interpretar timeout como "no existe"), `depositToUser`/`withdrawFromUser` (con recovery CREATEUSER si not_found), `creditUserBalance` (bonus, 3 intentos, acepta `jugayganaUserId` para saltear el lookup), `syncUserToPlatform`, `changeUserPassword`, `getUserNet*`, rangos de fecha ART. **Montos ×100 (centavos).** |
+| `jugaygana-movements.js` (raíz) | server.js | `getUserBalance(WithRetry)` y `makeBonus` (delega en el anterior). ⚠️ Sus `makeDeposit`/`makeWithdrawal` mandan el monto SIN ×100 y con recovery inferior — **no usarlos para mover plata** (hoy no los usa ningún flujo de plata). |
+| `src/services/jugayganaService.js` | referidos, passwords, platform-login | `bonus()` (DepositMoney+childid — NO CREDITBALANCE, regresión PR#189/190), `changeUserPasswordAsAdmin`, `loginAsUser`, `getUserInfo`. |
+| `src/services/jugayganaPublisherSessions.js` | publisher_admin create-user | Pool de sesiones por Campaign (creds propias del sub-agente). Firma sha1 de creds → re-login si cambian en DB. |
 
-**Comportamiento clave:** JUGAYGANA es flaky — devuelve HTML (Cloudflare/rate-limit) de
-forma intermitente. Todos los clientes tienen auto-retry + detección de HTML + renovación
-de sesión. Los montos van en **centavos** al API (`amount * 100`). Las fechas se calculan
-en hora Argentina (ART, UTC-3). NUNCA asumir respuesta inmediata; reusar estos clientes.
+Además `src/services/referralRevenueService.js` consulta `royalty-statistics`
+(**header `X-Token`**, no Bearer) con **`child_user_id` OBLIGATORIO** (sin él devuelve
+el agregado GLOBAL del agente → números inflados). Es la fuente del NETWIN de
+reembolsos Y del revenue de referidos. `jugayganaUserLinkService.resolveJugayganaUserId`
+hace backfill al vuelo del id faltante.
+
+**Comportamiento clave:** JUGAYGANA es flaky — responde HTML (Cloudflare) de forma
+intermitente. Todos los clientes tienen auto-retry + detección de HTML + renovación de
+sesión. Montos en **centavos** (×100) al API. Fechas en hora Argentina (ART, UTC-3).
+NUNCA asumir respuesta inmediata; reusar estos clientes.
 
 ## 5. Flujos principales
 
-- **Registro**: `POST /api/auth/register` (con OTP de teléfono) o `register-quick` (link de
-  pauta, sin SMS). Crea User local + sincroniza a JUGAYGANA en background. Atribuye campaña
-  si vino `campaignCode`. NO crea ChatStatus (se crea al ingresar).
-- **Login**: `POST /api/auth/login` (server.js ~L1926). Valida password (con fallback
-  asd123 para importados), setea cookies admin si es rol staff, devuelve JWT 30d. Importa
-  desde JUGAYGANA si el user existe allá pero no localmente. NO fuerza cambio de password
-  por asd123 (removido).
-- **Bienvenida**: al entrar al chat, el front llama `POST /api/messages/welcome` →
-  crea 2 mensajes de SISTEMA (lado admin) + upsert de ChatStatus. Throttle 24h server-side.
-  Editable via comando `/sys_welcome`.
-- **Depósito (admin)**: `POST /api/admin/deposit` → `jugaygana.depositToUser` → si hay
-  bonus, pausa 700ms + `creditUserBalance` (con `jugayganaUserId`). Mensaje al cliente
-  refleja el resultado REAL (si el bonus falla, no lo menciona + alerta admin-only).
-  Registra Transaction(s). Mensajes editables `/sys_deposit`, `/sys_deposit_bonus`,
-  `/sys_reminder`, `/sys_install_app`.
-- **Retiro**: admin (`/api/admin/withdrawal`) y self-service (`/api/withdrawal/request`,
-  mueve el chat a "pagos", mensaje `/sys_withdrawal_request`).
-- **Reembolsos**: `POST /api/refunds/claim/{daily|weekly|monthly}` — consulta la pérdida
-  neta a JUGAYGANA (`getUserNet*`), valida con índice único por periodKey, acredita.
-- **Referidos**: `/api/referrals/admin/preview|calculate|payout`. El cálculo
-  (`referralCalculationService.calculateCommissionsForPeriod`) consulta revenue por referido
-  a JUGAYGANA — se hace en PARALELO (batches de 5) para no timeoutear. Payout en
-  `referralPayoutService` (soporta pagos incrementales/delta).
-- **Publicistas / atribución**: publisher_admin crea usuarios → quedan atribuidos a su
-  Campaign. Análisis en `src/services/publisherAnalyticsService.js` (segmentación churn,
-  ranking, recuperación por push). Endpoints `/api/admin/publishers/*`.
-- **Notificaciones**: `notificationService.sendNotificationToUsernames/AllUsers` (FCM).
-  Motores automáticos por cron: `notificationRulesService`, `encuestaService`,
-  `inactividadService`. Recuperación de inactivos: `/api/admin/recovery/*`.
+- **Registro**: `POST /api/auth/register` (user+pass; OTP solo si manda teléfono) o
+  `register-quick` (link de pauta con campaignCode válido, sin SMS,
+  phoneVerificationPending=true → no puede retirar hasta verificar). Crea en JUGAYGANA
+  PRIMERO; guarda atribución, fbc/fbp, registrationIp. Crea ChatStatus solo el flujo
+  público (los usuarios creados por admin/publisher NO — evita chats vacíos).
+- **Login**: `POST /api/auth/login` (~L3341). `findUserByUsernameCI` con
+  `critical:true` (fallback regex SIEMPRE disponible — nadie queda afuera). Importa de
+  JUGAYGANA si no existe local. Soporta login por teléfono, OTP y `temporaryCode`.
+  Roles staff reciben las cookies admin. JWT 30d (registro: 90d).
+- **Pauta / vanity URL**: `GET /:code` matchea Campaign.code exacto (DB directa) o slug
+  del publisher (cache 30s). Setea cookie httpOnly `vip_campaign` (60 días) → el server
+  reinyecta el código en CADA carga SPA (`renderIndexHtml`) para que "registro sin SMS"
+  sea determinístico (las webviews de Meta rompen localStorage).
+- **Bienvenida**: `POST /api/messages/welcome` — mensajes de SISTEMA + upsert de
+  ChatStatus. Throttle 24h server-side. Guard `_isStaleClientWelcome` descarta
+  bienvenidas-fantasma de PWA cacheadas viejas.
+- **Chat**: HTTP `POST /api/messages/send` + socket `send_message` (misma lógica
+  duplicada: validaciones, comandos `/`, SLA, comprobantes). Imagen de cliente →
+  `analyzeComprobanteFromMessage` (IA, fire-and-forget) → aviso adminOnly
+  (duplicado/verificado/manual) → `hgcashMatchFromComprobante`.
+- **Carga manual**: `POST /api/admin/deposit` → `jugaygana.depositToUser` (+bonus
+  separado tras pausa 700ms; el mensaje al cliente refleja el resultado REAL; si el
+  bonus falla → alerta adminOnly). Consume PromoBonus vigente y movimiento hgcash
+  pendiente del mismo monto (`hgcashConsumeOnManualDeposit`). Mensajes `/sys_deposit*`,
+  `/sys_reminder`, `/sys_install_app`, `/sys_recover_100`.
+- **AUTO-CARGA hgcash** (`POST /api/hgcash/webhook`, firma HMAC sobre rawBody,
+  fail-closed en prod): guarda BankMovement → matching contra Comprobantes por
+  monto + (N° operación==coelsa/externalID, o nombre de origen + destino consistente)
+  dentro de una ventana (60min desde comprobante / 10min desde movimiento). Ambigüedad
+  → NO carga. `hgcashAutoCarga`: claims atómicos de movimiento y comprobante → modo
+  sombra o real → **mínimo $2.000** (menor → needs_review + aviso) → candado
+  HgcashCharge por coelsa → guard anti-duplicado (misma carga <8min → needs_review) →
+  `depositToUser` → Transaction + mensaje + SLA. Fallo → reintentable hasta 3 veces.
+  **Fan-out** (#94): reenvía el webhook crudo+firma a autoreembolsos.com
+  (`HGCASH_FANOUT_URL`, 'off' para apagar).
+- **Retiro self-service**: `POST /api/withdrawal/request` — exige phoneVerified, lock
+  anti-doble, chequeo de saldo (UX), dedup 10min → crea PendingPayout
+  (`deductAtPay:true`, SIN descontar) → mueve el chat a Pagos. El AGENTE confirma:
+  `POST /api/admin/payouts/:id/pay` → `_deductChipsAtConfirm` (saldo → withdraw →
+  verificación anti-fantasma de que bajó) → cash-out hgcash (externalID=payout.id =
+  idempotencia; retry con accountId fresco ante 403) → webhook/poller confirma DONE →
+  aviso `/sys_payout_paid` + comprobante PDF (foto vía mupdf + link permanente
+  `/api/payout-receipt/:id`). Rechazo (`/cancel`): si NO se descontó → nada que
+  devolver; si se descontó → devolución (split bonus/fichas para pagos legacy).
+  `pay-other-bank` = pago manual (descuenta igual). Poller `_pollPayingPayouts` cada
+  45s (últimas 2h) cubre webhooks perdidos.
+- **Reembolsos**: `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis,
+  ventanas de `models/refunds.js` (semanal: lunes/martes; mensual: desde día 7),
+  NETWIN real de `referralRevenueService.getUserNetwinForDateRange`, % de
+  Config['refundPercents'] (defaults 20/10/5), índice único periodKey.
+- **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
+  payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas.
+- **Ruleta diaria**: requiere PWA instalada (token FCM standalone) + cliente activo
+  (>10 cargas reales/30d). Pick ponderado + **budget pacing** (distribuye el
+  presupuesto diario por hora ART; si excede → fuerza SIN PREMIO). Auto-crédito.
+- **Fueguito**: reclamo diario sin requisitos; premios de hitos (editables en panel,
+  Config['fireMilestones']) exigen actividad de cargas y expiran el mismo día.
+- **Bono instalación $5.000**: exige standalone real (token FCM), teléfono verificado,
+  anti-multicuenta por token FCM compartido, reserva atómica.
+- **SLA demoras**: reloj en ChatStatus (`delayClockOnUserMessage`/`delayClockResolve`);
+  responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
+  ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).
 
-## 6. Convenciones importantes
+## 6. Front-end: PWA cliente y panel admin
 
-- **Mensajes automáticos al usuario** → usar `renderSystemCommand(name, fallback, vars)`
-  (server.js, helper). Sembrar el comando en el array `systemCmds` de `initializeData()`.
-  Convención de variables: montos en el template como `${amount}` y se reemplaza `{amount}`
-  por el número (el `$` queda como signo de peso); texto como `{username}` sin `$`.
-- **Identidad de usuario**: usar `user.id` (uuid), no `_id`. Queries de username
-  case-insensitive con regex anclado + `escapeRegex`.
-- **periodKey**: formato `YYYY-MM` para referidos/comisiones.
-- **Migraciones one-shot**: patrón con flag en `Config` (`migration_xxx_done`) para correr
-  una sola vez en el bootstrap.
-- **Montos JUGAYGANA**: centavos (×100) al enviar; algunos campos vuelven en centavos.
-- **Validación local**: sólo `node --check` (no hay node_modules en el entorno del owner).
+### PWA (`public/`)
+- Namespace global `window.VIP` (`VIP.config`/`VIP.state` en config.js; módulos IIFE:
+  auth, socket, chat, ui, refunds, fire, roulette, reviews, promobonus, notifications,
+  withdraw, installbonus, notifsurvey, publisherwelcome, campaign, meta-pixel, apptest,
+  app). El orden real de carga está en index.html (el comentario de app.js está viejo).
+- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v50) — FCM + caché:
+  `/js/` y `/css/` stale-while-revalidate (deploy llega en la SIGUIENTE carga sin
+  bumpear versión), `/app.js` y manifest network-first, API/socket nunca. `user-sw.js`
+  es un stub de auto-desregistro (no volver a registrarlo).
+- **FCM**: todo el manejo real (getToken 3 tiers, refresh, register-token) está en el
+  INLINE de index.html; `window.sendFcmTokenAfterLogin` del inline pisa a propósito la
+  de notifications.js. Firebase config duplicada en index.html Y en el SW (cambiar
+  ambas). iOS: push solo en PWA instalada.
+- SPA sin router: `#loginScreen`/`#chatScreen` + modales. Estado de login en globals
+  `window._loginMode` etc. Interceptor global de fetch (auth.js) reabre el modal
+  obligatorio ante 403 MUST_CHANGE_PASSWORD.
+- Server-side rendering mínimo: `renderIndexHtml` reemplaza placeholders
+  (`__META_PIXEL_ID_PLACEHOLDER__`, `__VIP_PUBLIC_BASE_URL_PLACEHOLDER__`,
+  `__VIP_CAMPAIGN_CODE_PLACEHOLDER__`) con cache en memoria por proceso.
+- Duplicados front/back a mantener sincronizados: mínimo retiro $4.999, bono $5.000,
+  URL jugaygana44.bet, defaults de % de reembolso.
 
-## 7. Trampas / "no rompas esto"
+### Panel admin (`public/adminprivado2026/`)
+- `admin.js` (~12k líneas), auth mixta: login → Bearer en memoria + cookies httpOnly;
+  `checkAdminSession()` (`GET /api/admin/me`) restaura sesión al recargar.
+- Roles: admin ve todo; depositor (abiertos/cerrados); withdrawer (solo Pagos);
+  comunidad (abiertos/cerrados/comunidad); **publisher_admin tiene vista propia**
+  (`#publisherAdminSection`, early-return en setupRoleBasedUI, funciones `pa*`).
+- Chat: `renderConversations` con coalescing rAF + delegación de eventos (#91);
+  `selectConversation` → `loadUserInfo` → banners (bloqueo, fraude/multicuenta,
+  fueguito 30%, tags/notas, payout pendiente con botones pay/other-bank/cancel/
+  dismiss/sync, promo bonus). Races protegidas por `activeConversationId` +
+  AbortController — **no romper ese patrón**.
+- `admin-sw.js` (v24, scope /adminprivado2026/): network-first no-store para el shell.
+- Servido por handlers propios con cache en memoria (`readFileCached`) + ADMIN_HOST
+  check opcional; el catch-all bloquea todo otro path bajo /adminprivado2026/.
+- Secciones "Automatización" y "Estrategia de bonos" están marcadas "No se usa" en el
+  sidebar pero siguen funcionales (candidatas a limpieza con el owner).
+- La sección "Base de Datos" fue ELIMINADA por completo (2026-07-09): era inalcanzable.
 
-- **DOS `connectDB`**: el real es `config/database.js`; `src/models/index.js` NO se usa
-  desde server.js. No definir schemas en config/database.js.
-- **Secrets por SSM**: no leer `process.env.JWT_SECRET` al require; usar lazy getters.
-- **JUGAYGANA flaky**: manejar HTML/timeout; no interpretar timeout como "no existe"
-  (`lookupUserOrError` ya distingue error de not_found — no lo rompas).
-- **Message tiene TTL de 3 días**; Transaction NO. La analítica/histórico va sobre Transaction.
-- **ChatStatus** se crea con actividad, no al crear el usuario (sino aparecen chats vacíos).
-- **Atribución de publicista** se fija al crear/registrar, el login NO la cambia.
-- **publisher_admin** tiene lockdown estricto — si agregás un endpoint que ese rol deba
-  usar, agregalo a `PUBLISHER_ADMIN_ALLOWED_PATHS`.
-- **Referido (`?ref=`)** tiene prioridad sobre la atribución de publicista en el front.
+## 7. Motores automáticos / crons (todos `setInterval` en server.js — corren en CADA instancia)
+
+| Motor | Frecuencia | Estado | Idempotencia |
+|---|---|---|---|
+| `_runNotifRulesEvaluator` (reglas push) | 5 min | activo (reglas refund/tier inertes: PlayerStats no portado) | lastFiredAt + ventana |
+| `_runEncuestaTick` | 5 min | pushes sí, **bonos apagados** (`bDays=[]`) | EncuestaFire.slotKey único |
+| `_runInactividadTick` | 6 h | **APAGADO** (`INACTIVIDAD_DISABLED=true`) | InactividadFire.fireKey único |
+| `_runBonusStrategy` | 10 min | **APAGADO** (`BONUS_STRATEGY_DISABLED=true`) | step en StrategyEnrollment |
+| `_runDueSchedules` (ScheduledNotif) | 60 s | activo | lastRunAt |
+| `_pollPayingPayouts` | 45 s | activo (confirma pagos si el webhook no llegó) | handlePayoutStatusWebhook idempotente |
+| `_runFcmPrune` | 24 h | activo | flag anti-overlap en memoria |
+| `fbAdsWebhook.startWorker` | 5 min | activo | nextRetryAt |
+| Limpieza mensajes >3d | 6 h | activo (red de seguridad del TTL) | deleteMany |
+
+Migraciones one-shot: patrón flag en Config (`migration_*_done`) en `initializeData()`.
+El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
+`_usernameLowerReady`.
+
+## 8. Convenciones importantes
+
+- **Mensajes automáticos al usuario** → `renderSystemCommand(name, fallback, vars)` y
+  sembrar el comando en `systemCmds` de `initializeData()`. Respuesta VACÍA en el panel
+  = "no enviar" (null). Variables: montos como `${amount}` en el template y se
+  reemplaza `{amount}` (el `$` queda como signo); texto como `{username}` sin `$`.
+- **Identidad**: `user.id` (uuid), no `_id`. Username case-insensitive →
+  `findUserByUsernameCI` (indexado + fallback), NUNCA regex nuevo.
+- **periodKey**: `YYYY-MM` (referidos); RefundClaim usa `daily:YYYY-MM-DD` /
+  `weekly:YYYY-MM-DD` / `monthly:YYYY-MM`.
+- **Montos JUGAYGANA**: centavos (×100) al enviar; balances vuelven /100.
+- **Todo lo fire-and-forget** (tracking, comprobantes, fanout, SLA) va en try/catch y
+  JAMÁS frena la respuesta al cliente — mantener ese patrón.
+- **Endpoints muertos**: se eliminan con comentario-lápida y rollback `git revert`.
+- **Validación local**: sólo `node --check` (no hay node_modules en Tails).
+
+## 9. Trampas / "no rompas esto"
+
+- **DOS `connectDB`**: el real es `config/database.js`; el de `src/models/index.js` NO
+  se usa. No definir schemas en config/database.js.
+- **Secrets por SSM**: no leer `process.env.X` al require; lazy getters.
+- **JUGAYGANA flaky**: manejar HTML/timeout; `lookupUserOrError` distingue error de
+  not_found — un timeout NO es "no existe" (dispararía CREATEUSER duplicado).
+- **`jugaygana-movements.js`**: makeDeposit/makeWithdrawal NO multiplican ×100 — no
+  usarlos para plata (ver §4).
+- **Message TTL 3 días; Transaction permanente.** Snapshot en ChatDelay por eso.
+- **ChatStatus se crea con actividad**, no al crear el usuario.
+- **Atribución de publicista** se fija al registrar; el login NO la cambia. El referido
+  (`?ref=`) tiene prioridad sobre publicista en el front.
+- **publisher_admin**: endpoint nuevo para ese rol ⇒ sumarlo a
+  `PUBLISHER_ADMIN_ALLOWED_PATHS`.
+- **`adminMiddleware` deja pasar 4 roles** — todo endpoint sensible re-chequea
+  `role==='admin'` explícito (patrón #80; los CRÍTICOS ya están cerrados).
+- **Tope 30% en bonos automáticos** (owner 2026-07-08): cap de lectura en
+  `_getActivePromoBonus`, validaciones ≤30 en configs, plantillas bono_50/100
+  eliminadas + guard en `_runStrategyLaunch`. Los botones manuales +50/+100 del modal
+  de depósito QUEDAN (herramienta del agente).
+- **Multi-instancia**: crons corren en cada instancia — la idempotencia vive en los
+  índices únicos (slotKey, fireKey, chargeKey, userId+dateKey). No dropearlos. La
+  blacklist JWT de src/middlewares/auth.js y `generalLimiter` son por-instancia.
+- **USERS_LIST_FIELDS** (`GET /api/admin/users`) y la proyección de
+  `AUTH_USER_FIELDS` (authMiddleware): campo nuevo consumido ⇒ sumarlo al select.
+- **onclick inline** en panel y PWA dependen de `window.*` — no renombrar exports sin
+  actualizar los strings. En `renderUsers` las comillas SIMPLES del onclick con JSON
+  son a propósito.
+- **CACHE de assets por proceso** (`readFileCached`, `_indexHtmlBase`,
+  `_adminHtmlRendered`): index.html/admin.js/css se leen 1 vez por proceso — cambios
+  llegan con el redeploy (que reinicia). No agregar contenido dinámico por-request al
+  HTML sin pasar por `renderIndexHtml`.
+- **Firebase config duplicada** (index.html + firebase-messaging-sw.js) y VAPID key en
+  el inline: cambiar en ambos lados.
+- **`X-Token` en royalty-statistics** y **`child_user_id` obligatorio** — cambiarlos
+  rompe referidos Y reembolsos.
+- **`_communityRecommendCard` (roulette.js)**: feature pedida por el owner que nunca
+  se conectó — lee `VIP.state.communityLink*` que nadie setea (el wiring real de
+  comunidad es `loadCommunity()` inline → `/api/config/community`). Es MEJORA
+  PENDIENTE (reconectar seteando VIP.state desde loadCommunity), no código muerto.
+- **`checkUsernameAvailability` (PWA)**: existe pero no se dispara — mejora pendiente.
+- **vercel.json es un artefacto** de un deploy anterior; el deploy real es AWS EB.
+- **Env DB_PASSWORD ya no se usa** (sección Base de Datos eliminada 2026-07-09).

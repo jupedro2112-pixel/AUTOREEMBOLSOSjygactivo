@@ -6118,33 +6118,44 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
       const refundAmount = Math.round(netLoss * (dailyPct / 100));
 
       logger.info('[REFUND] daily — calculado para', username, 'netLoss:', netLoss, 'pct:', dailyPct, 'refund:', refundAmount);
-      
+
+      // CANDADO REAL contra doble cobro: RESERVAR el reclamo (índice único
+      // userId+type+periodKey) ANTES de acreditar. Antes se acreditaba y RECIÉN
+      // DESPUÉS se creaba el RefundClaim → el índice único sólo evitaba la fila
+      // duplicada, NO el doble pago (si el lock Redis caía en multi-instancia, dos
+      // requests acreditaban y el segundo create fallaba con la plata ya duplicada).
+      // Ahora el create atómico ES la barrera: si ya existe (E11000) → abortar sin pagar.
+      const _refundClaimId = uuidv4();
+      const _refundPeriodKey = 'daily:' + dateStr;
+      try {
+        await RefundClaim.create({
+          id: _refundClaimId, userId, username, type: 'daily',
+          amount: refundAmount, netAmount: netLoss, percentage: dailyPct,
+          period: dateStr, periodKey: _refundPeriodKey, claimedAt: new Date()
+        });
+      } catch (e) {
+        if (e && e.code === 11000) {
+          return res.json({ success: false, message: 'Ya reclamaste tu reembolso diario. Vuelve mañana!', canClaim: false });
+        }
+        throw e;
+      }
+
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount);
-      
+
       if (!depositResult.success) {
+        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
           message: 'Error al acreditar el reembolso: ' + depositResult.error,
           canClaim: true
         });
       }
-      
-      // Guardar reclamo en MongoDB
-      await RefundClaim.create({
-        id: uuidv4(),
-        userId,
-        username,
-        type: 'daily',
-        amount: refundAmount,
-        netAmount: netLoss,
-        percentage: dailyPct,
-        period: dateStr,
-        // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
-        periodKey: 'daily:' + dateStr,
-        transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
-        claimedAt: new Date()
-      });
-      
+
+      // Persistir el transactionId real ahora que la acreditación salió OK.
+      const _refundTxId = depositResult.data?.transfer_id || depositResult.data?.transferId;
+      if (_refundTxId) await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: _refundTxId } }).catch(() => {});
+
       // Guardar transacción para el dashboard
       await Transaction.create({
         id: uuidv4(),
@@ -6152,7 +6163,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         amount: refundAmount,
         username,
         description: `Reembolso diario (${dateStr})`,
-        transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
+        transactionId: _refundTxId,
         timestamp: new Date()
       });
 
@@ -6252,33 +6263,40 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
       const refundAmount = Math.round(netLoss * (weeklyPct / 100));
 
       logger.info('[REFUND] weekly — calculado para', username, 'netLoss:', netLoss, 'pct:', weeklyPct, 'refund:', refundAmount);
-      
+
+      // CANDADO REAL contra doble cobro (ver comentario en el reembolso diario):
+      // reservar el reclamo (índice único) ANTES de acreditar.
+      const _refundClaimId = uuidv4();
+      const _refundPeriodKey = 'weekly:' + fromDateStr;
+      try {
+        await RefundClaim.create({
+          id: _refundClaimId, userId, username, type: 'weekly',
+          amount: refundAmount, netAmount: netLoss, percentage: weeklyPct,
+          period: `${fromDateStr} a ${toDateStr}`, periodKey: _refundPeriodKey, claimedAt: new Date()
+        });
+      } catch (e) {
+        if (e && e.code === 11000) {
+          return res.json({ success: false, message: 'Ya reclamaste tu reembolso semanal esta semana.', canClaim: false });
+        }
+        throw e;
+      }
+
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount);
-      
+
       if (!depositResult.success) {
+        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
           message: 'Error al acreditar el reembolso: ' + depositResult.error,
           canClaim: true
         });
       }
-      
-      // Guardar reclamo en MongoDB
-      await RefundClaim.create({
-        id: uuidv4(),
-        userId,
-        username,
-        type: 'weekly',
-        amount: refundAmount,
-        netAmount: netLoss,
-        percentage: weeklyPct,
-        period: `${fromDateStr} a ${toDateStr}`,
-        // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
-        periodKey: 'weekly:' + fromDateStr,
-        transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
-        claimedAt: new Date()
-      });
-      
+
+      // Persistir el transactionId real ahora que la acreditación salió OK.
+      const _refundTxId = depositResult.data?.transfer_id || depositResult.data?.transferId;
+      if (_refundTxId) await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: _refundTxId } }).catch(() => {});
+
       // Guardar transacción para el dashboard
       await Transaction.create({
         id: uuidv4(),
@@ -6286,7 +6304,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         amount: refundAmount,
         username,
         description: `Reembolso semanal (${fromDateStr} a ${toDateStr})`,
-        transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
+        transactionId: _refundTxId,
         timestamp: new Date()
       });
 
@@ -6386,33 +6404,40 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
       const refundAmount = Math.round(netLoss * (monthlyPct / 100));
 
       logger.info('[REFUND] monthly — calculado para', username, 'netLoss:', netLoss, 'pct:', monthlyPct, 'refund:', refundAmount);
-      
+
+      // CANDADO REAL contra doble cobro (ver comentario en el reembolso diario):
+      // reservar el reclamo (índice único) ANTES de acreditar.
+      const _refundClaimId = uuidv4();
+      const _refundPeriodKey = 'monthly:' + fromDateStr.slice(0, 7);
+      try {
+        await RefundClaim.create({
+          id: _refundClaimId, userId, username, type: 'monthly',
+          amount: refundAmount, netAmount: netLoss, percentage: monthlyPct,
+          period: `${fromDateStr} a ${toDateStr}`, periodKey: _refundPeriodKey, claimedAt: new Date()
+        });
+      } catch (e) {
+        if (e && e.code === 11000) {
+          return res.json({ success: false, message: 'Ya reclamaste tu reembolso mensual este mes.', canClaim: false });
+        }
+        throw e;
+      }
+
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount);
-      
+
       if (!depositResult.success) {
+        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
           message: 'Error al acreditar el reembolso: ' + depositResult.error,
           canClaim: true
         });
       }
-      
-      // Guardar reclamo en MongoDB
-      await RefundClaim.create({
-        id: uuidv4(),
-        userId,
-        username,
-        type: 'monthly',
-        amount: refundAmount,
-        netAmount: netLoss,
-        percentage: monthlyPct,
-        period: `${fromDateStr} a ${toDateStr}`,
-        // periodKey activa el índice único (userId,type,periodKey) contra doble cobro.
-        periodKey: 'monthly:' + fromDateStr.slice(0, 7),
-        transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
-        claimedAt: new Date()
-      });
-      
+
+      // Persistir el transactionId real ahora que la acreditación salió OK.
+      const _refundTxId = depositResult.data?.transfer_id || depositResult.data?.transferId;
+      if (_refundTxId) await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: _refundTxId } }).catch(() => {});
+
       // Guardar transacción para el dashboard
       await Transaction.create({
         id: uuidv4(),
@@ -6420,7 +6445,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         amount: refundAmount,
         username,
         description: `Reembolso mensual (${fromDateStr} a ${toDateStr})`,
-        transactionId: depositResult.data?.transfer_id || depositResult.data?.transferId,
+        transactionId: _refundTxId,
         timestamp: new Date()
       });
 
@@ -9300,8 +9325,24 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
       }
     }
 
-    const rewardAmount = fireStreak.pendingCashReward;
-    const rewardDesc = fireStreak.pendingCashRewardDesc || `Recompensa Fueguito día ${fireStreak.pendingCashRewardDay}`;
+    // RESERVA ATÓMICA anti doble/N-cobro (TOCTOU): consumimos el premio pendiente
+    // ANTES de acreditar. `findOneAndUpdate` con guard `pendingCashReward > 0` es
+    // atómico: si N requests concurrentes del mismo cliente entran a la vez, SÓLO UNO
+    // "gana" el documento con el monto (los demás reciben null → abortan). Antes se
+    // acreditaba con makeBonus y RECIÉN DESPUÉS se ponía el flag en 0, así que N
+    // requests leían el mismo pendingCashReward>0 y cobraban el premio N veces.
+    const reserved = await FireStreak.findOneAndUpdate(
+      { userId, pendingCashReward: { $gt: 0 } },
+      { $set: { pendingCashReward: 0, pendingCashRewardDay: 0, pendingCashRewardDesc: '', pendingCashRewardDate: '' } },
+      { new: false } // devuelve el doc PREVIO → de ahí sale el monto a acreditar
+    );
+    if (!reserved || !reserved.pendingCashReward || reserved.pendingCashReward <= 0) {
+      // Otro request concurrente ya lo tomó (o se limpió en el ínterin).
+      return res.status(400).json({ error: 'No hay recompensa pendiente para reclamar.' });
+    }
+
+    const rewardAmount = reserved.pendingCashReward;
+    const rewardDesc = reserved.pendingCashRewardDesc || `Recompensa Fueguito día ${reserved.pendingCashRewardDay}`;
 
     const serializeErrorPart = (value) => {
       if (typeof value === 'string') return value;
@@ -9312,8 +9353,24 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
     };
 
     const bonusResult = await jugayganaMovements.makeBonus(username, rewardAmount, rewardDesc + ' - Sala de Juegos');
-    
+
     if (!bonusResult.success) {
+      // La acreditación falló → DEVOLVER el premio a pendiente para que el cliente
+      // pueda reintentar. Guard `pendingCashReward: 0` para no pisar un premio nuevo
+      // que se hubiera generado en el ínterin.
+      try {
+        await FireStreak.updateOne(
+          { userId, pendingCashReward: 0 },
+          { $set: {
+            pendingCashReward: rewardAmount,
+            pendingCashRewardDay: reserved.pendingCashRewardDay,
+            pendingCashRewardDesc: reserved.pendingCashRewardDesc,
+            pendingCashRewardDate: reserved.pendingCashRewardDate
+          } }
+        );
+      } catch (restoreErr) {
+        logger.error(`[FIRE_REWARD] no se pudo restaurar el premio tras fallo de crédito userId=${userId}: ${restoreErr.message}`);
+      }
       const creditError = typeof bonusResult.error === 'string'
         ? bonusResult.error
         : (bonusResult.error?.message || bonusResult.error?.error || bonusResult.error?.details || JSON.stringify(bonusResult.error) || 'Error al acreditar recompensa');
@@ -9324,13 +9381,8 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Error al acreditar recompensa: ' + creditError });
     }
 
-    // Limpiar pending reward y sumar al total
-    fireStreak.totalClaimed = (fireStreak.totalClaimed || 0) + rewardAmount;
-    fireStreak.pendingCashReward = 0;
-    fireStreak.pendingCashRewardDay = 0;
-    fireStreak.pendingCashRewardDesc = '';
-    fireStreak.pendingCashRewardDate = '';
-    await fireStreak.save();
+    // Acreditado OK: sumar al total (atómico; el flag pendiente ya quedó en 0 por la reserva).
+    await FireStreak.updateOne({ userId }, { $inc: { totalClaimed: rewardAmount } }).catch(() => {});
 
     try {
       await Transaction.create({

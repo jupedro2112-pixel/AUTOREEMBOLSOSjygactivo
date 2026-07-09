@@ -223,7 +223,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - **Reembolsos**: `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis,
   ventanas de `models/refunds.js` (semanal: lunes/martes; mensual: desde día 7),
   NETWIN real de `referralRevenueService.getUserNetwinForDateRange`, % de
-  Config['refundPercents'] (defaults 20/10/5), índice único periodKey.
+  Config['refundPercents'] (defaults 20/10/5). **El RefundClaim se CREA antes de
+  acreditar** (el índice único `userId+type+periodKey` es el candado atómico contra
+  doble cobro; si el crédito falla se borra la reserva). Ver #96.
 - **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
   payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas.
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone) + cliente activo
@@ -310,6 +312,10 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
 - **Montos JUGAYGANA**: centavos (×100) al enviar; balances vuelven /100.
 - **Todo lo fire-and-forget** (tracking, comprobantes, fanout, SLA) va en try/catch y
   JAMÁS frena la respuesta al cliente — mantener ese patrón.
+- **Crédito de plata al cliente = RESERVAR ATÓMICO ANTES de acreditar** (nunca acreditar
+  y limpiar el flag después → TOCTOU/doble cobro). Patrón: `findOneAndUpdate` con guard
+  del flag (ruleta, bono instalación, fueguito claim-reward) o `create` con índice único
+  (reembolsos). Si el crédito falla, revertir la reserva. Ver #96.
 - **Endpoints muertos**: se eliminan con comentario-lápida y rollback `git revert`.
 - **Validación local**: sólo `node --check` (no hay node_modules en Tails).
 

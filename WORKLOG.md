@@ -8,6 +8,35 @@
 
 ## Sesión 2026-07-09
 
+### 96. SEGURIDAD — 2 races de doble-cobro cerrados con reserva atómica ANTES de acreditar (fueguito + reembolsos)
+- **Contexto:** auditoría de seguridad completa del repo (4 frentes: auth/roles, plata, inyección,
+  secrets). De los hallazgos, el owner pidió corregir AHORA los 2 races de plata explotables; el
+  resto queda anotado para tandas siguientes. **Los detalles del resto NO se documentan acá a
+  propósito** (el repo es público en GitHub — no se publica el mapa de ataque de algo sin arreglar).
+- **Fueguito `POST /api/fire/claim-reward` (server.js) — race de doble/N-cobro por el cliente:** el
+  handler acreditaba el premio (`makeBonus`, con un `await` largo) y RECIÉN DESPUÉS ponía
+  `pendingCashReward` en 0. N requests concurrentes del mismo cliente leían todos el flag >0 y
+  cobraban el premio (hasta $200.000) N veces (TOCTOU). **Fix:** reserva atómica —
+  `FireStreak.findOneAndUpdate({userId, pendingCashReward:{$gt:0}}, {$set:{...en 0}}, {new:false})`
+  ANTES de acreditar. Solo un request "gana" el doc con el monto; los demás reciben null → abortan.
+  Si `makeBonus` falla, se RESTAURA el premio (guard `pendingCashReward:0` para no pisar uno nuevo)
+  y el cliente puede reintentar. `totalClaimed` pasó a `$inc` atómico. Mismo patrón que ya usaban
+  la ruleta y el bono de instalación (que estaban bien).
+- **Reembolsos `POST /api/refunds/claim/{daily|weekly|monthly}` (server.js) — doble pago si el lock
+  Redis cae en multi-instancia:** el orden era acreditar (`creditUserBalance`) y DESPUÉS crear el
+  `RefundClaim` con el `periodKey` único → el índice único solo evitaba la fila duplicada, no el
+  doble pago (dos instancias con el lock Redis degradado acreditaban ambas y la segunda solo fallaba
+  al escribir la fila, con la plata ya duplicada). **Fix:** invertido el orden en los 3 — se CREA el
+  `RefundClaim` PRIMERO (el índice único `userId+type+periodKey` es ahora el candado atómico real);
+  si choca (E11000) → se aborta SIN acreditar; recién si la reserva ganó se acredita; si el crédito
+  falla se borra la reserva (`deleteOne`) para permitir reintentar; el `transactionId` se persiste
+  con un update posterior. El `acquireRefundLock` (Redis+fallback memoria) queda como defensa en
+  profundidad (evita el trabajo duplicado del cálculo), pero ya NO es la única barrera de plata.
+- **Validado:** `node --check` OK (server.js). Sin migraciones (el índice único ya existía —
+  `RefundClaim.js:88`). Back necesita redeploy. PROBAR tras deploy: reclamar un reembolso normal
+  (debe seguir funcionando) y una recompensa de fueguito; el doble-reclamo concurrente ahora paga
+  una sola vez.
+
 ### 95. Lectura integral del repo + docs vivos (ARCHITECTURE/CLAUDE/WORKLOG) + limpieza de código muerto
 - **Pedido del owner:** leer TODO el repo de punta a punta para tener contexto completo, y que
   `docs/ARCHITECTURE.md` y `CLAUDE.md` se mantengan actualizados junto con `WORKLOG.md` a medida

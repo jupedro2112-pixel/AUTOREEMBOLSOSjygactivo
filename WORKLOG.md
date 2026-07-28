@@ -8,6 +8,34 @@
 
 ## Sesión 2026-07-28
 
+### 98. UI del home: REEMBOLSOS siempre visibles (fuera del menú colapsable) + tamaños emprolijados
+- **Pedido del owner (con captura):** al tocar "Ocultar menú" se escondía TODO, incluidos los
+  reembolsos ("lo que más se usa y más retiene"); y había recuadros muy grandes y otros muy
+  chicos.
+- **Reembolsos SIEMPRE visibles:** el recuadro (`.dash-refunds`, con badge de rango + botones
+  semanal/mensual) se movió FUERA de `#homePanel`, a un wrapper nuevo `.dash-refunds-sticky >
+  .dash-refunds-frame` (marco dorado propio, antes lo aportaba `.dash-top`), ubicado ANTES del
+  panel — mismo patrón que el botón RETIRAR MI PREMIO. Con el menú oculto queda: reembolsos →
+  barra del menú → retirar → chat. Cambio de HTML/CSS inline puro: TODOS los ids se conservan y
+  `git diff` de public/js/ solo toca un comentario → NO hace falta bumpear `?v`/CACHE_VERSION
+  (regla de #97: solo cuando cambian DOM y JS juntos).
+- **Tamaños:** badge de rango pasó de botón full-width a PILL junto al título (fila
+  `.dash-refunds-head`); botones semanal/mensual parejos a lo ancho (flex:1 en fila ancha);
+  card USUARIO de columna angosta (84px) a fila horizontal compacta (flex:1); banners del bono
+  100% compactados (padding/fonts) y centrados con `width:calc(100% - 16px); max-width:664px`
+  (= ancho interno del resto). `#unifiedRefundBtn` ELIMINADO (markup muerto: display:none, cero
+  referencias JS, su CSS apuntaba a `.header-center` que no existe).
+- **⚠️ Trampa flexbox que cazó la revisión (agente):** `.chat-section` es flex column → un flex
+  item con `margin: X auto` NO se estira (queda a fit-content, una pastilla de ~290px). Fix:
+  `.dash-refunds-sticky` lleva `width:100%; box-sizing:border-box` además del max-width+auto.
+  Si se agrega otro hijo directo a `.chat-section`, recordar esto.
+- **Validado:** estructura de divs balanceada, IDs únicos, `node --check` OK (app.js — solo
+  comentario). Agente revisor verificó: selectores JS todos por getElementById plano (ninguno
+  dependía de la jerarquía vieja), colapso del panel intacto (BFC de overflow:hidden evita
+  margen fantasma), media queries de responsive.css no pisan el layout nuevo, badge elipsiza
+  bien a 320px. PROBAR tras deploy: abrir la PWA, ocultar el menú (los reembolsos y RETIRAR
+  deben quedar), badge de rango y montos en el recuadro sticky, banner del bono 100%.
+
 ### 97. REEMBOLSOS POR RANGO (🥉🥈🥇, sin diario) + bono instalación → cupón 100% próxima carga
 - **Pedido del owner:** (a) eliminar el reembolso DIARIO y dejar solo semanal y mensual, con un
   sistema de RANGOS según lo perdido en el mes: hasta $30.000 → bronce 3%, hasta $100.000 →

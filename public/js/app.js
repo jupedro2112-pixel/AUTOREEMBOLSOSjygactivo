@@ -241,8 +241,9 @@ function setupEventListeners() {
             if (body) body.innerHTML = h;
         });
 
-        // Panel del home colapsable: "subir" el menú (ruleta, reembolsos,
-        // saldo, retirar) para agrandar el chat, y bajarlo para ver todo.
+        // Panel del home colapsable: "subir" el menú (ruleta, usuario, saldo,
+        // banners) para agrandar el chat, y bajarlo para ver todo. REEMBOLSOS y
+        // RETIRAR viven FUERA de #homePanel: quedan visibles con el menú oculto.
         const homePanel = document.getElementById('homePanel');
         const homePanelToggle = document.getElementById('homePanelToggle');
         if (homePanel && homePanelToggle) {

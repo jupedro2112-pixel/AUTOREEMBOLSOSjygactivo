@@ -29,6 +29,10 @@
   item con `margin: X auto` NO se estira (queda a fit-content, una pastilla de ~290px). Fix:
   `.dash-refunds-sticky` lleva `width:100%; box-sizing:border-box` además del max-width+auto.
   Si se agrega otro hijo directo a `.chat-section`, recordar esto.
+- **Botón flotante "📱 Instalar App / Agregar a Inicio" subido:** estaba `position:fixed;
+  bottom:20px` y TAPABA la barra de escribir mensaje (captura del owner). Ahora
+  `bottom: calc(80px + safe-area)` → queda justo por encima del input (el estilo vive en el
+  `<style>` que inyecta el JS inline de PWA en index.html).
 - **Validado:** estructura de divs balanceada, IDs únicos, `node --check` OK (app.js — solo
   comentario). Agente revisor verificó: selectores JS todos por getElementById plano (ninguno
   dependía de la jerarquía vieja), colapso del panel intacto (BFC de overflow:hidden evita

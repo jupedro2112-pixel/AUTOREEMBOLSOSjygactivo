@@ -3244,8 +3244,10 @@
         pwaStyles.textContent = `
             .pwa-install-btn {
                 position: fixed;
-                bottom: 20px;
-                right: 20px;
+                /* Por ENCIMA de la barra de escribir mensaje (~72px de alto con
+                   safe-area): con bottom:20px la tapaba y no se podía escribir. */
+                bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+                right: 14px;
                 background: linear-gradient(135deg, #d4af37 0%, #00cc6a 100%);
                 color: #000;
                 border: none;

@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css">
-    <link rel="stylesheet" href="/css/login.css">
-    <link rel="stylesheet" href="/css/header.css">
-    <link rel="stylesheet" href="/css/chat.css">
-    <link rel="stylesheet" href="/css/modals.css">
-    <link rel="stylesheet" href="/css/responsive.css">
+    <link rel="stylesheet" href="/css/base.css?v=51">
+    <link rel="stylesheet" href="/css/login.css?v=51">
+    <link rel="stylesheet" href="/css/header.css?v=51">
+    <link rel="stylesheet" href="/css/chat.css?v=51">
+    <link rel="stylesheet" href="/css/modals.css?v=51">
+    <link rel="stylesheet" href="/css/responsive.css?v=51">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -636,13 +636,10 @@
                     <div id="rouletteHomeCard" style="display:none;"></div>
                     <div class="dash-refunds">
                         <div class="dash-refunds-title">🎁 REEMBOLSOS</div>
+                        <!-- Rango del mes (bronce/plata/oro): lo pinta js/refunds.js con
+                             el estado real. Tocarlo abre el modal unificado con el detalle. -->
+                        <button id="dashTierBadge" onclick="VIP.refunds.showUnifiedRefundModal()" style="display:none; width:100%; margin-bottom:5px; background:linear-gradient(135deg,#2d0052,#1a0033); color:#ffd700; border:1px solid #d4af37; border-radius:8px; padding:3px 6px; font-size:10px; font-weight:900; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></button>
                         <div class="dash-refunds-row">
-                            <button id="dailyRefundBtn" class="refund-btn daily" title="Reembolso Diario">
-                                <span class="refund-label-full">📅<br>Diario</span>
-                                <span class="refund-label-short">📅</span>
-                                <span class="refund-amount" id="dailyRefundAmount">$0</span>
-                                <span class="refund-timer" id="dailyRefundTimer"></span>
-                            </button>
                             <button id="weeklyRefundBtn" class="refund-btn weekly" title="Reembolso Semanal (Lun-Mar)">
                                 <span class="refund-label-full">📆<br>Semanal</span>
                                 <span class="refund-label-short">📆</span>
@@ -720,22 +717,35 @@
             })();
             </script>
             <!-- ===== /DASHBOARD ===== -->
-            <!-- Cartel del bono por instalar la app: visible hasta que se reclama -->
+            <!-- Cartel del bono por instalar la app: visible hasta que se reclama.
+                 Desde 2026-07-28 el bono es un CUPÓN de 100% extra en la próxima
+                 carga (ya no acredita $5.000). -->
             <div id="installBonusBanner" style="display:none; background: linear-gradient(135deg, #d4af37 0%, #ffd700 50%, #d4af37 100%); color: #000; padding: 11px 14px; border-radius: 12px; margin: 8px 8px 0; box-shadow: 0 4px 18px rgba(212,175,55,0.55); border: 2px solid #ffd700;">
                 <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                     <span style="font-size: 26px;">🎁</span>
                     <div style="flex: 1; min-width: 110px;">
-                        <strong style="font-size: 14px; display: block;">¡Bono de $5.000 por instalar la app!</strong>
+                        <strong style="font-size: 14px; display: block;">¡100% EXTRA en tu próxima carga por instalar la app!</strong>
                         <span style="font-size: 11px; opacity: 0.8;">Reclamalo desde la app instalada.</span>
                     </div>
-                    <button id="installBonusClaimBtn" style="background: #000; color: #ffd700; border: none; border-radius: 9px; padding: 9px 15px; font-weight: 800; font-size: 13px; cursor: pointer; flex-shrink: 0;">🎁 Reclamar $5.000</button>
+                    <button id="installBonusClaimBtn" style="background: #000; color: #ffd700; border: none; border-radius: 9px; padding: 9px 15px; font-weight: 800; font-size: 13px; cursor: pointer; flex-shrink: 0;">🎁 Reclamar mi 100%</button>
                 </div>
                 <!-- Aviso para usuarios sin pauta (registro directo): el bono
-                     es para probar la página y no es retirable hasta ser usuario
-                     activo. installbonus.js lo muestra/oculta según
-                     VIP.state.currentUser.acquisitionCampaign. -->
+                     es promocional y no es retirable directo. installbonus.js lo
+                     muestra/oculta según VIP.state.currentUser.acquisitionCampaign. -->
                 <div id="installBonusDirectNotice" style="display:none; margin-top:10px; padding:8px 11px; background:rgba(0,0,0,0.12); border:1px solid rgba(0,0,0,0.28); border-radius:9px; font-size:11px; line-height:1.4; color:#1a0033; font-weight:600;">
-                    ⚠️ Este bono es <strong>para que pruebes la página, no es retirable</strong>. Para poder retirarlo necesitás <strong>ser un usuario activo</strong>.
+                    ⚠️ El bono se aplica <strong>como bonus en tu próxima carga</strong>, no es dinero retirable directo.
+                </div>
+            </div>
+
+            <!-- Cartel "cupón activo": el usuario ya desbloqueó el 100% y todavía
+                 no lo usó en una carga. Lo muestra/oculta installbonus.js. -->
+            <div id="installBonusActiveBanner" style="display:none; background: linear-gradient(135deg, #0f4c00 0%, #1a8200 100%); color: #fff; padding: 10px 14px; border-radius: 12px; margin: 8px 8px 0; border: 2px solid #00ff88; box-shadow: 0 4px 14px rgba(0,255,136,0.35);">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 24px;">🎁</span>
+                    <div style="flex: 1; min-width: 110px; line-height: 1.35;">
+                        <strong style="font-size: 13px; display: block; color: #00ff88;">BONO ACTIVO: 100% EXTRA en tu próxima carga</strong>
+                        <span style="font-size: 11px; opacity: 0.9;">Avisale al cajero cuando cargues para que te lo aplique. 💬</span>
+                    </div>
                 </div>
             </div>
 
@@ -1221,17 +1231,16 @@
             <button onclick="hideModal('unifiedRefundModal')" style="position:absolute;top:12px;right:12px;background:none;border:none;color:#888;font-size:22px;cursor:pointer;z-index:10;line-height:1;">✕</button>
             <div class="modal-header">
                 <h2>🎁 Reembolsos</h2>
-                <p style="font-size:12px;color:#aaa;">Elegí el tipo de reembolso a consultar</p>
+                <p style="font-size:12px;color:#aaa;">Tu % de reembolso depende de tu RANGO del mes</p>
             </div>
+            <!-- Panel de rango (bronce/plata/oro): lo pinta js/refunds.js con el estado real. -->
+            <div id="unifiedTierPanel" style="display:none;"></div>
             <div style="display:flex;flex-direction:column;gap:12px;padding:10px 0;">
-                <button onclick="VIP.refunds.showRefundModal('daily');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;">
-                    📅 Reembolso Diario (<span id="unifiedDailyPct">20</span>% de tu NETWIN de ayer)
-                </button>
                 <button onclick="VIP.refunds.showRefundModal('weekly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a6b3a,#2d9b56);">
-                    📆 Reembolso Semanal (<span id="unifiedWeeklyPct">10</span>% de tu NETWIN semanal)
+                    📆 Reembolso Semanal (<span id="unifiedWeeklyPct">3</span>% de tu NETWIN semanal)
                 </button>
                 <button onclick="VIP.refunds.showRefundModal('monthly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a3a6b,#2d5b9b);">
-                    🗓️ Reembolso Mensual (<span id="unifiedMonthlyPct">5</span>% de tu NETWIN mensual)
+                    🗓️ Reembolso Mensual (<span id="unifiedMonthlyPct">3</span>% de tu NETWIN mensual)
                 </button>
                 <button onclick="VIP.ui.hideModal('unifiedRefundModal')" class="btn btn-secondary">Cerrar</button>
             </div>
@@ -1355,19 +1364,19 @@
             </div>
             <div class="info-grid">
                 <div class="info-card">
-                    <div class="info-card-icon">💰</div>
-                    <div class="info-card-title">Reembolso Diario</div>
-                    <div class="info-card-desc">20% de tus pérdidas del día anterior, a tu cuenta.</div>
+                    <div class="info-card-icon">🏅</div>
+                    <div class="info-card-title">Rangos 🥉🥈🥇</div>
+                    <div class="info-card-desc">Tu % de reembolso según lo que perdés en el mes: Bronce 3%, Plata 5%, Oro 10%.</div>
                 </div>
                 <div class="info-card">
                     <div class="info-card-icon">📅</div>
                     <div class="info-card-title">Reembolso Semanal</div>
-                    <div class="info-card-desc">10% de tus pérdidas de la semana (lunes y martes).</div>
+                    <div class="info-card-desc">El % de tu rango sobre tus pérdidas de la semana (lunes y martes).</div>
                 </div>
                 <div class="info-card">
                     <div class="info-card-icon">🗓️</div>
                     <div class="info-card-title">Reembolso Mensual</div>
-                    <div class="info-card-desc">5% de tus pérdidas del mes, desde el día 7.</div>
+                    <div class="info-card-desc">El % de tu rango sobre tus pérdidas del mes, desde el día 7.</div>
                 </div>
                 <div class="info-card">
                     <div class="info-card-icon">🎰</div>
@@ -1409,19 +1418,19 @@
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:7px;">
                 <div style="background:linear-gradient(135deg,rgba(0,255,136,0.10),rgba(0,204,106,0.10)); border:1px solid rgba(0,255,136,0.55); border-radius:9px; padding:8px 6px; text-align:center;">
-                    <div style="font-size:22px; line-height:1;">💰</div>
-                    <div style="color:#00ff88; font-weight:700; font-size:11px; margin:3px 0 2px;">Reembolso Diario</div>
-                    <div style="color:#b0b0b0; font-size:9.5px; line-height:1.3;">20% de tus pérdidas de ayer.</div>
+                    <div style="font-size:22px; line-height:1;">🏅</div>
+                    <div style="color:#00ff88; font-weight:700; font-size:11px; margin:3px 0 2px;">Rangos 🥉🥈🥇</div>
+                    <div style="color:#b0b0b0; font-size:9.5px; line-height:1.3;">Bronce 3% · Plata 5% · Oro 10% según tu mes.</div>
                 </div>
                 <div style="background:linear-gradient(135deg,rgba(0,255,136,0.10),rgba(0,204,106,0.10)); border:1px solid rgba(0,255,136,0.55); border-radius:9px; padding:8px 6px; text-align:center;">
                     <div style="font-size:22px; line-height:1;">📅</div>
                     <div style="color:#00ff88; font-weight:700; font-size:11px; margin:3px 0 2px;">Reembolso Semanal</div>
-                    <div style="color:#b0b0b0; font-size:9.5px; line-height:1.3;">10% de tus pérdidas de la semana.</div>
+                    <div style="color:#b0b0b0; font-size:9.5px; line-height:1.3;">El % de tu rango sobre la semana.</div>
                 </div>
                 <div style="background:linear-gradient(135deg,rgba(0,255,136,0.10),rgba(0,204,106,0.10)); border:1px solid rgba(0,255,136,0.55); border-radius:9px; padding:8px 6px; text-align:center;">
                     <div style="font-size:22px; line-height:1;">🗓️</div>
                     <div style="color:#00ff88; font-weight:700; font-size:11px; margin:3px 0 2px;">Reembolso Mensual</div>
-                    <div style="color:#b0b0b0; font-size:9.5px; line-height:1.3;">5% de tus pérdidas del mes.</div>
+                    <div style="color:#b0b0b0; font-size:9.5px; line-height:1.3;">El % de tu rango sobre el mes.</div>
                 </div>
                 <div style="background:linear-gradient(135deg,rgba(0,255,136,0.10),rgba(0,204,106,0.10)); border:1px solid rgba(0,255,136,0.55); border-radius:9px; padding:8px 6px; text-align:center;">
                     <div style="font-size:22px; line-height:1;">🎰</div>
@@ -1562,7 +1571,7 @@
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Retiros al instante 24/7</span></li>
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Sin límite de retiros</span></li>
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Racha diaria reclamable</span></li>
-                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Reembolsos diarios, semanales y mensuales</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Reembolsos semanales y mensuales según tu rango 🥉🥈🥇</span></li>
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Premios, bonificaciones y más</span></li>
                 </ul>
 
@@ -1806,25 +1815,29 @@
 
     <!-- Socket.IO desde el servidor local -->
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/js/config.js"></script>
-    <script src="/js/campaign.js"></script>
-    <script src="/js/meta-pixel.js"></script>
-    <script src="/js/auth.js"></script>
-    <script src="/js/socket.js"></script>
-    <script src="/js/chat.js"></script>
-    <script src="/js/refunds.js"></script>
-    <script src="/js/fire.js"></script>
-    <script src="/js/roulette.js"></script>
-    <script src="/js/reviews.js"></script>
-    <script src="/js/promobonus.js"></script>
-    <script src="/js/notifications.js"></script>
-    <script src="/js/ui.js"></script>
-    <script src="/js/withdraw.js"></script>
-    <script src="/js/installbonus.js"></script>
-    <script src="/js/notifsurvey.js"></script>
-    <script src="/js/publisherwelcome.js"></script>
-    <script src="/js/apptest.js"></script>
-    <script src="/js/app.js"></script>
+    <!-- ⚠️ Versionado ?v=N de js/css: el SW usa stale-while-revalidate para /js/ y
+         /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
+         viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
+         JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
+    <script src="/js/config.js?v=51"></script>
+    <script src="/js/campaign.js?v=51"></script>
+    <script src="/js/meta-pixel.js?v=51"></script>
+    <script src="/js/auth.js?v=51"></script>
+    <script src="/js/socket.js?v=51"></script>
+    <script src="/js/chat.js?v=51"></script>
+    <script src="/js/refunds.js?v=51"></script>
+    <script src="/js/fire.js?v=51"></script>
+    <script src="/js/roulette.js?v=51"></script>
+    <script src="/js/reviews.js?v=51"></script>
+    <script src="/js/promobonus.js?v=51"></script>
+    <script src="/js/notifications.js?v=51"></script>
+    <script src="/js/ui.js?v=51"></script>
+    <script src="/js/withdraw.js?v=51"></script>
+    <script src="/js/installbonus.js?v=51"></script>
+    <script src="/js/notifsurvey.js?v=51"></script>
+    <script src="/js/publisherwelcome.js?v=51"></script>
+    <script src="/js/apptest.js?v=51"></script>
+    <script src="/js/app.js?v=51"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA

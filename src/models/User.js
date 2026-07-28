@@ -383,14 +383,34 @@ const userSchema = new mongoose.Schema({
     default: null
   },
 
-  // Bono one-time por instalar la app (PWA). Se acredita una sola vez cuando el
-  // usuario toca "Reclamar" estando dentro de la app instalada (standalone).
+  // Bono one-time por instalar la app (PWA). Se reclama una sola vez desde la
+  // app instalada (standalone). Hasta 2026-07-28 acreditaba $5.000; ahora el
+  // reclamo otorga un CUPÓN de 100% extra en la próxima carga (campos de abajo).
   installBonusClaimed: {
     type: Boolean,
     default: false
   },
   installBonusClaimedAt: {
     type: Date,
+    default: null
+  },
+  // Cupón "100% EXTRA en tu próxima carga" por instalar la app. Lo aplica el
+  // AGENTE a mano en la carga (+100% del modal de depósito) y lo marca usado
+  // desde el banner del chat (POST /api/admin/users/:id/install-bonus-100/apply).
+  installBonus100Pending: {
+    type: Boolean,
+    default: false
+  },
+  installBonus100GrantedAt: {
+    type: Date,
+    default: null
+  },
+  installBonus100UsedAt: {
+    type: Date,
+    default: null
+  },
+  installBonus100UsedBy: {
+    type: String,
     default: null
   },
 

@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v50'; // v50: stale-while-revalidate para js/css (v49: bonos-fantasma)
+const CACHE_VERSION = 'v51'; // v51: rangos de reembolso + cupón install 100% (v50: stale-while-revalidate js/css)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

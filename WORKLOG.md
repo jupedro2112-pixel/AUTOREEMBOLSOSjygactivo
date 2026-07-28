@@ -4,7 +4,76 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-07-09**
+> **Última actualización: 2026-07-28**
+
+## Sesión 2026-07-28
+
+### 97. REEMBOLSOS POR RANGO (🥉🥈🥇, sin diario) + bono instalación → cupón 100% próxima carga
+- **Pedido del owner:** (a) eliminar el reembolso DIARIO y dejar solo semanal y mensual, con un
+  sistema de RANGOS según lo perdido en el mes: hasta $30.000 → bronce 3%, hasta $100.000 →
+  plata 5%, más → oro 10%, siempre sobre NETWIN; (b) el bono por instalar la app deja de regalar
+  $5.000 y pasa a desbloquear un **100% EXTRA en la próxima carga**, con visibilidad y botón
+  "marcar usado" para el admin. Decisiones confirmadas por el owner: el % del rango aplica a
+  AMBOS reembolsos; rango por mes calendario; el 100% lo acredita el AGENTE a mano; el cliente
+  VE su rango en la PWA.
+- **Rangos (backend):** `Config['refundTiers']` (editable panel→COMANDOS, solo admin general,
+  `GET/POST /api/admin/refund-tiers` — reemplazan a refund-percents; `Config['refundPercents']`
+  queda huérfana en DB). `getRefundTiers()` + `computeRefundTier()` (corte INCLUSIVO: $30.000
+  exactos = bronce). **Qué mes define el rango:** mensual → el propio mes reembolsado; semanal →
+  el mes del LUNES de la semana reembolsada (mes en curso a hoy, o el mes anterior COMPLETO si
+  la semana arrancó allá). ⚠️ Decidir por el domingo era un bug que la revisión cazó: en la
+  primera semana de cada mes el rango se calculaba con 1-2 días del mes nuevo y descartaba toda
+  la pérdida del mes anterior (Oro caía a Bronce). `RefundClaim` guarda `tier`; los claims pasan
+  `jugayganaUserId` a `creditUserBalance` (evita un lookup flaky). Guard nuevo
+  `refundAmount <= 0` ANTES de reservar (con % 0 o pérdida ínfima se quemaba el período por $0).
+  El patrón #96 (RefundClaim ANTES de acreditar) quedó intacto; el netwin del rango se consulta
+  ANTES de reservar (fallo → abortar reintentable, sin reserva huérfana).
+- **Diario eliminado:** `POST /api/refunds/claim/daily` = stub amigable (success:false +
+  mensaje explicando los rangos) porque las PWAs cacheadas lo siguen llamando (lección #88);
+  `GET /api/refunds/status` devuelve un `daily` inerte con el shape que el JS viejo espera +
+  objeto `tier` nuevo (rango en vivo del mes, nextTier con `missing` = tope−pérdida+1, tabla de
+  rangos). `canClaimDailyRefund` eliminada de models/refunds.js. Ticker fake sin daily/bono.
+- **PWA:** botón diario ELIMINADO del dashboard; badge `#dashTierBadge` (TU RANGO: 🥇 ORO ·
+  10%) + panel `#unifiedTierPanel` en el modal unificado (rango, pérdida del mes, cuánto falta
+  para subir, tabla 🥉🥈🥇 y nota de que el mensual usa el rango del mes reembolsado); copys de
+  infoModal/adServiceModal/beneficios/welcome actualizados. **`?v=51` en TODOS los script/link
+  de index.html** (fix de raíz de la revisión: el SW SWR servía UNA carga de HTML nuevo + JS
+  viejo → TypeError por el DOM del botón diario eliminado y toast falso "¡$5.000 acreditado!").
+  REGLA NUEVA: al cambiar HTML y JS juntos, bumpear `?v` y CACHE_VERSION (v51) al mismo número.
+- **Cupón 100% instalación:** el claim (mismos gates: standalone real, teléfono verificado,
+  anti-multicuenta por token) ya NO llama a JUGAYGANA — la reserva atómica setea también
+  `installBonus100Pending/GrantedAt` (sin plata → sin rollback). Campos nuevos en User
+  (+`UsedAt/UsedBy`). Panel: banner VERDE en el chat (patrón fueguito) con "✓ Marcar usado" →
+  `POST /api/admin/users/:id/install-bonus-100/apply` (depositorMiddleware, update atómico con
+  guard). PWA: banner dorado "Reclamar mi 100%" → al reclamar, banner verde "BONO ACTIVO…
+  avisale al cajero" (persiste hasta que el admin lo marca usado; se refresca al recargar).
+  Sección del panel renombrada "Bono App (100%)" con stats cupón pendiente/usado y "Pagado
+  legacy"; feed de reclamos excluye cupones (sin monto mostrable). Comando NUEVO
+  `/sys_install_bonus_100`; `/sys_install_app` con copy nuevo.
+- **Migración one-shot `migration_refund_tiers_install100_done`:** actualiza `/sys_welcome` y
+  `/sys_deposit(_bonus)` por SUBSTRING (respeta ediciones del owner alrededor) y
+  `/sys_install_app` solo-si-default; borra `/sys_install_bonus`; desactiva las reglas push
+  `refund-pending-daily` (B1/B2) en DB. Seeds B1/B2 eliminados; copy de B3-B6 sin % fijos.
+  ⚠️ Si el owner tenía editados esos comandos con textos viejos, la migración NO los toca:
+  revisar COMANDOS tras el deploy (buscar menciones a "diario" o "$5.000").
+- **Revisión con 2 agentes adversariales** (plata/races y contrato front-back/stale clients).
+  Corregido: bug del rango semanal en cambio de mes (ALTA), ventana HTML nuevo + JS viejo
+  (ALTA, fix `?v=51`), off-by-one de nextTier.missing, quema de período por $0, copia shallow
+  de defaults, guards en el panel, CSS muerto, card "Diarios (descontinuado)".
+- **Trade-offs aceptados (documentados, no bugs):** el claim semanal ahora depende de 2
+  llamadas a JUGAYGANA (si falla la del rango → error reintentable; en el borde martes 23:59
+  se puede perder la ventana); los reclamos daily históricos siguen visibles en ticker/reportes;
+  el banner verde del cliente no se limpia por socket al marcarlo usado (solo al recargar);
+  semanal y mensual siguen SIN descontarse entre sí (solape preexistente de #73); usuarios que
+  ya cobraron los $5.000 legacy NO pueden reclamar el cupón (installBonusClaimed ya en true).
+- **Validado:** `node --check` OK en todo lo tocado (server.js, jugaygana.js, models/refunds.js,
+  User.js, RefundClaim.js, notificationRulesService.js, refunds.js, app.js, installbonus.js,
+  roulette.js, SW, admin.js). Back necesita redeploy (corre la migración). **PROBAR tras
+  deploy:** status de reembolsos (badge de rango + panel), reclamo semanal (lunes/martes) y
+  mensual con el % del rango correcto, claim diario desde una PWA vieja (mensaje amigable),
+  reclamo del bono de instalación (debe dar cupón, NO $5.000), banner verde en el chat del
+  panel + "Marcar usado", editor de rangos en COMANDOS (solo admin general), y revisar
+  COMANDOS por textos viejos con "diario"/"$5.000".
 
 ## Sesión 2026-07-09
 

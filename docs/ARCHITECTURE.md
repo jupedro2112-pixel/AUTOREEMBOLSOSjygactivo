@@ -32,9 +32,11 @@ El sistema VIPCARGAS:
 - Gestiona **cargas** (manuales por agente, o AUTOMÁTICAS vía banco hgcash + IA de
   comprobantes) y **retiros** (self-service con confirmación de agente y pago
   automático por hgcash).
-- Da **reembolsos** sobre la pérdida real/NETWIN (diario/semanal/mensual), **ruleta
-  diaria**, **fueguito** (racha), **bono instalación $5.000**, **referidos** (7% del
-  owner-revenue) y **campañas/publicistas** con sub-atribución por influencer.
+- Da **reembolsos** sobre la pérdida real/NETWIN (semanal/mensual, % según **rango**
+  🥉🥈🥇 por pérdida del mes; el diario fue eliminado 2026-07-28), **ruleta diaria**,
+  **fueguito** (racha), **bono instalación** (cupón 100% próxima carga; antes $5.000),
+  **referidos** (7% del owner-revenue) y **campañas/publicistas** con sub-atribución
+  por influencer.
 - El "saldo real" del jugador vive en JUGAYGANA; VIPCARGAS guarda atribución, bonos,
   reclamos y el registro permanente de transacciones.
 
@@ -66,8 +68,9 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   `acquisitionCampaign/Source/Influencer/Utm`, `createdByEmployeeId`. Referidos:
   `referralCode`, `referredByUserId`. Meta: `metaFbc/metaFbp/landingUrl`.
   Anti-multicuenta: `registrationIp/UserAgent`. Panel: `tags[]`, `adminNotes`,
-  `tagHistory`. Otros: `installBonusClaimed`, `notificationPlan`, `notifMonthlyCounts`,
-  `loginWithoutPassword`, `withdrawalAccount`, `pendingAccessCode`.
+  `tagHistory`. Otros: `installBonusClaimed` + cupón `installBonus100Pending/
+  GrantedAt/UsedAt/UsedBy` (100% próxima carga por instalar la app), `notificationPlan`,
+  `notifMonthlyCounts`, `loginWithoutPassword`, `withdrawalAccount`, `pendingAccessCode`.
 - **Transaction** — registro PERMANENTE (sin TTL). `type`: deposit|withdrawal|bonus|
   refund|transfer|referral_commission|fire_reward. `metadata.source` distingue regalos
   ('install_bonus','welcome_gift') y devoluciones ('payout_refund') que se EXCLUYEN de
@@ -121,7 +124,8 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   **FbAdsWebhookQueue** (cola de reintentos al sistema externo fb-ads),
   **RefundClaim** (índice único userId+type+periodKey contra doble cobro),
   **FireStreak** (racha fueguito + premios pendientes), **Config** (key/value: cbu,
-  hgcash, refundPercents, fireMilestones, flags de migración one-shot, etc.),
+  hgcash, refundTiers (rangos 🥉🥈🥇; refundPercents quedó huérfana en DB),
+  fireMilestones, flags de migración one-shot, etc.),
   **Command** (comandos `/...` y mensajes automáticos `/sys_*`, `isSystem:true`).
 
 ## 3. Ciclo de request / autenticación / roles
@@ -220,12 +224,23 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   devolver; si se descontó → devolución (split bonus/fichas para pagos legacy).
   `pay-other-bank` = pago manual (descuenta igual). Poller `_pollPayingPayouts` cada
   45s (últimas 2h) cubre webhooks perdidos.
-- **Reembolsos**: `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis,
-  ventanas de `models/refunds.js` (semanal: lunes/martes; mensual: desde día 7),
-  NETWIN real de `referralRevenueService.getUserNetwinForDateRange`, % de
-  Config['refundPercents'] (defaults 20/10/5). **El RefundClaim se CREA antes de
-  acreditar** (el índice único `userId+type+periodKey` es el candado atómico contra
-  doble cobro; si el crédito falla se borra la reserva). Ver #96.
+- **Reembolsos** (rediseñados 2026-07-28, ver #97): SOLO semanal y mensual — el
+  DIARIO fue eliminado (`claim/daily` quedó como stub amigable para PWAs cacheadas).
+  `POST /api/refunds/claim/{weekly|monthly}` — lock Redis, ventanas de
+  `models/refunds.js` (semanal: lunes/martes; mensual: desde día 7), NETWIN real de
+  `referralRevenueService.getUserNetwinForDateRange`. El **% sale del RANGO** del
+  cliente (`Config['refundTiers']`, editable panel→COMANDOS, solo admin general;
+  defaults: 🥉 bronce hasta $30.000 = 3%, 🥈 plata hasta $100.000 = 5%, 🥇 oro = 10%),
+  calculado sobre la pérdida NETWIN mensual: el MENSUAL usa el netwin del propio mes
+  reembolsado; el SEMANAL usa el mes al que pertenece el LUNES de la semana (mes en
+  curso a hoy, o el mes anterior completo si la semana arrancó allá — decidir por el
+  domingo era un bug de arranque de mes). `GET /api/refunds/status` devuelve además
+  `tier` (rango en vivo del mes en curso + nextTier + tabla) y un `daily` stub inerte.
+  Guard `refundAmount <= 0` ANTES de reservar (no quemar el período por $0).
+  **El RefundClaim se CREA antes de acreditar** (el índice único `userId+type+periodKey`
+  es el candado atómico contra doble cobro; si el crédito falla se borra la reserva;
+  ver #96). RefundClaim guarda `tier`. Config admin: `GET/POST /api/admin/refund-tiers`
+  (reemplazó a refund-percents).
 - **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
   payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas.
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone) + cliente activo
@@ -233,8 +248,15 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   presupuesto diario por hora ART; si excede → fuerza SIN PREMIO). Auto-crédito.
 - **Fueguito**: reclamo diario sin requisitos; premios de hitos (editables en panel,
   Config['fireMilestones']) exigen actividad de cargas y expiran el mismo día.
-- **Bono instalación $5.000**: exige standalone real (token FCM), teléfono verificado,
-  anti-multicuenta por token FCM compartido, reserva atómica.
+- **Bono instalación** (desde 2026-07-28 = **cupón 100% EXTRA en la próxima carga**,
+  ya NO acredita $5.000): exige standalone real (token FCM), teléfono verificado,
+  anti-multicuenta por token FCM compartido. La reserva atómica del claim setea
+  `installBonusClaimed` + `installBonus100Pending/GrantedAt` en un solo update (sin
+  plata → sin rollback). El AGENTE lo ve como banner verde en el chat del panel
+  (patrón fueguito), aplica el +100% a mano en el modal de carga y lo marca usado con
+  `POST /api/admin/users/:id/install-bonus-100/apply` (update atómico con guard).
+  Mensaje `/sys_install_bonus_100`. Reporte: sección "Bono App (100%)" del panel
+  (`/api/admin/central/welcome-bonus` distingue legacy $5.000 vs cupón).
 - **SLA demoras**: reloj en ChatStatus (`delayClockOnUserMessage`/`delayClockResolve`);
   responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
   ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).
@@ -246,10 +268,15 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   auth, socket, chat, ui, refunds, fire, roulette, reviews, promobonus, notifications,
   withdraw, installbonus, notifsurvey, publisherwelcome, campaign, meta-pixel, apptest,
   app). El orden real de carga está en index.html (el comentario de app.js está viejo).
-- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v50) — FCM + caché:
+- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v51) — FCM + caché:
   `/js/` y `/css/` stale-while-revalidate (deploy llega en la SIGUIENTE carga sin
   bumpear versión), `/app.js` y manifest network-first, API/socket nunca. `user-sw.js`
   es un stub de auto-desregistro (no volver a registrarlo).
+  ⚠️ **Los script/link de index.html llevan `?v=N`** (desde v51): sin la query, un
+  deploy que cambia HTML y JS JUNTOS corre UNA carga con HTML nuevo + JS viejo del
+  caché SWR (TypeError si el HTML cambió el DOM — casi pasó con el botón del
+  reembolso diario). Al cambiar HTML+JS juntos: bumpear `?v` y CACHE_VERSION al
+  mismo número. Cambios de JS solo (sin DOM nuevo) siguen sin necesitar bump.
 - **FCM**: todo el manejo real (getToken 3 tiers, refresh, register-token) está en el
   INLINE de index.html; `window.sendFcmTokenAfterLogin` del inline pisa a propósito la
   de notifications.js. Firebase config duplicada en index.html Y en el SW (cambiar
@@ -260,8 +287,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - Server-side rendering mínimo: `renderIndexHtml` reemplaza placeholders
   (`__META_PIXEL_ID_PLACEHOLDER__`, `__VIP_PUBLIC_BASE_URL_PLACEHOLDER__`,
   `__VIP_CAMPAIGN_CODE_PLACEHOLDER__`) con cache en memoria por proceso.
-- Duplicados front/back a mantener sincronizados: mínimo retiro $4.999, bono $5.000,
-  URL jugaygana44.bet, defaults de % de reembolso.
+- Duplicados front/back a mantener sincronizados: mínimo retiro $4.999, URL
+  jugaygana44.bet, copys de rangos de reembolso (3/5/10% y umbrales en infoModal/
+  adServiceModal/welcome — el badge y el panel del modal unificado sí son dinámicos).
 
 ### Panel admin (`public/adminprivado2026/`)
 - `admin.js` (~12k líneas), auth mixta: login → Bearer en memoria + cookies httpOnly;
@@ -307,8 +335,9 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
   reemplaza `{amount}` (el `$` queda como signo); texto como `{username}` sin `$`.
 - **Identidad**: `user.id` (uuid), no `_id`. Username case-insensitive →
   `findUserByUsernameCI` (indexado + fallback), NUNCA regex nuevo.
-- **periodKey**: `YYYY-MM` (referidos); RefundClaim usa `daily:YYYY-MM-DD` /
-  `weekly:YYYY-MM-DD` / `monthly:YYYY-MM`.
+- **periodKey**: `YYYY-MM` (referidos); RefundClaim usa `weekly:YYYY-MM-DD` /
+  `monthly:YYYY-MM` (`daily:YYYY-MM-DD` solo en filas históricas — el diario se
+  eliminó 2026-07-28).
 - **Montos JUGAYGANA**: centavos (×100) al enviar; balances vuelven /100.
 - **Todo lo fire-and-forget** (tracking, comprobantes, fanout, SLA) va en try/catch y
   JAMÁS frena la respuesta al cliente — mantener ese patrón.

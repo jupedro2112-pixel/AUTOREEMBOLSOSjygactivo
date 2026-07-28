@@ -59,10 +59,7 @@
     text-align: center;
 }
 
-.refund-btn.daily {
-    background: linear-gradient(135deg, #00ff88 0%, #00cc6a 100%);
-    color: #000;
-}
+/* .refund-btn.daily eliminada 2026-07-28 (reembolso diario descontinuado) */
 
 .refund-btn.weekly {
     background: linear-gradient(135deg, #9d4edd 0%, #6603a8 100%);

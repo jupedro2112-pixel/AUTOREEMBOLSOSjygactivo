@@ -86,7 +86,9 @@ Deploy: AWS Elastic Beanstalk. Dominio público: vipcargas.com. Git user: jupedr
 - **Front frágil:** cientos de `onclick` inline dependen de funciones en `window.*`
   (no renombrar exports sin actualizar el HTML/strings). Tabla de usuarios del panel
   acoplada a `USERS_LIST_FIELDS` del backend (columna nueva ⇒ sumar campo al select).
-  Detalle completo de trampas en `docs/ARCHITECTURE.md` §7.
+  Los script/link de `public/index.html` llevan `?v=N`: al cambiar HTML y JS JUNTOS,
+  bumpear `?v` y `CACHE_VERSION` del SW al mismo número (sin eso, una carga corre
+  HTML nuevo + JS viejo cacheado). Detalle completo en `docs/ARCHITECTURE.md` §7.
 
 ## Flujo de trabajo del asistente
 

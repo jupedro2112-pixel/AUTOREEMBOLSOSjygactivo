@@ -1685,6 +1685,9 @@ async function selectConversation(userId, username) {
     // Reset del banner de premio Fueguito hasta que loadUserInfo confirme el estado
     const fireBanner = document.getElementById('chatFireBonusBanner');
     if (fireBanner) fireBanner.style.display = 'none';
+    // Reset del banner del cupón 100% por instalar la app
+    const installBanner = document.getElementById('chatInstallBonusBanner');
+    if (installBanner) installBanner.style.display = 'none';
     // Reset de la barra de etiquetas/notas hasta que loadUserInfo la rellene
     const tagsBar = document.getElementById('chatTagsBar');
     if (tagsBar) tagsBar.style.display = 'none';
@@ -2600,6 +2603,11 @@ async function loadUserInfo(userId) {
         // aplicado. Así el operador sabe que se lo tiene que dar y queda registrado.
         renderFireBonusBanner(user);
 
+        // Cupón "100% próxima carga" por INSTALAR LA APP: cartel al operador con
+        // botón "Marcar usado". El operador aplica el +100% en el modal de carga
+        // y después lo marca acá para que no se use dos veces.
+        renderInstallBonus100Banner(user);
+
         // Etiquetas y nota interna del cliente.
         renderUserTagsAndNotes(user);
 
@@ -2776,6 +2784,44 @@ async function applyFireNextLoadBonus(userId) {
         if (r.ok && j.success) {
             showToast('Premio Fueguito marcado como aplicado', 'success');
             const el = document.getElementById('chatFireBonusBanner');
+            if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else {
+            showToast(j.error || 'Error', 'error');
+        }
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// Cupón "100% EXTRA en próxima carga" por instalar la app (2026-07-28).
+// Mismo patrón que el banner del Fueguito: cartel + botón "Marcar usado".
+function renderInstallBonus100Banner(user) {
+    const el = document.getElementById('chatInstallBonusBanner');
+    if (!el) return;
+    if (!user || user.installBonus100Pending !== true) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+    }
+    el.style.display = '';
+    el.style.padding = '8px 14px';
+    el.style.fontSize = '12px';
+    el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
+    el.style.background = 'linear-gradient(90deg,#1a8200,#0f4c00)';
+    el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
+        '<span style="font-size:18px;">🎁</span>' +
+        '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">BONO APP: 100% en la próxima carga</strong>' +
+        '<div style="font-size:11px;opacity:0.9;">Por instalar la app — aplicá el +100% en la carga y marcalo como usado.</div></div>' +
+        '<button onclick="applyInstallBonus100(\'' + escapeHtml(String(user.id)) + '\')" style="background:#fff;color:#0f4c00;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✓ Marcar usado</button>' +
+        '</div>';
+}
+
+async function applyInstallBonus100(userId) {
+    if (!confirm('¿Marcar el 100% de próxima carga (bono por instalar la app) como USADO? El cliente no lo va a tener más después de esto.')) return;
+    try {
+        const r = await authFetch('/api/admin/users/' + encodeURIComponent(userId) + '/install-bonus-100/apply', { method: 'POST' });
+        const j = await r.json();
+        if (r.ok && j.success) {
+            showToast('Bono 100% de instalación marcado como usado', 'success');
+            const el = document.getElementById('chatInstallBonusBanner');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
         } else {
             showToast(j.error || 'Error', 'error');
@@ -5103,18 +5149,19 @@ async function loadCBUConfig() {
     loadCommunityConfig();
     // Cargar la config del banco automático (hgcash)
     loadHgcashConfig();
-    // Cargar los porcentajes de reembolso (solo admin general)
-    loadRefundPercents();
+    // Cargar los rangos de reembolso (solo admin general)
+    loadRefundTiers();
     // Cargar los premios del fueguito (solo admin general)
     loadFireMilestones();
 }
 
-// ====== Porcentajes de reembolso (solo admin general) ======
-async function loadRefundPercents() {
-    const form = document.getElementById('refundPercentsForm');
-    const header = document.getElementById('refundPercentsHeader');
+// ====== Rangos de reembolso bronce/plata/oro (solo admin general) ======
+// Reemplaza a los % fijos diario/semanal/mensual (2026-07-28).
+async function loadRefundTiers() {
+    const form = document.getElementById('refundTiersForm');
+    const header = document.getElementById('refundTiersHeader');
     try {
-        const r = await authFetch('/api/admin/refund-percents');
+        const r = await authFetch('/api/admin/refund-tiers');
         if (!r.ok) {
             // Sólo admin general puede verlo: si no, ocultamos la card.
             if (form) form.style.display = 'none';
@@ -5124,29 +5171,33 @@ async function loadRefundPercents() {
         if (form) form.style.display = '';
         if (header) header.style.display = '';
         const j = await r.json();
-        const p = j.percents || {};
+        const t = j.tiers || {};
         const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
-        set('refundPctDaily', p.daily);
-        set('refundPctWeekly', p.weekly);
-        set('refundPctMonthly', p.monthly);
+        set('tierBronceUpTo', t.bronce && t.bronce.upTo);
+        set('tierBroncePct', t.bronce && t.bronce.percent);
+        set('tierPlataUpTo', t.plata && t.plata.upTo);
+        set('tierPlataPct', t.plata && t.plata.percent);
+        set('tierOroPct', t.oro && t.oro.percent);
     } catch (e) {
-        console.error('Error cargando porcentajes de reembolso:', e);
+        console.error('Error cargando rangos de reembolso:', e);
     }
 }
 
-async function saveRefundPercents() {
-    const msg = document.getElementById('refundPctMsg');
+async function saveRefundTiers() {
+    const msg = document.getElementById('refundTiersMsg');
     const num = (id) => {
         const el = document.getElementById(id);
         return el ? el.value : '';
     };
     const body = {
-        daily: num('refundPctDaily'),
-        weekly: num('refundPctWeekly'),
-        monthly: num('refundPctMonthly')
+        bronceUpTo: num('tierBronceUpTo'),
+        broncePct: num('tierBroncePct'),
+        plataUpTo: num('tierPlataUpTo'),
+        plataPct: num('tierPlataPct'),
+        oroPct: num('tierOroPct')
     };
     try {
-        const r = await authFetch('/api/admin/refund-percents', {
+        const r = await authFetch('/api/admin/refund-tiers', {
             method: 'POST',
             body: JSON.stringify(body)
         });
@@ -5155,9 +5206,13 @@ async function saveRefundPercents() {
             if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = j.error || 'No se pudo guardar.'; }
             return;
         }
-        const p = j.percents || {};
-        if (msg) { msg.style.color = '#00c853'; msg.textContent = `✅ Guardado: diario ${p.daily}% · semanal ${p.weekly}% · mensual ${p.monthly}%`; }
-        showToast('Porcentajes de reembolso actualizados', 'success');
+        const t = j.tiers || {};
+        const tb = t.bronce || {}, tp = t.plata || {}, to = t.oro || {};
+        if (msg) {
+            msg.style.color = '#00c853';
+            msg.textContent = `✅ Guardado: 🥉 hasta $${tb.upTo} = ${tb.percent}% · 🥈 hasta $${tp.upTo} = ${tp.percent}% · 🥇 ${to.percent}%`;
+        }
+        showToast('Rangos de reembolso actualizados', 'success');
     } catch (e) {
         if (msg) { msg.style.color = '#ff6b6b'; msg.textContent = 'Error de conexión.'; }
     }
@@ -9002,7 +9057,7 @@ function _centAppUserCard(u) {
         + tokensHtml + '</div></details></div>';
 }
 
-// --- Bono $5.000 ---
+// --- Bono por instalar la app (cupón 100% próxima carga; antes $5.000) ---
 async function loadCentralWelcomeBonus() {
     const body = document.getElementById('centralWelcomeBonusBody');
     if (!body) return;
@@ -9015,13 +9070,15 @@ async function loadCentralWelcomeBonus() {
         const planLabels = { suave: 'Suave', normal: 'Normal', activo: 'Activo', solo_reembolsos: 'Solo reembolsos' };
         let html = '<div class="stats-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
         html += _centStatCard('🎁', _centNum(j.count), 'Lo reclamaron', '#ff9800');
-        html += _centStatCard('💸', _centMoney(j.totalPaid), 'Total pagado', '#ffc107');
+        html += _centStatCard('⏳', _centNum(j.couponPending || 0), 'Cupón 100% pendiente', '#00c853');
+        html += _centStatCard('✔️', _centNum(j.couponUsed || 0), 'Cupón 100% usado', '#4caf50');
+        html += _centStatCard('💸', _centMoney(j.totalPaid), 'Pagado legacy ($5.000)', '#ffc107');
         html += _centStatCard('✅', _centNum(j.stillInstalled), 'Siguen con la app', '#4caf50');
         html += '</div>';
         if (!users.length) {
             html += '<div class="empty-state"><p>Todavía nadie reclamó el bono.</p></div>';
         } else {
-            html += '<table class="data-table"><thead><tr><th>Usuario</th><th>Reclamó el</th>'
+            html += '<table class="data-table"><thead><tr><th>Usuario</th><th>Reclamó el</th><th>Bono</th>'
                 + '<th>App</th><th>Notifs</th><th>Plan</th><th>Último ingreso</th></tr></thead><tbody>';
             users.forEach(function (u) {
                 const appCell = u.appInstalled
@@ -9030,8 +9087,14 @@ async function loadCentralWelcomeBonus() {
                         : '<span style="color:#ff5050;font-weight:700;">❌ Sin app</span>');
                 const npColor = u.notifPermission === 'granted' ? '#4caf50'
                     : (u.notifPermission === 'denied' ? '#ff5050' : '#ff9800');
+                const bonusCell = u.bonusKind === 'cupon'
+                    ? (u.coupon100Pending
+                        ? '<span style="color:#00c853;font-weight:700;">🎟️ 100% PENDIENTE</span>'
+                        : '<span style="color:#8bc34a;">🎟️ 100% usado' + (u.coupon100UsedBy ? ' (' + _centEsc(u.coupon100UsedBy) + ')' : '') + '</span>')
+                    : '<span style="color:#ffc107;">💸 $5.000 legacy</span>';
                 html += '<tr><td><strong>' + _centEsc(u.username) + '</strong></td>'
                     + '<td>' + _centDate(u.claimedAt) + '</td>'
+                    + '<td>' + bonusCell + '</td>'
                     + '<td>' + appCell + '</td>'
                     + '<td><span style="color:' + npColor + ';">' + _centEsc(u.notifPermission || 's/d') + '</span></td>'
                     + '<td>' + _centEsc(planLabels[u.notificationPlan] || u.notificationPlan || '—') + '</td>'
@@ -9221,7 +9284,7 @@ async function loadReembolsos() {
         const recent = j.recent || [];
         const typeLabels = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual' };
         let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:18px;">';
-        html += _centRefundCard('📅 Diarios', types.daily, '#4caf50');
+        html += _centRefundCard('📅 Diarios (descontinuado)', types.daily, '#4caf50');
         html += _centRefundCard('📆 Semanales', types.weekly, '#2196f3');
         html += _centRefundCard('🗓️ Mensuales', types.monthly, '#d4af37');
         html += '</div>';

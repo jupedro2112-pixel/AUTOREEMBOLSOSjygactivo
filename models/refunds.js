@@ -25,36 +25,9 @@ async function getAllRefunds() {
   }
 }
 
-// Verificar si el usuario puede reclamar reembolso diario
-async function canClaimDailyRefund(userId) {
-  try {
-    const today = new Date().toDateString();
-    
-    const lastDaily = await RefundClaim.findOne({ 
-      userId, 
-      type: 'daily' 
-    }).sort({ claimedAt: -1 }).lean();
-    
-    if (!lastDaily) return { canClaim: true, nextClaim: null };
-    
-    const lastDate = new Date(lastDaily.claimedAt).toDateString();
-    const canClaim = lastDate !== today;
-    
-    // Calcular próximo reclamo (mañana a las 00:00)
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    
-    return {
-      canClaim,
-      nextClaim: canClaim ? null : tomorrow.toISOString(),
-      lastClaim: lastDaily.claimedAt
-    };
-  } catch (error) {
-    console.error('Error verificando reembolso diario:', error);
-    return { canClaim: false, nextClaim: null };
-  }
-}
+// TOMBSTONE (2026-07-28): canClaimDailyRefund ELIMINADA — el reembolso diario ya no
+// existe (reemplazado por el sistema de rangos bronce/plata/oro en semanal/mensual).
+// Rollback: git revert.
 
 // Verificar si el usuario puede reclamar reembolso semanal
 async function canClaimWeeklyRefund(userId) {
@@ -195,7 +168,6 @@ function calculateRefundFromNetwin(netwin, percentage) {
 module.exports = {
   getUserRefunds,
   getAllRefunds,
-  canClaimDailyRefund,
   canClaimWeeklyRefund,
   canClaimMonthlyRefund,
   recordRefund,

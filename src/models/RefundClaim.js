@@ -38,11 +38,18 @@ const refundClaimSchema = new mongoose.Schema({
     type: Number, 
     required: true 
   },
-  percentage: { 
-    type: Number, 
+  percentage: {
+    type: Number,
     required: true,
     min: 0,
     max: 100
+  },
+  // Rango del cliente al momento del reclamo (sistema bronce/plata/oro, 2026-07-28).
+  // null en reclamos anteriores al sistema de rangos.
+  tier: {
+    type: String,
+    enum: ['bronce', 'plata', 'oro', null],
+    default: null
   },
   deposits: { 
     type: Number, 

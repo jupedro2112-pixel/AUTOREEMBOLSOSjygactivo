@@ -107,7 +107,7 @@
                 </a>
                 <a href="#" class="nav-item" data-section="centralWelcomeBonus">
                     <span>🎁</span>
-                    <span>Bono $5.000</span>
+                    <span>Bono App (100%)</span>
                 </a>
                 <a href="#" class="nav-item" data-section="suspiciousAccounts">
                     <span>🕵️</span>
@@ -321,6 +321,8 @@
                         <div id="chatPromoBonusBanner" style="display:none;"></div>
                         <!-- Premio Fueguito "100% próxima carga" (día 15) pendiente — lo llena loadUserInfo() -->
                         <div id="chatFireBonusBanner" style="display:none;"></div>
+                        <!-- Cupón "100% próxima carga" por INSTALAR LA APP pendiente — lo llena loadUserInfo() -->
+                        <div id="chatInstallBonusBanner" style="display:none;"></div>
                         <!-- Pago/retiro pendiente del cliente (verificar y pagar) — lo llena loadUserInfo() -->
                         <div id="chatPayoutBanner" style="display:none;"></div>
                         <!-- Etiquetas y nota interna del cliente — lo llena loadUserInfo() -->
@@ -590,33 +592,43 @@
                                 <span class="icon icon-save"></span> Guardar Comunidad
                             </button>
                         </div>
-                        <!-- Porcentajes de reembolso (solo admin general) -->
-                        <div class="panel-subheader" style="margin-top: 24px;" id="refundPercentsHeader">
-                            <h3>🎁 Porcentajes de reembolso</h3>
+                        <!-- Rangos de reembolso bronce/plata/oro (solo admin general).
+                             Reemplaza a los % fijos diario/semanal/mensual (2026-07-28). -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="refundTiersHeader">
+                            <h3>🏅 Rangos de reembolso (🥉🥈🥇)</h3>
                         </div>
-                        <div class="cbu-form" id="refundPercentsForm">
+                        <div class="cbu-form" id="refundTiersForm">
                             <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
-                                Porcentaje que se le devuelve al cliente sobre su <b>pérdida neta</b> (cargas − retiros) de cada período.
-                                Solo el admin general puede modificarlos. Se aplican al instante a los reembolsos nuevos.
+                                El % de reembolso (semanal Y mensual) depende del <b>rango</b> del cliente, según su
+                                <b>pérdida real (NETWIN)</b> del mes. Bronce: hasta su tope. Plata: hasta su tope.
+                                Oro: más que el tope de Plata. Solo el admin general puede modificarlos.
                             </p>
                             <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
-                                <div class="form-group" style="flex:1;min-width:120px;">
-                                    <label>📅 Diario %</label>
-                                    <input type="number" id="refundPctDaily" min="0" max="100" step="0.1" style="width:100%;">
+                                <div class="form-group" style="flex:1;min-width:130px;">
+                                    <label>🥉 Bronce — hasta $</label>
+                                    <input type="number" id="tierBronceUpTo" min="1" step="1000" style="width:100%;">
                                 </div>
-                                <div class="form-group" style="flex:1;min-width:120px;">
-                                    <label>📆 Semanal %</label>
-                                    <input type="number" id="refundPctWeekly" min="0" max="100" step="0.1" style="width:100%;">
+                                <div class="form-group" style="flex:1;min-width:100px;">
+                                    <label>🥉 Bronce %</label>
+                                    <input type="number" id="tierBroncePct" min="0" max="100" step="0.5" style="width:100%;">
                                 </div>
-                                <div class="form-group" style="flex:1;min-width:120px;">
-                                    <label>🗓️ Mensual %</label>
-                                    <input type="number" id="refundPctMonthly" min="0" max="100" step="0.1" style="width:100%;">
+                                <div class="form-group" style="flex:1;min-width:130px;">
+                                    <label>🥈 Plata — hasta $</label>
+                                    <input type="number" id="tierPlataUpTo" min="1" step="1000" style="width:100%;">
+                                </div>
+                                <div class="form-group" style="flex:1;min-width:100px;">
+                                    <label>🥈 Plata %</label>
+                                    <input type="number" id="tierPlataPct" min="0" max="100" step="0.5" style="width:100%;">
+                                </div>
+                                <div class="form-group" style="flex:1;min-width:100px;">
+                                    <label>🥇 Oro %</label>
+                                    <input type="number" id="tierOroPct" min="0" max="100" step="0.5" style="width:100%;">
                                 </div>
                             </div>
-                            <button class="btn-primary" onclick="saveRefundPercents()">
-                                <span class="icon icon-save"></span> Guardar porcentajes
+                            <button class="btn-primary" onclick="saveRefundTiers()">
+                                <span class="icon icon-save"></span> Guardar rangos
                             </button>
-                            <div id="refundPctMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
+                            <div id="refundTiersMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>
                         <!-- Premios del Fueguito (solo admin general) -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="fireMilestonesHeader">
@@ -994,15 +1006,15 @@
             </section>
 
             <!-- ============================================================
-                 CENTRAL — Bono $5.000 (quién lo reclamó)
+                 CENTRAL — Bono por instalar la app (quién lo reclamó)
                  ============================================================ -->
             <section id="centralWelcomeBonusSection" class="section">
                 <div class="panel-header">
-                    <h2>🎁 Bono $5.000</h2>
+                    <h2>🎁 Bono App (100% próxima carga)</h2>
                     <button class="refresh-btn" onclick="loadCentralWelcomeBonus()" title="Refrescar">🔄</button>
                 </div>
                 <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
-                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Usuarios que reclamaron el bono de $5.000 por instalar la app (one-time). Mostramos el estado actual de su app y notificaciones para detectar quién la desinstaló después de cobrar.</p>
+                    <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Usuarios que reclamaron el bono por instalar la app (one-time). Los nuevos desbloquean un <b>cupón de 100% extra en su próxima carga</b> (el agente lo aplica a mano y lo marca usado desde el chat); los viejos cobraron los $5.000 legacy. Mostramos el estado actual de su app y notificaciones para detectar quién la desinstaló después.</p>
                 </div>
                 <div id="centralWelcomeBonusBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>

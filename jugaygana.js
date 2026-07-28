@@ -1243,6 +1243,50 @@ function getLastMonthRangeArgentinaEpoch() {
   };
 }
 
+// Mes calendario EN CURSO en ART: día 1 00:00 → HOY 23:59:59.
+// Lo usa el sistema de rangos de reembolso (pérdida del mes que define bronce/plata/oro).
+function getCurrentMonthToDateRangeArgentinaEpoch() {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  const now = new Date();
+  const parts = formatter.formatToParts(now);
+  const yyyy = parts.find(p => p.type === 'year').value;
+  const mm = parts.find(p => p.type === 'month').value;
+  const dd = parts.find(p => p.type === 'day').value;
+
+  const from = new Date(`${yyyy}-${mm}-01T00:00:00-03:00`);
+  const to = new Date(`${yyyy}-${mm}-${dd}T23:59:59-03:00`);
+
+  return {
+    fromEpoch: Math.floor(from.getTime() / 1000),
+    toEpoch: Math.floor(to.getTime() / 1000),
+    fromDateStr: `${yyyy}-${mm}-01`,
+    toDateStr: `${yyyy}-${mm}-${dd}`
+  };
+}
+
+// Mes-a-la-fecha del mes al que pertenece dateStr ('YYYY-MM-DD', fecha ART):
+// día 1 de ese mes 00:00 → dateStr 23:59:59. Lo usa el reclamo semanal para
+// calcular el rango con la pérdida del mes al que pertenece la semana reembolsada.
+function getMonthToDateRangeForDateArgentina(dateStr) {
+  const [yyyy, mm, dd] = String(dateStr).split('-');
+
+  const from = new Date(`${yyyy}-${mm}-01T00:00:00-03:00`);
+  const to = new Date(`${yyyy}-${mm}-${dd}T23:59:59-03:00`);
+
+  return {
+    fromEpoch: Math.floor(from.getTime() / 1000),
+    toEpoch: Math.floor(to.getTime() / 1000),
+    fromDateStr: `${yyyy}-${mm}-01`,
+    toDateStr: `${yyyy}-${mm}-${dd}`
+  };
+}
+
 async function getUserNetLastMonth(username) {
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
@@ -1415,6 +1459,8 @@ module.exports = {
   getYesterdayRangeArgentinaEpoch,
   getLastWeekRangeArgentinaEpoch,
   getLastMonthRangeArgentinaEpoch,
+  getCurrentMonthToDateRangeArgentinaEpoch,
+  getMonthToDateRangeForDateArgentina,
   /** Returns the current session token, or null if no session is active. */
   getSessionToken: () => SESSION_TOKEN,
   /** Returns the current session cookie string, or null if no session is active. */

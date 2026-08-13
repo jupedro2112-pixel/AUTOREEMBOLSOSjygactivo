@@ -4,7 +4,90 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-07-28**
+> **Última actualización: 2026-08-13**
+
+## Sesión 2026-08-13
+
+### 99. REGISTRO — fin del `[object Object]` + `syncUserToPlatform` con lookup tri-estado y recuperación de "ya existe"
+- **Síntoma reportado por el owner (con captura):** un usuario intentó registrarse
+  (`VIPjuancito2020`) y la PWA mostró **"No se pudo crear el usuario en JUGAYGANA:
+  [object Object]"**. El mensaje real quedaba oculto.
+- **Causa del `[object Object]`:** `createPlatformUser` devolvía `error: data?.error`
+  TAL CUAL, y JUGAYGANA a veces manda `error` como **objeto**, no string. En
+  `server.js` se concatenaba (`'…: ' + jgResult.error`) → JS lo convierte a
+  `[object Object]`. Mismo bug latente en los logs (template literals) y en
+  `jugayganaPublisherSessions.js:325`, donde además terminaba **persistido** en
+  `User.jugayganaSyncError` (el panel quedaba sin diagnóstico).
+- **Causa de fondo (por qué falló ESE registro):** `syncUserToPlatform` chequeaba
+  existencia con `getUserInfoByName`, el wrapper de 2 estados que **colapsa
+  `error` y `not_found` en `null`**. Con JUGAYGANA intermitente (HTML/Cloudflare,
+  timeout, sesión caída por el proxy en 402 — ver nota del proxy más abajo), un fallo
+  de la búsqueda se leía como "no existe" → se disparaba `CREATEUSER` → la plataforma
+  respondía "user already existing" → el registro moría con un error confuso.
+  `depositToUser`/`withdrawFromUser` YA tenían la red de seguridad para ese caso
+  (#patrón de re-lookup); `syncUserToPlatform` NO.
+- **Fix 1 — `errToString()` + `safeJson()` (jugaygana.js, exportado):** normalizan a
+  string cualquier forma de error (string, `{message}`, `{error}`, `{msg}`,
+  `{description}`, objeto plano → JSON de ≤300 chars, array, `Error`, circular →
+  fallback). `safeJson` nunca tira ni devuelve `undefined` (ojo: `JSON.stringify(undefined)`
+  es `undefined` y un `.slice()` encima explota). **REGLA NUEVA: todo `.error` que
+  devuelvan los clientes JUGAYGANA pasa por `errToString`.** Aplicado en
+  `createPlatformUser` (+ loguea la respuesta CRUDA, que es lo único que permite
+  diagnosticar un rechazo nuevo), en `jugayganaPublisherSessions.js` y como defensa en
+  profundidad en los 2 endpoints de registro.
+- **Fix 2 — `syncUserToPlatform` reescrito** con contrato explícito
+  (`{success, alreadyExists?, jugayganaUserId, jugayganaUsername}` /
+  `{success:false, error:<STRING>, code, transient}`):
+  1. Lookup **tri-estado** (`lookupUserOrError`) en vez de `getUserInfoByName`.
+  2. `found` → vincula. `error` → **igual intenta crear** (mejor-esfuerzo: es el camino
+     que históricamente funcionaba; abortar ahí habría perdido registros válidos) pero
+     recuerda el fallo en `lookupFailed`.
+  3. Si `CREATEUSER` dice "already existing" (helper compartido `looksLikeAlreadyExists`)
+     → **re-busca 3× cada 1,5 s y VINCULA** en vez de fallar.
+  4. Clasificación del error final: `LOOKUP_UNAVAILABLE` / `EXISTS_UNCONFIRMED` /
+     `PLATFORM_UNAVAILABLE` (todos `transient:true`) vs `CREATE_FAILED`
+     (`transient:false` = rechazo real: nombre/contraseña que la plataforma no acepta).
+- **Fix 3 — mensajes al cliente diferenciados** (`server.js` en `/api/auth/register` y
+  `/api/auth/register-quick`): si `transient` → se muestra el texto ya redactado ("La
+  plataforma no está respondiendo en este momento (…). Esperá 1-2 minutos y volvé a
+  intentar."), sin el prefijo técnico ni culpar al nombre elegido. Si no, el prefijo de
+  siempre + el motivo REAL de JUGAYGANA. Ambos loguean
+  `[Register] JUGAYGANA rechazó a <user>: [<code>] <error>`.
+- **Refactor menor prolijo:** `depositToUser` y `withdrawFromUser` tenían el bloque de
+  normalización y la lista de substrings de "ya existe" **duplicados**; ahora usan
+  `errToString` + `looksLikeAlreadyExists`. Comportamiento idéntico (verificado caso por
+  caso: `already exist`/`already existing`/`duplicate`/`ya existe`).
+- **Status HTTP:** se mantiene **400** en los 2 endpoints incluso para errores
+  transitorios (503 sería más correcto, pero `register-quick` no tiene caller en este
+  repo — lo consume una landing externa — y cambiarle el status es riesgo sin necesidad).
+  El front de la PWA usa `response.ok` + `data.error`, así que el mensaje llega igual.
+- **⚠️ Consecuencia de diseño a tener en cuenta (NO es nueva, ahora se dispara un poco
+  más seguido):** si el username ya existe en JUGAYGANA, el registro **vincula** al
+  usuario local con esa cuenta de plataforma preexistente (con su saldo y su contraseña
+  vieja). Eso ya pasaba en el camino `found` desde siempre; el cambio sólo hace que el
+  caso "la lookup dio falso negativo" se comporte igual que el caso normal, en vez de
+  fallar. Si el owner quiere BLOQUEAR usernames ya existentes en la plataforma, es una
+  decisión de producto aparte.
+- **Nota de contexto (mismo día):** el owner reportó también "No hay sesión válida" en el
+  panel al depositar. Eso **no es un bug del repo**: el proxy (`PROXY_URL`) agotó su
+  ancho de banda y responde `HTTP 402 "Bandwidth limit reached"` a TODO el tráfico hacia
+  JUGAYGANA, así que `ensureSession` falla en loop. Se arregla recargando/cambiando el
+  proxy. ⚠️ `PROXY_URL` se lee al `require()` (antes del bootstrap SSM) → tiene que estar
+  como **environment property de EB**, NO en SSM, o no toma efecto. En los mismos logs
+  aparece `[hgcash-fanout] … 404` contra autoreembolsos.com (endpoint inexistente del
+  lado de ellos; es fire-and-forget, no afecta vipcargas — kill switch
+  `HGCASH_FANOUT_URL=off`).
+- **Validado:** `node --check` OK en los 3 archivos tocados (jugaygana.js, server.js,
+  jugayganaPublisherSessions.js). Helpers testeados en aislamiento con 13 formas de error
+  + circulares + `undefined` → ningún caso devuelve `[object Object]`. Verificado que los
+  6 callers de `syncUserToPlatform` en server.js siguen leyendo campos que el contrato
+  mantiene (`success`, `alreadyExists`, `jugayganaUserId`, `jugayganaUsername`,
+  `user?.user_id`, `error`). Sin migraciones. **Back necesita redeploy.**
+  **PROBAR tras deploy:** registro normal nuevo, registro con un username que ya exista
+  en JUGAYGANA (debe vincular y entrar, no error), y forzar un error de la plataforma
+  para confirmar que NUNCA más aparece `[object Object]`. En los logs, buscar
+  `CREATEUSER falló … | raw:` para ver qué respondió realmente JUGAYGANA en el caso de
+  `VIPjuancito2020` si se repite.
 
 ## Sesión 2026-07-28
 

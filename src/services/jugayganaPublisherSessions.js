@@ -25,6 +25,10 @@ const crypto = require('crypto');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 const logger = require('../utils/logger');
 const Campaign = require('../models/Campaign');
+// Reusamos el normalizador del cliente principal: JUGAYGANA a veces devuelve
+// `error` como objeto y concatenarlo daba "[object Object]" (acá terminaba
+// persistido en User.jugayganaSyncError, dejando el panel sin diagnóstico).
+const { errToString } = require('../../jugaygana');
 
 // Firma de las creds (sha1 sobre username|password) usada para detectar cambios.
 // Se guarda junto a la sesión cacheada; antes de reutilizarla comparamos contra
@@ -321,8 +325,9 @@ async function createUserAsPublisher(campaignCode, { username, password, userrol
       };
     }
 
-    logger.error(`[PublisherSessions] CREATEUSER ${campaignCode}/${username} falló: ${data?.error || 'desconocido'}`);
-    return { success: false, error: data?.error || 'CREATEUSER falló', code: 'API_ERROR' };
+    const createErr = errToString(data?.error, 'CREATEUSER falló');
+    logger.error(`[PublisherSessions] CREATEUSER ${campaignCode}/${username} falló: ${createErr}`);
+    return { success: false, error: createErr, code: 'API_ERROR' };
   } catch (err) {
     logger.error(`[PublisherSessions] CREATEUSER ${campaignCode}/${username} excepción: ${err.message}`);
     return { success: false, error: err.message, code: 'API_ERROR' };

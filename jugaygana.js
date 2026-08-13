@@ -54,6 +54,47 @@ function toFormUrlEncoded(data) {
     .join('&');
 }
 
+// Normaliza a STRING cualquier "error" que devuelva JUGAYGANA (string, objeto,
+// array, Error…). JUGAYGANA a veces responde `error` como objeto estructurado;
+// sin esto terminaba concatenado como "[object Object]" tanto en el mensaje al
+// cliente como en los logs, tapando el error real.
+// REGLA: todo lo que estos clientes devuelvan en `.error` debe pasar por acá.
+function errToString(err, fallback = 'Error desconocido') {
+  if (err === null || err === undefined || err === '') return fallback;
+  if (typeof err === 'string') return err.trim() || fallback;
+  if (typeof err !== 'object') return String(err);
+
+  // Formas comunes de error anidado: { message } | { error } | { msg } | { description }
+  const nested = err.message || err.error || err.msg || err.description;
+  if (typeof nested === 'string' && nested.trim()) return nested.trim();
+
+  try {
+    const json = JSON.stringify(err);
+    return (json && json !== '{}' && json !== '[]') ? json.slice(0, 300) : fallback;
+  } catch (e) {
+    return fallback; // referencias circulares u objetos no serializables
+  }
+}
+
+// JSON.stringify seguro para logs: nunca tira ni devuelve undefined.
+// (JSON.stringify(undefined) === undefined → un .slice() encima explotaría.)
+function safeJson(value, maxLen = 300) {
+  try {
+    const json = JSON.stringify(value);
+    return (json === undefined ? String(value) : json).slice(0, maxLen);
+  } catch (e) {
+    return '[no serializable]';
+  }
+}
+
+// ¿El error de CREATEUSER significa "el usuario YA existe"? No es un error real:
+// implica que nuestra lookup previa dio un falso negativo y hay que re-buscar.
+function looksLikeAlreadyExists(errMsg) {
+  const s = String(errMsg || '').toLowerCase();
+  return s.includes('already exist') || s.includes('already existing') ||
+         s.includes('duplicate') || s.includes('ya existe');
+}
+
 // Parsear JSON que puede venir envuelto
 function parsePossiblyWrappedJson(data) {
   if (typeof data !== 'string') return data;
@@ -266,8 +307,13 @@ async function createPlatformUser({ username, password, userrole = 'player', cur
       };
     }
     
-    console.error('❌ CREATEUSER falló:', data?.error || 'Error desconocido');
-    return { success: false, error: data?.error || 'CREATEUSER falló' };
+    // `data.error` puede venir como OBJETO desde JUGAYGANA → normalizar SIEMPRE a
+    // string (sin esto el caller lo concatenaba como "[object Object]").
+    // Se loguea además la respuesta cruda: es lo único que permite diagnosticar
+    // un rechazo nuevo de la plataforma.
+    const createErr = errToString(data?.error, 'CREATEUSER falló');
+    console.error(`❌ CREATEUSER falló (${username}): ${createErr} | raw: ${safeJson(data)}`);
+    return { success: false, error: createErr };
   } catch (error) {
     console.error('❌ Error en CREATEUSER:', error.message);
     return { success: false, error: error.message };
@@ -445,30 +491,102 @@ async function checkUserExists(username) {
 // Sincronización completa: crear usuario local + JUGAYGANA
 // ============================================
 
+// Contrato de retorno (lo consumen las 6 llamadas en server.js):
+//   OK creado   → { success:true, user, jugayganaUserId, jugayganaUsername }
+//   OK vinculado→ { success:true, alreadyExists:true, jugayganaUserId, jugayganaUsername }
+//   Error       → { success:false, error:<STRING>, code, transient:boolean }
+// `error` es SIEMPRE string (ver errToString). `transient:true` = no es culpa del
+// usuario ni del nombre elegido: JUGAYGANA no respondió y conviene reintentar.
 async function syncUserToPlatform(localUser) {
-  console.log('🔄 Sincronizando usuario con JUGAYGANA:', localUser.username);
+  const username = localUser.username;
+  console.log('🔄 Sincronizando usuario con JUGAYGANA:', username);
 
-  // 1. Verificar si ya existe en JUGAYGANA
-  const existingUser = await getUserInfoByName(localUser.username);
-  if (existingUser) {
-    console.log('✅ Usuario ya existe en JUGAYGANA:', existingUser.id);
+  // 1. Lookup TRI-ESTADO. Antes se usaba getUserInfoByName (2 estados: user|null),
+  //    que colapsaba "la API falló" con "no existe" → ante un timeout/HTML de
+  //    Cloudflare se disparaba un CREATEUSER que fallaba con "user already
+  //    existing" y el registro moría con un error confuso para el cliente.
+  const lookup = await lookupUserOrError(username);
+
+  if (lookup.status === 'found') {
+    console.log('✅ Usuario ya existe en JUGAYGANA:', lookup.user.id);
     return {
       success: true,
       alreadyExists: true,
-      jugayganaUserId: existingUser.id,
-      jugayganaUsername: localUser.username
+      jugayganaUserId: lookup.user.id,
+      jugayganaUsername: username
     };
   }
 
-  // 2. Crear en JUGAYGANA
+  // `lookupFailed` = la API no pudo confirmar NADA (timeout, HTML, sesión caída).
+  // Igual intentamos crear —es el camino que históricamente funcionaba y no queremos
+  // perder registros válidos—, pero lo recordamos: si el CREATEUSER también falla,
+  // el problema es de la plataforma y NO del nombre que eligió el usuario.
+  const lookupFailed = lookup.status === 'error';
+  if (lookupFailed) {
+    console.warn(`⚠️  syncUserToPlatform: no se pudo verificar ${username} en JUGAYGANA (${errToString(lookup.error)}) → intentamos crear igual`);
+  }
+
+  // 2. Crear en JUGAYGANA (confirmado que no existe, o mejor-esfuerzo si la lookup falló).
   const result = await createPlatformUser({
-    username: localUser.username,
+    username,
     password: localUser.password || 'asd123',
     userrole: 'player',
     currency: 'ARS'
   });
 
-  return result;
+  if (result.success) return result;
+
+  const createError = errToString(result.error);
+
+  // 3. Red de seguridad (mismo patrón que depositToUser/withdrawFromUser): si
+  //    CREATEUSER dice que el usuario YA existe, la lookup del paso 1 dio un
+  //    falso negativo. Re-buscamos con espera (replica lag) y lo vinculamos en
+  //    vez de fallar — que es exactamente lo que habría pasado si el paso 1
+  //    hubiera respondido bien.
+  if (looksLikeAlreadyExists(createError)) {
+    console.warn(`⚠️  CREATEUSER confirma que ${username} ya existe → la lookup dio falso negativo. Re-buscando...`);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await new Promise(r => setTimeout(r, 1500));
+      const reLookup = await lookupUserOrError(username);
+      if (reLookup.status === 'found') {
+        console.log(`✅ ${username} vinculado tras ${attempt} reintento(s) de búsqueda`);
+        return {
+          success: true,
+          alreadyExists: true,
+          jugayganaUserId: reLookup.user.id,
+          jugayganaUsername: username
+        };
+      }
+      console.warn(`⚠️  Re-lookup ${attempt}/3 de ${username}: ${reLookup.status}${reLookup.error ? ` (${errToString(reLookup.error)})` : ''}`);
+    }
+
+    console.error(`❌ ${username} existe en JUGAYGANA pero no pudimos confirmarlo tras 3 reintentos`);
+    return {
+      success: false,
+      code: 'EXISTS_UNCONFIRMED',
+      transient: true,
+      error: 'La plataforma está respondiendo intermitente y no pudimos confirmar la cuenta. Esperá 1-2 minutos y volvé a intentar.'
+    };
+  }
+
+  // 4. CREATEUSER falló por otro motivo.
+  console.error(`❌ syncUserToPlatform: CREATEUSER rechazó a ${username}: ${createError}`);
+
+  if (lookupFailed) {
+    // La búsqueda TAMPOCO había respondido → es la plataforma la que está caída,
+    // no el nombre elegido. No le echamos la culpa al usuario.
+    return {
+      success: false,
+      code: 'PLATFORM_UNAVAILABLE',
+      transient: true,
+      error: `La plataforma no está respondiendo en este momento (${createError}). Esperá 1-2 minutos y volvé a intentar.`
+    };
+  }
+
+  // Rechazo real: la lookup respondió bien ("no existe") y aun así CREATEUSER
+  // falló → nombre inválido, contraseña que no cumple sus reglas, etc.
+  // Se propaga el motivo tal cual lo dio la plataforma.
+  return { success: false, code: 'CREATE_FAILED', transient: false, error: createError };
 }
 
 // ============================================
@@ -812,18 +930,14 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
         break;
       }
 
-      createError = typeof createResult.error === 'string'
-        ? createResult.error
-        : (createResult.error?.message || JSON.stringify(createResult.error) || 'Error desconocido');
+      createError = errToString(createResult.error);
       console.log(`❌ Intento ${attempt} falló: ${createError}`);
 
       // Si JUGAYGANA dice "user already existing" (o variantes), el usuario YA existe.
       // No es un error real: significa que nuestra lookup dio un falso negativo.
       // Salimos del loop y caemos al bloque de re-búsqueda — NO seguimos reintentando
       // CREATEUSER (cada reintento volvería a dar el mismo error).
-      const errLower = createError.toLowerCase();
-      if (errLower.includes('already exist') || errLower.includes('already existing') ||
-          errLower.includes('duplicate') || errLower.includes('ya existe')) {
+      if (looksLikeAlreadyExists(createError)) {
         console.warn(`⚠️  CREATEUSER confirma que ${username} ya existe → la lookup dio falso negativo. Reintentando búsqueda...`);
         userAlreadyExists = true;
         break;
@@ -1461,6 +1575,8 @@ module.exports = {
   getLastMonthRangeArgentinaEpoch,
   getCurrentMonthToDateRangeArgentinaEpoch,
   getMonthToDateRangeForDateArgentina,
+  /** Normaliza a string cualquier `.error` devuelto por este cliente (evita "[object Object]"). */
+  errToString,
   /** Returns the current session token, or null if no session is active. */
   getSessionToken: () => SESSION_TOKEN,
   /** Returns the current session cookie string, or null if no session is active. */

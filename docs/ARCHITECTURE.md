@@ -183,6 +183,17 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   phoneVerificationPending=true → no puede retirar hasta verificar). Crea en JUGAYGANA
   PRIMERO; guarda atribución, fbc/fbp, registrationIp. Crea ChatStatus solo el flujo
   público (los usuarios creados por admin/publisher NO — evita chats vacíos).
+  - `syncUserToPlatform` usa el lookup TRI-ESTADO y devuelve
+    `{success, alreadyExists?, jugayganaUserId, jugayganaUsername}` o
+    `{success:false, error:<STRING>, code, transient}`. `code` ∈ `LOOKUP_UNAVAILABLE` ·
+    `EXISTS_UNCONFIRMED` · `PLATFORM_UNAVAILABLE` · `CREATE_FAILED`; `transient:true`
+    = caída de la plataforma, NO culpa del nombre elegido (el front muestra el mensaje
+    tal cual, sin el prefijo "No se pudo crear el usuario en JUGAYGANA:").
+  - Si CREATEUSER responde "already existing", se re-busca (3× cada 1,5 s) y se VINCULA
+    la cuenta existente en vez de fallar — misma red de seguridad que
+    `depositToUser`/`withdrawFromUser`. ⚠️ Consecuencia de diseño (preexistente): un
+    username que ya existe en JUGAYGANA se vincula a la cuenta de plataforma existente,
+    con el saldo y la contraseña que esa cuenta ya tenía.
 - **Login**: `POST /api/auth/login` (~L3341). `findUserByUsernameCI` con
   `critical:true` (fallback regex SIEMPRE disponible — nadie queda afuera). Importa de
   JUGAYGANA si no existe local. Soporta login por teléfono, OTP y `temporaryCode`.
@@ -355,6 +366,12 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
 - **Secrets por SSM**: no leer `process.env.X` al require; lazy getters.
 - **JUGAYGANA flaky**: manejar HTML/timeout; `lookupUserOrError` distingue error de
   not_found — un timeout NO es "no existe" (dispararía CREATEUSER duplicado).
+  ⚠️ `getUserInfoByName` es el wrapper de 2 estados (user|null) que COLAPSA
+  error+not_found: no usarlo para decidir si crear algo. Usar `lookupUserOrError`.
+- **Los `.error` de JUGAYGANA pueden ser OBJETOS**, no strings. Todo `.error` que
+  devuelvan estos clientes debe pasar por `errToString()` (exportado por
+  `jugaygana.js`); concatenar el objeto directo imprime `[object Object]` y tapa el
+  error real, tanto en pantalla como en los logs y en `User.jugayganaSyncError`.
 - **`jugaygana-movements.js`**: makeDeposit/makeWithdrawal NO multiplican ×100 — no
   usarlos para plata (ver §4).
 - **Message TTL 3 días; Transaction permanente.** Snapshot en ChatDelay por eso.

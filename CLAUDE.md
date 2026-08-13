@@ -76,6 +76,10 @@ Deploy: AWS Elastic Beanstalk. Dominio público: vipcargas.com. Git user: jupedr
   makeBonus; ⚠️ sus makeDeposit/makeWithdrawal NO multiplican ×100 — no usarlos para
   plata), `src/services/jugayganaService.js` (referidos/bonus/passwords) y
   `jugayganaPublisherSessions.js` (pool por publicista). Reusar el que use el flujo.
+  ⚠️ Sus `.error` pueden venir como **objeto**: pasarlos SIEMPRE por `errToString()`
+  (exportado por `jugaygana.js`) antes de concatenar/loguear, o sale `[object Object]`.
+  Para decidir "existe / no existe" usar `lookupUserOrError` (tri-estado), nunca
+  `getUserInfoByName` (colapsa "falló la API" con "no existe").
 - **Bonos automáticos APAGADOS por flags** (owner 2026-06-24): `INACTIVIDAD_DISABLED`
   y `BONUS_STRATEGY_DISABLED` (server.js) + `CHARGE_BONUSES_DISABLED`
   (notificationRulesService) + bonos de encuesta con `bDays=[]`. Tope 30% en TODO lo

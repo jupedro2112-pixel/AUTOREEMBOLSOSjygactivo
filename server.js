@@ -2998,9 +2998,18 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
       });
       
       if (!jgResult.success && !jgResult.alreadyExists) {
-        return res.status(400).json({ error: 'No se pudo crear el usuario en JUGAYGANA: ' + (jgResult.error || 'Error desconocido') });
+        // `error` ya viene normalizado a string desde el cliente; errToString es
+        // defensa en profundidad para que NUNCA se le muestre "[object Object]"
+        // al cliente (concatenar un objeto de error era el bug original).
+        const jgErr = jugaygana.errToString(jgResult.error);
+        logger.warn(`[Register] JUGAYGANA rechazó a ${username}: [${jgResult.code || 'n/a'}] ${jgErr}`);
+        // transient = la plataforma no respondió (no es culpa del nombre elegido):
+        // el mensaje ya viene redactado para el cliente, sin prefijo técnico.
+        return res.status(400).json({
+          error: jgResult.transient ? jgErr : `No se pudo crear el usuario en JUGAYGANA: ${jgErr}`
+        });
       }
-      
+
       logger.info(`User created/linked in JUGAYGANA: ${username}`);
     } catch (jgError) {
       logger.error(`Error creating user in JUGAYGANA: ${jgError.message}`);
@@ -3219,7 +3228,12 @@ app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req,
     try {
       jgResult = await jugaygana.syncUserToPlatform({ username, password });
       if (!jgResult.success && !jgResult.alreadyExists) {
-        return res.status(400).json({ error: 'No se pudo crear el usuario en JUGAYGANA: ' + (jgResult.error || 'Error desconocido') });
+        // Mismo criterio que /api/auth/register (ver comentario allá).
+        const jgErr = jugaygana.errToString(jgResult.error);
+        logger.warn(`[register-quick] JUGAYGANA rechazó a ${username}: [${jgResult.code || 'n/a'}] ${jgErr}`);
+        return res.status(400).json({
+          error: jgResult.transient ? jgErr : `No se pudo crear el usuario en JUGAYGANA: ${jgErr}`
+        });
       }
     } catch (jgError) {
       logger.error(`[register-quick] Error JUGAYGANA: ${jgError.message}`);

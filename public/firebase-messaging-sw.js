@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v51'; // v51: rangos de reembolso + cupón install 100% (v50: stale-while-revalidate js/css)
+const CACHE_VERSION = 'v52'; // v52: link de autologin + teléfono opcional en el cambio obligatorio (v51: rangos de reembolso + cupón install 100%)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

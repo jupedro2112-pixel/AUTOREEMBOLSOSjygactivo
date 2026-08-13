@@ -620,14 +620,36 @@ VIP.auth = (function () {
             ? VIP.state.currentUser.phone
             : null;
 
+        // En el cambio OBLIGATORIO (link de autologin / alta por agente) el
+        // teléfono es OPCIONAL: el usuario entra igual y verifica después. El
+        // SMS pasa a ser obligatorio recién al RETIRAR (lo corta /api/withdraw
+        // con phoneVerified !== true). Fuera del cambio obligatorio se sigue
+        // exigiendo, porque ahí no hay urgencia de dejarlo entrar.
+        const phoneOptional = VIP.state.passwordChangePending === true;
+        const whatsappLabel = document.getElementById('changePasswordWhatsAppLabel');
+        const whatsappHint = document.getElementById('changePasswordWhatsAppHint');
+
         if (whatsappGroup) {
             if (verifiedPhone) {
                 whatsappGroup.style.display = 'none';
                 if (whatsappInput) whatsappInput.removeAttribute('required');
             } else {
                 whatsappGroup.style.display = '';
-                if (whatsappInput) whatsappInput.setAttribute('required', '');
+                if (whatsappInput) {
+                    if (phoneOptional) whatsappInput.removeAttribute('required');
+                    else whatsappInput.setAttribute('required', '');
+                }
             }
+        }
+        if (whatsappLabel) {
+            whatsappLabel.textContent = phoneOptional
+                ? 'Número de WhatsApp (opcional)'
+                : 'Número de WhatsApp *';
+        }
+        if (whatsappHint) {
+            whatsappHint.innerHTML = phoneOptional
+                ? 'Podés dejarlo vacío y cargarlo después. <strong style="color:#ffb84d;">Para RETIRAR tus premios vas a necesitar verificarlo por SMS.</strong>'
+                : 'Necesario para recuperar tu cuenta. Te vamos a enviar un código por SMS para verificarlo.';
         }
         if (whatsappInfo) {
             whatsappInfo.style.display = verifiedPhone ? 'block' : 'none';
@@ -771,6 +793,22 @@ VIP.auth = (function () {
             });
         }
 
+        // CASO A2: cambio OBLIGATORIO (link de autologin / alta por agente) y el
+        // usuario decidió NO cargar teléfono. Se le deja entrar sin SMS: queda
+        // sin teléfono verificado y /api/withdraw lo va a frenar cuando quiera
+        // retirar. El backend acepta este caso sin pedir la contraseña actual
+        // porque `mustChangePassword` está en true.
+        if (!whatsappFull && !verifiedPhone && VIP.state.passwordChangePending) {
+            return _commitPasswordChange({
+                newPassword,
+                closeAllSessions,
+                phone: null,
+                otpCode: null,
+                currentPassword,
+                errorDiv
+            });
+        }
+
         // CASO B: se está agregando o cambiando teléfono → OTP obligatorio.
         if (!whatsappFull) {
             errorDiv.textContent = 'El número de WhatsApp es obligatorio (más de 10 dígitos con prefijo internacional)';
@@ -887,6 +925,10 @@ VIP.auth = (function () {
 
                 VIP.ui.hideModal('changePasswordModal');
                 VIP.ui.showToast('✅ Contraseña guardada exitosamente', 'success');
+                // Si quedó SIN teléfono verificado (caso "omitir el SMS" del
+                // cambio obligatorio), que el banner de verificación aparezca
+                // ya mismo — no puede retirar hasta cargarlo.
+                try { refreshVerifyPhoneBanner(); } catch (e) { /* DOM no listo */ }
                 document.getElementById('newPasswordInput').value = '';
                 document.getElementById('confirmPasswordInput').value = '';
                 const wpInput = document.getElementById('changePasswordWhatsApp');

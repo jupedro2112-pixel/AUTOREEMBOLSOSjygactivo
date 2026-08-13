@@ -111,10 +111,24 @@
   usuario entra con `asd123` (server.js:3568) — puede desarmar la migración.
 - **Validado:** `node --check` OK en los 5 archivos (server.js, User.js, auth.js, app.js,
   admin.js). Sin migraciones de datos (los campos nuevos son opcionales; el índice lo crea
-  Mongoose por autoIndex). **Back necesita redeploy.** **NO hace falta bumpear `?v` ni
-  CACHE_VERSION**: `public/index.html` no se tocó (solo JS), y el SW es
-  stale-while-revalidate para `/js/` → el deploy llega en la siguiente carga (regla de
-  #97: bumpear solo cuando cambian HTML y JS JUNTOS).
+  Mongoose por autoIndex). **Back necesita redeploy.** **`?v=52` + `CACHE_VERSION='v52'`**
+  (HTML y JS cambiaron juntos por el ajuste del teléfono opcional — regla de #97).
+
+- **AJUSTE tras probar el link en producción (mismo día):** el modal de cambio obligatorio
+  pedía el teléfono como **obligatorio** (captura del owner). El botón "📲 Entrar de forma
+  temporal" existía pero vivía en el **paso 2** (la pantalla del OTP), o sea que había que
+  cargar un teléfono y pedir el SMS para siquiera poder omitirlo. Ahora, **solo dentro del
+  cambio OBLIGATORIO** (`VIP.state.passwordChangePending`): el campo deja de ser `required`,
+  el label dice "(opcional)", el texto de ayuda avisa que **para RETIRAR va a necesitar
+  verificarlo por SMS**, y `handleChangePassword` suma el **CASO A2** (sin teléfono y sin
+  teléfono verificado → commitea directo). El backend ya lo aceptaba sin tocar nada:
+  con `mustChangePassword:true` no pide la contraseña actual y con `requestedPhone` null
+  deja `isPhoneChange` en false. El usuario entra con `phoneVerified:false` → `/api/withdraw`
+  lo frena al retirar, que es exactamente lo pedido. Fuera del cambio obligatorio el
+  teléfono sigue siendo obligatorio (ahí no hay urgencia de dejarlo entrar).
+  IDs nuevos en index.html (`changePasswordWhatsAppLabel`, `changePasswordWhatsAppHint`)
+  para no depender de `querySelector` posicional. `_commitPasswordChange` refresca el
+  banner de "verificá tu teléfono" al cerrar, así el usuario ve enseguida lo que le falta.
   **PROBAR tras deploy:** generar link desde el panel y abrirlo en incógnito (debe entrar
   y saltar el modal de contraseña), abrirlo DOS veces (la segunda debe fallar), esperar el
   vencimiento, registro público con un username que ya exista en JUGAYGANA (debe decir

@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=51">
-    <link rel="stylesheet" href="/css/login.css?v=51">
-    <link rel="stylesheet" href="/css/header.css?v=51">
-    <link rel="stylesheet" href="/css/chat.css?v=51">
-    <link rel="stylesheet" href="/css/modals.css?v=51">
-    <link rel="stylesheet" href="/css/responsive.css?v=51">
+    <link rel="stylesheet" href="/css/base.css?v=52">
+    <link rel="stylesheet" href="/css/login.css?v=52">
+    <link rel="stylesheet" href="/css/header.css?v=52">
+    <link rel="stylesheet" href="/css/chat.css?v=52">
+    <link rel="stylesheet" href="/css/modals.css?v=52">
+    <link rel="stylesheet" href="/css/responsive.css?v=52">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -1020,7 +1020,7 @@
                     <input type="password" id="confirmPasswordInput" name="confirm-password" placeholder="Repite tu contraseña" required minlength="6" autocomplete="new-password">
                 </div>
                 <div class="input-group" id="changePasswordWhatsAppGroup">
-                    <label>Número de WhatsApp *</label>
+                    <label id="changePasswordWhatsAppLabel">Número de WhatsApp *</label>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <select id="changePasswordWhatsAppPrefix" style="flex-shrink:0; width: 110px; padding: 8px 6px; border-radius: 8px; border: 1px solid rgba(212,175,55,0.3); background: rgba(0,0,0,0.4); color: #fff; font-size: 14px;">
                             <option value="+54">🇦🇷 +54</option>
@@ -1045,7 +1045,7 @@
                         </select>
                         <input type="tel" id="changePasswordWhatsApp" name="whatsapp" placeholder="9 11 1234-5678" autocomplete="tel" style="flex: 1;">
                     </div>
-                    <span style="font-size: 11px; color: #888;">Necesario para recuperar tu cuenta. Te vamos a enviar un código por SMS para verificarlo.</span>
+                    <span id="changePasswordWhatsAppHint" style="font-size: 11px; color: #888;">Necesario para recuperar tu cuenta. Te vamos a enviar un código por SMS para verificarlo.</span>
                 </div>
                 <div id="changePasswordWhatsAppInfo" style="display:none; font-size: 12px; color: #00ff88; padding: 8px 0; margin-bottom: 8px;"></div>
                 <div class="input-group" style="display: flex; align-items: center; gap: 10px;">
@@ -1850,25 +1850,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=51"></script>
-    <script src="/js/campaign.js?v=51"></script>
-    <script src="/js/meta-pixel.js?v=51"></script>
-    <script src="/js/auth.js?v=51"></script>
-    <script src="/js/socket.js?v=51"></script>
-    <script src="/js/chat.js?v=51"></script>
-    <script src="/js/refunds.js?v=51"></script>
-    <script src="/js/fire.js?v=51"></script>
-    <script src="/js/roulette.js?v=51"></script>
-    <script src="/js/reviews.js?v=51"></script>
-    <script src="/js/promobonus.js?v=51"></script>
-    <script src="/js/notifications.js?v=51"></script>
-    <script src="/js/ui.js?v=51"></script>
-    <script src="/js/withdraw.js?v=51"></script>
-    <script src="/js/installbonus.js?v=51"></script>
-    <script src="/js/notifsurvey.js?v=51"></script>
-    <script src="/js/publisherwelcome.js?v=51"></script>
-    <script src="/js/apptest.js?v=51"></script>
-    <script src="/js/app.js?v=51"></script>
+    <script src="/js/config.js?v=52"></script>
+    <script src="/js/campaign.js?v=52"></script>
+    <script src="/js/meta-pixel.js?v=52"></script>
+    <script src="/js/auth.js?v=52"></script>
+    <script src="/js/socket.js?v=52"></script>
+    <script src="/js/chat.js?v=52"></script>
+    <script src="/js/refunds.js?v=52"></script>
+    <script src="/js/fire.js?v=52"></script>
+    <script src="/js/roulette.js?v=52"></script>
+    <script src="/js/reviews.js?v=52"></script>
+    <script src="/js/promobonus.js?v=52"></script>
+    <script src="/js/notifications.js?v=52"></script>
+    <script src="/js/ui.js?v=52"></script>
+    <script src="/js/withdraw.js?v=52"></script>
+    <script src="/js/installbonus.js?v=52"></script>
+    <script src="/js/notifsurvey.js?v=52"></script>
+    <script src="/js/publisherwelcome.js?v=52"></script>
+    <script src="/js/apptest.js?v=52"></script>
+    <script src="/js/app.js?v=52"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA

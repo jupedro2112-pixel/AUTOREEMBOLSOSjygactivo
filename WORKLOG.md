@@ -129,6 +129,21 @@
   IDs nuevos en index.html (`changePasswordWhatsAppLabel`, `changePasswordWhatsAppHint`)
   para no depender de `querySelector` posicional. `_commitPasswordChange` refresca el
   banner de "verificá tu teléfono" al cerrar, así el usuario ve enseguida lo que le falta.
+
+- **AJUSTE 2 — el link se muestra en un recuadro y sale solo al crear el usuario** (pedido
+  del owner tras usarlo): antes el link se copiaba al portapapeles con un toast, y si el
+  navegador bloqueaba el portapapeles caía a un `prompt()` feo. Ahora hay un modal
+  `autologinLinkModal` (adminprivado2026/index.html) con el **username** bien visible, el
+  link en un `<textarea>` seleccionable (click = select all), el aviso de un-solo-uso +
+  vencimiento, y botón "Copiar de nuevo". **Se copia solo al abrirse.**
+  `copyAutologinLink()` usa `navigator.clipboard` con fallback a `execCommand('copy')`
+  (navegadores que niegan el permiso o contextos sin HTTPS) y, si nada funciona, deja el
+  texto seleccionado y lo avisa en amarillo — el link nunca se pierde.
+  **Además: al crear un usuario desde el panel** (`role === 'user'`, admin general), el
+  link se genera y se muestra AUTOMÁTICAMENTE — es el paso siguiente natural del alta.
+  `generateAutologinLink` acepta `{skipConfirm:true}` para no preguntar dos veces en ese
+  caso. `POST /api/admin/users` ya devolvía `user.id` y `user.username`, así que no hubo
+  que tocar el backend.
   **PROBAR tras deploy:** generar link desde el panel y abrirlo en incógnito (debe entrar
   y saltar el modal de contraseña), abrirlo DOS veces (la segunda debe fallar), esperar el
   vencimiento, registro público con un username que ya exista en JUGAYGANA (debe decir

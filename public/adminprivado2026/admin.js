@@ -4164,8 +4164,10 @@ async function handleUnblockUser(userId, username) {
 // Genera un link de acceso de UN SOLO USO para un cliente que ya existe en
 // JUGAYGANA pero nunca entró acá. Se le manda por WhatsApp: al abrirlo entra
 // directo y le salta el cambio de contraseña obligatorio.
-async function generateAutologinLink(userId, username) {
-    if (!confirm(`¿Generar un link de acceso para ${username}?\n\nEl link entra a la cuenta SIN contraseña, sirve UNA sola vez y vence.\nMandáselo solo a esa persona.\n\nSi ya le habías generado uno, el anterior deja de funcionar.`)) return;
+// `skipConfirm` lo usa el alta de usuario: ahí el link es la continuación
+// natural de crear la cuenta, así que no tiene sentido volver a preguntar.
+async function generateAutologinLink(userId, username, { skipConfirm = false } = {}) {
+    if (!skipConfirm && !confirm(`¿Generar un link de acceso para ${username}?\n\nEl link entra a la cuenta SIN contraseña, sirve UNA sola vez y vence.\nMandáselo solo a esa persona.\n\nSi ya le habías generado uno, el anterior deja de funcionar.`)) return;
     try {
         const response = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/autologin-link`, {
             method: 'POST',
@@ -4177,22 +4179,57 @@ async function generateAutologinLink(userId, username) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Error al generar el link');
 
-        const horas = data.expiresInHours || 72;
-        // Se copia solo al portapapeles; si el navegador lo bloquea, cae al prompt
-        // para que el agente igual pueda seleccionarlo a mano.
-        let copiado = false;
-        try {
-            await navigator.clipboard.writeText(data.link);
-            copiado = true;
-        } catch (e) { /* sin permiso de portapapeles */ }
-
-        if (copiado) {
-            showToast(`✅ Link de ${username} copiado (vence en ${horas} h)`, 'success');
-        } else {
-            window.prompt(`Link de acceso para ${username} (vence en ${horas} h) — copialo:`, data.link);
-        }
+        showAutologinLinkModal(data.username || username, data.link, data.expiresInHours);
     } catch (error) {
         showToast(error.message || 'Error al generar el link', 'error');
+    }
+}
+
+// Muestra el link en un recuadro seleccionable y lo deja YA copiado.
+function showAutologinLinkModal(username, link, hours) {
+    const userEl = document.getElementById('autologinLinkUser');
+    const input = document.getElementById('autologinLinkInput');
+    const hoursEl = document.getElementById('autologinLinkHours');
+    const state = document.getElementById('autologinCopyState');
+    if (!input) { // por si el modal no está en el DOM: no perder el link
+        window.prompt(`Link de acceso para ${username}:`, link);
+        return;
+    }
+    if (userEl) userEl.textContent = username;
+    if (hoursEl) hoursEl.textContent = hours || 72;
+    input.value = link;
+    if (state) state.textContent = '';
+    showModal('autologinLinkModal');
+    copyAutologinLink();
+}
+
+// Copia al portapapeles con fallback a execCommand (navegadores que niegan el
+// permiso o contextos sin HTTPS). Si nada funciona, deja el texto seleccionado
+// para que el agente lo copie a mano.
+async function copyAutologinLink() {
+    const input = document.getElementById('autologinLinkInput');
+    const state = document.getElementById('autologinCopyState');
+    if (!input || !input.value) return;
+
+    let ok = false;
+    try {
+        await navigator.clipboard.writeText(input.value);
+        ok = true;
+    } catch (e) {
+        try {
+            input.select();
+            ok = document.execCommand('copy');
+        } catch (e2) { ok = false; }
+    }
+
+    if (!state) return;
+    if (ok) {
+        state.style.color = '#28a745';
+        state.textContent = '✅ Link copiado — ya lo podés pegar en WhatsApp';
+    } else {
+        state.style.color = '#ffb84d';
+        state.textContent = '⚠️ No se pudo copiar solo: tocá el recuadro y copialo a mano';
+        input.select();
     }
 }
 
@@ -4304,6 +4341,8 @@ window.handleUnblockUser = handleUnblockUser;
 window.handleToggleVerifyPhone = handleToggleVerifyPhone;
 window.handleToggleLoginNoPwd = handleToggleLoginNoPwd;
 window.generateAutologinLink = generateAutologinLink;
+window.showAutologinLinkModal = showAutologinLinkModal;
+window.copyAutologinLink = copyAutologinLink;
 
 // Pinta el banner BLOQUEADO + alterna botones Bloquear/Desbloquear según el estado del user.
 // El banner muestra motivo y QUIÉN lo bloqueó — esta info es solo para admins
@@ -5108,6 +5147,14 @@ async function handleCreateUser() {
             document.getElementById('newUserEmail').value = '';
             document.getElementById('newUserPhone').value = '';
             document.getElementById('newUserRole').value = 'user';
+
+            // Recién creado un CLIENTE: le generamos el link de acceso y lo
+            // mostramos ya copiado, que es el paso siguiente del alta (el agente
+            // se lo manda por WhatsApp). Solo admin general puede generarlo, y
+            // nunca para cuentas de staff — el backend lo revalida igual.
+            if (role === 'user' && currentAdmin?.role === 'admin' && data.user?.id) {
+                await generateAutologinLink(data.user.id, data.user.username || username, { skipConfirm: true });
+            }
         } else {
             showToast(data.error || 'Error al crear usuario', 'error');
         }

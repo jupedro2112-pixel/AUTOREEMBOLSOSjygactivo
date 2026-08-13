@@ -2471,6 +2471,37 @@
         </div>
     </div>
 
+    <!-- Autologin Link Modal — link de acceso para mandarle al cliente por WhatsApp -->
+    <div id="autologinLinkModal" class="modal hidden" onclick="if(event.target===this)hideModal('autologinLinkModal')">
+        <div class="modal-content" style="max-width:540px" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3>🔗 Link de acceso</h3>
+                <button class="close-modal" onclick="hideModal('autologinLinkModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin:0 0 12px;font-size:1em;">
+                    Usuario: <strong id="autologinLinkUser" style="color:#d4af37"></strong>
+                </p>
+                <div class="form-group">
+                    <label for="autologinLinkInput">Mandale este link por WhatsApp</label>
+                    <textarea id="autologinLinkInput" readonly rows="3" onclick="this.select()"
+                        style="width:100%;resize:vertical;padding:10px;border:1px solid rgba(212,175,55,0.45);border-radius:8px;font-size:0.82em;font-family:monospace;word-break:break-all;background:rgba(0,0,0,0.25);color:#e8e8e8;"></textarea>
+                </div>
+                <div id="autologinCopyState" style="font-size:0.88em;font-weight:700;margin:6px 0 10px;min-height:18px;"></div>
+                <p style="font-size:0.82em;color:#888;margin:0;line-height:1.5;">
+                    Entra a la cuenta <strong>sin contraseña</strong>, sirve <strong>una sola vez</strong>
+                    y vence en <span id="autologinLinkHours">72</span> h.
+                    Al abrirlo, el usuario tiene que crear su contraseña.
+                    Si generás otro link, éste deja de funcionar.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="hideModal('autologinLinkModal')">Cerrar</button>
+                <button class="btn-primary" id="autologinCopyBtn" onclick="copyAutologinLink()">📋 Copiar de nuevo</button>
+            </div>
+        </div>
+    </div>
+
     <!-- User Detail Modal -->
     <div id="userDetailModal" class="modal hidden" onclick="if(event.target===this)hideModal('userDetailModal')">
         <div class="modal-content" style="max-width:520px" onclick="event.stopPropagation()">

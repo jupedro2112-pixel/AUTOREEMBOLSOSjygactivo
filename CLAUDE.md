@@ -32,7 +32,18 @@ referidos y campañas/publicistas. UX en PWA con notificaciones push (FCM).
 
 **Stack:** Node 20 · Express · MongoDB (Atlas) · Mongoose · Socket.IO (+ Redis adapter
 para multi-instancia en AWS EB) · Firebase Admin (FCM) · AWS SNS (SMS OTP).
-Deploy: AWS Elastic Beanstalk. Dominio público: vipcargas.com. Git user: jupedro2112-pixel.
+**Deploy — DOS entornos:**
+- **AWS Elastic Beanstalk = PRODUCCIÓN** (vipcargas.com). Secrets por SSM (`SSM_PATH`).
+- **Render = PRUEBAS** (`vipcargasantinobackupviejo.onrender.com`). Se prueba ahí y recién
+  después va a EB. Sin `SSM_PATH` → los secrets salen de las env vars del dashboard de
+  Render (ver `loadSecrets.js:19`). Plan gratis: la instancia se duerme sin uso (primera
+  visita ~50 s) y corre en una sola instancia (Socket.IO sin Redis, avisa por log).
+
+⚠️ Las vars que se leen al `require()` (**`PROXY_URL`, `PUBLIC_BASE_URL`**) NO pueden ir en
+SSM: se leen ANTES del bootstrap async. En EB van como *environment properties*.
+
+Git remote: `github.com/jupedro2112-pixel/VIPCARGASANTINOactivo` (el repo se renombró; el
+nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112-pixel.
 
 ## Estructura
 

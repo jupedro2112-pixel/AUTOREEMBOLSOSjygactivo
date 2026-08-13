@@ -191,12 +191,30 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
     tal cual, sin el prefijo "No se pudo crear el usuario en JUGAYGANA:").
   - Si CREATEUSER responde "already existing", se re-busca (3× cada 1,5 s) y se VINCULA
     la cuenta existente en vez de fallar — misma red de seguridad que
-    `depositToUser`/`withdrawFromUser`. ⚠️ Consecuencia de diseño (preexistente): un
-    username que ya existe en JUGAYGANA se vincula a la cuenta de plataforma existente,
-    con el saldo y la contraseña que esa cuenta ya tenía.
+    `depositToUser`/`withdrawFromUser`.
+  - ⚠️ **Vincular una cuenta preexistente de JUGAYGANA es potestad del ADMIN.** El
+    registro PÚBLICO (`/api/auth/register` y `register-quick`) rechaza con 400
+    `USERNAME_TAKEN` cuando `syncUserToPlatform` devuelve `alreadyExists`: ahí el
+    username es la única prueba de identidad, así que vincular permitiría quedarse con
+    la cuenta y el saldo de otro. Las altas por admin (`POST /api/users` y
+    `POST /api/admin/users`) SÍ vinculan — ya validan que el username no exista local.
+- **Link de autologin** (alta por agente / migración): `POST /api/admin/users/:id/autologin-link`
+  (admin general, nunca sobre staff) genera un token de **un solo uso** con TTL
+  `AUTOLOGIN_TTL_HOURS` (72 h) y devuelve `https://<host>/?al=<token>`; en la DB va solo
+  el SHA-256 (`autologinTokenHash`). Setea `mustChangePassword:true`. El canje es
+  `POST /api/auth/autologin` — **POST y no GET porque la vista previa de WhatsApp
+  quemaría el token**; el un-solo-uso se garantiza con reserva atómica
+  (`findOneAndUpdate` con `autologinUsedAt:null` en el filtro). En la PWA lo consume
+  `VIP.auth.consumeAutologinFromUrl()` (auth.js), llamado desde `app.js` ANTES de
+  `verifyToken`; limpia el token de la URL con `replaceState` antes de canjearlo.
 - **Login**: `POST /api/auth/login` (~L3341). `findUserByUsernameCI` con
   `critical:true` (fallback regex SIEMPRE disponible — nadie queda afuera). Importa de
-  JUGAYGANA si no existe local. Soporta login por teléfono, OTP y `temporaryCode`.
+  JUGAYGANA si no existe local, **validando la contraseña contra la plataforma**
+  (`jugayganaService.loginAsUser`) y guardando ESA contraseña — nunca una fija. Si la
+  plataforma no responde (`transient`), devuelve 503 `PLATFORM_UNAVAILABLE`, NO
+  "credenciales inválidas". ⚠️ El atajo histórico que aceptaba `asd123` fue eliminado
+  (2026-08-13); pero las cuentas que creamos NOSOTROS en JUGAYGANA todavía nacen allá con
+  `asd123`, así que para ésas esa contraseña sigue siendo válida en la plataforma. Soporta login por teléfono, OTP y `temporaryCode`.
   Roles staff reciben las cookies admin. JWT 30d (registro: 90d).
 - **Pauta / vanity URL**: `GET /:code` matchea Campaign.code exacto (DB directa) o slug
   del publisher (cache 30s). Setea cookie httpOnly `vip_campaign` (60 días) → el server

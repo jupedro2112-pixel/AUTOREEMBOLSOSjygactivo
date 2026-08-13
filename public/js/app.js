@@ -7,6 +7,17 @@
 // ========================================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Link de autologin (?al=TOKEN): el agente se lo pasa al usuario por WhatsApp.
+    // Se canjea ANTES de verifyToken y corta el arranque normal — si sale bien,
+    // consumeAutologin() deja la sesión iniciada y llama a initializeSession.
+    // El canje va por POST (nunca GET) para que la vista previa de WhatsApp no
+    // queme el token de un solo uso; ver /api/auth/autologin en server.js.
+    if (VIP.auth && typeof VIP.auth.consumeAutologinFromUrl === 'function'
+        && VIP.auth.consumeAutologinFromUrl()) {
+        setupEventListeners();
+        return;
+    }
+
     if (VIP.state.currentToken) {
         VIP.auth.verifyToken();
     }

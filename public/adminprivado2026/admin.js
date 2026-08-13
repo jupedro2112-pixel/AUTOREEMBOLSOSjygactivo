@@ -3987,6 +3987,13 @@ function renderUsers(users) {
         // browser parsea onclick="fn(" y descarta el resto → ningún botón
         // ejecutaba su handler. Con comillas simples afuera, las dobles del
         // JSON conviven sin colisión: onclick='fn("abc", "pepe")'.
+        // Link de autologin: para clientes que ya existen en JUGAYGANA pero
+        // nunca entraron acá. Solo admin general y nunca sobre cuentas de staff
+        // (el backend lo vuelve a validar).
+        const autologinBtn = (adminRole === 'admin' && !isAdminUser)
+            ? `<button class="action-btn-small" title="Generar link de acceso (WhatsApp)" onclick='generateAutologinLink(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)})'>🔗</button>`
+            : '';
+
         const pwdBtn = canChangePassword
             ? `<button class="action-btn-small" title="Cambiar contraseña" onclick='openUserPasswordModal(${JSON.stringify(user.id)}, ${JSON.stringify(user.username)}, ${JSON.stringify(user.role)})'><span class="icon icon-key"></span></button>`
             : '';
@@ -4047,6 +4054,7 @@ function renderUsers(users) {
                 <button class="action-btn-small" title="Ir al chat" onclick='chatUser(${JSON.stringify(user.id)})'>
                     <span class="icon icon-comment"></span>
                 </button>
+                ${autologinBtn}
                 ${pwdBtn}
                 ${blockBtn}
             </td>
@@ -4153,6 +4161,41 @@ async function handleUnblockUser(userId, username) {
 }
 
 // Verifica o desverifica el teléfono de un usuario (habilita retiro sin SMS).
+// Genera un link de acceso de UN SOLO USO para un cliente que ya existe en
+// JUGAYGANA pero nunca entró acá. Se le manda por WhatsApp: al abrirlo entra
+// directo y le salta el cambio de contraseña obligatorio.
+async function generateAutologinLink(userId, username) {
+    if (!confirm(`¿Generar un link de acceso para ${username}?\n\nEl link entra a la cuenta SIN contraseña, sirve UNA sola vez y vence.\nMandáselo solo a esa persona.\n\nSi ya le habías generado uno, el anterior deja de funcionar.`)) return;
+    try {
+        const response = await fetch(`${API_URL}/api/admin/users/${encodeURIComponent(userId)}/autologin-link`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${currentToken}`
+            }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Error al generar el link');
+
+        const horas = data.expiresInHours || 72;
+        // Se copia solo al portapapeles; si el navegador lo bloquea, cae al prompt
+        // para que el agente igual pueda seleccionarlo a mano.
+        let copiado = false;
+        try {
+            await navigator.clipboard.writeText(data.link);
+            copiado = true;
+        } catch (e) { /* sin permiso de portapapeles */ }
+
+        if (copiado) {
+            showToast(`✅ Link de ${username} copiado (vence en ${horas} h)`, 'success');
+        } else {
+            window.prompt(`Link de acceso para ${username} (vence en ${horas} h) — copialo:`, data.link);
+        }
+    } catch (error) {
+        showToast(error.message || 'Error al generar el link', 'error');
+    }
+}
+
 async function handleToggleVerifyPhone(userId, username, verified) {
     const msg = verified
         ? `¿Verificar el teléfono de ${username}? Va a poder retirar sin pasar por el SMS.`
@@ -4260,6 +4303,7 @@ window.handleBlockUser = handleBlockUser;
 window.handleUnblockUser = handleUnblockUser;
 window.handleToggleVerifyPhone = handleToggleVerifyPhone;
 window.handleToggleLoginNoPwd = handleToggleLoginNoPwd;
+window.generateAutologinLink = generateAutologinLink;
 
 // Pinta el banner BLOQUEADO + alterna botones Bloquear/Desbloquear según el estado del user.
 // El banner muestra motivo y QUIÉN lo bloqueó — esta info es solo para admins

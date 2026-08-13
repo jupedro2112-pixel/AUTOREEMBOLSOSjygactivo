@@ -780,15 +780,21 @@ const loginAsUser = async (username, password) => {
     });
 
     const data = parseJson(resp.data);
-    if (isHtmlBlocked(data)) return { success: false, error: 'IP bloqueada' };
+    // `transient: true` ⇒ NO pudimos saber si la contraseña es correcta (la
+    // plataforma no respondió bien). Quien use esto para AUTENTICAR debe tratar
+    // ese caso como "reintentá en un rato", nunca como "credenciales inválidas":
+    // si no, un hipo de Cloudflare deja al usuario afuera de su cuenta.
+    if (isHtmlBlocked(data)) return { success: false, error: 'IP bloqueada', transient: true };
 
     const token = data?.token || data?.data?.token;
+    // Acá SÍ hubo respuesta JSON de la plataforma: es un rechazo real de credenciales.
     if (!token) return { success: false, error: data?.error || data?.message || 'Login failed' };
 
     return { success: true, token };
   } catch (error) {
+    // Timeout / ECONNRESET / red: tampoco sabemos nada.
     logger.error('Error en loginAsUser JUGAYGANA:', error.message);
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, transient: true };
   }
 };
 

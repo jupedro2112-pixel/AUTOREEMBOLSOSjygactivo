@@ -8,6 +8,119 @@
 
 ## Sesión 2026-08-13
 
+### 100. LINK DE AUTOLOGIN (alta por agente) + el registro público deja de vincular cuentas de JUGAYGANA
+- **Contexto (decisión del owner):** se va a reemplazar el proyecto **autoreembolsos** por
+  ESTE código. autoreembolsos entra con usuario SIN contraseña; vipcargas pide contraseña.
+  Requisitos: (a) el que ya tiene sesión iniciada NO la pierde; (b) el que no la tiene, el
+  agente le crea la cuenta desde el panel (se vincula sola a JUGAYGANA) y le manda un
+  **link de autologin** por WhatsApp; (c) al entrar, cambio de contraseña OBLIGATORIO con
+  SMS **omitible**, pero SMS **obligatorio para retirar**.
+- **Auditoría de compatibilidad de sesiones (con la IA del otro repo):** son el mismo
+  linaje de código → `JWT_SECRET`, claim `userId`, `localStorage['userToken']`,
+  `User.findOne({id})` y hasta el nombre del service worker (`firebase-messaging-sw.js`,
+  scope `/`) COINCIDEN. **Las sesiones sobreviven** con: mismo valor de `JWT_SECRET`
+  (está en SSM del proyecto viejo), misma `MONGODB_URI` y mismo dominio. NO hace falta
+  ningún shim de localStorage.
+- **Lo que YA existía y NO se tocó** (verificado leyendo el código): modal forzado de
+  contraseña (`mustChangePassword` + allow-list en authMiddleware), crear contraseña sin
+  saber la anterior, **omitir el SMS** (`POST /api/auth/change-password/pending` → deja
+  `phoneVerificationPending:true`; botón "📲 Entrar de forma temporal" ya en el modal,
+  index.html:1081) y **SMS obligatorio al retirar** (`/api/withdraw` corta con
+  `phoneVerified !== true`). Los 2 endpoints de alta por admin (`POST /api/users` y
+  `POST /api/admin/users`) YA validan que el username no exista local y YA vinculan la
+  cuenta de JUGAYGANA vía `syncUserToPlatform`.
+- **Registro PÚBLICO ya no vincula (server.js, los 2 endpoints):** si `syncUserToPlatform`
+  devuelve `alreadyExists`, ahora responde 400 `USERNAME_TAKEN` ("Ese nombre de usuario ya
+  está en uso. Si ya tenés una cuenta, iniciá sesión."). **Por qué:** en el registro el
+  username es la ÚNICA prueba de identidad → cualquiera podía registrarse con el nombre de
+  otro y quedarse con su cuenta Y SU SALDO. Era preexistente (el camino `found` vinculaba
+  desde siempre), pero se vuelve crítico al migrar una base donde el 100% de los usuarios
+  existe en JUGAYGANA. **Regla del owner: vincular es potestad del ADMIN, no del registro.**
+- **Link de autologin — NUEVO:**
+  - Campos en User: `autologinTokenHash` (SHA-256; el claro vive SOLO en el link),
+    `autologinExpiresAt`, `autologinUsedAt`, `autologinCreatedBy` (auditoría) + índice
+    sparse por hash. Un link nuevo PISA al anterior (uno vivo por usuario).
+  - `POST /api/admin/users/:id/autologin-link` — **admin general únicamente** (generar el
+    link ES entrar a la cuenta; mismo criterio que el reset de contraseña) y **nunca sobre
+    staff**. Setea `mustChangePassword:true`. Devuelve `{ link, expiresAt, expiresInHours }`.
+    TTL por `AUTOLOGIN_TTL_HOURS` (**72 h**, elegido por el owner) y **UN SOLO USO**.
+  - `POST /api/auth/autologin` — público. **Es POST a propósito: WhatsApp/Facebook visitan
+    los links para armar la vista previa y con un GET el crawler quemaría el token de un
+    solo uso antes de que el usuario lo abriera.** El "un solo uso" se garantiza con
+    **reserva atómica** (`findOneAndUpdate` con `autologinUsedAt:null` + no vencido en el
+    FILTRO) — mismo patrón que #96; sin eso sería un TOCTOU. Errores sin distinguir
+    "no existe"/"vencido"/"usado" (no dar información a quien pruebe tokens).
+  - SHA-256 y no bcrypt a propósito: el token tiene 256 bits de entropía real (no es una
+    contraseña humana) y el canje tiene que ser una lectura indexada barata.
+  - Base del link: se arma con el **host del REQUEST** (el mismo código va a correr en
+    vipcargas Y en autoreembolsos; el panel siempre se abre desde el dominio correcto),
+    con `PUBLIC_BASE_URL` como override. ⚠️ `PUBLIC_BASE_URL` se lee al arrancar, ANTES
+    del bootstrap SSM → va como env property de EB, NO en SSM (mismo gotcha que PROXY_URL).
+  - PWA: `consumeAutologinFromUrl()` (auth.js) detecta `?al=TOKEN`, **limpia la URL con
+    `replaceState` ANTES de cualquier await** (que no quede el token en la barra si
+    recarga o comparte) y canjea por POST. `app.js` la llama ANTES de `verifyToken` y
+    aborta el arranque normal si había token.
+  - Panel: botón 🔗 en la fila del usuario (solo admin general, no staff) → confirm →
+    copia el link al portapapeles, con fallback a `prompt()` si el navegador lo bloquea.
+- **CERRADO el atajo de la contraseña fija `asd123` (pedido del owner, mismo día):**
+  - **Antes:** el login importaba al usuario de JUGAYGANA creándolo con `password:'asd123'`
+    FIJA y recién después comparaba contra ese mismo valor → **quien supiera un username
+    entraba escribiendo "asd123"** y se quedaba con la cuenta. Encima había un fallback
+    explícito (server.js ~3546) que aceptaba `asd123` para `source==='jugaygana'` sin
+    `passwordChangedAt`.
+  - **Ahora:** la importación valida la contraseña **contra JUGAYGANA**
+    (`jugayganaService.loginAsUser`) ANTES de crear nada, y guarda la contraseña REAL del
+    usuario (hasheada por el pre-save). El fallback explícito se ELIMINÓ (lápida en el
+    código; rollback por `git revert`).
+  - **`loginAsUser` ahora marca `transient:true`** cuando la plataforma no respondió (HTML
+    de Cloudflare / timeout / red). El login lo traduce a **503 `PLATFORM_UNAVAILABLE`**
+    ("probá en 1-2 minutos") en vez de "credenciales inválidas": decirle eso a alguien que
+    tiene la contraseña bien lo manda a resetearla al pedo.
+  - Guard nuevo: sin `password` no se importa nada (el `temporaryCode` sólo puede existir
+    para un usuario que YA está en esta base).
+  - **DECISIÓN DEL OWNER (2026-08-13), para no volver a discutirla:**
+    1. **NO se usan contraseñas aleatorias.** La contraseña elegida por quien crea la
+       cuenta vale para vipcargas Y para JUGAYGANA (ya es así: registro y altas de admin
+       propagan la contraseña elegida). **Si un admin elige `asd123`, está perfecto** — el
+       problema nunca fue el valor, sino que apareciera SIN que nadie lo eligiera.
+    2. **NO se fuerza el cambio de contraseña** a los usuarios que hoy tienen `asd123`
+       guardada. "Si deciden tener esa, que la tengan." (Coherente con la remoción previa
+       del forzado, server.js:3552.)
+  - **`asd123` residual del lado de JUGAYGANA — analizado, NO es un agujero de vipcargas:**
+    el auto-alta de `depositToUser`/`withdrawFromUser` crea la cuenta EN LA PLATAFORMA con
+    `asd123` (ídem el sync de admin, server.js:5527, y el default `|| 'asd123'` de
+    `syncUserToPlatform`). **Verificados los 9 call sites de deposit/withdraw: TODOS parten
+    de un usuario que ya existe en la base de vipcargas.** Y la validación contra JUGAYGANA
+    sólo corre en la importación del login, o sea cuando el usuario NO existe localmente
+    → para estas cuentas nunca se ejecuta: el login compara contra la contraseña real
+    guardada acá. **Conclusión: ese `asd123` no habilita ningún acceso a vipcargas.** Lo
+    único que queda es que su contraseña EN el sitio de JUGAYGANA sea `asd123`, relevante
+    sólo si el usuario entra directo a la plataforma. No se cambia nada.
+  - **Cuándo se dispara ese auto-alta** (es una red de reparación, no un camino normal):
+    cuando el usuario existe en vipcargas pero NO en JUGAYGANA — porque la creación en la
+    plataforma al registrarse/crear por admin es **fire-and-forget** (`.then()` sin await,
+    server.js:5180: si falla no se reintenta ni se registra el error, el user queda en
+    `jugayganaSyncStatus:'pending'`), o porque borraron la cuenta del lado de la plataforma.
+- **Pendiente de la migración (no hecho todavía):** script one-shot que ponga
+  `mustChangePassword:true` a los usuarios sin contraseña real y normalice los roles que
+  vipcargas no acepta (`closings_viewer`/`roulette_viewer` no están en el enum de
+  `User.js:80` → ValidationError en el primer `save()`); parche para que los tokens
+  legacy con `scope:'refunds-only'` no queden como tokens de privilegio TOTAL (vipcargas
+  ignora `scope`); y verificar `referralCode` (unique+sparse: los nulls explícitos rompen
+  la construcción del índice). ⚠️ El login **auto-limpia** `mustChangePassword` si el
+  usuario entra con `asd123` (server.js:3568) — puede desarmar la migración.
+- **Validado:** `node --check` OK en los 5 archivos (server.js, User.js, auth.js, app.js,
+  admin.js). Sin migraciones de datos (los campos nuevos son opcionales; el índice lo crea
+  Mongoose por autoIndex). **Back necesita redeploy.** **NO hace falta bumpear `?v` ni
+  CACHE_VERSION**: `public/index.html` no se tocó (solo JS), y el SW es
+  stale-while-revalidate para `/js/` → el deploy llega en la siguiente carga (regla de
+  #97: bumpear solo cuando cambian HTML y JS JUNTOS).
+  **PROBAR tras deploy:** generar link desde el panel y abrirlo en incógnito (debe entrar
+  y saltar el modal de contraseña), abrirlo DOS veces (la segunda debe fallar), esperar el
+  vencimiento, registro público con un username que ya exista en JUGAYGANA (debe decir
+  "ya está en uso", NO vincular), y alta por admin de un usuario que existe en JUGAYGANA
+  (SÍ debe vincular).
+
 ### 99. REGISTRO — fin del `[object Object]` + `syncUserToPlatform` con lookup tri-estado y recuperación de "ya existe"
 - **Síntoma reportado por el owner (con captura):** un usuario intentó registrarse
   (`VIPjuancito2020`) y la PWA mostró **"No se pudo crear el usuario en JUGAYGANA:

@@ -3010,7 +3010,21 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
         });
       }
 
-      logger.info(`User created/linked in JUGAYGANA: ${username}`);
+      // El registro PÚBLICO nunca VINCULA una cuenta preexistente de JUGAYGANA:
+      // como el username es la única prueba de identidad acá, cualquiera podría
+      // registrarse con el nombre de otro y quedarse con su cuenta y su saldo.
+      // Vincular es una operación de confianza y queda reservada a la creación
+      // por ADMIN (POST /api/admin/users y POST /api/users), que ya valida que
+      // el username no exista localmente antes de vincular.
+      if (jgResult.alreadyExists) {
+        logger.warn(`[Register] ${username} ya existe en JUGAYGANA — registro público rechazado (vincular es solo por admin)`);
+        return res.status(400).json({
+          error: 'Ese nombre de usuario ya está en uso. Si ya tenés una cuenta, iniciá sesión.',
+          code: 'USERNAME_TAKEN'
+        });
+      }
+
+      logger.info(`User created in JUGAYGANA: ${username}`);
     } catch (jgError) {
       logger.error(`Error creating user in JUGAYGANA: ${jgError.message}`);
       return res.status(400).json({ error: 'Error al crear usuario en la plataforma. Intenta con otro nombre de usuario.' });
@@ -3235,6 +3249,15 @@ app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req,
           error: jgResult.transient ? jgErr : `No se pudo crear el usuario en JUGAYGANA: ${jgErr}`
         });
       }
+      // Mismo criterio que /api/auth/register: el registro público no vincula
+      // cuentas preexistentes de JUGAYGANA (ver comentario allá).
+      if (jgResult.alreadyExists) {
+        logger.warn(`[register-quick] ${username} ya existe en JUGAYGANA — registro público rechazado`);
+        return res.status(400).json({
+          error: 'Ese nombre de usuario ya está en uso. Si ya tenés una cuenta, iniciá sesión.',
+          code: 'USERNAME_TAKEN'
+        });
+      }
     } catch (jgError) {
       logger.error(`[register-quick] Error JUGAYGANA: ${jgError.message}`);
       return res.status(400).json({ error: 'Error al crear usuario en la plataforma. Intenta con otro nombre de usuario.' });
@@ -3412,18 +3435,46 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     // Si no existe localmente, verificar en JUGAYGANA (solo para login por username)
     if (!user && username) {
       logger.debug(`User ${username} not found locally, checking JUGAYGANA...`);
-      
+
+      // ⚠️ Sin contraseña no se importa nada: el `temporaryCode` sólo puede
+      // existir para un usuario que YA está en esta base.
+      if (!password) {
+        return res.status(401).json({ error: 'Credenciales inválidas' });
+      }
+
       const jgUser = await jugaygana.getUserInfoByName(username);
-      
+
       if (jgUser) {
-        logger.debug(`User found in JUGAYGANA, creating locally...`);
-        
+        // La contraseña se valida CONTRA JUGAYGANA antes de importar nada.
+        // Antes se creaba el usuario con la contraseña FIJA 'asd123' y después
+        // se comparaba contra ese mismo valor → cualquiera que supiera un
+        // username entraba escribiendo "asd123" y se quedaba con la cuenta.
+        const jgLogin = await jugayganaService.loginAsUser(username, password);
+
+        if (!jgLogin.success) {
+          if (jgLogin.transient) {
+            // La plataforma no respondió: NO podemos afirmar que la contraseña
+            // esté mal. Decirle "credenciales inválidas" a alguien que la tiene
+            // bien lo manda a resetearla al pedo.
+            logger.warn(`[Login] No se pudo validar ${username} contra JUGAYGANA: ${jgLogin.error}`);
+            return res.status(503).json({
+              error: 'La plataforma no está respondiendo en este momento. Probá de nuevo en 1-2 minutos.',
+              code: 'PLATFORM_UNAVAILABLE'
+            });
+          }
+          logger.debug(`[Login] JUGAYGANA rechazó la contraseña de ${username}`);
+          return res.status(401).json({ error: 'Credenciales inválidas' });
+        }
+
+        logger.info(`[Login] ${username} validado contra JUGAYGANA — importando localmente`);
+
         const userId = uuidv4();
-        
+
         user = await User.create({
           id: userId,
           username: jgUser.username,
-          password: 'asd123',
+          // Su contraseña REAL de JUGAYGANA (el pre-save del modelo la hashea).
+          password: password,
           email: jgUser.email || null,
           phone: jgUser.phone || null,
           role: 'user',
@@ -3535,19 +3586,13 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         logger.error(`Error comparing password for ${loginIdentifier}: ${bcryptError.message}`);
       }
 
-      // Fallback SOLO para usuarios auto-importados desde JUGAYGANA que aún no cambiaron
-      // su contraseña real (la inicial real es "asd123"). Para evitar backdoor:
-      //  - Sólo aplica si source === 'jugaygana' Y nunca cambió contraseña.
-      //  - Sólo aplica para role=user (admins nunca tienen contraparte en JUGAYGANA).
-      //  - Valida que el hash almacenado realmente corresponda a "asd123";
-      //    si la DB guarda otro hash, NO se acepta "asd123" como atajo.
-      if (!isValidPassword && password === 'asd123' && !userObj.passwordChangedAt && userObj.source === 'jugaygana' && !isAdminRole(userObj.role)) {
-        try {
-          isValidPassword = await bcrypt.compare('asd123', userObj.password);
-        } catch (bcryptError) {
-          logger.error(`Error verifying JUGAYGANA default password: ${bcryptError.message}`);
-        }
-      }
+      // ELIMINADO (2026-08-13, a pedido del owner): el fallback que aceptaba la
+      // contraseña FIJA "asd123" para usuarios con source==='jugaygana' que aún
+      // no la habían cambiado. Era un atajo de contraseña conocida: alcanzaba
+      // con saber un username para entrar a esa cuenta. La importación desde
+      // JUGAYGANA ahora valida la contraseña REAL contra la plataforma
+      // (jugayganaService.loginAsUser) y la guarda hasheada, así que este
+      // atajo dejó de ser necesario. Rollback: git revert.
     }
     
     if (!isValidPassword) {
@@ -4898,6 +4943,177 @@ app.post('/api/admin/users/:id/reset-password', authMiddleware, adminMiddleware,
     });
   } catch (error) {
     console.error('Error reseteando contraseña:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
+// ADMIN - Link de autologin (alta por agente / migración)
+// ============================================
+//
+// Caso de uso: un usuario que YA existe en JUGAYGANA pero nunca se registró acá.
+// El agente le crea la cuenta desde el panel (que la vincula a JUGAYGANA) y le
+// pasa este link por WhatsApp. El usuario lo abre y entra sin escribir nada;
+// adentro le salta el cambio de contraseña obligatorio.
+//
+// Seguridad:
+//  · UN SOLO USO y vence a las AUTOLOGIN_TTL_HOURS (72 h por defecto).
+//  · En la base se guarda SOLO el SHA-256 del token; el claro vive en el link.
+//    Si se filtra la base, los links no son reutilizables.
+//  · Generarlo equivale a entrar a la cuenta ⇒ admin general únicamente, y
+//    NUNCA sobre cuentas de staff.
+//  · Queda auditado en `autologinCreatedBy` + log.
+const AUTOLOGIN_TTL_HOURS = parseInt(process.env.AUTOLOGIN_TTL_HOURS || '72', 10);
+
+// SHA-256 en vez de bcrypt a propósito: el token tiene 256 bits de entropía
+// real (no es una contraseña humana), así que no hay nada que "fuerza bruta"
+// pueda hacer y necesitamos que el canje sea una lectura indexada barata.
+function _hashAutologinToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+// Base pública para armar el link. Se prioriza el host del REQUEST porque el
+// mismo código corre en más de un dominio (vipcargas / autoreembolsos) y el
+// panel siempre se abre desde el dominio correcto. PUBLIC_BASE_URL queda como
+// override explícito. OJO: PUBLIC_BASE_URL se lee al arrancar (antes del
+// bootstrap SSM) ⇒ va como env property de EB, no en SSM.
+function _publicBaseUrlFromRequest(req) {
+  const host = req.get('host');
+  if (host) {
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+    return `${proto}://${host}`.replace(/\/$/, '');
+  }
+  return PUBLIC_BASE_URL;
+}
+
+app.post('/api/admin/users/:id/autologin-link', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    // Un link de autologin ES un acceso a la cuenta del cliente: poder de admin
+    // general, igual que el reset de contraseña.
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el administrador principal puede generar links de acceso' });
+    }
+
+    const { id } = req.params;
+    const user = await User.findOne({ id });
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    // Jamás sobre cuentas de staff: sería una escalada de privilegios por link.
+    if (isAdminRole(user.role)) {
+      return res.status(400).json({ error: 'No se pueden generar links de acceso para cuentas de staff' });
+    }
+
+    if (user.isBlocked === true) {
+      return res.status(400).json({ error: 'El usuario está bloqueado. Desbloquealo antes de generar el link.' });
+    }
+    if (user.isActive === false) {
+      return res.status(400).json({ error: 'El usuario está desactivado' });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + AUTOLOGIN_TTL_HOURS * 60 * 60 * 1000);
+
+    user.autologinTokenHash = _hashAutologinToken(rawToken);
+    user.autologinExpiresAt = expiresAt;
+    user.autologinUsedAt = null;          // link nuevo ⇒ se re-arma el de un solo uso
+    user.autologinCreatedBy = req.user.username;
+    // El objetivo del link es que el usuario cree su contraseña: si entra por
+    // acá, no tiene una propia (o no la sabe).
+    user.mustChangePassword = true;
+    await user.save();
+
+    const link = `${_publicBaseUrlFromRequest(req)}/?al=${rawToken}`;
+
+    logger.info(`[autologin] ${req.user.username} generó link para ${user.username} (vence ${expiresAt.toISOString()})`);
+
+    res.json({
+      success: true,
+      link,
+      username: user.username,
+      expiresAt,
+      expiresInHours: AUTOLOGIN_TTL_HOURS
+    });
+  } catch (error) {
+    logger.error(`Error generando link de autologin: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Canje del link. PÚBLICO (el usuario todavía no tiene sesión) y por POST a
+// propósito: WhatsApp/Facebook visitan los links para armar la vista previa, y
+// con un GET esos crawlers quemarían el token de un solo uso antes de que el
+// usuario lo abriera. El front hace este POST desde el JS.
+app.post('/api/auth/autologin', authLimiter, async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (!token || typeof token !== 'string' || token.length < 20) {
+      return res.status(400).json({ error: 'Link de acceso inválido' });
+    }
+
+    const hash = _hashAutologinToken(token.trim());
+    const now = new Date();
+
+    // Reserva ATÓMICA (mismo patrón que el resto de los flujos de un solo uso):
+    // el `autologinUsedAt: null` dentro del filtro es el candado. Dos aperturas
+    // simultáneas del mismo link ⇒ una sola gana el documento, la otra recibe
+    // null y aborta. Sin esto, el "un solo uso" sería un TOCTOU.
+    const user = await User.findOneAndUpdate(
+      {
+        autologinTokenHash: hash,
+        autologinUsedAt: null,
+        autologinExpiresAt: { $gt: now }
+      },
+      { $set: { autologinUsedAt: now } },
+      { new: true }
+    );
+
+    if (!user) {
+      // No distinguimos "no existe" de "vencido" o "ya usado": el usuario no
+      // puede hacer nada distinto en ninguno de los casos y así no le damos
+      // información a quien pruebe tokens al azar.
+      return res.status(401).json({
+        error: 'Este link de acceso ya fue usado o venció. Pedile uno nuevo al soporte.',
+        code: 'AUTOLOGIN_INVALID'
+      });
+    }
+
+    if (user.isBlocked === true) {
+      return res.status(403).json({ error: 'Tu cuenta está bloqueada. Contactá a soporte.', code: 'USER_BLOCKED' });
+    }
+    if (user.isActive === false) {
+      return res.status(401).json({ error: 'Cuenta desactivada' });
+    }
+    if (isAdminRole(user.role)) {
+      // Defensa en profundidad: el generador ya lo impide.
+      return res.status(403).json({ error: 'Acceso no permitido' });
+    }
+
+    user.lastLogin = now;
+    await user.save();
+
+    const jwtToken = jwt.sign(
+      { userId: user.id, username: user.username, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
+      JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    logger.info(`[autologin] ${user.username} entró con link generado por ${user.autologinCreatedBy || 'n/a'}`);
+
+    res.json({
+      token: jwtToken,
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        balance: user.balance,
+        mustChangePassword: user.mustChangePassword === true,
+        phoneVerified: user.phoneVerified === true
+      }
+    });
+  } catch (error) {
+    logger.error(`Error en autologin: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

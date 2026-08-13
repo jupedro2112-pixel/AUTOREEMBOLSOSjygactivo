@@ -427,6 +427,80 @@ VIP.auth = (function () {
         }
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // AUTOLOGIN POR LINK (?al=TOKEN)
+    // El agente crea la cuenta desde el panel (se vincula a JUGAYGANA) y le
+    // manda este link al usuario por WhatsApp. Al abrirlo entra sin escribir
+    // nada y cae directo en el cambio de contraseña obligatorio.
+    //
+    // Devuelve true si HABÍA un token en la URL (o sea: el arranque normal
+    // debe abortar, porque de esto nos encargamos acá), false si no.
+    // ────────────────────────────────────────────────────────────────────
+    function consumeAutologinFromUrl() {
+        var token;
+        try {
+            token = new URLSearchParams(window.location.search).get('al');
+        } catch (e) {
+            return false;
+        }
+        if (!token) return false;
+
+        // Sacar el token de la URL YA, antes de cualquier await: si el usuario
+        // recarga o comparte la dirección, no queremos que el token viaje. La
+        // barra queda limpia aunque el canje falle.
+        try {
+            var clean = window.location.pathname + window.location.hash;
+            window.history.replaceState({}, document.title, clean || '/');
+        } catch (e) { /* navegadores viejos: seguimos igual */ }
+
+        _runAutologin(token);
+        return true;
+    }
+
+    async function _runAutologin(token) {
+        try {
+            const response = await fetch(`${VIP.config.API_URL}/api/auth/autologin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                // Link vencido / ya usado / cuenta bloqueada: mostramos el login
+                // normal con el motivo, para que el usuario sepa qué pedirle al
+                // soporte en vez de quedarse mirando una pantalla vacía.
+                VIP.ui.showToast(data.error || 'El link de acceso no es válido', 'error');
+                if (VIP.state.currentToken) verifyToken();
+                return;
+            }
+
+            VIP.state.currentToken = data.token;
+            VIP.state.currentUser = { ...data.user, id: data.user.id, userId: data.user.id };
+            localStorage.setItem('userToken', VIP.state.currentToken);
+
+            try {
+                await initializeSession(false);
+            } catch (initError) {
+                console.error('Error inicializando sesión (autologin):', initError);
+            }
+
+            // El link SIEMPRE deja mustChangePassword en true del lado del server,
+            // así que este modal es el destino real del flujo. El guard igual se
+            // respeta por si en el futuro se generan links sin ese flag.
+            if (data.user.mustChangePassword === true) {
+                VIP.state.passwordChangePending = true;
+                prepareChangePasswordModal();
+                VIP.ui.showModal('changePasswordModal');
+            } else {
+                maybeOfferSmsVerification(data.user);
+            }
+        } catch (error) {
+            console.error('Error en autologin:', error);
+            VIP.ui.showToast('No se pudo iniciar sesión con el link. Revisá tu conexión.', 'error');
+        }
+    }
+
     function handleLogout() {
         // Avisar al backend para limpiar el token FCM de este dispositivo, así
         // las notificaciones del próximo user no se entregan a la sesión cerrada.
@@ -1362,6 +1436,7 @@ VIP.auth = (function () {
         handleVerifyPhoneSend,
         handleVerifyPhoneConfirm,
         handleLogin,
+        consumeAutologinFromUrl,
         verifyToken,
         handleLogout,
         ensureUserLoaded,

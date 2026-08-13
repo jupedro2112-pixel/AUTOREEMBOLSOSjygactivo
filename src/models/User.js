@@ -383,6 +383,32 @@ const userSchema = new mongoose.Schema({
     default: null
   },
 
+  // ── Link de autologin (alta por agente / migración desde autoreembolsos) ──
+  // El admin genera un link desde el panel y se lo pasa al usuario por WhatsApp;
+  // al abrirlo, el usuario entra sin escribir contraseña y cae directo en el
+  // cambio obligatorio (`mustChangePassword`).
+  // Se guarda SOLO el hash SHA-256: el token en claro existe únicamente dentro
+  // del link. Un link nuevo PISA al anterior (queda un solo link vivo por
+  // usuario). Es de UN SOLO USO y vence — ver AUTOLOGIN_TTL_HOURS en server.js.
+  autologinTokenHash: {
+    type: String,
+    default: null
+  },
+  autologinExpiresAt: {
+    type: Date,
+    default: null
+  },
+  // Sello del canje. No-null ⇒ el link ya se usó y no vuelve a servir.
+  autologinUsedAt: {
+    type: Date,
+    default: null
+  },
+  // Username del staff que generó el link (auditoría: es un acceso a la cuenta).
+  autologinCreatedBy: {
+    type: String,
+    default: null
+  },
+
   // Bono one-time por instalar la app (PWA). Se reclama una sola vez desde la
   // app instalada (standalone). Hasta 2026-07-28 acreditaba $5.000; ahora el
   // reclamo otorga un CUPÓN de 100% extra en la próxima carga (campos de abajo).
@@ -500,6 +526,9 @@ userSchema.index({ 'fcmTokens.token': 1 });
 // Audiencias de recuperación/inactividad y cron de reglas (cada 5 min):
 // countDocuments/find por role + rango de lastLogin.
 userSchema.index({ role: 1, lastLogin: 1 });
+// Canje del link de autologin: se busca por el hash del token. Sparse porque
+// sólo una minoría de usuarios tiene un link vivo en un momento dado.
+userSchema.index({ autologinTokenHash: 1 }, { sparse: true });
 
 // Virtual para verificar si es admin
 userSchema.virtual('isAdmin').get(function() {

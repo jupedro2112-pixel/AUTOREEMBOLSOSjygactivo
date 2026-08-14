@@ -5010,6 +5010,19 @@ function _hashAutologinToken(token) {
 // override explícito. OJO: PUBLIC_BASE_URL se lee al arrancar (antes del
 // bootstrap SSM) ⇒ va como env property de EB, no en SSM.
 function _publicBaseUrlFromRequest(req) {
+  // PRIORIDAD 1: PUBLIC_BASE_URL, si está seteada de verdad en el entorno.
+  // ⚠️ El panel admin suele servirse desde OTRO dominio (ADMIN_HOST, ej. el de
+  // Elastic Beanstalk), así que tomar el host del request generaba links con el
+  // dominio del panel en vez del público. Eso NO es cosmético: el link abre otro
+  // ORIGEN, y como localStorage es por origen, el usuario quedaba logueado en el
+  // dominio equivocado y tenía que volver a entrar en el bueno.
+  // Se lee process.env directo (no la const PUBLIC_BASE_URL) porque esa const
+  // tiene un default hardcodeado que taparía el caso "no configurada".
+  const fromEnv = String(process.env.PUBLIC_BASE_URL || '').trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+
+  // PRIORIDAD 2 (sin PUBLIC_BASE_URL): el host del request. Es mejor que el
+  // default hardcodeado, que apuntaría al dominio del otro proyecto.
   const host = req.get('host');
   if (host) {
     const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();

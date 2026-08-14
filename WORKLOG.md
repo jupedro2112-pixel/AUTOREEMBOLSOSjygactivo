@@ -8,6 +8,30 @@
 
 ## Sesión 2026-08-14
 
+### 107. El link de autologin salía con el dominio del PANEL, no con el público
+- **Reportado por el owner:** al crear un usuario, el link de acceso sale con un dominio
+  distinto al de `PUBLIC_BASE_URL`.
+- **Causa:** `_publicBaseUrlFromRequest` armaba el link con el **host del request**, y el
+  panel admin se sirve desde `ADMIN_HOST` (el dominio de Elastic Beanstalk,
+  `autoreembolsosgirox.sa-east-1.elasticbeanstalk.com`), no desde el público. Así que todo
+  link generado desde el panel salía con el dominio del panel.
+- **Por qué NO era cosmético:** el link abre un **ORIGEN distinto**. Como `localStorage` es
+  por origen, el usuario entraba y quedaba logueado **en el dominio equivocado**; al ir
+  después a autoreembolsos.com tenía que loguearse igual, o sea que el link no cumplía su
+  función. (Y en iOS, el traspaso de sesión a la PWA quedaba atado a ese otro origen.)
+- **Fix:** ahora manda `PUBLIC_BASE_URL` **si está seteada de verdad en el entorno**
+  (se lee `process.env` directo, NO la const, que tiene un default hardcodeado que taparía
+  el caso "no configurada"). Sin ella, sigue el host del request — que igual es mejor que
+  el default, porque ese apunta al dominio del OTRO proyecto.
+- **⚠️ NO se tocó el webhook de cash-out de hgcash** (`server.js:13663`), que también se
+  arma con el host del request. Es el mismo patrón pero **cambiarlo es riesgoso**: hoy
+  apunta al hostname de EB, que **esquiva Cloudflare**. Si se lo pasa al dominio público y
+  Cloudflare bloquea el POST server-to-server (le pasó a vipcargas en #66 y está anotado
+  como riesgo para autoreembolsos en #94), **se romperían las confirmaciones de pago**. El
+  protocolo sí está bien: `trust proxy` está en 1, así que `req.protocol` da `https`.
+  Queda anotado como decisión consciente, no como olvido.
+- **Validado:** `node --check` OK. Solo backend → no hace falta bumpear `?v`.
+
 ### 106. EQUIPOS por prefijo de usuario: Telegram propio + cartel de acceso por WhatsApp
 - **Pedido del owner:** el proyecto lo operan **varios equipos**; cada uno tiene su grupo de
   Telegram y su número de WhatsApp. Se detecta a qué equipo pertenece cada cliente por el

@@ -201,7 +201,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
     `POST /api/admin/users`) SÍ vinculan — ya validan que el username no exista local.
 - **Link de autologin** (alta por agente / migración): `POST /api/admin/users/:id/autologin-link`
   (admin general, nunca sobre staff) genera un token de **un solo uso** con TTL
-  `AUTOLOGIN_TTL_HOURS` (72 h) y devuelve `https://<host>/?al=<token>`; en la DB va solo
+  `AUTOLOGIN_TTL_HOURS` (72 h) y devuelve `<PUBLIC_BASE_URL>/?al=<token>`.
+  ⚠️ El dominio sale de `PUBLIC_BASE_URL` y NO del host del request: el panel se
+  sirve desde `ADMIN_HOST` (otro dominio), y como `localStorage` es por ORIGEN,
+  un link con el dominio del panel dejaba al usuario logueado en el lugar
+  equivocado. Sin `PUBLIC_BASE_URL` seteada, cae al host del request; en la DB va solo
   el SHA-256 (`autologinTokenHash`). Setea `mustChangePassword:true`. El canje es
   `POST /api/auth/autologin` — **POST y no GET porque la vista previa de WhatsApp
   quemaría el token**; el un-solo-uso se garantiza con reserva atómica

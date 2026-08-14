@@ -8,6 +8,55 @@
 
 ## Sesión 2026-08-13
 
+### 101. PWA en iOS: la app instalada arranca con la sesión ya iniciada (traspaso por `start_url`)
+- **Problema (confirmado por el owner en un iPhone real):** al agregar la app a inicio desde
+  Safari, la PWA **abre pidiendo login** aunque en Safari la sesión siga abierta. Causa: en
+  iOS la web app de la pantalla de inicio corre en **su propio contenedor de almacenamiento**,
+  separado de Safari → no hereda `localStorage`, donde vive `userToken`. **En Android/Chrome
+  y escritorio NO pasa**: la app instalada comparte origen y storage, así que ya arrancaba
+  logueada (`app.js:10` lee el token y llama a `verifyToken()`).
+- **Verificado antes de tocar nada:** el `start_url` del manifest era `/?source=pwa` estático
+  y **`source=pwa` no lo leía NADIE** (grep en todo el repo: sólo aparecía en manifest.json).
+  No había ningún mecanismo de traspaso.
+- **Solución (reusa el canje del autologin de #100):** el `start_url` es la ÚNICA URL que se
+  ejecuta DENTRO del contenedor de la app, así que es por donde se puede pasar la sesión.
+  1. `POST /api/auth/pwa-session-token` (autenticado): el usuario pide un token **para sí
+     mismo**. TTL corto (`PWA_SESSION_TTL_MINUTES`, **30 min** — se usa en el acto) y **NO
+     toca `mustChangePassword`** (a diferencia del link de admin: acá ya tiene contraseña).
+     Sólo para `role: user`.
+  2. `GET /manifest.json?al=TOKEN` (ruta nueva ANTES de `express.static`): devuelve el mismo
+     manifest pero con `start_url: "/?al=TOKEN"`. **`id` y `scope` quedan intactos** — si
+     cambiaran, el navegador lo tomaría como otra app. Sin `?al` o con formato inválido cae
+     al static de siempre. `Cache-Control: no-store, private` (es de un solo usuario y un
+     solo uso). Filtro de forma del token (`^[A-Za-z0-9_-]{20,120}$`) probado contra path
+     traversal y basura.
+  3. `primePwaSessionHandoff()` (ui.js): al mostrar las instrucciones de instalación **de
+     iOS**, pide el token y reescribe el `href` del `<link rel="manifest">`. Fire-and-forget
+     a propósito (el usuario todavía tiene que abrir el menú Compartir, sobra tiempo) y
+     best-effort: si falla, se instala igual y pide login una vez, como hoy.
+  4. Al abrir la app, `consumeAutologinFromUrl()` (ya existía) canjea el token y deja la
+     sesión armada adentro del contenedor.
+- **⚠️ Trampa que cazó la revisión y HABÍA que resolver:** iOS abre el `start_url` en **CADA
+  arranque**, así que del segundo en adelante el token ya está usado y el canje falla. Sin
+  fix, el usuario habría visto un toast de error **cada vez que abre la app**. Ahora
+  `_runAutologin` distingue: si el canje falla **y ya hay sesión**, sigue de largo en
+  SILENCIO (`verifyToken()`); sólo avisa cuando NO hay sesión (ahí el error sí es útil:
+  el link venció o ya se usó).
+- **Comparte los campos `autologin*` de User** con el link de admin: pedir un token de PWA
+  PISA un link de admin vivo para ese usuario. Benigno y documentado — sólo puede pasar si
+  el usuario ya está logueado, y en ese caso no necesita el link (el admin lo regenera con
+  un clic).
+- **Validado:** `node --check` OK (server.js, ui.js, auth.js); manifest sigue siendo JSON
+  válido tras inyectar `start_url`; filtro del token probado con casos maliciosos.
+  **NO hace falta bumpear `?v`/CACHE_VERSION** (index.html no se tocó; el href del manifest
+  se reescribe en runtime). Back necesita redeploy. **PROBAR EN UN IPHONE REAL:** logueado en
+  Safari → Instalar App → Agregar a inicio → abrir el ícono (debe entrar SIN pedir login) →
+  **cerrarla y volver a abrirla** (debe seguir logueada y SIN toast de error).
+  ⚠️ Que iOS respete el `start_url` del manifest al agregar a inicio es lo que marca el
+  estándar, pero Apple cambió el comportamiento entre versiones — si no funciona, el
+  siguiente intento sería que el propio `start_url` NO se canjee sino que la app pida la
+  sesión de otra forma. Degrada sin romper: si iOS lo ignora, queda el login de hoy.
+
 ### 100. LINK DE AUTOLOGIN (alta por agente) + el registro público deja de vincular cuentas de JUGAYGANA
 - **Contexto (decisión del owner):** se va a reemplazar el proyecto **autoreembolsos** por
   ESTE código. autoreembolsos entra con usuario SIN contraseña; vipcargas pide contraseña.

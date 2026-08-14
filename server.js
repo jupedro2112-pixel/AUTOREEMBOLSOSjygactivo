@@ -979,6 +979,35 @@ app.get('/:code', async (req, res, next) => {
   }
 });
 
+// Manifest con `start_url` personalizado para el traspaso de sesión a la PWA.
+// Va ANTES de express.static para poder interceptar `/manifest.json?al=TOKEN`.
+// Sin el parámetro devuelve el archivo tal cual (el static de abajo lo sirve).
+//
+// Por qué: en iOS la app instalada NO comparte localStorage con Safari, así que
+// abre deslogueada. El `start_url` es la única URL que se ejecuta DENTRO del
+// contenedor de la app, así que es por donde se le puede pasar la sesión.
+// El token es de un solo uso: sirve para el primer arranque y se muere ahí.
+app.get('/manifest.json', (req, res, next) => {
+  const al = typeof req.query.al === 'string' ? req.query.al.trim() : '';
+  // Sin token o con basura → manifest normal. El formato es base64url de 32
+  // bytes (43 chars); validamos forma, no validez: el canje ya la verifica.
+  if (!al || !/^[A-Za-z0-9_-]{20,120}$/.test(al)) return next();
+
+  try {
+    const raw = readFileCached(path.join(__dirname, 'public', 'manifest.json'));
+    if (!raw) return next();
+    const manifest = JSON.parse(raw);
+    manifest.start_url = `/?al=${encodeURIComponent(al)}`;
+    res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+    // Nunca cachear: este manifest es de un solo usuario y de un solo uso.
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    return res.send(JSON.stringify(manifest));
+  } catch (e) {
+    logger.warn(`[manifest] no se pudo personalizar start_url: ${e.message}`);
+    return next();
+  }
+});
+
 app.use(express.static(path.join(__dirname, 'public'), {
   dotfiles: 'deny',
   index: false,
@@ -5037,6 +5066,53 @@ app.post('/api/admin/users/:id/autologin-link', authMiddleware, adminMiddleware,
     });
   } catch (error) {
     logger.error(`Error generando link de autologin: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Traspaso de sesión a la PWA instalada (problema de iOS).
+//
+// En Android la app instalada comparte `localStorage` con el navegador, así que
+// arranca ya logueada. En iOS NO: la web app de la pantalla de inicio corre en
+// su PROPIO contenedor de almacenamiento, separado de Safari → abre sin token y
+// muestra el login, aunque en Safari la sesión siga abierta.
+//
+// Solución: el usuario (ya autenticado en Safari) pide un token para SÍ MISMO;
+// ese token se mete en el `start_url` del manifest, que es la única URL que se
+// ejecuta DENTRO del contenedor de la app. Al abrirla por primera vez, el front
+// lo canjea con /api/auth/autologin y la sesión queda armada ahí adentro.
+//
+// Diferencias con el link que genera el admin (mismos campos en User):
+//   · TTL corto (PWA_SESSION_TTL_MINUTES, 30 min): se usa en el acto, al instalar.
+//   · NO toca `mustChangePassword` — el usuario ya tiene su contraseña.
+// ⚠️ Comparte los campos `autologin*`, así que pedir uno PISA un link de admin
+// vivo para ese usuario. Es benigno (el admin lo regenera con un clic) y sólo
+// puede pasar si el usuario ya está logueado, en cuyo caso no necesita el link.
+const PWA_SESSION_TTL_MINUTES = parseInt(process.env.PWA_SESSION_TTL_MINUTES || '30', 10);
+
+app.post('/api/auth/pwa-session-token', authMiddleware, authLimiter, async (req, res) => {
+  try {
+    const user = await User.findOne({ id: req.user.userId });
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // Solo clientes: el panel admin no se instala como PWA por esta vía.
+    if (isAdminRole(user.role)) {
+      return res.status(403).json({ error: 'No disponible para cuentas de staff' });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + PWA_SESSION_TTL_MINUTES * 60 * 1000);
+
+    user.autologinTokenHash = _hashAutologinToken(rawToken);
+    user.autologinExpiresAt = expiresAt;
+    user.autologinUsedAt = null;
+    user.autologinCreatedBy = `pwa-install:${user.username}`;
+    await user.save();
+
+    logger.info(`[pwa-session] token de instalación generado para ${user.username}`);
+    res.json({ success: true, token: rawToken, expiresAt });
+  } catch (error) {
+    logger.error(`Error generando token de sesión PWA: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

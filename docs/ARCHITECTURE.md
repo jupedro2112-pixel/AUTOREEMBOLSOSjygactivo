@@ -207,6 +207,16 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   (`findOneAndUpdate` con `autologinUsedAt:null` en el filtro). En la PWA lo consume
   `VIP.auth.consumeAutologinFromUrl()` (auth.js), llamado desde `app.js` ANTES de
   `verifyToken`; limpia el token de la URL con `replaceState` antes de canjearlo.
+- **Traspaso de sesión a la PWA instalada (solo iOS)**: en iOS la web app de la pantalla de
+  inicio tiene su PROPIO storage, separado de Safari → no hereda `userToken` y abre pidiendo
+  login (en Android/escritorio sí lo hereda: mismo origen). Fix: `POST /api/auth/pwa-session-token`
+  (autenticado, TTL 30 min, NO toca `mustChangePassword`) + `GET /manifest.json?al=TOKEN`
+  (ruta ANTES de `express.static`, devuelve el manifest con `start_url: "/?al=TOKEN"`;
+  `id`/`scope` intactos o el navegador lo tomaría como otra app). Lo dispara
+  `primePwaSessionHandoff()` en ui.js al mostrar las instrucciones de iOS.
+  ⚠️ **El `start_url` se abre en CADA arranque de la app**, así que del 2º en adelante el
+  token ya está usado: `_runAutologin` falla en SILENCIO cuando ya hay sesión (si avisara,
+  el usuario vería un error cada vez que abre la app).
 - **Login**: `POST /api/auth/login` (~L3341). `findUserByUsernameCI` con
   `critical:true` (fallback regex SIEMPRE disponible — nadie queda afuera). Importa de
   JUGAYGANA si no existe local, **validando la contraseña contra la plataforma**

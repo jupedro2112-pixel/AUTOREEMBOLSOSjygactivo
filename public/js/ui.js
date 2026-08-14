@@ -457,7 +457,52 @@ VIP.ui = (function () {
         window.deferredPrompt = null;
     }
 
+    // Traspaso de sesión a la PWA instalada (problema exclusivo de iOS).
+    //
+    // En Android la app instalada comparte `localStorage` con el navegador y
+    // arranca ya logueada. En iOS la web app de la pantalla de inicio corre en
+    // su PROPIO contenedor de almacenamiento: no hereda la sesión de Safari y
+    // abre pidiendo login.
+    //
+    // Antes de que el usuario agregue la app a inicio le pedimos al backend un
+    // token de un solo uso y lo dejamos en el `start_url` del manifest. iOS
+    // congela ese start_url dentro del acceso directo, así que al abrir la app
+    // por primera vez se canjea (VIP.auth.consumeAutologinFromUrl) y la sesión
+    // queda armada ADENTRO del contenedor de la app.
+    //
+    // Best-effort: si algo falla, la instalación sigue igual y el usuario
+    // simplemente tendrá que loguearse una vez (el comportamiento de hoy).
+    async function primePwaSessionHandoff() {
+        if (!VIP.state.currentToken) return false; // sin sesión no hay nada que traspasar
+        const link = document.querySelector('link[rel="manifest"]');
+        if (!link) return false;
+        try {
+            const resp = await fetch(`${VIP.config.API_URL}/api/auth/pwa-session-token`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${VIP.state.currentToken}`
+                }
+            });
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            if (!data || !data.token) return false;
+            // Cambiar el href hace que el navegador vuelva a leer el manifest;
+            // el server responde el mismo JSON pero con start_url personalizado.
+            link.setAttribute('href', '/manifest.json?al=' + encodeURIComponent(data.token));
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function showInstallInstructions(platform) {
+        // Se dispara acá porque es donde el usuario YA mostró intención de
+        // instalar: pedirlo antes generaría tokens para gente que sólo ve el
+        // botón. No se espera (`await`) a propósito: el usuario todavía tiene
+        // que abrir el menú Compartir, que da tiempo de sobra.
+        if (platform === 'ios') primePwaSessionHandoff();
+
         const modal = document.createElement('div');
         modal.className = 'ios-install-modal';
 

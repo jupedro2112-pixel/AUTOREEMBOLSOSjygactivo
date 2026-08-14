@@ -467,11 +467,19 @@ VIP.auth = (function () {
             const data = await response.json();
 
             if (!response.ok) {
-                // Link vencido / ya usado / cuenta bloqueada: mostramos el login
-                // normal con el motivo, para que el usuario sepa qué pedirle al
-                // soporte en vez de quedarse mirando una pantalla vacía.
+                // OJO: en la PWA instalada el `start_url` (que lleva el token del
+                // traspaso de sesión) se abre en CADA arranque, así que del
+                // segundo en adelante el token ya está usado. Si ya tenemos
+                // sesión, eso es lo ESPERADO: seguimos de largo en silencio.
+                // Molestar con un error ahí sería un bug visible cada vez que
+                // el usuario abre la app.
+                if (VIP.state.currentToken) {
+                    verifyToken();
+                    return;
+                }
+                // Sin sesión sí hay que avisar: el link venció, ya se usó o la
+                // cuenta está bloqueada, y el usuario tiene que pedir otro.
                 VIP.ui.showToast(data.error || 'El link de acceso no es válido', 'error');
-                if (VIP.state.currentToken) verifyToken();
                 return;
             }
 

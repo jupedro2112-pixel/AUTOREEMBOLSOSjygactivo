@@ -153,9 +153,11 @@ const generalLimiter = rateLimit({
     const sess = getAdminApiSessionCookie(req);
     return sess ? ('sess:' + sess) : req.ip;
   },
-  // Desactiva la validación de IPv6-fallback de la lib: usamos cookie para admins
-  // e IP para clientes a propósito (no necesitamos el helper de IPv6 acá).
-  validate: { keyGeneratorIpFallback: false },
+  // NOTA: acá había `validate: { keyGeneratorIpFallback: false }`. La versión de
+  // express-rate-limit instalada NO conoce esa opción → tiraba un
+  // ERR_ERL_UNKNOWN_VALIDATION con stack completo en CADA arranque (ruido que
+  // parece un crash) y encima la ignoraba. Se quitó: la validación que
+  // desactivaba sólo emite un aviso, no cambia el comportamiento.
   message: { error: 'Demasiadas solicitudes. Intenta más tarde.' }
 });
 
@@ -620,9 +622,10 @@ app.use(compression({
   }
 }));
 app.use(securityHeaders);
-if (!process.env.ALLOWED_ORIGINS && process.env.NODE_ENV === 'production') {
-  logger.warn('⚠️ SEGURIDAD: ALLOWED_ORIGINS no configurado en producción. CORS rechazará orígenes cruzados.');
-}
+// El aviso de ALLOWED_ORIGINS faltante NO va acá: este archivo se evalúa ANTES
+// del bootstrap que carga SSM, así que con la var en SSM el aviso saltaba SIEMPRE
+// y era mentira (CORS la lee lazy por request y funciona bien). Se movió al
+// bootstrap, después de loadSecretsFromSSM — buscar "ALLOWED_ORIGINS".
 app.use(cors({
   origin: corsOriginFn,
   credentials: true,
@@ -8844,6 +8847,34 @@ async function initializeData() {
     if (_ok) {
       logger.info('[refund-index] OK — el índice único anti-doble-cobro está activo');
     } else {
+      // CANDADO ENTRE INSTANCIAS. En EB arrancan varias a la vez y las dos
+      // detectaban el índice viejo, las dos hacían dropIndex y la segunda
+      // ABORTABA el build de la primera ("Index build failed ... caused by
+      // dropIndexes"). Resultado: quedaba SIN índice y sin que se notara.
+      // `Config.key` es único → el insert atómico decide quién repara.
+      // El lock se libera al terminar; si la instancia muere en el medio, queda
+      // uno viejo: por eso se ignora si tiene más de 10 minutos.
+      const LOCK_KEY = 'refund_index_repair_lock';
+      let _gotLock = false;
+      try {
+        await Config.create({ key: LOCK_KEY, value: new Date().toISOString() });
+        _gotLock = true;
+      } catch (e) {
+        if (!(e && e.code === 11000)) throw e;
+        const _prev = await Config.findOne({ key: LOCK_KEY }).lean();
+        const _ageMs = _prev ? (Date.now() - new Date(_prev.value).getTime()) : Infinity;
+        if (_ageMs > 10 * 60 * 1000) {
+          await Config.updateOne({ key: LOCK_KEY }, { $set: { value: new Date().toISOString() } });
+          _gotLock = true;
+          logger.warn('[refund-index] lock viejo (>10 min) — lo tomo yo');
+        }
+      }
+
+      if (!_gotLock) {
+        logger.info('[refund-index] otra instancia está reparando el índice — no hago nada (se verifica en el próximo arranque)');
+        throw { _skip: true };
+      }
+
       logger.warn(`[refund-index] el índice ${IDX_NAME} ${_idx ? 'existe pero con opciones viejas (sparse)' : 'NO existe'} — reparando...`);
 
       // 1) Backfill de periodKey en claims viejos. Sin esto quedan nulls que
@@ -8915,21 +8946,46 @@ async function initializeData() {
         }
         logger.error('[refund-index] ⚠️ MIENTRAS TANTO EL SISTEMA CORRE SIN CANDADO ANTI-DOBLE-COBRO.');
       } else {
-        // 3) Recrear el índice con las opciones correctas.
-        if (_idx) {
-          await _rcColl.dropIndex(IDX_NAME);
-          logger.info('[refund-index] índice viejo (sparse) eliminado');
+        // 3) Recrear el índice con las opciones correctas. Se relee el estado
+        //    JUSTO ANTES de dropear: entre el chequeo inicial y este punto pudo
+        //    haber pasado un rato (el backfill recorre la colección).
+        try {
+          const _now = await _rcColl.indexes();
+          if (_now.find(i => i.name === IDX_NAME)) {
+            await _rcColl.dropIndex(IDX_NAME);
+            logger.info('[refund-index] índice viejo eliminado');
+          }
+          await _rcColl.createIndex(
+            { userId: 1, type: 1, periodKey: 1 },
+            { unique: true, partialFilterExpression: { periodKey: { $type: 'string' } }, name: IDX_NAME }
+          );
+        } catch (buildErr) {
+          logger.error(`[refund-index] falló la creación: ${buildErr.message}`);
         }
-        await _rcColl.createIndex(
-          { userId: 1, type: 1, periodKey: 1 },
-          { unique: true, partialFilterExpression: { periodKey: { $type: 'string' } }, name: IDX_NAME }
-        );
-        logger.info('[refund-index] ✅ índice único anti-doble-cobro CREADO');
+
+        // VERIFICACIÓN FINAL: se relee de la DB en vez de confiar en que el
+        // createIndex no tiró. Así el log dice la verdad sobre el estado real.
+        const _after = await _rcColl.indexes();
+        const _fin = _after.find(i => i.name === IDX_NAME);
+        if (_fin && _fin.unique === true && !!_fin.partialFilterExpression) {
+          logger.info('[refund-index] ✅ índice único anti-doble-cobro ACTIVO (verificado)');
+        } else {
+          logger.error('[refund-index] ⛔ el índice NO quedó creado — EL SISTEMA ESTÁ SIN CANDADO ANTI-DOBLE-COBRO. Se reintenta en el próximo arranque.');
+        }
       }
+
+      // Soltar el candado pase lo que pase, para que el próximo arranque pueda
+      // reintentar sin esperar los 10 minutos de expiración.
+      await Config.deleteOne({ key: 'refund_index_repair_lock' }).catch(() => {});
     }
   } catch (e) {
-    // Nunca tumba el arranque: se reintenta en el próximo boot.
-    logger.error(`[refund-index] no se pudo verificar/crear el índice único (se reintenta al próximo arranque): ${e.message}`);
+    if (e && e._skip) {
+      // Otra instancia tiene el lock: no es un error.
+    } else {
+      // Nunca tumba el arranque: se reintenta en el próximo boot.
+      logger.error(`[refund-index] no se pudo verificar/crear el índice único (se reintenta al próximo arranque): ${e.message}`);
+      await Config.deleteOne({ key: 'refund_index_repair_lock' }).catch(() => {});
+    }
   }
 
   // Backfill de usernameLower (camino rápido del login case-insensitive). Corre en
@@ -16510,6 +16566,12 @@ if (process.env.VERCEL) {
     // usar 32+ caracteres (cambiarlo invalida las sesiones vigentes).
     if (JWT_SECRET.length < 32) {
       console.warn('⚠️  ADVERTENCIA: JWT_SECRET es corto (' + JWT_SECRET.length + ' caracteres). Se recomienda 32+ para mayor seguridad.');
+    }
+
+    // Recién ACÁ tiene sentido avisar por ALLOWED_ORIGINS: si estuviera arriba
+    // (cuerpo del módulo) saltaría siempre, porque SSM todavía no cargó.
+    if (!process.env.ALLOWED_ORIGINS && process.env.NODE_ENV === 'production') {
+      logger.warn('⚠️ SEGURIDAD: ALLOWED_ORIGINS no configurado en producción. CORS rechazará orígenes cruzados.');
     }
 
     await initializeData();

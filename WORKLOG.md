@@ -8,6 +8,48 @@
 
 ## Sesión 2026-08-14
 
+### 103. Post-deploy: carrera del índice entre instancias + 2 ruidos de arranque que mentían
+- **Contexto:** primer deploy del código a EB con los logs de las DOS instancias a la vista.
+  Confirmado en producción lo que decía #102: `[refund-index] el índice ... existe pero con
+  opciones viejas (sparse)` — o sea que el candado anti-doble-cobro **efectivamente estaba
+  mal creado** en la base real.
+- 🔴 **CARRERA ENTRE INSTANCIAS (corregida).** Las dos instancias arrancaron en el mismo
+  segundo, las dos detectaron el índice viejo y las dos hicieron `dropIndex`: una logueó
+  "✅ CREADO" y la otra murió con `Index build failed ... caused by :: dropIndexes command`.
+  El drop de la segunda puede haber abortado el build de la primera → **el índice podía
+  quedar en cualquiera de los dos estados y el log no lo decía.** Fixes:
+  1. **Candado entre instancias** usando la unicidad de `Config.key`
+     (`refund_index_repair_lock`): sólo la instancia que gana el insert atómico repara; las
+     demás loguean y siguen. Lock viejo (>10 min, instancia muerta a mitad) se toma igual.
+     Se libera al terminar, también por el camino de error.
+  2. **Se relee el estado justo antes de dropear** (entre el chequeo inicial y ese punto
+     puede pasar un rato: el backfill recorre la colección).
+  3. **Verificación final leyendo de la DB**, en vez de confiar en que `createIndex` no
+     tiró: el log ahora dice `✅ ACTIVO (verificado)` o `⛔ el índice NO quedó creado — EL
+     SISTEMA ESTÁ SIN CANDADO`. Antes podía decir "CREADO" y ser mentira.
+- **Ruido de arranque #1 — `ERR_ERL_UNKNOWN_VALIDATION` (corregido).** `generalLimiter`
+  pasaba `validate: { keyGeneratorIpFallback: false }`, opción que la versión instalada de
+  express-rate-limit **no conoce**: tiraba un ValidationError con stack completo en CADA
+  arranque (parecía un crash) y encima ignoraba la opción. Eliminada — la validación que
+  desactivaba sólo emite un aviso, no cambia comportamiento.
+- **Ruido de arranque #2 — aviso FALSO de `ALLOWED_ORIGINS` (corregido).** El chequeo estaba
+  en el cuerpo del módulo, que se evalúa **ANTES** del bootstrap que carga SSM: con la var
+  correctamente cargada en SSM, el warning de "CORS rechazará orígenes cruzados" saltaba
+  igual **siempre**. CORS en realidad funcionaba bien (lee la env lazy, por request). El
+  aviso se movió después de `loadSecretsFromSSM`. ⚠️ Es la MISMA familia de problema que
+  `PROXY_URL`/`PUBLIC_BASE_URL`: **cualquier lectura de `process.env` en el cuerpo del
+  módulo pasa antes de SSM.**
+- **Observaciones de los logs (no se tocaron):**
+  - La `MONGODB_URI` no trae nombre de base → Mongo usa **`test`** (se ve en
+    `Collection test.refundclaims`). Funciona y los datos reales están ahí, pero conviene
+    nombrarla explícitamente en la URI para que no sorprenda.
+  - `The deployment used the default Node.js version ... instead of the one in package.json`.
+  - Siguen los 2 avisos de índice duplicado de Mongoose (`clickedAt`, `nextRetryAt`):
+    cosméticos, es `index: true` + `schema.index()` sobre el mismo campo.
+  - El proxy anda y rota IP en cada arranque; JUGAYGANA loguea OK y las cargas funcionan.
+  - `refund_daily_restore: comandos actualizados: 0` — correcto: la migración de #97 ya
+    había dejado el texto nuevo (que ahora incluye DIARIO), así que no había qué reemplazar.
+
 ### 102. VUELVE EL REEMBOLSO DIARIO (en todo el repo) + modal "MI MES" + tarjetas de Telegram
 - **Pedido del owner:** (a) reimplantar el reembolso DIARIO que se había eliminado en #97,
   en TODO el repo y sin fallas; (b) que el recuadro USUARIO del dashboard sea clickeable y

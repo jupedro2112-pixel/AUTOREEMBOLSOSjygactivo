@@ -5235,7 +5235,6 @@ async function loadCBUConfig() {
     }
     
     // Cargar también la URL del Canal Informativo
-    loadCanalUrlConfig();
     // Cargar la config de la Comunidad (Telegram)
     loadCommunityConfig();
     // Cargar la config del banco automático (hgcash)
@@ -5738,49 +5737,11 @@ async function saveCBUConfig() {
     }
 }
 
-async function loadCanalUrlConfig() {
-    try {
-        const response = await fetch(`${API_URL}/api/admin/config`, {
-            headers: { 'Authorization': `Bearer ${currentToken}` }
-        });
-        if (response.ok) {
-            const data = await response.json();
-            const urlInput = document.getElementById('canalInformativoUrl');
-            if (urlInput) {
-                urlInput.value = data.canalInformativoUrl || '';
-            }
-        }
-    } catch (error) {
-        console.error('Error loading canal URL:', error);
-    }
-}
-
-async function saveCanalUrl() {
-    const urlInput = document.getElementById('canalInformativoUrl');
-    const url = urlInput ? urlInput.value.trim() : '';
-    
-    try {
-        const response = await fetch(`${API_URL}/api/admin/canal-url`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${currentToken}`
-            },
-            body: JSON.stringify({ url })
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok) {
-            showToast('URL del Canal Informativo guardada correctamente', 'success');
-        } else {
-            showToast(data.error || data.message || 'Error al guardar URL', 'error');
-        }
-    } catch (error) {
-        console.error('Error saving canal URL:', error);
-        showToast('Error al guardar URL', 'error');
-    }
-}
+// ELIMINADAS 2026-08-14: loadCanalUrlConfig() y saveCanalUrl(). El campo
+// "Canal Informativo" salió del panel — el canal ahora se configura por EQUIPO
+// (card "👥 Equipos") y el botón 📢 del cliente lo resuelve el backend con el
+// mismo criterio. Los endpoints /api/admin/config y /api/admin/canal-url siguen
+// existiendo en el server como fallback legacy. Rollback: git revert.
 
 async function loadCommunityConfig() {
     try {
@@ -5789,9 +5750,8 @@ async function loadCommunityConfig() {
         });
         if (response.ok) {
             const data = await response.json();
-            const channelInput = document.getElementById('communityChannelUrl');
+            // Solo el soporte: el canal se edita en la card de Equipos.
             const supportInput = document.getElementById('communitySupportUrl');
-            if (channelInput) channelInput.value = data.channelUrl || '';
             if (supportInput) supportInput.value = data.supportUrl || '';
         }
     } catch (error) {
@@ -5800,18 +5760,19 @@ async function loadCommunityConfig() {
 }
 
 async function saveCommunityConfig() {
-    const channelInput = document.getElementById('communityChannelUrl');
     const supportInput = document.getElementById('communitySupportUrl');
-    const channelUrl = channelInput ? channelInput.value.trim() : '';
     const supportUrl = supportInput ? supportInput.value.trim() : '';
     try {
+        // Se manda SOLO supportUrl: el canal ya no se edita acá (vive en Equipos).
+        // El backend conserva el channelUrl guardado cuando no viene en el body,
+        // así este guardado no le borra el valor legacy a nadie.
         const response = await fetch(`${API_URL}/api/admin/community`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({ channelUrl, supportUrl })
+            body: JSON.stringify({ supportUrl })
         });
         const data = await response.json();
         if (response.ok) {

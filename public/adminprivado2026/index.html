@@ -560,36 +560,27 @@
                                 <span class="icon icon-save"></span> Guardar CBU
                             </button>
                         </div>
-                        <!-- Canal Informativo URL -->
+                        <!-- SOPORTE de Telegram: uno solo para TODOS los equipos.
+                             Los CANALES ya no se cargan acá: viven en la card
+                             "👥 Equipos" (uno por equipo + el general), así hay un
+                             solo lugar para configurarlos. Antes había DOS campos
+                             de canal (Canal Informativo y Canal Oficial) que había
+                             que llenar con el mismo link. -->
                         <div class="panel-subheader" style="margin-top: 24px;">
-                            <h3>Canal Informativo</h3>
+                            <h3>💬 Soporte de Telegram (general)</h3>
                         </div>
                         <div class="cbu-form">
                             <div class="form-group">
-                                <label>URL del Canal:</label>
-                                <input type="url" id="canalInformativoUrl" placeholder="https://t.me/tu_canal" style="width:100%;">
-                                <small style="color:#aaa;font-size:11px;">Dejá vacío para ocultar el botón en el panel de usuario.</small>
-                            </div>
-                            <button class="btn-primary" onclick="saveCanalUrl()">
-                                <span class="icon icon-save"></span> Guardar URL Canal
-                            </button>
-                        </div>
-                        <!-- Comunidad / Canales de Telegram -->
-                        <div class="panel-subheader" style="margin-top: 24px;">
-                            <h3>Comunidad (Telegram)</h3>
-                        </div>
-                        <div class="cbu-form">
-                            <div class="form-group">
-                                <label>Canal Oficial Telegram:</label>
-                                <input type="url" id="communityChannelUrl" placeholder="https://t.me/tu_canal" style="width:100%;">
-                            </div>
-                            <div class="form-group">
-                                <label>Soporte VIP Telegram:</label>
+                                <label>Soporte Telegram:</label>
                                 <input type="url" id="communitySupportUrl" placeholder="https://t.me/tu_soporte" style="width:100%;">
-                                <small style="color:#aaa;font-size:11px;">Se muestran en la pantalla principal del usuario. Cada campo vacío = ese botón oculto.</small>
+                                <small style="color:#aaa;font-size:11px;">
+                                    Es el MISMO para todos los equipos. Se muestra como la tarjeta verde
+                                    "Soporte" en la pantalla del cliente. Vacío = esa tarjeta se oculta.<br>
+                                    Los canales de Telegram se cargan más abajo, en <b>👥 Equipos</b>.
+                                </small>
                             </div>
                             <button class="btn-primary" onclick="saveCommunityConfig()">
-                                <span class="icon icon-save"></span> Guardar Comunidad
+                                <span class="icon icon-save"></span> Guardar Soporte
                             </button>
                         </div>
                         <!-- Rangos de reembolso bronce/plata/oro (solo admin general).

@@ -352,9 +352,13 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `Config['communityConfig']` (`channelUrl`/`supportUrl`), editables en el panel →
   COMANDOS; cada tarjeta se muestra sólo si su URL está cargada. Las pinta
   `VIP.ui.loadCommunityLinks()` desde `initializeSession` (antes era un script inline
-  con polling de 25 s que se rendía si el login tardaba). ⚠️ NO confundir con
-  `Config['canalInformativoUrl']`, que es el botón 📢 de la barra superior: son dos
-  claves distintas y hay que cargar el link en las dos.
+  con polling de 25 s que se rendía si el login tardaba).
+  ⚠️ **El CANAL se configura en UN SOLO lugar**: la card "👥 Equipos" del panel
+  (uno por equipo + el general). El botón 📢 de la barra superior
+  (`GET /api/config/canal-url`) resuelve con el MISMO criterio desde 2026-08-14.
+  `Config['canalInformativoUrl']` y `communityConfig.channelUrl` quedaron como
+  fallback legacy y ya NO se editan desde el panel; el único campo que sigue ahí
+  es el **soporte**, que es general para todos los equipos.
 - **FCM**: todo el manejo real (getToken 3 tiers, refresh, register-token) está en el
   INLINE de index.html; `window.sendFcmTokenAfterLogin` del inline pisa a propósito la
   de notifications.js. Firebase config duplicada en index.html Y en el SW (cambiar

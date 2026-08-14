@@ -8,6 +8,31 @@
 
 ## Sesión 2026-08-14
 
+### 108. Un solo lugar para el canal de Telegram (había DOS campos para lo mismo)
+- **Detectado por el owner (con capturas):** en COMANDOS había **dos campos de canal de
+  Telegram** y no se entendía cuál mandaba. Eran dos claves distintas de Config apuntando
+  a dos elementos distintos de la app, que en la práctica había que llenar con el MISMO link:
+  - `canalInformativoUrl` → el botón 📢 de la barra superior del cliente.
+  - `communityConfig.channelUrl` → la tarjeta "Canal Exclusivo" del dashboard.
+  Con los equipos (#106) se sumó un tercero (`teams.general.telegram`).
+- **Unificado: el canal se configura SOLO en la card "👥 Equipos"** (uno por equipo + el
+  general). Los DOS elementos de la interfaz —el botón 📢 y la tarjeta— lo resuelven ahora
+  con el mismo criterio: canal del equipo → general de `teams` → `communityConfig.channelUrl`
+  → `canalInformativoUrl` (los dos últimos, sólo como fallback legacy para no romper lo ya
+  cargado). O sea: `GET /api/config/canal-url` pasó a resolver por equipo.
+- **El SOPORTE queda GENERAL** (reiterado por el owner): la sección de COMANDOS se renombró
+  a "💬 Soporte de Telegram (general)" y quedó con **un solo campo**, aclarando que es el
+  mismo para todos los equipos y que los canales se cargan en Equipos.
+- **Para no borrarle datos a nadie:** el panel ahora manda SOLO `supportUrl`, y
+  `POST /api/admin/community` **conserva** el `channelUrl` guardado cuando no viene en el
+  body (antes lo hubiera pisado con vacío).
+- **Código muerto eliminado** (verificado por grep, 0 referencias vivas): `loadCanalUrlConfig()`
+  y `saveCanalUrl()` del panel + su llamada. Los endpoints `/api/admin/config` y
+  `/api/admin/canal-url` **se conservan** en el server como fallback legacy.
+- **Validado:** `node --check` OK (server.js, admin.js); 565/565 divs, ids únicos, sin
+  referencias huérfanas a los campos borrados. Solo panel + backend → **no hace falta
+  bumpear `?v`** (el panel se sirve network-first).
+
 ### 107. El link de autologin salía con el dominio del PANEL, no con el público
 - **Reportado por el owner:** al crear un usuario, el link de acceso sale con un dominio
   distinto al de `PUBLIC_BASE_URL`.

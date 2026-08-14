@@ -5235,9 +5235,21 @@ app.get('/api/config/cbu', authMiddleware, async (req, res) => {
 });
 
 // Ruta GET para obtener URL del Canal Informativo (panel usuario)
+// Botón 📢 de la barra superior del cliente. Desde 2026-08-14 usa el MISMO
+// canal que la tarjeta "Canal Exclusivo": el del EQUIPO del usuario. Antes tenía
+// su propia clave (`canalInformativoUrl`) y había que cargar el mismo link en
+// dos lugares distintos del panel. Esa clave queda como último fallback para no
+// romper instalaciones que ya la tenían cargada.
 app.get('/api/config/canal-url', authMiddleware, async (req, res) => {
   try {
-    const url = await getConfig('canalInformativoUrl', '');
+    const teamsCfg = await getTeamsConfig();
+    const team = resolveTeamForUsername(req.user.username, teamsCfg);
+    const community = (await getConfig('communityConfig')) || {};
+    const url = (team && team.telegram)
+      || teamsCfg.general.telegram
+      || community.channelUrl || community.url
+      || (await getConfig('canalInformativoUrl', ''))
+      || '';
     res.json({ url: url || '' });
   } catch (error) {
     console.error('Error obteniendo canal URL:', error);
@@ -16164,7 +16176,14 @@ app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, re
       if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
       return u;
     }
-    const channelUrl = _normUrl(req.body && req.body.channelUrl);
+    // El CANAL ya no se edita desde acá (se configura por equipo en
+    // Config['teams']); `channelUrl` queda sólo como fallback legacy. Si el body
+    // no lo trae, se CONSERVA el guardado — así el panel, que ahora manda sólo
+    // el soporte, no se lo borra a nadie.
+    const prev = (await getConfig('communityConfig')) || {};
+    const channelUrl = (req.body && req.body.channelUrl !== undefined)
+      ? _normUrl(req.body.channelUrl)
+      : (prev.channelUrl || prev.url || '');
     const supportUrl = _normUrl(req.body && req.body.supportUrl);
     await setConfig('communityConfig', { channelUrl, supportUrl });
     logger.info(`[community] config guardada por ${(req.user && req.user.username) || '?'}`);

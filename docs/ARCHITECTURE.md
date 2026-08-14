@@ -334,7 +334,17 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   subir y una tarjeta por cada uno de los 3 reembolsos). El chip dorado "VER MI MES ›"
   está para que se note que se puede tocar. Los 3 botones de reembolso viven en
   `.dash-refunds-sticky` (FUERA de `#homePanel`, así ocultar el menú no los esconde).
-- **Tarjetas de Telegram** (`#communitySection`): las URLs salen de
+- **EQUIPOS por prefijo de usuario** (`Config['teams']`, panel→COMANDOS): el proyecto lo
+  operan varios equipos y cada cliente se asigna al suyo por el **INICIO de su username**
+  (`resolveTeamForUsername` en server.js; gana el prefijo MÁS LARGO, case-insensitive).
+  Se calcula al vuelo — NO hay campo en User. Cada equipo tiene su **Telegram** (el canal
+  que ve dentro de la app) y su **WhatsApp** (el del cartel de acceso en el login).
+  ⚠️ **El SOPORTE NO se divide por equipo**: `communityConfig.supportUrl` es único para
+  todos. `GET /api/config/team?username=` es **público** (lo usa el login sin sesión) y
+  sólo compara prefijos contra la config: no toca la base ni revela si el usuario existe.
+- **Tarjetas de Telegram** (`#communitySection`): el canal sale del equipo del usuario
+  (fallback: general de `teams` → `communityConfig.channelUrl`); el soporte, siempre de
+  `communityConfig.supportUrl`. Las URLs salen de
   `Config['communityConfig']` (`channelUrl`/`supportUrl`), editables en el panel →
   COMANDOS; cada tarjeta se muestra sólo si su URL está cargada. Las pinta
   `VIP.ui.loadCommunityLinks()` desde `initializeSession` (antes era un script inline

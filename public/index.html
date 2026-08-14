@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=53">
-    <link rel="stylesheet" href="/css/login.css?v=53">
-    <link rel="stylesheet" href="/css/header.css?v=53">
-    <link rel="stylesheet" href="/css/chat.css?v=53">
-    <link rel="stylesheet" href="/css/modals.css?v=53">
-    <link rel="stylesheet" href="/css/responsive.css?v=53">
+    <link rel="stylesheet" href="/css/base.css?v=54">
+    <link rel="stylesheet" href="/css/login.css?v=54">
+    <link rel="stylesheet" href="/css/header.css?v=54">
+    <link rel="stylesheet" href="/css/chat.css?v=54">
+    <link rel="stylesheet" href="/css/modals.css?v=54">
+    <link rel="stylesheet" href="/css/responsive.css?v=54">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -329,6 +329,33 @@
                 <span id="loginClaimsText" style="flex:1;min-width:0;font-size:11px;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .25s ease;">—</span>
             </div>
             
+            <!-- Cartel de acceso por WhatsApp. El número depende del EQUIPO, que
+                 se detecta por el inicio del usuario (lo resuelve
+                 GET /api/config/team, público). Si no matchea ningún equipo,
+                 devuelve el WhatsApp general. Se configura en el panel → COMANDOS. -->
+            <div id="teamAccessBanner" style="background:linear-gradient(135deg,rgba(37,211,102,0.14),rgba(212,175,55,0.10));border:1px solid rgba(37,211,102,0.45);border-radius:12px;padding:11px 12px;margin-bottom:10px;text-align:left;">
+                <p style="margin:0 0 6px;font-size:12.5px;font-weight:800;color:#25d366;line-height:1.35;">
+                    💬 ¿Necesitás tu acceso nuevo?
+                </p>
+                <p style="margin:0 0 8px;font-size:11px;color:#ccc;line-height:1.5;">
+                    Escribinos por WhatsApp y te damos tu usuario para <strong>cargar directo</strong> y pedir tus <strong>reembolsos</strong>.
+                </p>
+                <p style="margin:0 0 6px;font-size:10.5px;color:#aaa;line-height:1.4;">
+                    ¿No sabés a qué número escribir? Poné tu usuario:
+                </p>
+                <div style="display:flex;gap:6px;align-items:stretch;">
+                    <input type="text" id="teamLookupUser" placeholder="Tu usuario" autocomplete="off"
+                           style="flex:1;min-width:0;padding:8px 10px;border-radius:8px;border:1px solid rgba(212,175,55,0.4);background:rgba(0,0,0,0.35);color:#fff;font-size:12.5px;">
+                    <button type="button" id="teamLookupBtn"
+                            style="flex-shrink:0;padding:8px 14px;border-radius:8px;border:none;background:linear-gradient(135deg,#1a9c5b,#25d366);color:#fff;font-size:12px;font-weight:900;cursor:pointer;-webkit-tap-highlight-color:rgba(37,211,102,.3);touch-action:manipulation;">Buscar</button>
+                </div>
+                <div id="teamLookupMsg" style="display:none;font-size:11px;margin-top:7px;line-height:1.45;"></div>
+                <a id="teamWhatsappLink" href="#" target="_blank" rel="noopener"
+                   style="display:none;align-items:center;justify-content:center;gap:7px;margin-top:8px;padding:10px;border-radius:9px;background:#25d366;color:#0a2e18;font-size:13px;font-weight:900;text-decoration:none;">
+                    💬 <span id="teamWhatsappLabel">Escribir por WhatsApp</span>
+                </a>
+            </div>
+
             <form id="loginForm" autocomplete="on">
                 <div style="display:none;gap:0;margin-bottom:12px;border-radius:8px;overflow:hidden;border:1px solid rgba(212,175,55,0.3);">
                     <!-- Modos de login por celular/SMS ocultos: el acceso es solo
@@ -1901,25 +1928,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=53"></script>
-    <script src="/js/campaign.js?v=53"></script>
-    <script src="/js/meta-pixel.js?v=53"></script>
-    <script src="/js/auth.js?v=53"></script>
-    <script src="/js/socket.js?v=53"></script>
-    <script src="/js/chat.js?v=53"></script>
-    <script src="/js/refunds.js?v=53"></script>
-    <script src="/js/fire.js?v=53"></script>
-    <script src="/js/roulette.js?v=53"></script>
-    <script src="/js/reviews.js?v=53"></script>
-    <script src="/js/promobonus.js?v=53"></script>
-    <script src="/js/notifications.js?v=53"></script>
-    <script src="/js/ui.js?v=53"></script>
-    <script src="/js/withdraw.js?v=53"></script>
-    <script src="/js/installbonus.js?v=53"></script>
-    <script src="/js/notifsurvey.js?v=53"></script>
-    <script src="/js/publisherwelcome.js?v=53"></script>
-    <script src="/js/apptest.js?v=53"></script>
-    <script src="/js/app.js?v=53"></script>
+    <script src="/js/config.js?v=54"></script>
+    <script src="/js/campaign.js?v=54"></script>
+    <script src="/js/meta-pixel.js?v=54"></script>
+    <script src="/js/auth.js?v=54"></script>
+    <script src="/js/socket.js?v=54"></script>
+    <script src="/js/chat.js?v=54"></script>
+    <script src="/js/refunds.js?v=54"></script>
+    <script src="/js/fire.js?v=54"></script>
+    <script src="/js/roulette.js?v=54"></script>
+    <script src="/js/reviews.js?v=54"></script>
+    <script src="/js/promobonus.js?v=54"></script>
+    <script src="/js/notifications.js?v=54"></script>
+    <script src="/js/ui.js?v=54"></script>
+    <script src="/js/withdraw.js?v=54"></script>
+    <script src="/js/installbonus.js?v=54"></script>
+    <script src="/js/notifsurvey.js?v=54"></script>
+    <script src="/js/publisherwelcome.js?v=54"></script>
+    <script src="/js/apptest.js?v=54"></script>
+    <script src="/js/app.js?v=54"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA

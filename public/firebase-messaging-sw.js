@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v53'; // v53: reembolso DIARIO restaurado + modal MI MES + tarjetas Telegram (v52: teléfono opcional)
+const CACHE_VERSION = 'v54'; // v54: equipos por prefijo de usuario (cartel de acceso por WhatsApp)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

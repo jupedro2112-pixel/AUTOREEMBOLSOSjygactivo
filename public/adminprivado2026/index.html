@@ -631,6 +631,41 @@
                             </button>
                             <div id="refundTiersMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>
+
+                        <!-- EQUIPOS: se detectan por el INICIO del usuario (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="teamsHeader">
+                            <h3>👥 Equipos (por inicio del usuario)</h3>
+                        </div>
+                        <div class="cbu-form" id="teamsForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Cada equipo se detecta por cómo <b>empieza</b> el nombre de usuario.
+                                Ej: prefijo <b>mar</b> → los usuarios <i>marcos12</i>, <i>MarShall99</i>… son de ese equipo.
+                                Si dos prefijos se pisan, gana el <b>más largo</b> (<i>marte</i> le gana a <i>mar</i>).<br>
+                                El <b>Telegram</b> es el canal que ve ese equipo dentro de la app.
+                                El <b>WhatsApp</b> es el número del cartel de acceso en la pantalla de login.<br>
+                                <b>El Soporte NO se divide por equipo</b>: es uno solo para todos (se configura arriba, en Comunidad).
+                            </p>
+
+                            <div style="background:rgba(212,175,55,.08);border:1px solid rgba(212,175,55,.35);border-radius:8px;padding:10px;margin-bottom:12px;">
+                                <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#d4af37;">
+                                    General — se usa cuando el usuario no coincide con ningún equipo
+                                </p>
+                                <div class="form-group">
+                                    <label for="teamsGeneralTelegram">Telegram general</label>
+                                    <input type="text" id="teamsGeneralTelegram" placeholder="https://t.me/...">
+                                </div>
+                                <div class="form-group">
+                                    <label for="teamsGeneralWhatsapp">WhatsApp general</label>
+                                    <input type="text" id="teamsGeneralWhatsapp" placeholder="5491155551234">
+                                </div>
+                            </div>
+
+                            <div id="teamsList"></div>
+                            <button class="btn-secondary" onclick="addTeamRow()" style="margin-top:8px;">➕ Agregar equipo</button>
+                            <button class="btn-primary" onclick="saveTeams()" style="margin-top:8px;margin-left:8px;">💾 Guardar equipos</button>
+                            <div id="teamsMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
+                        </div>
+
                         <!-- Premios del Fueguito (solo admin general) -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="fireMilestonesHeader">
                             <h3>🔥 Premios del Fueguito</h3>

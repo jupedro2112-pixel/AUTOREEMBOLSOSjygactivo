@@ -15980,13 +15980,163 @@ app.post('/api/admin/bonus-strategy/activate', authMiddleware, adminMiddleware, 
 // ============================================================
 // COMUNIDAD — config del link de la comunidad / canal de Telegram.
 // ============================================================
+// ============================================
+// EQUIPOS (detección por el INICIO del username)
+// ============================================
+// El proyecto lo operan varios equipos. Cada uno tiene su grupo de Telegram y
+// su número de WhatsApp, y a cada cliente se lo asigna por el PREFIJO de su
+// usuario (ej: "marcosVIP" empieza con "mar" → equipo Marshall).
+//
+// ⚠️ El SOPORTE (tarjeta verde de la app) NO se divide por equipo: es único
+// para TODOS (decisión del owner 2026-08-14). Lo que cambia por equipo es el
+// canal de Telegram y el WhatsApp del cartel de login.
+//
+// Config['teams'] = {
+//   general: { telegram, whatsapp },              // cuando no matchea ninguno
+//   list: [ { prefix, name, telegram, whatsapp } ]
+// }
+async function getTeamsConfig() {
+  const raw = (await getConfig('teams')) || {};
+  const general = raw.general || {};
+  const list = Array.isArray(raw.list) ? raw.list : [];
+  return {
+    general: { telegram: general.telegram || '', whatsapp: general.whatsapp || '' },
+    list: list
+      .filter(t => t && t.prefix)
+      .map(t => ({
+        prefix: String(t.prefix).toLowerCase().trim(),
+        name: String(t.name || t.prefix).trim(),
+        telegram: String(t.telegram || '').trim(),
+        whatsapp: String(t.whatsapp || '').trim()
+      }))
+  };
+}
+
+// Devuelve el equipo del username, o null si no matchea ninguno.
+// Gana el prefijo MÁS LARGO: así "mar" y "marte" pueden convivir sin que el
+// corto le robe los usuarios al largo.
+function resolveTeamForUsername(username, cfg) {
+  const u = String(username || '').toLowerCase().trim();
+  if (!u || !cfg || !Array.isArray(cfg.list)) return null;
+  let best = null;
+  for (const t of cfg.list) {
+    if (t.prefix && u.startsWith(t.prefix)) {
+      if (!best || t.prefix.length > best.prefix.length) best = t;
+    }
+  }
+  return best;
+}
+
+// Número → link de wa.me con mensaje prellenado. Devuelve '' si no hay número.
+function buildWhatsappUrl(number, text) {
+  const digits = String(number || '').replace(/\D/g, '');
+  if (!digits) return '';
+  return `https://wa.me/${digits}${text ? '?text=' + encodeURIComponent(text) : ''}`;
+}
+
+// PÚBLICO (se usa en la pantalla de login, sin sesión). Dado un usuario,
+// devuelve a qué WhatsApp tiene que escribir.
+// No revela la lista de equipos ni si el usuario existe: sólo matchea prefijos,
+// así que no sirve para enumerar cuentas.
+app.get('/api/config/team', async (req, res) => {
+  try {
+    const username = String(req.query.username || '').trim().slice(0, 40);
+    const cfg = await getTeamsConfig();
+    const team = resolveTeamForUsername(username, cfg);
+
+    const number = (team && team.whatsapp) || cfg.general.whatsapp || '';
+    const texto = username
+      ? `Hola! Mi usuario es ${username}. Quiero mis datos de acceso para autoreembolsos.com`
+      : 'Hola! Quiero mis datos de acceso para autoreembolsos.com';
+
+    res.json({
+      matched: !!team,
+      teamName: team ? team.name : null,
+      whatsappUrl: buildWhatsappUrl(number, texto),
+      hasWhatsapp: !!number
+    });
+  } catch (error) {
+    logger.error(`/api/config/team: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ADMIN — leer/guardar los equipos.
+app.get('/api/admin/teams', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el administrador principal puede ver los equipos' });
+    }
+    res.json(await getTeamsConfig());
+  } catch (error) {
+    logger.error(`GET /api/admin/teams: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/teams', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Solo el administrador principal puede editar los equipos' });
+    }
+
+    const _url = (v) => {
+      let u = String(v || '').trim().slice(0, 300);
+      if (u && !/^https?:\/\//i.test(u)) u = 'https://' + u;
+      return u;
+    };
+
+    const body = req.body || {};
+    const general = {
+      telegram: _url(body.general && body.general.telegram),
+      whatsapp: String((body.general && body.general.whatsapp) || '').trim().slice(0, 30)
+    };
+
+    const vistos = new Set();
+    const list = [];
+    for (const t of (Array.isArray(body.list) ? body.list : [])) {
+      const prefix = String((t && t.prefix) || '').toLowerCase().trim();
+      // Mismo alfabeto que los usernames válidos, para que el prefijo pueda
+      // matchear de verdad.
+      if (!prefix || !/^[a-z0-9._-]{1,20}$/.test(prefix)) continue;
+      if (vistos.has(prefix)) continue;   // duplicado: gana el primero
+      vistos.add(prefix);
+      list.push({
+        prefix,
+        name: String((t && t.name) || prefix).trim().slice(0, 60),
+        telegram: _url(t && t.telegram),
+        whatsapp: String((t && t.whatsapp) || '').trim().slice(0, 30)
+      });
+    }
+
+    await setConfig('teams', { general, list });
+    logger.info(`[teams] ${req.user.username} guardó ${list.length} equipo(s)`);
+    res.json({ success: true, general, list });
+  } catch (error) {
+    logger.error(`POST /api/admin/teams: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 app.get('/api/config/community', authMiddleware, async (req, res) => {
   try {
     const c = (await getConfig('communityConfig')) || {};
-    // Fallback al esquema viejo {name,url} -> canal oficial.
+
+    // CANAL: es POR EQUIPO. Se resuelve por el prefijo del username; si el
+    // usuario no matchea ninguno, cae al general de `teams` y, si tampoco hay,
+    // al `communityConfig` de siempre (compatibilidad con la config previa).
+    const teamsCfg = await getTeamsConfig();
+    const team = resolveTeamForUsername(req.user.username, teamsCfg);
+    const channelUrl = (team && team.telegram)
+      || teamsCfg.general.telegram
+      || c.channelUrl || c.url || '';
+
     res.json({
-      channelUrl: c.channelUrl || c.url || '',
-      supportUrl: c.supportUrl || ''
+      channelUrl,
+      // SOPORTE: único para TODOS los equipos (decisión del owner). No se
+      // divide por prefijo a propósito.
+      supportUrl: c.supportUrl || '',
+      teamName: team ? team.name : null
     });
   } catch (err) {
     logger.error(`/api/config/community: ${err.message}`);

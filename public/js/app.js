@@ -133,6 +133,67 @@ function setupEventListeners() {
             }
         });
 
+        // ===== Login: a qué WhatsApp escribir según el EQUIPO del usuario =====
+        // El equipo sale del INICIO del username (ej: "mar..." → Marshall). Lo
+        // resuelve el server en GET /api/config/team; si no matchea ninguno,
+        // devuelve el WhatsApp general. El endpoint sólo compara prefijos, así
+        // que NO revela si la cuenta existe.
+        const teamLookupBtn = document.getElementById('teamLookupBtn');
+        const teamLookupUser = document.getElementById('teamLookupUser');
+        const teamLookupMsg = document.getElementById('teamLookupMsg');
+        const teamWhatsappLink = document.getElementById('teamWhatsappLink');
+        const teamWhatsappLabel = document.getElementById('teamWhatsappLabel');
+
+        async function _vipBuscarEquipo() {
+            if (!teamLookupMsg || !teamWhatsappLink) return;
+            // Si dejó vacío el campo del cartel, se usa el usuario que ya cargó
+            // en el formulario de login (no lo hacemos escribir dos veces).
+            const loginUserEl = document.getElementById('username');
+            const user = (teamLookupUser && teamLookupUser.value.trim())
+                || (loginUserEl && loginUserEl.value.trim())
+                || '';
+
+            teamLookupMsg.style.display = 'block';
+            teamLookupMsg.style.color = '#aaa';
+            teamLookupMsg.textContent = 'Buscando...';
+            teamWhatsappLink.style.display = 'none';
+
+            try {
+                const r = await fetch(VIP.config.API_URL + '/api/config/team?username=' + encodeURIComponent(user));
+                const d = r.ok ? await r.json() : null;
+
+                if (!d || !d.hasWhatsapp) {
+                    teamLookupMsg.style.color = '#ffaa44';
+                    teamLookupMsg.textContent = 'No hay un WhatsApp cargado todavía. Probá con los botones de soporte de arriba.';
+                    return;
+                }
+
+                if (d.matched) {
+                    teamLookupMsg.style.color = '#00ff88';
+                    teamLookupMsg.innerHTML = '✓ Tu equipo es <strong>' + _vipEsc(d.teamName) + '</strong>';
+                    if (teamWhatsappLabel) teamWhatsappLabel.textContent = 'Escribir a ' + d.teamName;
+                } else {
+                    teamLookupMsg.style.color = '#ccc';
+                    teamLookupMsg.textContent = user
+                        ? 'No encontramos un equipo para ese usuario. Te pasamos con el soporte general.'
+                        : 'Te pasamos con el soporte general.';
+                    if (teamWhatsappLabel) teamWhatsappLabel.textContent = 'Escribir por WhatsApp';
+                }
+
+                teamWhatsappLink.href = d.whatsappUrl;
+                teamWhatsappLink.style.display = 'flex';
+            } catch (e) {
+                teamLookupMsg.style.color = '#ff8888';
+                teamLookupMsg.textContent = 'No pudimos consultar ahora. Revisá tu conexión.';
+            }
+        }
+
+        if (teamLookupBtn) teamLookupBtn.addEventListener('click', _vipBuscarEquipo);
+        // Enter en el campo también busca (sin enviar el form de login).
+        if (teamLookupUser) teamLookupUser.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); _vipBuscarEquipo(); }
+        });
+
         // ===== Login: botones Reseñas / Regalos + ticker en vivo de reclamos =====
         const _vipEsc = (s) => {
             const d = document.createElement('div');

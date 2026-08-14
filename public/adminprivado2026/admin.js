@@ -5242,12 +5242,136 @@ async function loadCBUConfig() {
     loadHgcashConfig();
     // Cargar los rangos de reembolso (solo admin general)
     loadRefundTiers();
+    // Cargar los equipos por prefijo de usuario (solo admin general)
+    loadTeams();
     // Cargar los premios del fueguito (solo admin general)
     loadFireMilestones();
 }
 
 // ====== Rangos de reembolso bronce/plata/oro (solo admin general) ======
 // Reemplaza a los % fijos diario/semanal/mensual (2026-07-28).
+// ============================================
+// EQUIPOS (detección por el inicio del usuario)
+// ============================================
+// Cada equipo tiene prefijo + nombre + Telegram + WhatsApp. El SOPORTE no se
+// divide por equipo (es uno solo para todos, se configura en Comunidad).
+
+function _teamRowHtml(t) {
+    t = t || {};
+    const v = (x) => escapeHtml(String(x == null ? '' : x));
+    return `
+    <div class="team-row" style="border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:10px;margin-bottom:8px;background:rgba(0,0,0,.18);">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div class="form-group" style="flex:0 0 130px;margin:0;">
+                <label>Prefijo</label>
+                <input type="text" class="team-prefix" value="${v(t.prefix)}" placeholder="mar" maxlength="20">
+            </div>
+            <div class="form-group" style="flex:1;min-width:150px;margin:0;">
+                <label>Nombre del equipo</label>
+                <input type="text" class="team-name" value="${v(t.name)}" placeholder="Marshall" maxlength="60">
+            </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <div class="form-group" style="flex:1;min-width:180px;margin:0;">
+                <label>Telegram del equipo</label>
+                <input type="text" class="team-telegram" value="${v(t.telegram)}" placeholder="https://t.me/...">
+            </div>
+            <div class="form-group" style="flex:1;min-width:150px;margin:0;">
+                <label>WhatsApp del equipo</label>
+                <input type="text" class="team-whatsapp" value="${v(t.whatsapp)}" placeholder="5491155551234">
+            </div>
+        </div>
+        <button class="btn-danger" style="margin-top:8px;background:#dc3545;color:#fff;"
+                onclick="this.closest('.team-row').remove()">🗑️ Quitar</button>
+    </div>`;
+}
+
+function addTeamRow(t) {
+    const cont = document.getElementById('teamsList');
+    if (!cont) return;
+    cont.insertAdjacentHTML('beforeend', _teamRowHtml(t));
+}
+
+async function loadTeams() {
+    const form = document.getElementById('teamsForm');
+    const header = document.getElementById('teamsHeader');
+    try {
+        const r = await authFetch('/api/admin/teams');
+        if (!r.ok) {
+            // Sólo admin general: si no, se oculta la card entera.
+            if (form) form.style.display = 'none';
+            if (header) header.style.display = 'none';
+            return;
+        }
+        if (form) form.style.display = '';
+        if (header) header.style.display = '';
+        const j = await r.json();
+        const g = j.general || {};
+        const gt = document.getElementById('teamsGeneralTelegram');
+        const gw = document.getElementById('teamsGeneralWhatsapp');
+        if (gt) gt.value = g.telegram || '';
+        if (gw) gw.value = g.whatsapp || '';
+        const cont = document.getElementById('teamsList');
+        if (cont) {
+            cont.innerHTML = '';
+            (j.list || []).forEach(t => addTeamRow(t));
+        }
+    } catch (e) {
+        console.error('Error cargando equipos:', e);
+    }
+}
+
+async function saveTeams() {
+    const msg = document.getElementById('teamsMsg');
+    const val = (row, cls) => {
+        const el = row.querySelector('.' + cls);
+        return el ? el.value.trim() : '';
+    };
+
+    const list = [];
+    const vistos = new Set();
+    let invalidos = 0;
+    document.querySelectorAll('#teamsList .team-row').forEach(row => {
+        const prefix = val(row, 'team-prefix').toLowerCase();
+        if (!prefix) return;                       // fila vacía: se ignora
+        // Mismo alfabeto que los usernames, o el prefijo nunca matchearía.
+        if (!/^[a-z0-9._-]{1,20}$/.test(prefix)) { invalidos++; return; }
+        if (vistos.has(prefix)) { invalidos++; return; }
+        vistos.add(prefix);
+        list.push({
+            prefix,
+            name: val(row, 'team-name') || prefix,
+            telegram: val(row, 'team-telegram'),
+            whatsapp: val(row, 'team-whatsapp')
+        });
+    });
+
+    const general = {
+        telegram: (document.getElementById('teamsGeneralTelegram') || {}).value || '',
+        whatsapp: (document.getElementById('teamsGeneralWhatsapp') || {}).value || ''
+    };
+
+    try {
+        const r = await authFetch('/api/admin/teams', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ general, list })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error al guardar');
+        if (msg) {
+            msg.style.color = '#28a745';
+            msg.textContent = `✅ Guardado: ${j.list.length} equipo(s)` +
+                (invalidos ? ` — ⚠️ ${invalidos} fila(s) ignorada(s) por prefijo inválido o repetido` : '');
+        }
+        showToast('Equipos guardados', 'success');
+        loadTeams();
+    } catch (e) {
+        if (msg) { msg.style.color = '#dc3545'; msg.textContent = '❌ ' + e.message; }
+        showToast(e.message || 'Error al guardar equipos', 'error');
+    }
+}
+
 async function loadRefundTiers() {
     const form = document.getElementById('refundTiersForm');
     const header = document.getElementById('refundTiersHeader');

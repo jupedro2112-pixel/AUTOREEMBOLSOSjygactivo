@@ -8,6 +8,50 @@
 
 ## Sesión 2026-08-14
 
+### 106. EQUIPOS por prefijo de usuario: Telegram propio + cartel de acceso por WhatsApp
+- **Pedido del owner:** el proyecto lo operan **varios equipos**; cada uno tiene su grupo de
+  Telegram y su número de WhatsApp. Se detecta a qué equipo pertenece cada cliente por el
+  **INICIO de su usuario** (ej: prefijo `mar` → equipo Marshall). En la pantalla de login va
+  un cartel diciendo que escriban al WhatsApp para pedir su acceso nuevo; si no saben a qué
+  número, ponen su usuario y les aparece el botón del WhatsApp de SU equipo. Si no matchea
+  ningún equipo → WhatsApp **general**.
+- **DECISIÓN DEL OWNER (aclarada expresamente):** el **SOPORTE es lo ÚNICO general** —
+  un solo soporte para TODOS los equipos. Lo que se divide por equipo es el **canal de
+  Telegram** y el **WhatsApp del cartel de login**.
+- **Modelo:** `Config['teams']` =
+  `{ general: {telegram, whatsapp}, list: [{prefix, name, telegram, whatsapp}] }`.
+  El equipo se calcula **al vuelo** desde el username; NO se guarda un campo en User, así
+  que cambiar un prefijo se refleja al instante y no deja datos viejos.
+- **Matcheo:** case-insensitive y **gana el prefijo MÁS LARGO** — así `mar` (Marshall) y
+  `marte` (Marte) conviven sin que el corto le robe los usuarios al largo. Probado con
+  `marcosVIP`, `MarShallPedro`, `marteLuis`, `MARTE99`, `mar`, `ma`.
+- **Backend (server.js):** `getTeamsConfig()`, `resolveTeamForUsername()`,
+  `buildWhatsappUrl()`; `GET /api/config/team?username=` (**PÚBLICO**, para el login) y
+  `GET/POST /api/admin/teams` (solo admin general).
+  🔒 El endpoint público **sólo compara prefijos contra la config**: no consulta la base ni
+  revela si la cuenta existe, así que **no sirve para enumerar usuarios**. Devuelve el link
+  de `wa.me` con el mensaje prellenado ("Hola! Mi usuario es X. Quiero mis datos de acceso
+  para autoreembolsos.com"). Ya está cubierto por el `generalLimiter` de `/api/`.
+- **`GET /api/config/community` ahora resuelve el canal por equipo:** Telegram del equipo →
+  general de `teams` → `communityConfig.channelUrl` (compatibilidad con la config previa).
+  **`supportUrl` NO se toca**: sigue siendo único para todos.
+- **Front (login):** cartel `#teamAccessBanner` con input de usuario y botón. Si el campo
+  está vacío usa el usuario que ya escribió en el formulario de login (no lo hace tipear dos
+  veces). Enter también busca, sin enviar el form. Muestra el nombre del equipo detectado o
+  avisa que va al soporte general.
+- **Panel → COMANDOS:** card "👥 Equipos (por inicio del usuario)" con el bloque General y
+  filas agregables/borrables (prefijo, nombre, Telegram, WhatsApp). Valida el prefijo contra
+  el mismo alfabeto que los usernames (`[a-z0-9._-]{1,20}`) e ignora repetidos, avisando
+  cuántas filas descartó. Solo admin general (si no, la card se oculta sola).
+- **Validado:** `node --check` OK (server.js, app.js, admin.js); ids únicos y divs
+  balanceados en los dos HTML (380/380 y 569/569); resolvedor probado con casos de solape.
+  **`?v=54` + `CACHE_VERSION='v54'`.** Back necesita redeploy.
+  **PROBAR tras deploy:** cargar 2 equipos con prefijos que se pisen (`mar` y `marte`) +
+  el general; en el login poner un usuario de cada uno y verificar que el botón lleva al
+  WhatsApp correcto; con un usuario que no matchee, que caiga al general; y entrar con una
+  cuenta de equipo y ver que la tarjeta "Canal Exclusivo" muestra SU Telegram mientras que
+  "Soporte" sigue siendo el mismo para todos.
+
 ### 105. Zona horaria del reembolso SEMANAL y MENSUAL (misma familia que #102)
 - **Contexto:** en #102 se corrigió el diario, que evaluaba "qué día es hoy" con el reloj
   del PROCESO. El semanal y el mensual tenían el mismo bug (`getDay()`, `getDate()`,

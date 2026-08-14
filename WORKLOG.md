@@ -106,13 +106,31 @@
     backend viejo sin `s.daily`), ids únicos y modal bien anidado, y compatibilidad en las
     dos direcciones con clientes cacheados (JS viejo + back nuevo, y JS nuevo + back viejo
     durante el rolling deploy).
-- **⚠️ PARA VERIFICAR A MANO EN ATLAS (no se puede desde el código):** toda la garantía
-  anti-doble-cobro descansa en el índice único `{userId:1, type:1, periodKey:1}` de
-  `refundclaims`. En un índice compuesto sparse, Mongo igual indexa el doc si **algún**
-  campo existe (y `userId` siempre existe), así que si quedaron 2+ claims `daily` viejos con
-  `periodKey` null, **la construcción del índice falló en silencio** y no hay protección.
-  El diario pasa a ser el reclamo más frecuente: correr `db.refundclaims.getIndexes()` y
-  confirmar que está `userId_1_type_1_periodKey_1` ANTES de deployar.
+- 🔴 **ÍNDICE ANTI-DOBLE-COBRO: estaba MAL DECLARADO — corregido y ahora se auto-repara.**
+  Toda la garantía de que un reembolso no se paga dos veces descansa en el índice único
+  `{userId, type, periodKey}` de `refundclaims` (el RefundClaim se crea ANTES de acreditar;
+  el E11000 aborta el pago — #96). Estaba declarado con **`sparse`**, y en un índice
+  **COMPUESTO** `sparse` sólo excluye el doc si le faltan TODOS los campos: como `userId`
+  siempre existe, los claims viejos con `periodKey` null quedaban indexados como null y, con
+  dos o más, **la creación del índice fallaba EN SILENCIO** → el sistema podía estar
+  corriendo sin ningún candado. (El header de `scripts/migrate-refund-periodkey.js` ya
+  documentaba esto desde hacía meses, pero el modelo nunca se corrigió y el script era
+  manual: probablemente nunca se corrió.)
+  - **Modelo corregido:** `partialFilterExpression: { periodKey: { $type: 'string' } }` en
+    lugar de `sparse` (`src/models/RefundClaim.js`).
+  - **Rutina de arranque nueva (`[refund-index]` en server.js), en CADA boot:** si el índice
+    ya está bien, es sólo una lectura de metadatos (barato, no toca la colección). Si no:
+    (1) rellena los `periodKey` faltantes, (2) busca duplicados reales, (3) borra el índice
+    viejo y crea el correcto. Si encuentra **duplicados** (= alguien cobró dos veces el mismo
+    período en el pasado) **NO borra nada** —son registros de plata— y loguea en ERROR la
+    lista con un aviso de que el sistema está sin candado, para que el owner los resuelva.
+    Nunca tumba el arranque.
+  - **Bug del backfill corregido:** el script viejo derivaba el `periodKey` de la fecha del
+    RECLAMO, pero el período reembolsado es otro (el diario paga AYER, el semanal la semana
+    PASADA, el mensual el mes PASADO) → generaba claves corridas que no coinciden con las del
+    código vivo. La rutina nueva prioriza el campo `period` que guarda el propio claim y sólo
+    cae a derivar de `claimedAt` restando un período. Verificado con casos borde (día 1,
+    cambio de año, lunes vs martes). El script quedó marcado como OBSOLETO — no correrlo.
 - **⚠️ Consecuencia del solape que el owner aceptó, con el número concreto:** un cliente que
   reclama los tres cobra ~**3× el % de su rango** sobre la misma pérdida → en 🥇 Oro son
   **30% de cashback**. Roza el "tope 30% en TODO lo automático" documentado en CLAUDE.md.

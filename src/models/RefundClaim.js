@@ -91,8 +91,22 @@ refundClaimSchema.index({ userId: 1, type: 1 });
 refundClaimSchema.index({ userId: 1, claimedAt: -1 });
 refundClaimSchema.index({ claimedAt: -1 });
 refundClaimSchema.index({ type: 1, claimedAt: -1 });
-// Índice único por período para prevenir doble reclamo (sparse permite valores null para registros históricos)
-refundClaimSchema.index({ userId: 1, type: 1, periodKey: 1 }, { unique: true, sparse: true });
+// Índice ÚNICO por período: es el candado REAL contra el doble cobro (ver #96 —
+// se crea el RefundClaim ANTES de acreditar y el E11000 aborta el pago).
+//
+// ⚠️ Va con `partialFilterExpression`, NO con `sparse`. En un índice COMPUESTO,
+// `sparse` sólo excluye el documento si le faltan TODOS los campos: como `userId`
+// siempre está, los claims viejos con `periodKey` null quedaban indexados como
+// null y, con dos o más, la construcción del índice fallaba EN SILENCIO → la app
+// arrancaba sin ninguna protección contra doble cobro.
+// Con el filtro parcial sólo entran los docs que tienen periodKey string, que son
+// exactamente los que hay que proteger.
+// El arranque de server.js repara el índice viejo si lo encuentra (busca
+// "índice único de RefundClaim").
+refundClaimSchema.index(
+  { userId: 1, type: 1, periodKey: 1 },
+  { unique: true, partialFilterExpression: { periodKey: { $type: 'string' } } }
+);
 
 // Método estático para verificar si puede reclamar
 refundClaimSchema.statics.canClaim = async function(userId, type) {

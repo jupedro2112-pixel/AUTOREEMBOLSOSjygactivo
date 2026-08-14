@@ -1,4 +1,21 @@
 // =============================================================================
+// ⚠️ OBSOLETO — NO LO CORRAS (2026-08-14)
+// =============================================================================
+// Esto ahora lo hace SOLO el arranque de server.js (buscar "[refund-index]"):
+// verifica el índice en cada boot, rellena los periodKey que falten, detecta
+// duplicados y recrea el índice con partialFilterExpression. No hay que ejecutar
+// nada a mano.
+//
+// Además este script deriva el periodKey MAL: usa la fecha del RECLAMO en vez de
+// la del PERÍODO REEMBOLSADO (el diario paga AYER, el semanal la semana PASADA y
+// el mensual el mes PASADO), así que genera claves corridas que no coinciden con
+// las que produce el código vivo. La rutina de server.js sí lo deriva bien
+// (prioriza el campo `period` del propio claim).
+//
+// Se conserva sólo como referencia histórica.
+// =============================================================================
+
+// =============================================================================
 // MIGRACIÓN: activar el índice único de RefundClaim (anti doble cobro)
 // =============================================================================
 // Qué hace este script (una sola vez, ejecución manual):

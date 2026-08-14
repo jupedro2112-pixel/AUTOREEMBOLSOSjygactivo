@@ -8826,6 +8826,112 @@ async function initializeData() {
     logger.error(`[startup-migration] refund_daily_restore (reintenta al próximo arranque): ${e.message}`);
   }
 
+  // ── Índice único de RefundClaim: el candado anti-doble-cobro ──────────────
+  // Toda la garantía de que un reembolso no se paga dos veces descansa en este
+  // índice (el RefundClaim se crea ANTES de acreditar; el E11000 aborta el pago).
+  // Históricamente estaba declarado con `sparse`, que en un índice COMPUESTO no
+  // excluye los docs con periodKey null (porque userId siempre existe): con dos o
+  // más claims viejos sin periodKey, la creación fallaba EN SILENCIO y la app
+  // quedaba SIN protección. Esto corre en CADA arranque, pero si el índice ya está
+  // bien es sólo una lectura de metadatos (barato) y no toca la colección.
+  try {
+    const _rcColl = RefundClaim.collection;
+    const IDX_NAME = 'userId_1_type_1_periodKey_1';
+    const _idxs = await _rcColl.indexes();
+    const _idx = _idxs.find(i => i.name === IDX_NAME);
+    const _ok = _idx && _idx.unique === true && !!_idx.partialFilterExpression;
+
+    if (_ok) {
+      logger.info('[refund-index] OK — el índice único anti-doble-cobro está activo');
+    } else {
+      logger.warn(`[refund-index] el índice ${IDX_NAME} ${_idx ? 'existe pero con opciones viejas (sparse)' : 'NO existe'} — reparando...`);
+
+      // 1) Backfill de periodKey en claims viejos. Sin esto quedan nulls que
+      //    impiden crear el índice.
+      //    ⚠️ El periodKey identifica el PERÍODO REEMBOLSADO, no el día del
+      //    reclamo (el diario paga AYER, el semanal la semana PASADA y el mensual
+      //    el mes PASADO). Derivarlo de `claimedAt` a secas —como hacía
+      //    scripts/migrate-refund-periodkey.js— generaba claves corridas que NO
+      //    coinciden con las que produce el código vivo.
+      //    Fuente preferida: el campo `period` que el propio claim guardó
+      //    ('YYYY-MM-DD' en diario, 'YYYY-MM-DD a YYYY-MM-DD' en semanal/mensual).
+      //    Si falta, se deriva de claimedAt restando un período.
+      const _ymdArt = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+      const _mondayOf = (ymd) => {
+        const [yy, mm, dd] = ymd.split('-').map(Number);
+        const b = new Date(Date.UTC(yy, mm - 1, dd));
+        const dow = b.getUTCDay();                      // 0=domingo
+        b.setUTCDate(b.getUTCDate() + (dow === 0 ? -6 : 1 - dow));
+        return b.toISOString().slice(0, 10);
+      };
+      const _shiftDays = (ymd, n) => {
+        const [yy, mm, dd] = ymd.split('-').map(Number);
+        const b = new Date(Date.UTC(yy, mm - 1, dd));
+        b.setUTCDate(b.getUTCDate() + n);
+        return b.toISOString().slice(0, 10);
+      };
+
+      let _filled = 0;
+      const _cursor = RefundClaim.find({
+        $or: [{ periodKey: { $exists: false } }, { periodKey: null }, { periodKey: '' }]
+      }).cursor();
+      for await (const doc of _cursor) {
+        // Primer intento: el inicio del período guardado en `period`.
+        const _periodStart = (String(doc.period || '').match(/^(\d{4}-\d{2}-\d{2})/) || [])[1] || null;
+        const _claimYmd = _ymdArt(doc.claimedAt || doc.createdAt || new Date());
+
+        let pk = null;
+        if (doc.type === 'daily') {
+          // period del diario ES el día reembolsado; si falta, ayer del reclamo.
+          pk = 'daily:' + (_periodStart || _shiftDays(_claimYmd, -1));
+        } else if (doc.type === 'weekly') {
+          // period arranca el LUNES de la semana reembolsada; si falta, el lunes
+          // de la semana ANTERIOR a la del reclamo.
+          pk = 'weekly:' + (_periodStart || _mondayOf(_shiftDays(_claimYmd, -7)));
+        } else if (doc.type === 'monthly') {
+          // period arranca el día 1 del mes reembolsado; si falta, el mes anterior.
+          pk = 'monthly:' + (_periodStart ? _periodStart.slice(0, 7) : _shiftDays(_claimYmd.slice(0, 8) + '01', -1).slice(0, 7));
+        }
+        if (!pk) continue;
+        await RefundClaim.updateOne({ _id: doc._id }, { $set: { periodKey: pk } });
+        _filled++;
+      }
+      if (_filled) logger.info(`[refund-index] periodKey rellenado en ${_filled} claim(s) histórico(s)`);
+
+      // 2) ¿Hay duplicados REALES que impidan el índice único? (= alguien cobró dos
+      //    veces el mismo período en el pasado). NO se borra nada automáticamente:
+      //    son registros de plata, los revisa el owner.
+      const _dups = await RefundClaim.aggregate([
+        { $match: { periodKey: { $type: 'string' } } },
+        { $group: { _id: { userId: '$userId', type: '$type', periodKey: '$periodKey' }, n: { $sum: 1 }, ids: { $push: '$id' } } },
+        { $match: { n: { $gt: 1 } } },
+        { $limit: 20 }
+      ]);
+
+      if (_dups.length) {
+        logger.error(`[refund-index] ⛔ NO se puede crear el índice único: hay ${_dups.length}+ período(s) con reclamos DUPLICADOS (doble cobro histórico). Revisar y resolver a mano:`);
+        for (const d of _dups) {
+          logger.error(`[refund-index]    ${d._id.userId} ${d._id.type} ${d._id.periodKey} → ${d.n} claims (${(d.ids || []).join(', ')})`);
+        }
+        logger.error('[refund-index] ⚠️ MIENTRAS TANTO EL SISTEMA CORRE SIN CANDADO ANTI-DOBLE-COBRO.');
+      } else {
+        // 3) Recrear el índice con las opciones correctas.
+        if (_idx) {
+          await _rcColl.dropIndex(IDX_NAME);
+          logger.info('[refund-index] índice viejo (sparse) eliminado');
+        }
+        await _rcColl.createIndex(
+          { userId: 1, type: 1, periodKey: 1 },
+          { unique: true, partialFilterExpression: { periodKey: { $type: 'string' } }, name: IDX_NAME }
+        );
+        logger.info('[refund-index] ✅ índice único anti-doble-cobro CREADO');
+      }
+    }
+  } catch (e) {
+    // Nunca tumba el arranque: se reintenta en el próximo boot.
+    logger.error(`[refund-index] no se pudo verificar/crear el índice único (se reintenta al próximo arranque): ${e.message}`);
+  }
+
   // Backfill de usernameLower (camino rápido del login case-insensitive). Corre en
   // CADA arranque (idempotente; cuando no hay nada que rellenar es un no-op barato)
   // porque también repara usuarios creados por instancias con código viejo durante

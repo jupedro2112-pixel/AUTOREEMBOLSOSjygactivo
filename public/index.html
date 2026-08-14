@@ -584,13 +584,16 @@
                     font-size:9px; font-weight:900; color:#fff; text-align:center;
                     line-height:1.15; max-width:74px;
                 }
-                /* Reembolsos SIEMPRE visibles: viven FUERA de #homePanel (como el
-                   botón RETIRAR), así ocultar el menú no los esconde — es lo que
-                   más se usa y más retiene. Marco dorado propio (antes lo aportaba
-                   .dash-top). */
-                /* width:100% es OBLIGATORIO: .chat-section es flex column y un flex
-                   item con margin horizontal auto NO se estira (quedaría una pastilla
-                   angosta a fit-content). Con width + max-width + auto, centra bien. */
+                /* Reembolsos: viven DENTRO de #homePanel, así se ocultan junto con
+                   el menú (owner 2026-08-14). Entre el 2026-07-28 y esa fecha
+                   estuvieron afuera para quedar siempre visibles — si se vuelven a
+                   sacar, mirar la nota de width de acá abajo. Marco dorado propio
+                   (antes lo aportaba .dash-top). */
+                /* width:100% se conserva aunque hoy el padre (#homePanel) sea un
+                   bloque: si este recuadro vuelve a colgar de .chat-section (flex
+                   column), un flex item con margin horizontal auto NO se estira y
+                   queda una pastilla angosta a fit-content. Con width + max-width
+                   + auto centra bien en los dos contextos. */
                 .dash-refunds-sticky { width:100%; box-sizing:border-box; max-width:680px; margin:10px auto 0; padding:0 8px; }
                 .dash-refunds-frame {
                     background:linear-gradient(135deg,#d4af37 0%,#ffd700 50%,#d4af37 100%);
@@ -672,8 +675,12 @@
                 }
                 #homePanelToggle .hpt-chevron { font-size:9px; }
             </style>
-            <!-- Reembolsos SIEMPRE visibles: FUERA de #homePanel (como RETIRAR MI
-                 PREMIO), así al ocultar el menú este recuadro queda a la vista. -->
+
+            <!-- Panel del home (colapsable con #homePanelToggle). -->
+            <div id="homePanel">
+            <!-- Reembolsos DENTRO de #homePanel: al ocultar el menú se ocultan
+                 también (pedido del owner 2026-08-14; revierte la decisión de #98,
+                 que los sacaba fuera para dejarlos siempre a la vista). -->
             <div class="dash-refunds-sticky">
                 <div class="dash-refunds-frame">
                     <div class="dash-refunds">
@@ -710,8 +717,6 @@
                 </div>
             </div>
 
-            <!-- Panel del home (colapsable con #homePanelToggle). -->
-            <div id="homePanel">
             <div class="home-dash">
                 <div class="dash-top">
                     <!-- Ruleta diaria: render dinámico desde js/roulette.js -->

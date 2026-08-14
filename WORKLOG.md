@@ -8,6 +8,26 @@
 
 ## Sesión 2026-08-14
 
+### 104. Los reembolsos vuelven a ocultarse con el menú (revierte #98)
+- **Pedido del owner:** al ocultar el menú, el recuadro de reembolsos (diario/semanal/
+  mensual) también tiene que desaparecer. En #98 se había hecho lo CONTRARIO —sacarlos
+  fuera de `#homePanel` para que quedaran siempre visibles porque "es lo que más se usa y
+  más retiene"— así que esto revierte esa decisión.
+- **Cambio:** el bloque `.dash-refunds-sticky` se movió DENTRO de `#homePanel`, como su
+  primer hijo. Con el panel abierto el orden visual queda igual que antes; al colapsar,
+  se va con el resto. El botón **RETIRAR MI PREMIO sigue afuera** (siempre visible).
+- **No hizo falta tocar JS:** el toggle calcula la altura con `scrollHeight` en cada
+  click y usa `max-height:none` al expandir, así que agregar contenido al panel no
+  requiere ajustes. Los selectores de reembolsos son todos `getElementById` planos, sin
+  dependencia de la jerarquía → **JS viejo + HTML nuevo no rompe** (por eso NO se bumpeó
+  `?v`/CACHE_VERSION: sólo cambió el HTML y un par de comentarios, regla de #97).
+- Se corrigieron los comentarios de CSS y de `app.js` que afirmaban lo contrario, y se
+  dejó anotado en el CSS por qué `.dash-refunds-sticky` conserva `width:100%` (si algún
+  día vuelve a colgar de `.chat-section`, que es flex column, sin eso queda una pastilla
+  angosta — la trampa que documentó #98).
+- **Validado:** `node --check` OK (app.js), 377/377 divs, ids únicos, y verificado por
+  índice que el bloque quedó entre `#homePanel` y `.home-dash`.
+
 ### 103. Post-deploy: carrera del índice entre instancias + 2 ruidos de arranque que mentían
 - **Contexto:** primer deploy del código a EB con los logs de las DOS instancias a la vista.
   Confirmado en producción lo que decía #102: `[refund-index] el índice ... existe pero con

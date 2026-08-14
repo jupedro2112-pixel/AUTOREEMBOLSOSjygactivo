@@ -252,9 +252,12 @@ function setupEventListeners() {
             if (body) body.innerHTML = h;
         });
 
-        // Panel del home colapsable: "subir" el menú (ruleta, usuario, saldo,
-        // banners) para agrandar el chat, y bajarlo para ver todo. REEMBOLSOS y
-        // RETIRAR viven FUERA de #homePanel: quedan visibles con el menú oculto.
+        // Panel del home colapsable: "subir" el menú (reembolsos, ruleta, usuario,
+        // saldo, banners) para agrandar el chat, y bajarlo para ver todo.
+        // Los REEMBOLSOS viven DENTRO de #homePanel → se ocultan con el menú
+        // (owner 2026-08-14). El botón RETIRAR sigue FUERA: queda siempre visible.
+        // La altura sale de scrollHeight en cada toggle, así que agregar o sacar
+        // contenido del panel no requiere tocar nada acá.
         const homePanel = document.getElementById('homePanel');
         const homePanelToggle = document.getElementById('homePanelToggle');
         if (homePanel && homePanelToggle) {

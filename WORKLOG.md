@@ -8,6 +8,32 @@
 
 ## Sesión 2026-08-14
 
+### 105. Zona horaria del reembolso SEMANAL y MENSUAL (misma familia que #102)
+- **Contexto:** en #102 se corrigió el diario, que evaluaba "qué día es hoy" con el reloj
+  del PROCESO. El semanal y el mensual tenían el mismo bug (`getDay()`, `getDate()`,
+  `setHours()`), documentado ahí como preexistente. El owner pidió arreglarlos.
+- **El bug:** en EB el server corre en **UTC** y Argentina es **UTC−3**, así que el día del
+  server arranca a las **21:00 ART**. Las ventanas reales eran:
+  - Semanal: **domingo 21:00 → martes 20:59** (en vez de lunes y martes completos).
+  - Mensual: desde **el día 6 a las 21:00**, y **se cerraba el último día del mes a las
+    21:00**.
+  - Los dos bordes malos, verificados forzando `TZ=UTC`:
+    · **Martes 22:30 ART** (último día válido) → el sistema decía "no disponible" y el
+      usuario **perdía la semana**.
+    · **Día 31 a las 22:00 ART** → "no disponible", justo antes de que el período rote.
+    · Y al revés, dejaba reclamar el **domingo a las 22:00** y el **día 6 a las 22:00**.
+- **Fix:** helpers de fecha argentina en `models/refunds.js` (`_artParts`, `_artMidnight`,
+  `_addDays`) y las dos funciones reescritas para decidir por el **día ARGENTINO**.
+  `nextClaim` también pasa a ser medianoche ART real (antes devolvía las 21:00).
+- **Además, mismo criterio que el diario:** `canClaimWeeklyRefund(userId, periodDateStr)` y
+  `canClaimMonthlyRefund(userId, periodMonthStr)` ahora consultan el **periodKey EXACTO**
+  del período que se va a reembolsar, así la puerta de UX coincide 1:1 con el candado del
+  índice único. Se conserva un fallback (rango de fechas ART) por si alguien los llama sin
+  período. Los 3 claims y el status resuelven el período ANTES de chequear la ventana.
+- **Validado:** `node --check` OK; lógica probada con `TZ=UTC` (el escenario real de EB)
+  contra los 4 bordes de arriba + cambio de año en el "próximo día 7" (dic → ene 2027).
+  Sin cambios de front → **no hace falta bumpear `?v`/CACHE_VERSION**. Back necesita redeploy.
+
 ### 104. Los reembolsos vuelven a ocultarse con el menú (revierte #98)
 - **Pedido del owner:** al ocultar el menú, el recuadro de reembolsos (diario/semanal/
   mensual) también tiene que desaparecer. En #98 se había hecho lo CONTRARIO —sacarlos

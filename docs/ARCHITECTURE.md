@@ -267,8 +267,14 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - **Reembolsos** (rangos desde 2026-07-28 #97; el DIARIO volvió el 2026-08-14 #102):
   **DIARIO, semanal y mensual**, los tres con el MISMO % de rango.
   `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis, ventanas de
-  `models/refunds.js` (diario: uno por día calendario; semanal: lunes/martes;
-  mensual: desde día 7), NETWIN real de
+  `models/refunds.js` (diario: uno por día; semanal: lunes/martes; mensual: desde
+  día 7). ⚠️ **Las ventanas se evalúan en día ARGENTINO** (`_artParts` en
+  models/refunds.js), NO con `getDay()`/`getDate()`: el server corre en UTC y ART
+  es UTC−3, así que el día del proceso arranca a las 21:00 de acá — con el reloj
+  del server, el martes 22:30 (último día válido del semanal) quedaba afuera.
+  Las 3 funciones `canClaim*` reciben el **período** que se va a reembolsar y
+  consultan el `periodKey` exacto, así la puerta de UX coincide 1:1 con el candado
+  del índice único. NETWIN real de
   `referralRevenueService.getUserNetwinForDateRange`. El **% sale del RANGO** del
   cliente (`Config['refundTiers']`, editable panel→COMANDOS, solo admin general;
   defaults: 🥉 bronce hasta $30.000 = 3%, 🥈 plata hasta $100.000 = 5%, 🥇 oro = 10%),

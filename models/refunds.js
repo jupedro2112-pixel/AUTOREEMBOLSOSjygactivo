@@ -25,21 +25,44 @@ async function getAllRefunds() {
   }
 }
 
-// Próxima medianoche de ARGENTINA en ISO. ART es UTC−3 FIJO (el país no usa
-// horario de verano), así que se puede construir el instante exacto.
-// ⚠️ NO usar `setHours(0,0,0,0)`: eso da la medianoche de la zona del SERVER, que
-// en Elastic Beanstalk es UTC → serían las 21:00 de Argentina.
+// ── Helpers de fecha ARGENTINA ────────────────────────────────────────────
+// TODO lo que sea "qué día es hoy" tiene que resolverse en horario Argentina,
+// NO en el del proceso: en Elastic Beanstalk el server corre en UTC y ART es
+// UTC−3, así que el "día" del server arranca a las 21:00 de acá. Usar
+// getDay()/getDate()/setHours() a secas corre las ventanas 3 horas.
+// ART no tiene horario de verano (offset fijo −03:00), así que se puede
+// construir el instante exacto con el string `...T00:00:00-03:00`.
+const TZ_AR = 'America/Argentina/Buenos_Aires';
+
+// Partes del día ARGENTINO para un instante dado.
+function _artParts(date = new Date()) {
+  const ymd = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TZ_AR, year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(date); // 'YYYY-MM-DD'
+  const [y, m, d] = ymd.split('-').map(Number);
+  // Día de la semana de ESE día calendario. Se usa el mediodía UTC para que
+  // ningún corrimiento de zona lo empuje al día vecino.
+  const dow = new Date(Date.UTC(y, m - 1, d, 12)).getUTCDay(); // 0=domingo
+  return { ymd, y, m, d, dow };
+}
+
+// Instante exacto de la medianoche argentina de un 'YYYY-MM-DD'.
+function _artMidnight(ymd) {
+  return new Date(`${ymd}T00:00:00-03:00`);
+}
+
+// Suma días a un 'YYYY-MM-DD' (calendario puro, sin zonas).
+function _addDays(ymd, n) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const b = new Date(Date.UTC(y, m - 1, d));
+  b.setUTCDate(b.getUTCDate() + n);
+  return b.toISOString().slice(0, 10);
+}
+
+// Próxima medianoche de ARGENTINA en ISO.
 function _nextArgentinaMidnightISO() {
-  const fmt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Argentina/Buenos_Aires',
-    year: 'numeric', month: '2-digit', day: '2-digit'
-  });
-  const parts = fmt.formatToParts(new Date());
-  const y = parts.find(p => p.type === 'year').value;
-  const m = parts.find(p => p.type === 'month').value;
-  const d = parts.find(p => p.type === 'day').value;
-  const todayArtMidnight = new Date(`${y}-${m}-${d}T00:00:00-03:00`);
-  return new Date(todayArtMidnight.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const { ymd } = _artParts();
+  return _artMidnight(_addDays(ymd, 1)).toISOString();
 }
 
 // Verificar si el usuario puede reclamar reembolso diario.
@@ -100,43 +123,40 @@ async function canClaimDailyRefund(userId, periodDateStr = null) {
 }
 
 // Verificar si el usuario puede reclamar reembolso semanal
-async function canClaimWeeklyRefund(userId) {
+// `periodDateStr` = LUNES ('YYYY-MM-DD') de la semana que se reembolsa (la
+// pasada), tal como lo da getLastWeekRangeArgentinaEpoch. Con ese dato se
+// pregunta por el periodKey EXACTO y la puerta coincide 1:1 con el candado.
+async function canClaimWeeklyRefund(userId, periodDateStr = null) {
   try {
-    const now = new Date();
-    const currentDay = now.getDay(); // 0 = Domingo, 1 = Lunes, 2 = Martes
-    
-    // Solo puede reclamar lunes (1) o martes (2)
-    const canClaimByDay = currentDay === 1 || currentDay === 2;
-    
-    // Verificar si ya reclamó esta semana
-    const currentWeekStart = new Date(now);
-    currentWeekStart.setDate(now.getDate() - currentDay + 1); // Lunes de esta semana
-    currentWeekStart.setHours(0, 0, 0, 0);
-    
-    const lastWeekly = await RefundClaim.findOne({ 
-      userId, 
-      type: 'weekly' 
-    }).sort({ claimedAt: -1 }).lean();
-    
-    let canClaim = canClaimByDay;
-    
-    if (lastWeekly) {
-      const lastDate = new Date(lastWeekly.claimedAt);
-      // Si ya reclamó esta semana, no puede reclamar de nuevo
-      if (lastDate >= currentWeekStart) {
-        canClaim = false;
-      }
+    const { ymd, dow } = _artParts();
+
+    // Ventana: lunes (1) o martes (2), en día ARGENTINO.
+    const canClaimByDay = dow === 1 || dow === 2;
+
+    // Próximo lunes ART a las 00:00 (domingo → mañana).
+    const nextMondayIso = _artMidnight(_addDays(ymd, dow === 0 ? 1 : 8 - dow)).toISOString();
+
+    let already = null;
+    if (periodDateStr) {
+      already = await RefundClaim.findOne({
+        userId, type: 'weekly', periodKey: 'weekly:' + periodDateStr
+      }).lean();
+    } else {
+      // Fallback: ¿reclamó desde el lunes ART de esta semana?
+      const mondayThisWeek = _artMidnight(_addDays(ymd, dow === 0 ? -6 : 1 - dow));
+      already = await RefundClaim.findOne({
+        userId, type: 'weekly', claimedAt: { $gte: mondayThisWeek }
+      }).sort({ claimedAt: -1 }).lean();
     }
-    
-    // Calcular próximo reclamo (próximo lunes)
-    const nextMonday = new Date(now);
-    const daysUntilMonday = currentDay === 0 ? 1 : 8 - currentDay;
-    nextMonday.setDate(now.getDate() + daysUntilMonday);
-    nextMonday.setHours(0, 0, 0, 0);
-    
+
+    const lastWeekly = already || await RefundClaim.findOne({ userId, type: 'weekly' })
+      .sort({ claimedAt: -1 }).lean();
+
+    const canClaim = canClaimByDay && !already;
+
     return {
       canClaim,
-      nextClaim: canClaim ? null : nextMonday.toISOString(),
+      nextClaim: canClaim ? null : nextMondayIso,
       lastClaim: lastWeekly?.claimedAt || null,
       availableDays: 'Lunes y Martes'
     };
@@ -147,39 +167,40 @@ async function canClaimWeeklyRefund(userId) {
 }
 
 // Verificar si el usuario puede reclamar reembolso mensual
-async function canClaimMonthlyRefund(userId) {
+// `periodMonthStr` = 'YYYY-MM' del mes que se reembolsa (el pasado).
+async function canClaimMonthlyRefund(userId, periodMonthStr = null) {
   try {
-    const now = new Date();
-    const currentDay = now.getDate();
-    
-    // Solo puede reclamar del día 7 en adelante
-    const canClaimByDay = currentDay >= 7;
-    
-    // Verificar si ya reclamó este mes
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const lastMonthly = await RefundClaim.findOne({ 
-      userId, 
-      type: 'monthly' 
-    }).sort({ claimedAt: -1 }).lean();
-    
-    let canClaim = canClaimByDay;
-    
-    if (lastMonthly) {
-      const lastDate = new Date(lastMonthly.claimedAt);
-      // Si ya reclamó este mes, no puede reclamar de nuevo
-      if (lastDate >= currentMonthStart) {
-        canClaim = false;
-      }
+    const { y, m, d } = _artParts();
+
+    // Ventana: del día 7 en adelante, en día ARGENTINO.
+    const canClaimByDay = d >= 7;
+
+    // Día 7 del próximo mes, 00:00 ART.
+    const nextY = m === 12 ? y + 1 : y;
+    const nextM = m === 12 ? 1 : m + 1;
+    const nextIso = _artMidnight(`${nextY}-${String(nextM).padStart(2, '0')}-07`).toISOString();
+
+    let already = null;
+    if (periodMonthStr) {
+      already = await RefundClaim.findOne({
+        userId, type: 'monthly', periodKey: 'monthly:' + periodMonthStr
+      }).lean();
+    } else {
+      // Fallback: ¿reclamó desde el día 1 ART de este mes?
+      const monthStart = _artMidnight(`${y}-${String(m).padStart(2, '0')}-01`);
+      already = await RefundClaim.findOne({
+        userId, type: 'monthly', claimedAt: { $gte: monthStart }
+      }).sort({ claimedAt: -1 }).lean();
     }
-    
-    // Calcular próximo reclamo (día 7 del próximo mes)
-    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 7);
-    nextMonth.setHours(0, 0, 0, 0);
-    
+
+    const lastMonthly = already || await RefundClaim.findOne({ userId, type: 'monthly' })
+      .sort({ claimedAt: -1 }).lean();
+
+    const canClaim = canClaimByDay && !already;
+
     return {
       canClaim,
-      nextClaim: canClaim ? null : nextMonth.toISOString(),
+      nextClaim: canClaim ? null : nextIso,
       lastClaim: lastMonthly?.claimedAt || null,
       availableFrom: 'Día 7 de cada mes'
     };

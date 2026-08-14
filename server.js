@@ -6333,8 +6333,8 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
       // Se pasa el día de AYER (ART) para que la ventana se evalúe por periodKey
       // exacto y no por el día calendario del server (que en EB es UTC).
       refunds.canClaimDailyRefund(userId, yesterdayRange.dateStr),
-      refunds.canClaimWeeklyRefund(userId),
-      refunds.canClaimMonthlyRefund(userId)
+      refunds.canClaimWeeklyRefund(userId, lastWeekRange.fromDateStr),
+      refunds.canClaimMonthlyRefund(userId, lastMonthRange.fromDateStr.slice(0, 7))
     ]);
 
     const dailyFrom = new Date(yesterdayRange.fromEpoch * 1000);
@@ -6667,8 +6667,12 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
     }
     
     try {
-      const status = await refunds.canClaimWeeklyRefund(userId);
-      
+      // El período (semana pasada, ART) se resuelve PRIMERO: la ventana se
+      // chequea contra esa semana exacta vía periodKey, no contra el día
+      // calendario del server (que en EB es UTC y corre el corte 3 horas).
+      const { fromEpoch, toEpoch, fromDateStr, toDateStr } = jugaygana.getLastWeekRangeArgentinaEpoch();
+      const status = await refunds.canClaimWeeklyRefund(userId, fromDateStr);
+
       if (!status.canClaim) {
         return res.json({
           success: false,
@@ -6691,7 +6695,6 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         });
       }
       
-      const { fromEpoch, toEpoch, fromDateStr, toDateStr } = jugaygana.getLastWeekRangeArgentinaEpoch();
       const fromDate = new Date(fromEpoch * 1000);
       const toDate = new Date(toEpoch * 1000);
 
@@ -6851,8 +6854,11 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
     }
     
     try {
-      const status = await refunds.canClaimMonthlyRefund(userId);
-      
+      // Igual que en diario y semanal: el período (mes pasado, ART) primero, y
+      // la ventana se chequea contra ese mes exacto vía periodKey.
+      const { fromEpoch, toEpoch, fromDateStr, toDateStr } = jugaygana.getLastMonthRangeArgentinaEpoch();
+      const status = await refunds.canClaimMonthlyRefund(userId, fromDateStr.slice(0, 7));
+
       if (!status.canClaim) {
         return res.json({
           success: false,
@@ -6875,7 +6881,6 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         });
       }
       
-      const { fromEpoch, toEpoch, fromDateStr, toDateStr } = jugaygana.getLastMonthRangeArgentinaEpoch();
       const fromDate = new Date(fromEpoch * 1000);
       const toDate = new Date(toEpoch * 1000);
 

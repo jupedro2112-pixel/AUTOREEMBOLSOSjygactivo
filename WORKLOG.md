@@ -6,6 +6,131 @@
 >
 > **Última actualización: 2026-08-13**
 
+## Sesión 2026-08-14
+
+### 102. VUELVE EL REEMBOLSO DIARIO (en todo el repo) + modal "MI MES" + tarjetas de Telegram
+- **Pedido del owner:** (a) reimplantar el reembolso DIARIO que se había eliminado en #97,
+  en TODO el repo y sin fallas; (b) que el recuadro USUARIO del dashboard sea clickeable y
+  explique los rangos, cuánto le corresponde y el % — que se note que tiene función;
+  (c) mejorar el bloque de soporte de Telegram, que "se ve mal", tomando la URL de la DB
+  que se carga en COMANDOS.
+- **DECISIONES DEL OWNER (para no volver a discutirlas):**
+  1. El diario usa **el MISMO % del rango** (bronce/plata/oro) que el semanal y el mensual,
+     **todo editable desde el panel → COMANDOS**. Un solo juego de rangos para los tres.
+  2. Los tres reembolsos **SE SOLAPAN a propósito**: el día de ayer también cae dentro de
+     la semana y del mes que se reembolsan, así que un cliente puede cobrar por la misma
+     pérdida en los tres. **NO se descuentan entre sí** (igual que el solape preexistente
+     entre semanal y mensual de #73). Queda documentado como comportamiento buscado.
+- **Mapeo previo con 3 agentes de sólo-lectura** (reembolsos punta a punta, soporte/comandos,
+  dashboard/modales) antes de tocar una línea; después una **revisión adversarial** con un
+  cuarto agente sobre el diff.
+- **Backend del diario:**
+  - `canClaimDailyRefund` RESTAURADA en `models/refunds.js` (+ export). Una por día
+    calendario; la ventana se reabre a las 00:00.
+  - `POST /api/refunds/claim/daily`: de stub a implementación completa, **calcada del claim
+    semanal** (que es el patrón ya probado): lock → canClaim → `resolveJugayganaUserId` →
+    rango de AYER (`getYesterdayRangeArgentinaEpoch`, ya existía y estaba exportado) →
+    NETWIN (`refund-daily`) → guard `netLoss === 0` → rango del mes → guard
+    `refundAmount <= 0` **ANTES de reservar** → **reserva atómica `RefundClaim.create` con
+    `periodKey: 'daily:YYYY-MM-DD'` ANTES de acreditar** (patrón #96: el índice único
+    `userId+type+periodKey` es el candado real, no el lock Redis) → `creditUserBalance` con
+    `jugayganaUserId` → si falla, `deleteOne` de la reserva → Transaction → Meta CAPI
+    (`refund_daily`) → `releaseRefundLock` a los 3 s.
+  - `GET /api/refunds/status`: el `daily` inerte pasó a ser real (4ª llamada NETWIN en
+    paralelo, `canClaimDailyRefund`, `dailyTier`, `dailyPotential`, `period`).
+  - **Qué mes define el rango del diario:** el mes al que pertenece AYER. Casi siempre es el
+    mes en curso; el único borde es el **día 1**, donde ayer cayó en el mes anterior → se usa
+    ESE mes completo (misma lógica que el semanal, para no descartar la pérdida acumulada).
+  - `_generateExampleClaims` vuelve a incluir `'daily'` en el ticker.
+- **Reglas push B1/B2 restauradas** (`notificationRulesService.js`) con copys sin % fijo
+  (ahora depende del rango). ⚠️ Se siembran **DESACTIVADAS** como todas las de refund
+  (`_seedDisabledAudiences`) — no se activan envíos masivos por migración; las prende el
+  owner desde el panel. Además la audiencia `refund-pending-daily` depende de
+  `DailyPlayerStats`, que **no está portado**: hasta entonces devuelve vacío y no dispara.
+- **Migración one-shot `migration_refund_daily_restore_done`:** actualiza por SUBSTRING los
+  comandos que quedaron diciendo "SEMANAL y MENSUAL" para que vuelvan a nombrar los tres.
+  También se actualizaron los fallbacks hardcodeados y los seeds de `/sys_welcome`,
+  `/sys_deposit` y `/sys_deposit_bonus`. ⚠️ Si el owner editó esos textos a mano el
+  substring no matchea: revisar COMANDOS buscando "SEMANAL y MENSUAL".
+- **Front del diario:** botón `#dailyRefundBtn` (verde, para distinguirlo del violeta
+  semanal y el rojo mensual), `.refund-btn.daily` en `header.css`, listener en `app.js`,
+  `updateRefundButton('daily')`, tooltip, `#unifiedDailyPct` y botón propio en el modal
+  unificado, rama `daily` en `showRefundModal` (countdown hasta las 00:00), card en el
+  infoModal. El panel admin dejó de decir "Diarios (descontinuado)".
+- **Modal "MI MES" (NUEVO):** la card `.dash-user` era **la única del dashboard sin
+  ninguna acción**; ahora abre `#myMonthModal` y lleva un chip dorado "VER MI MES ›" +
+  `cursor:pointer` + borde dorado para que se note. El modal muestra: rango con su emoji y
+  su %, la pérdida (NETWIN) del mes que lo define, la tabla 🥉🥈🥇 con el actual resaltado
+  ("◄ VOS"), cuánto falta para subir, y **una tarjeta por cada reembolso** (diario/semanal/
+  mensual) con el monto disponible, el período, la pérdida y si está listo para reclamar;
+  cierra con una explicación de que son independientes y que se calculan sobre NETWIN.
+  Todo sale de `/api/refunds/status` (ya cacheado); si no está, lo pide antes de pintar.
+- **Tarjetas de Telegram rehechas:** el bloque lo cargaba un **script inline en index.html
+  con polling de 1 s × 25** esperando el token — si el login tardaba más de 25 s, no
+  aparecía nunca. Ahora es `VIP.ui.loadCommunityLinks()`, llamado desde `initializeSession`
+  como el resto. Visual: se apilan en pantallas angostas (`flex-wrap` + `flex:1 1 190px`,
+  antes se apretaban y cortaban el texto), avatar en círculo, chevron ›, feedback al tocar,
+  y el **soporte pasó a VERDE** (era violeta, se confundía con el canal). Copys más claros:
+  "Canal Exclusivo / Promos y sorteos" y "Soporte 24/7 / Te respondemos al toque".
+  ⚠️ **Las URLs salen de `Config['communityConfig']`** (`channelUrl`/`supportUrl`), que se
+  edita en el panel → COMANDOS. En la captura del owner sólo se veía el canal porque
+  `supportUrl` está VACÍA: hay que cargarla ahí para que aparezca la tarjeta de soporte.
+- **REVISIÓN ADVERSARIAL (agente sobre el diff) — 1 bug REAL corregido + 1 blindaje:**
+  - 🔴 **BUG DE ZONA HORARIA (corregido).** `canClaimDailyRefund` comparaba "día
+    calendario" con `toDateString()`, que usa la TZ del **proceso**: en EB es **UTC**, y
+    Argentina es UTC−3. O sea que el "día" del server arrancaba a las **21:00 ART**.
+    Un usuario que reclamaba a las 22:00 ART quedaba marcado como "ya reclamó hoy" hasta
+    las 21:00 del día siguiente (**~21 h de bloqueo falso**) y, si no volvía después de esa
+    hora, **PERDÍA ese período para siempre**. En la práctica: todo el que reclama de noche
+    perdía uno de cada dos reembolsos diarios. **Fix:** `canClaimDailyRefund(userId,
+    periodDateStr)` ahora consulta el **periodKey EXACTO** del día a reembolsar → la puerta
+    de UX coincide 1:1 con el candado del índice único y deja de depender de la TZ del
+    server. `nextClaim` pasa a ser la próxima medianoche **argentina** real
+    (`_nextArgentinaMidnightISO`, ART = UTC−3 fijo, sin horario de verano). Verificado
+    forzando `TZ=UTC`: 22:00 ART → devuelve 00:00 ART del día siguiente (el método viejo
+    devolvía las 21:00 ART, un día entero tarde).
+    ⚠️ **Los reembolsos semanal y mensual tienen la MISMA familia de bug** (usan `getDay()`
+    y `getDate()`, también en UTC → la ventana semanal real es domingo 21:00 → martes
+    20:59 ART). Es PREEXISTENTE y no se tocó en esta tanda; queda anotado para arreglarlo.
+  - **Blindaje de la reserva:** el `creditUserBalance` del diario quedó en su propio
+    try/catch que **borra la reserva antes de propagar**. Si JUGAYGANA tiraba una excepción
+    (en vez de devolver `success:false`) justo ahí, el `RefundClaim` quedaba huérfano y el
+    usuario perdía el día sin cobrar. Importa más en el diario que en el semanal porque se
+    reclama 7× más seguido. También se envolvió el `Transaction.create` posterior: si falla
+    DESPUÉS de acreditar, se loguea pero ya no devuelve "Error del servidor" a alguien que
+    sí cobró.
+  - **Confirmado OK por la revisión** (no se tocó): el orden reserva→acreditar, el guard de
+    $0 antes de reservar, el borde del **día 1** en el cálculo del rango (status y claim
+    coinciden), el contrato completo del objeto `daily` contra los 3 consumidores del front,
+    `showMyMonthModal` sin caminos de TypeError (todos los accesos guardados, incluido
+    backend viejo sin `s.daily`), ids únicos y modal bien anidado, y compatibilidad en las
+    dos direcciones con clientes cacheados (JS viejo + back nuevo, y JS nuevo + back viejo
+    durante el rolling deploy).
+- **⚠️ PARA VERIFICAR A MANO EN ATLAS (no se puede desde el código):** toda la garantía
+  anti-doble-cobro descansa en el índice único `{userId:1, type:1, periodKey:1}` de
+  `refundclaims`. En un índice compuesto sparse, Mongo igual indexa el doc si **algún**
+  campo existe (y `userId` siempre existe), así que si quedaron 2+ claims `daily` viejos con
+  `periodKey` null, **la construcción del índice falló en silencio** y no hay protección.
+  El diario pasa a ser el reclamo más frecuente: correr `db.refundclaims.getIndexes()` y
+  confirmar que está `userId_1_type_1_periodKey_1` ANTES de deployar.
+- **⚠️ Consecuencia del solape que el owner aceptó, con el número concreto:** un cliente que
+  reclama los tres cobra ~**3× el % de su rango** sobre la misma pérdida → en 🥇 Oro son
+  **30% de cashback**. Roza el "tope 30% en TODO lo automático" documentado en CLAUDE.md.
+  Es lo que el owner pidió explícitamente; queda registrado por si más adelante quiere
+  descontarlos entre sí.
+- **Nota de carga:** `/api/refunds/status` pasó de 3 a **4 llamadas NETWIN concurrentes** a
+  JUGAYGANA (+33%), y `getUserNetwinForDateRange` **no cachea**. Corre en cada
+  `initializeSession` y tras cada reclamo. Si la del diario falla, `dailyNetLoss` cae a 0 y
+  el cliente ve $0 — indistinguible de no tener pérdida. `showMyMonthModal` usa el estado ya
+  cacheado a propósito (no dispara otra tanda de llamadas).
+- **Validado:** `node --check` OK en los 9 archivos tocados; ids únicos y `<div>` balanceados
+  (377/377) en index.html. **`?v=53` + `CACHE_VERSION='v53'`** (HTML+JS+CSS juntos, regla
+  de #97). Sin migraciones de datos destructivas. **Back necesita redeploy.**
+  **PROBAR tras deploy:** reclamar el diario (monto = % del rango sobre la pérdida de ayer),
+  reclamarlo dos veces seguidas (la segunda debe rechazar), tocar la card USUARIO (modal MI
+  MES con los 3 reembolsos), cargar `supportUrl` en COMANDOS y ver la tarjeta de soporte,
+  y abrir con una PWA vieja cacheada (no debe romper).
+
 ## Sesión 2026-08-13
 
 ### 101. PWA en iOS: la app instalada arranca con la sesión ya iniciada (traspaso por `start_url`)

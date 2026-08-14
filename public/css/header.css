@@ -59,7 +59,12 @@
     text-align: center;
 }
 
-/* .refund-btn.daily eliminada 2026-07-28 (reembolso diario descontinuado) */
+/* Restaurada 2026-08-14: el reembolso diario volvió. Verde para diferenciarlo
+   del violeta (semanal) y el rojo (mensual) de un vistazo. */
+.refund-btn.daily {
+    background: linear-gradient(135deg, #1a9c5b 0%, #0f6b3d 100%);
+    color: #fff;
+}
 
 .refund-btn.weekly {
     background: linear-gradient(135deg, #9d4edd 0%, #6603a8 100%);

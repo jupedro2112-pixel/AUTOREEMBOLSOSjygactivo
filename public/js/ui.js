@@ -424,6 +424,40 @@ VIP.ui = (function () {
         return VIP.chat.loadCanalInformativoUrl();
     }
 
+    // ---- Canales de Telegram del dashboard (canal + soporte) ----
+    // Las URLs salen de la DB (Config `communityConfig`), editables en el panel
+    // → COMANDOS. Antes esto vivía como script inline en index.html con un
+    // polling de 1 s × 25 esperando el token: si el login tardaba más, el bloque
+    // no aparecía nunca. Ahora se llama desde initializeSession, cuando la
+    // sesión YA está lista.
+    async function loadCommunityLinks() {
+        const sec = document.getElementById('communitySection');
+        const ch  = document.getElementById('communityChannelBtn');
+        const sup = document.getElementById('communitySupportBtn');
+        if (!sec) return;
+        try {
+            const resp = await fetch(`${VIP.config.API_URL}/api/config/community`, {
+                headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
+            });
+            if (!resp.ok) return;
+            const d = await resp.json();
+            let any = false;
+            // Cada tarjeta se muestra sólo si su URL está cargada; si no hay
+            // ninguna, la sección entera queda oculta (no deja huecos raros).
+            if (ch) {
+                if (d && d.channelUrl) { ch.href = d.channelUrl; ch.style.display = ''; any = true; }
+                else { ch.style.display = 'none'; }
+            }
+            if (sup) {
+                if (d && d.supportUrl) { sup.href = d.supportUrl; sup.style.display = ''; any = true; }
+                else { sup.style.display = 'none'; }
+            }
+            sec.style.display = any ? '' : 'none';
+        } catch (e) {
+            // Sin conexión: dejamos la sección como está (oculta por defecto).
+        }
+    }
+
     // ---- PWA install ----
 
     async function installApp() {
@@ -651,6 +685,7 @@ VIP.ui = (function () {
         copyReferralCode,
         copyReferralLink,
         loadCanalInformativoUrl,
+        loadCommunityLinks,
         installApp,
         showInstallInstructions,
         isAppInstalled,

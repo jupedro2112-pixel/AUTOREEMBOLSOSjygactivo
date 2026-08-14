@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=52">
-    <link rel="stylesheet" href="/css/login.css?v=52">
-    <link rel="stylesheet" href="/css/header.css?v=52">
-    <link rel="stylesheet" href="/css/chat.css?v=52">
-    <link rel="stylesheet" href="/css/modals.css?v=52">
-    <link rel="stylesheet" href="/css/responsive.css?v=52">
+    <link rel="stylesheet" href="/css/base.css?v=53">
+    <link rel="stylesheet" href="/css/login.css?v=53">
+    <link rel="stylesheet" href="/css/header.css?v=53">
+    <link rel="stylesheet" href="/css/chat.css?v=53">
+    <link rel="stylesheet" href="/css/modals.css?v=53">
+    <link rel="stylesheet" href="/css/responsive.css?v=53">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -544,18 +544,28 @@
                 .dash-user {
                     flex:1; min-width:0; display:flex; flex-direction:row; align-items:center;
                     justify-content:flex-start; gap:8px; color:#fff;
-                    background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #1a0033;
+                    background:linear-gradient(135deg,#1a0033,#2d0052); border:1px solid #d4af37;
                     border-radius:11px; padding:7px 11px; overflow:hidden;
+                    cursor:pointer; -webkit-tap-highlight-color:rgba(212,175,55,.3);
+                    touch-action:manipulation; transition:transform .12s ease;
                 }
+                .dash-user:active { transform:scale(.98); }
                 .dash-user-avatar {
                     font-size:16px; width:28px; height:28px; flex-shrink:0; display:flex;
                     align-items:center; justify-content:center;
                     background:linear-gradient(135deg,#d4af37,#ffd700); border-radius:50%;
                 }
-                .dash-user-label { font-size:9px; font-weight:800; color:#ffd700; letter-spacing:.6px; flex-shrink:0; }
+                .dash-user-text { display:flex; flex-direction:column; min-width:0; flex:1; line-height:1.15; }
+                .dash-user-label { font-size:9px; font-weight:800; color:#ffd700; letter-spacing:.6px; }
                 .dash-user-name {
                     font-size:12px; font-weight:900; color:#fff; min-width:0;
                     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+                }
+                /* Chip que delata que la card se puede tocar. */
+                .dash-user-cta {
+                    flex-shrink:0; font-size:8.5px; font-weight:900; letter-spacing:.4px;
+                    color:#1a0033; background:linear-gradient(135deg,#d4af37,#ffd700);
+                    border-radius:999px; padding:3px 7px; white-space:nowrap;
                 }
                 #rouletteHomeCard { flex:0 0 84px; display:flex; overflow:hidden; }
                 .dash-roulette {
@@ -603,20 +613,34 @@
                 /* Contención del texto con letra grande: recorta en vez de encimar. */
                 .dash-refunds-row .refund-amount,
                 .dash-refunds-row .refund-timer { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-                .dash-community { display:flex; gap:8px; }
+                /* Tarjetas de Telegram. En pantallas angostas se apilan (antes
+                   quedaban dos pastillas apretadas con el texto cortado). */
+                .dash-community { display:flex; flex-wrap:wrap; gap:8px; }
                 .dash-tg-btn {
-                    flex:1; min-width:0; display:flex; align-items:center; gap:9px;
+                    flex:1 1 190px; min-width:0; display:flex; align-items:center; gap:10px;
                     text-decoration:none; color:#fff;
                     background:linear-gradient(135deg,#229ED9,#1a7fb0); border:1px solid #6fd0f5;
-                    border-radius:12px; padding:9px 11px;
+                    border-radius:12px; padding:10px 12px;
+                    box-shadow:0 3px 10px rgba(34,158,217,.32);
+                    -webkit-tap-highlight-color:rgba(255,255,255,.25); touch-action:manipulation;
+                    transition:transform .12s ease, box-shadow .12s ease;
                 }
+                .dash-tg-btn:active { transform:scale(.98); }
+                /* Soporte: verde para que se lea como "ayuda" y no se confunda
+                   con el canal de promos (celeste). */
                 .dash-tg-btn.dash-tg-support {
-                    background:linear-gradient(135deg,#6a0dad,#9b30ff); border-color:#c9a0ff;
+                    background:linear-gradient(135deg,#0f7a4a,#1aa86a); border-color:#6ff5b8;
+                    box-shadow:0 3px 10px rgba(26,168,106,.32);
                 }
-                .dash-tg-emoji { font-size:20px; line-height:1; flex-shrink:0; }
-                .dash-tg-text { display:flex; flex-direction:column; min-width:0; line-height:1.15; }
-                .dash-tg-text strong { font-size:12px; font-weight:900; }
-                .dash-tg-text span { font-size:9.5px; opacity:.9; }
+                .dash-tg-emoji {
+                    font-size:19px; line-height:1; flex-shrink:0;
+                    width:32px; height:32px; display:flex; align-items:center; justify-content:center;
+                    background:rgba(255,255,255,.18); border-radius:50%;
+                }
+                .dash-tg-text { display:flex; flex-direction:column; min-width:0; line-height:1.2; flex:1; }
+                .dash-tg-text strong { font-size:12.5px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                .dash-tg-text span { font-size:10px; opacity:.92; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                .dash-tg-go { flex-shrink:0; font-size:20px; font-weight:900; opacity:.75; line-height:1; }
                 .dash-play { display:flex; gap:8px; align-items:stretch; }
                 .dash-play-btn {
                     flex:1; background:linear-gradient(135deg,#6a0dad,#9b30ff); color:#fff;
@@ -660,6 +684,12 @@
                             <button id="dashTierBadge" onclick="VIP.refunds.showUnifiedRefundModal()" style="display:none; min-width:0; max-width:70%; background:linear-gradient(135deg,#2d0052,#1a0033); color:#ffd700; border:1px solid #d4af37; border-radius:999px; padding:3px 10px; font-size:10px; font-weight:900; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></button>
                         </div>
                         <div class="dash-refunds-row">
+                            <button id="dailyRefundBtn" class="refund-btn daily" title="Reembolso Diario">
+                                <span class="refund-label-full">📅<br>Diario</span>
+                                <span class="refund-label-short">📅</span>
+                                <span class="refund-amount" id="dailyRefundAmount">$0</span>
+                                <span class="refund-timer" id="dailyRefundTimer"></span>
+                            </button>
                             <button id="weeklyRefundBtn" class="refund-btn weekly" title="Reembolso Semanal (Lun-Mar)">
                                 <span class="refund-label-full">📆<br>Semanal</span>
                                 <span class="refund-label-short">📆</span>
@@ -686,10 +716,17 @@
                 <div class="dash-top">
                     <!-- Ruleta diaria: render dinámico desde js/roulette.js -->
                     <div id="rouletteHomeCard" style="display:none;"></div>
-                    <div class="dash-user">
+                    <!-- Tocar la card abre "MI MES": rango, % y los 3 reembolsos.
+                         El chip de la derecha existe para que se note que es
+                         clickeable (antes era la única card del dashboard sin
+                         ninguna acción y nadie la tocaba). -->
+                    <div class="dash-user" onclick="VIP.refunds.showMyMonthModal()" title="Ver mi rango, mi % y mis reembolsos">
                         <span class="dash-user-avatar">👤</span>
-                        <span class="dash-user-label">USUARIO</span>
-                        <span class="dash-user-name" id="dashUserName">Usuario</span>
+                        <span class="dash-user-text">
+                            <span class="dash-user-label">USUARIO</span>
+                            <span class="dash-user-name" id="dashUserName">Usuario</span>
+                        </span>
+                        <span class="dash-user-cta">VER MI MES ›</span>
                     </div>
                 </div>
 
@@ -702,51 +739,31 @@
                     </div>
                 </div>
 
-                <!-- Canales de Telegram: abajo de Jugá Aquí -->
+                <!-- Canales de Telegram. Las URLs salen de la DB (Config
+                     `communityConfig`), editables en el panel → COMANDOS.
+                     Lo carga VIP.ui.loadCommunityLinks() desde initializeSession
+                     (antes era un script inline con polling de 25 s que se
+                     rendía si el login tardaba). Si no hay URL cargada, la
+                     tarjeta que falte no se muestra. -->
                 <div class="dash-community" id="communitySection" style="display:none;">
                     <a id="communityChannelBtn" href="#" target="_blank" rel="noopener" class="dash-tg-btn" style="display:none;">
                         <span class="dash-tg-emoji">📢</span>
                         <span class="dash-tg-text">
                             <strong>Canal Exclusivo</strong>
-                            <span>Telegram</span>
+                            <span>Promos y sorteos</span>
                         </span>
+                        <span class="dash-tg-go">›</span>
                     </a>
                     <a id="communitySupportBtn" href="#" target="_blank" rel="noopener" class="dash-tg-btn dash-tg-support" style="display:none;">
-                        <span class="dash-tg-emoji">💬</span>
+                        <span class="dash-tg-emoji">🎧</span>
                         <span class="dash-tg-text">
-                            <strong>Soporte</strong>
-                            <span>Telegram</span>
+                            <strong>Soporte 24/7</strong>
+                            <span>Te respondemos al toque</span>
                         </span>
+                        <span class="dash-tg-go">›</span>
                     </a>
                 </div>
             </div>
-            <script>
-            (function () {
-                function loadCommunity() {
-                    if (!window.VIP || !VIP.state || !VIP.state.currentToken || !VIP.config) return;
-                    fetch(VIP.config.API_URL + '/api/config/community', {
-                        headers: { 'Authorization': 'Bearer ' + VIP.state.currentToken }
-                    }).then(function (r) { return r.ok ? r.json() : null; })
-                      .then(function (d) {
-                          if (!d) return;
-                          var sec = document.getElementById('communitySection');
-                          var ch = document.getElementById('communityChannelBtn');
-                          var sup = document.getElementById('communitySupportBtn');
-                          var any = false;
-                          if (ch && d.channelUrl) { ch.href = d.channelUrl; ch.style.display = ''; any = true; }
-                          if (sup && d.supportUrl) { sup.href = d.supportUrl; sup.style.display = ''; any = true; }
-                          if (sec && any) sec.style.display = '';
-                      }).catch(function () {});
-                }
-                document.addEventListener('DOMContentLoaded', function () {
-                    var t = 0;
-                    var iv = setInterval(function () {
-                        if (window.VIP && VIP.state && VIP.state.currentToken) { clearInterval(iv); loadCommunity(); }
-                        else if (++t > 25) { clearInterval(iv); }
-                    }, 1000);
-                });
-            })();
-            </script>
             <!-- ===== /DASHBOARD ===== -->
             <!-- Cartel del bono por instalar la app: visible hasta que se reclama.
                  Desde 2026-07-28 el bono es un CUPÓN de 100% extra en la próxima
@@ -1256,6 +1273,27 @@
         </div>
     </div>
 
+    <!-- Modal MI MES — se abre tocando la card de USUARIO del dashboard.
+         Explica el rango, el % que le toca y cuánto tiene disponible en cada uno
+         de los tres reembolsos. Todo el contenido lo pinta
+         VIP.refunds.showMyMonthModal() con los datos reales de
+         GET /api/refunds/status. -->
+    <div id="myMonthModal" class="modal hidden" onclick="if(event.target===this)hideModal('myMonthModal')">
+        <div class="modal-content" style="max-width:420px;position:relative;" onclick="event.stopPropagation()">
+            <button onclick="hideModal('myMonthModal')" style="position:absolute;top:12px;right:12px;background:none;border:none;color:#888;font-size:22px;cursor:pointer;z-index:10;line-height:1;">✕</button>
+            <div class="modal-header">
+                <h2>📊 Mi mes</h2>
+                <p style="font-size:12px;color:#aaa;" id="myMonthUser">—</p>
+            </div>
+            <div id="myMonthBody">
+                <p style="text-align:center;color:#aaa;font-size:13px;padding:20px 0;">Cargando tu información...</p>
+            </div>
+            <div class="modal-actions">
+                <button onclick="hideModal('myMonthModal')" class="btn btn-secondary">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal Picker de Reembolsos (solo móvil) -->
     <div id="unifiedRefundModal" class="modal hidden" onclick="if(event.target===this)hideModal('unifiedRefundModal')">
         <div class="modal-content" style="max-width:380px;position:relative;" onclick="event.stopPropagation()">
@@ -1267,6 +1305,9 @@
             <!-- Panel de rango (bronce/plata/oro): lo pinta js/refunds.js con el estado real. -->
             <div id="unifiedTierPanel" style="display:none;"></div>
             <div style="display:flex;flex-direction:column;gap:12px;padding:10px 0;">
+                <button onclick="VIP.refunds.showRefundModal('daily');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#0f6b3d,#1a9c5b);">
+                    📅 Reembolso Diario (<span id="unifiedDailyPct">3</span>% de tu NETWIN de ayer)
+                </button>
                 <button onclick="VIP.refunds.showRefundModal('weekly');VIP.ui.hideModal('unifiedRefundModal');" class="btn btn-primary" style="font-size:15px;padding:14px;background:linear-gradient(135deg,#1a6b3a,#2d9b56);">
                     📆 Reembolso Semanal (<span id="unifiedWeeklyPct">3</span>% de tu NETWIN semanal)
                 </button>
@@ -1401,6 +1442,11 @@
                 </div>
                 <div class="info-card">
                     <div class="info-card-icon">📅</div>
+                    <div class="info-card-title">Reembolso Diario</div>
+                    <div class="info-card-desc">El % de tu rango sobre lo que perdiste AYER. Se reclama todos los días.</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-icon">📆</div>
                     <div class="info-card-title">Reembolso Semanal</div>
                     <div class="info-card-desc">El % de tu rango sobre tus pérdidas de la semana (lunes y martes).</div>
                 </div>
@@ -1602,7 +1648,7 @@
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Retiros al instante 24/7</span></li>
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Sin límite de retiros</span></li>
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Racha diaria reclamable</span></li>
-                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Reembolsos semanales y mensuales según tu rango 🥉🥈🥇</span></li>
+                    <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Reembolsos diarios, semanales y mensuales según tu rango 🥉🥈🥇</span></li>
                     <li style="display:flex; align-items:flex-start; gap:8px;"><span style="color:#00ff88;">✓</span><span>Premios, bonificaciones y más</span></li>
                 </ul>
 
@@ -1850,25 +1896,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=52"></script>
-    <script src="/js/campaign.js?v=52"></script>
-    <script src="/js/meta-pixel.js?v=52"></script>
-    <script src="/js/auth.js?v=52"></script>
-    <script src="/js/socket.js?v=52"></script>
-    <script src="/js/chat.js?v=52"></script>
-    <script src="/js/refunds.js?v=52"></script>
-    <script src="/js/fire.js?v=52"></script>
-    <script src="/js/roulette.js?v=52"></script>
-    <script src="/js/reviews.js?v=52"></script>
-    <script src="/js/promobonus.js?v=52"></script>
-    <script src="/js/notifications.js?v=52"></script>
-    <script src="/js/ui.js?v=52"></script>
-    <script src="/js/withdraw.js?v=52"></script>
-    <script src="/js/installbonus.js?v=52"></script>
-    <script src="/js/notifsurvey.js?v=52"></script>
-    <script src="/js/publisherwelcome.js?v=52"></script>
-    <script src="/js/apptest.js?v=52"></script>
-    <script src="/js/app.js?v=52"></script>
+    <script src="/js/config.js?v=53"></script>
+    <script src="/js/campaign.js?v=53"></script>
+    <script src="/js/meta-pixel.js?v=53"></script>
+    <script src="/js/auth.js?v=53"></script>
+    <script src="/js/socket.js?v=53"></script>
+    <script src="/js/chat.js?v=53"></script>
+    <script src="/js/refunds.js?v=53"></script>
+    <script src="/js/fire.js?v=53"></script>
+    <script src="/js/roulette.js?v=53"></script>
+    <script src="/js/reviews.js?v=53"></script>
+    <script src="/js/promobonus.js?v=53"></script>
+    <script src="/js/notifications.js?v=53"></script>
+    <script src="/js/ui.js?v=53"></script>
+    <script src="/js/withdraw.js?v=53"></script>
+    <script src="/js/installbonus.js?v=53"></script>
+    <script src="/js/notifsurvey.js?v=53"></script>
+    <script src="/js/publisherwelcome.js?v=53"></script>
+    <script src="/js/apptest.js?v=53"></script>
+    <script src="/js/app.js?v=53"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA

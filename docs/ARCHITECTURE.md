@@ -32,8 +32,9 @@ El sistema VIPCARGAS:
 - Gestiona **cargas** (manuales por agente, o AUTOMÁTICAS vía banco hgcash + IA de
   comprobantes) y **retiros** (self-service con confirmación de agente y pago
   automático por hgcash).
-- Da **reembolsos** sobre la pérdida real/NETWIN (semanal/mensual, % según **rango**
-  🥉🥈🥇 por pérdida del mes; el diario fue eliminado 2026-07-28), **ruleta diaria**,
+- Da **reembolsos** sobre la pérdida real/NETWIN (**diario, semanal y mensual**, los
+  tres con el % del **rango** 🥉🥈🥇 según la pérdida del mes; el diario se eliminó el
+  2026-07-28 y se restauró el 2026-08-14), **ruleta diaria**,
   **fueguito** (racha), **bono instalación** (cupón 100% próxima carga; antes $5.000),
   **referidos** (7% del owner-revenue) y **campañas/publicistas** con sub-atribución
   por influencer.
@@ -263,18 +264,23 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   devolver; si se descontó → devolución (split bonus/fichas para pagos legacy).
   `pay-other-bank` = pago manual (descuenta igual). Poller `_pollPayingPayouts` cada
   45s (últimas 2h) cubre webhooks perdidos.
-- **Reembolsos** (rediseñados 2026-07-28, ver #97): SOLO semanal y mensual — el
-  DIARIO fue eliminado (`claim/daily` quedó como stub amigable para PWAs cacheadas).
-  `POST /api/refunds/claim/{weekly|monthly}` — lock Redis, ventanas de
-  `models/refunds.js` (semanal: lunes/martes; mensual: desde día 7), NETWIN real de
+- **Reembolsos** (rangos desde 2026-07-28 #97; el DIARIO volvió el 2026-08-14 #102):
+  **DIARIO, semanal y mensual**, los tres con el MISMO % de rango.
+  `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis, ventanas de
+  `models/refunds.js` (diario: uno por día calendario; semanal: lunes/martes;
+  mensual: desde día 7), NETWIN real de
   `referralRevenueService.getUserNetwinForDateRange`. El **% sale del RANGO** del
   cliente (`Config['refundTiers']`, editable panel→COMANDOS, solo admin general;
   defaults: 🥉 bronce hasta $30.000 = 3%, 🥈 plata hasta $100.000 = 5%, 🥇 oro = 10%),
   calculado sobre la pérdida NETWIN mensual: el MENSUAL usa el netwin del propio mes
   reembolsado; el SEMANAL usa el mes al que pertenece el LUNES de la semana (mes en
   curso a hoy, o el mes anterior completo si la semana arrancó allá — decidir por el
-  domingo era un bug de arranque de mes). `GET /api/refunds/status` devuelve además
-  `tier` (rango en vivo del mes en curso + nextTier + tabla) y un `daily` stub inerte.
+  domingo era un bug de arranque de mes); el DIARIO usa el mes al que pertenece AYER
+  (sólo difiere el día 1, donde ayer cayó en el mes anterior → ese mes completo).
+  ⚠️ **Los tres SE SOLAPAN a propósito** (decisión del owner 2026-08-14): ayer también
+  cae dentro de la semana y del mes reembolsados, y NO se descuentan entre sí.
+  `GET /api/refunds/status` devuelve además `tier` (rango en vivo del mes en curso +
+  nextTier + tabla) y los 3 períodos con su `potentialAmount`/`percentage`/`period`.
   Guard `refundAmount <= 0` ANTES de reservar (no quemar el período por $0).
   **El RefundClaim se CREA antes de acreditar** (el índice único `userId+type+periodKey`
   es el candado atómico contra doble cobro; si el crédito falla se borra la reserva;
@@ -307,7 +313,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   auth, socket, chat, ui, refunds, fire, roulette, reviews, promobonus, notifications,
   withdraw, installbonus, notifsurvey, publisherwelcome, campaign, meta-pixel, apptest,
   app). El orden real de carga está en index.html (el comentario de app.js está viejo).
-- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v51) — FCM + caché:
+- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v53) — FCM + caché:
   `/js/` y `/css/` stale-while-revalidate (deploy llega en la SIGUIENTE carga sin
   bumpear versión), `/app.js` y manifest network-first, API/socket nunca. `user-sw.js`
   es un stub de auto-desregistro (no volver a registrarlo).
@@ -316,6 +322,19 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   caché SWR (TypeError si el HTML cambió el DOM — casi pasó con el botón del
   reembolso diario). Al cambiar HTML+JS juntos: bumpear `?v` y CACHE_VERSION al
   mismo número. Cambios de JS solo (sin DOM nuevo) siguen sin necesitar bump.
+- **Dashboard del cliente** (bloque `.home-dash` de index.html, CSS inline ~L534-660):
+  la card `.dash-user` es CLICKEABLE → `VIP.refunds.showMyMonthModal()` abre
+  `#myMonthModal` ("MI MES": rango, % , pérdida del mes, tabla 🥉🥈🥇, cuánto falta para
+  subir y una tarjeta por cada uno de los 3 reembolsos). El chip dorado "VER MI MES ›"
+  está para que se note que se puede tocar. Los 3 botones de reembolso viven en
+  `.dash-refunds-sticky` (FUERA de `#homePanel`, así ocultar el menú no los esconde).
+- **Tarjetas de Telegram** (`#communitySection`): las URLs salen de
+  `Config['communityConfig']` (`channelUrl`/`supportUrl`), editables en el panel →
+  COMANDOS; cada tarjeta se muestra sólo si su URL está cargada. Las pinta
+  `VIP.ui.loadCommunityLinks()` desde `initializeSession` (antes era un script inline
+  con polling de 25 s que se rendía si el login tardaba). ⚠️ NO confundir con
+  `Config['canalInformativoUrl']`, que es el botón 📢 de la barra superior: son dos
+  claves distintas y hay que cargar el link en las dos.
 - **FCM**: todo el manejo real (getToken 3 tiers, refresh, register-token) está en el
   INLINE de index.html; `window.sendFcmTokenAfterLogin` del inline pisa a propósito la
   de notifications.js. Firebase config duplicada en index.html Y en el SW (cambiar

@@ -520,10 +520,44 @@ async function evaluateAllRules({ models, sendPushFn, logger }) {
 async function seedDefaultRulesIfMissing(NotificationRule) {
   const defaults = [
     // ============= REEMBOLSOS =============
-    // B1/B2 (recordatorios del reembolso DIARIO) eliminados 2026-07-28: el
-    // reembolso diario no existe más (sistema de rangos bronce/plata/oro en
-    // semanal/mensual). La migración refund_tiers_install100 desactiva las
-    // reglas refund-pending-daily que ya estén en la DB.
+    // B1/B2 (recordatorios del reembolso DIARIO) RESTAURADOS 2026-08-14: el
+    // diario volvió y usa el % del rango del cliente (bronce/plata/oro), así que
+    // los copys NO mencionan un porcentaje fijo — el % lo ve en la app.
+    // ⚠️ La audiencia 'refund-pending-daily' depende del modelo DailyPlayerStats,
+    // que NO está portado a este repo: mientras falte, la audiencia devuelve
+    // vacío y la regla no dispara (ver el guard en `_audienceRefundPendingDaily`).
+    // Además todas las reglas de refund se siembran DESACTIVADAS por
+    // `_seedDisabledAudiences` — hay que prenderlas a mano desde el panel.
+    {
+      id: uuidv4(),
+      code: 'B1',
+      name: 'Recordatorio reembolso diario — tarde (14:00)',
+      description: 'Aviso a la tarde a quienes perdieron ayer y no reclamaron el diario.',
+      category: 'refund',
+      enabled: true,
+      triggerType: 'cron',
+      cronSchedule: { hour: 14, minute: 0 },
+      audienceType: 'refund-pending-daily',
+      title: '💰 Tenés un reembolso esperándote',
+      body: '¿Perdiste ayer? Te corresponde un reembolso según tu rango 🥉🥈🥇. Tocá para reclamarlo.',
+      bonus: { type: 'none' },
+      cooldownMinutes: 12 * 60
+    },
+    {
+      id: uuidv4(),
+      code: 'B2',
+      name: 'Recordatorio reembolso diario — última hora (22:00)',
+      description: 'Último aviso del día para reclamar el reembolso diario.',
+      category: 'refund',
+      enabled: true,
+      triggerType: 'cron',
+      cronSchedule: { hour: 22, minute: 0 },
+      audienceType: 'refund-pending-daily',
+      title: '⏰ Última hora para tu reembolso diario',
+      body: 'Quedan pocas horas para reclamar el reembolso de tu pérdida de ayer.',
+      bonus: { type: 'none' },
+      cooldownMinutes: 8 * 60
+    },
     {
       id: uuidv4(),
       code: 'B3',

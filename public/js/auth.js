@@ -608,6 +608,7 @@ VIP.auth = (function () {
         VIP.refunds.loadRefundStatus();
         VIP.fire.loadFireStatus();
         VIP.ui.loadCanalInformativoUrl();
+        VIP.ui.loadCommunityLinks();
         refreshVerifyPhoneBanner();
         if (VIP.appTest && VIP.appTest.maybeShowAppCheck) VIP.appTest.maybeShowAppCheck();
         if (VIP.appTest && VIP.appTest.maybeRunNotifTest) VIP.appTest.maybeRunNotifTest();

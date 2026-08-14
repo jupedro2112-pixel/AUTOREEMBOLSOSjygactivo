@@ -9375,7 +9375,7 @@ async function loadReembolsos() {
         const recent = j.recent || [];
         const typeLabels = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual' };
         let html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:18px;">';
-        html += _centRefundCard('📅 Diarios (descontinuado)', types.daily, '#4caf50');
+        html += _centRefundCard('📅 Diarios', types.daily, '#4caf50');
         html += _centRefundCard('📆 Semanales', types.weekly, '#2196f3');
         html += _centRefundCard('🗓️ Mensuales', types.monthly, '#d4af37');
         html += '</div>';

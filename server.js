@@ -5355,7 +5355,7 @@ app.post('/api/messages/welcome', authMiddleware, async (req, res) => {
     // Texto editable desde COMANDOS (/sys_welcome). Fallback al texto original.
     const welcomeContent = await renderSystemCommand(
       '/sys_welcome',
-      `🎉 ¡Bienvenido a la Sala de Juegos, {username}!\n\n🎁 Beneficios exclusivos:\n• Reembolso SEMANAL y MENSUAL según tu RANGO\n• 🥉 Bronce 3% · 🥈 Plata 5% · 🥇 Oro 10% de lo perdido\n• Fueguito diario con recompensas\n• Atención 24/7\n\n💬 Escribe aquí para hablar con un agente.\n\nLink de pagina: https://www.jugaygana44.bet/\n\nCBU activo: {cbu}`,
+      `🎉 ¡Bienvenido a la Sala de Juegos, {username}!\n\n🎁 Beneficios exclusivos:\n• Reembolso DIARIO, SEMANAL y MENSUAL según tu RANGO\n• 🥉 Bronce 3% · 🥈 Plata 5% · 🥇 Oro 10% de lo perdido\n• Fueguito diario con recompensas\n• Atención 24/7\n\n💬 Escribe aquí para hablar con un agente.\n\nLink de pagina: https://www.jugaygana44.bet/\n\nCBU activo: {cbu}`,
       { username, cbu: cbuNumber }
     );
 
@@ -6255,11 +6255,12 @@ async function getRefundNonDepositCredits(username, fromDate, toDate) {
 // ============================================
 // RANGOS DE REEMBOLSO (bronce / plata / oro)
 // ============================================
-// El % de reembolso (semanal Y mensual) depende del RANGO del cliente, que se
-// define por su pérdida real (NETWIN) del mes calendario: hasta el tope de
+// El % de reembolso (DIARIO, semanal Y mensual) depende del RANGO del cliente,
+// que se define por su pérdida real (NETWIN) del mes calendario: hasta el tope de
 // bronce → % bronce; hasta el de plata → % plata; más que eso → oro.
 // Umbrales y % editables desde el panel (solo admin general) vía
-// Config['refundTiers']. El reembolso DIARIO fue eliminado (2026-07-28).
+// Config['refundTiers'] — un solo juego de rangos para los TRES reembolsos.
+// El diario se eliminó el 2026-07-28 y se restauró el 2026-08-14.
 const REFUND_TIER_DEFAULTS = {
   bronce: { upTo: 30000, percent: 3 },
   plata: { upTo: 100000, percent: 5 },
@@ -6320,15 +6321,21 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     const currentBalance = userInfo ? userInfo.balance : 0;
 
     // Rangos de fechas (zona horaria Argentina)
+    const yesterdayRange = jugaygana.getYesterdayRangeArgentinaEpoch();
     const lastWeekRange = jugaygana.getLastWeekRangeArgentinaEpoch();
     const lastMonthRange = jugaygana.getLastMonthRangeArgentinaEpoch();
     const currentMonthRange = jugaygana.getCurrentMonthToDateRangeArgentinaEpoch();
 
-    const [weeklyStatus, monthlyStatus] = await Promise.all([
+    const [dailyStatus, weeklyStatus, monthlyStatus] = await Promise.all([
+      // Se pasa el día de AYER (ART) para que la ventana se evalúe por periodKey
+      // exacto y no por el día calendario del server (que en EB es UTC).
+      refunds.canClaimDailyRefund(userId, yesterdayRange.dateStr),
       refunds.canClaimWeeklyRefund(userId),
       refunds.canClaimMonthlyRefund(userId)
     ]);
 
+    const dailyFrom = new Date(yesterdayRange.fromEpoch * 1000);
+    const dailyTo = new Date(yesterdayRange.toEpoch * 1000);
     const weeklyFrom = new Date(lastWeekRange.fromEpoch * 1000);
     const weeklyTo = new Date(lastWeekRange.toEpoch * 1000);
     const monthlyFrom = new Date(lastMonthRange.fromEpoch * 1000);
@@ -6340,16 +6347,18 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     // El reembolso es sobre la PÉRDIDA REAL de juego, NO sobre cargas − retiros. Si la
     // plataforma no responde para un período, ese netLoss queda en 0 (no se preview de más).
     const jgId = await resolveJugayganaUserId(userId, username);
-    const [wN, mN, curN] = await Promise.all([
+    const [dN, wN, mN, curN] = await Promise.all([
+      referralRevenueService.getUserNetwinForDateRange(username, jgId, dailyFrom, dailyTo, 'refund-daily'),
       referralRevenueService.getUserNetwinForDateRange(username, jgId, weeklyFrom, weeklyTo, 'refund-weekly'),
       referralRevenueService.getUserNetwinForDateRange(username, jgId, monthlyFrom, monthlyTo, 'refund-monthly'),
       referralRevenueService.getUserNetwinForDateRange(username, jgId, curMonthFrom, curMonthTo, 'refund-tier')
     ]);
+    const dailyNetLoss = dN.success ? Math.max(0, Number(dN.totalGgr) || 0) : 0;
     const weeklyNetLoss = wN.success ? Math.max(0, Number(wN.totalGgr) || 0) : 0;
     const monthlyNetLoss = mN.success ? Math.max(0, Number(mN.totalGgr) || 0) : 0;
     const currentMonthNetLoss = curN.success ? Math.max(0, Number(curN.totalGgr) || 0) : 0;
 
-    logger.info(`[REFUND] status — ${username} NETWIN weekly:${wN.totalGgr}→${weeklyNetLoss} monthly:${mN.totalGgr}→${monthlyNetLoss} mes-en-curso:${curN.totalGgr}→${currentMonthNetLoss}`);
+    logger.info(`[REFUND] status — ${username} NETWIN daily:${dN.totalGgr}→${dailyNetLoss} weekly:${wN.totalGgr}→${weeklyNetLoss} monthly:${mN.totalGgr}→${monthlyNetLoss} mes-en-curso:${curN.totalGgr}→${currentMonthNetLoss}`);
 
     // RANGOS (bronce/plata/oro):
     // - currentTier: rango "en vivo" según la pérdida del mes EN CURSO (para mostrar).
@@ -6363,7 +6372,12 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     const monthlyTier = computeRefundTier(monthlyNetLoss, tiers);
     const _curMonthKey = currentMonthRange.fromDateStr.slice(0, 7);
     const weeklyTier = lastWeekRange.fromDateStr.slice(0, 7) === _curMonthKey ? currentTier : monthlyTier;
+    // El diario usa el rango del mes al que pertenece AYER. Casi siempre es el mes
+    // en curso; el único caso distinto es el día 1, donde ayer cayó en el mes
+    // anterior → ahí corresponde el rango de ESE mes (== monthlyTier).
+    const dailyTier = yesterdayRange.dateStr.slice(0, 7) === _curMonthKey ? currentTier : monthlyTier;
 
+    const dailyPotential = Math.round(dailyNetLoss * (dailyTier.percent / 100));
     const weeklyPotential = Math.round(weeklyNetLoss * (weeklyTier.percent / 100));
     const monthlyPotential = Math.round(monthlyNetLoss * (monthlyTier.percent / 100));
 
@@ -6395,16 +6409,15 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
           oro: { ...REFUND_TIER_META.oro, upTo: null, percent: tiers.oro.percent }
         }
       },
-      // Stub inerte para PWAs viejas cacheadas (el reembolso diario fue eliminado
-      // 2026-07-28; sin este objeto, un cliente con JS viejo rompería al renderizar).
+      // Reembolso DIARIO: restaurado 2026-08-14. Usa el MISMO % del rango que el
+      // semanal y el mensual (editable desde el panel), sobre el NETWIN de AYER.
       daily: {
-        canClaim: false,
-        discontinued: true,
-        potentialAmount: 0,
-        netAmount: 0,
-        percentage: 0,
-        period: null,
-        nextClaim: null
+        ...dailyStatus,
+        potentialAmount: dailyPotential,
+        netAmount: dailyNetLoss,
+        percentage: dailyTier.percent,
+        tier: dailyTier.key,
+        period: yesterdayRange.dateStr
       },
       weekly: {
         ...weeklyStatus,
@@ -6429,18 +6442,211 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
   }
 });
 
-// TOMBSTONE (2026-07-28): el reembolso DIARIO fue ELIMINADO — reemplazado por el
-// sistema de rangos (bronce/plata/oro) que define el % de los reembolsos semanal
-// y mensual. El endpoint queda como stub amigable porque PWAs viejas cacheadas
-// por el service worker siguen llamándolo un tiempo (lección de #88).
-// Rollback: git revert.
-app.post('/api/refunds/claim/daily', authMiddleware, (req, res) => {
-  res.json({
-    success: false,
-    canClaim: false,
-    discontinued: true,
-    message: 'El reembolso diario ya no está disponible: ahora tu reembolso SEMANAL y MENSUAL se calcula según tu rango (🥉 Bronce, 🥈 Plata, 🥇 Oro). Recargá la app para ver tu rango.'
-  });
+// REEMBOLSO DIARIO — restaurado 2026-08-14 a pedido del owner (se había eliminado
+// el 2026-07-28 al pasar a rangos). Convive con el semanal y el mensual y usa el
+// MISMO % del rango (bronce/plata/oro), editable desde el panel → COMANDOS.
+//
+// Se reembolsa el NETWIN de AYER (día calendario completo, horario Argentina).
+// El rango sale de la pérdida del mes al que pertenece ese día.
+//
+// ⚠️ Los tres reembolsos SE SOLAPAN a propósito (decisión del owner 2026-08-14):
+// el día de ayer también cae dentro de la semana y del mes que se reembolsan, así
+// que un cliente puede cobrar por la misma pérdida en los tres. No se descuentan
+// entre sí — igual que el solape preexistente entre semanal y mensual (#73).
+app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const username = req.user.username;
+
+    if (!await acquireRefundLock(userId, 'daily')) {
+      return res.json({
+        success: false,
+        message: '⏳ Ya estás procesando un reembolso. Por favor espera...',
+        canClaim: true,
+        processing: true
+      });
+    }
+
+    try {
+      // El período (ayer en ART) se resuelve PRIMERO: la ventana se chequea contra
+      // ese día exacto vía periodKey, no contra el día calendario del server.
+      const { fromEpoch, toEpoch, dateStr } = jugaygana.getYesterdayRangeArgentinaEpoch();
+      const fromDate = new Date(fromEpoch * 1000);
+      const toDate = new Date(toEpoch * 1000);
+
+      const status = await refunds.canClaimDailyRefund(userId, dateStr);
+
+      if (!status.canClaim) {
+        return res.json({
+          success: false,
+          message: 'Ya reclamaste tu reembolso diario de ayer. Volvé mañana.',
+          canClaim: false,
+          nextClaim: status.nextClaim
+        });
+      }
+
+      const jugayganaUserId = await resolveJugayganaUserId(userId, username);
+
+      if (!jugayganaUserId) {
+        return res.json({
+          success: false,
+          message: 'Tu cuenta no está vinculada a la plataforma. Contacta al soporte.',
+          canClaim: true
+        });
+      }
+
+      // NETWIN/GGR REAL de ayer (apostado − ganado), misma fuente que referidos.
+      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-daily');
+      if (!netRes.success) {
+        logger.warn(`[REFUND] daily — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
+        return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
+      }
+      const netLoss = Math.max(0, Number(netRes.totalGgr) || 0);
+      logger.info('[REFUND] daily — usuario:', username, 'NETWIN(GGR):', netRes.totalGgr, 'netLoss:', netLoss);
+
+      if (netLoss === 0) {
+        logger.info('[REFUND] daily — sin pérdida real para:', username);
+        return res.json({
+          success: false,
+          message: 'No tenés pérdida de ayer. El reembolso aplica solo sobre lo que perdiste jugando.',
+          canClaim: true,
+          netAmount: 0
+        });
+      }
+
+      // % según RANGO: pérdida del mes al que pertenece AYER. Normalmente es el mes
+      // en curso; el día 1 ayer cayó en el mes anterior → ahí se usa ese mes COMPLETO
+      // (misma lógica que el semanal, para no descartar la pérdida acumulada).
+      const tiers = await getRefundTiers();
+      const _curMonthRange = jugaygana.getCurrentMonthToDateRangeArgentinaEpoch();
+      let tierRange;
+      if (dateStr.slice(0, 7) === _curMonthRange.fromDateStr.slice(0, 7)) {
+        tierRange = _curMonthRange;
+      } else {
+        const [_dy, _dm] = dateStr.split('-').map(Number);
+        const _lastDay = new Date(_dy, _dm, 0).getDate();
+        tierRange = jugaygana.getMonthToDateRangeForDateArgentina(`${dateStr.slice(0, 7)}-${String(_lastDay).padStart(2, '0')}`);
+      }
+      const tierRes = await referralRevenueService.getUserNetwinForDateRange(
+        username, jugayganaUserId,
+        new Date(tierRange.fromEpoch * 1000), new Date(tierRange.toEpoch * 1000),
+        'refund-tier'
+      );
+      if (!tierRes.success) {
+        logger.warn(`[REFUND] daily — no se pudo leer NETWIN mensual (rango) de ${username}: ${tierRes.error || 's/detalle'}`);
+        return res.json({ success: false, message: 'No pudimos calcular tu rango en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
+      }
+      const monthNetLoss = Math.max(0, Number(tierRes.totalGgr) || 0);
+      const tier = computeRefundTier(monthNetLoss, tiers);
+      const dailyPct = tier.percent;
+      const refundAmount = Math.round(netLoss * (dailyPct / 100));
+
+      logger.info('[REFUND] daily — calculado para', username, 'netLoss:', netLoss, 'rango:', tier.key, `(pérdida mes ${monthNetLoss})`, 'pct:', dailyPct, 'refund:', refundAmount);
+
+      // Guard: monto que redondea a $0 → NO reservar el día (si no, se quema la
+      // ventana por $0 y el usuario no puede reintentar). Mismo criterio que #97.
+      if (refundAmount <= 0) {
+        return res.json({
+          success: false,
+          message: 'Tu pérdida de ayer es muy chica para generar reembolso.',
+          canClaim: true,
+          netAmount: netLoss
+        });
+      }
+
+      // CANDADO REAL contra doble cobro (#96): reservar el reclamo con el índice
+      // único userId+type+periodKey ANTES de acreditar. Si el lock Redis está
+      // degradado en multi-instancia, esto es lo que evita pagar dos veces.
+      const _refundClaimId = uuidv4();
+      const _refundPeriodKey = 'daily:' + dateStr;
+      try {
+        await RefundClaim.create({
+          id: _refundClaimId, userId, username, type: 'daily',
+          amount: refundAmount, netAmount: netLoss, percentage: dailyPct, tier: tier.key,
+          period: dateStr, periodKey: _refundPeriodKey, claimedAt: new Date()
+        });
+      } catch (e) {
+        if (e && e.code === 11000) {
+          return res.json({ success: false, message: 'Ya reclamaste tu reembolso diario de ese día.', canClaim: false });
+        }
+        throw e;
+      }
+
+      // El crédito va en su propio try: si TIRA (no si devuelve success:false —
+      // eso ya se maneja abajo), hay que soltar la reserva antes de propagar el
+      // error. Sin esto, un hipo de JUGAYGANA en el peor momento dejaba al usuario
+      // con el día quemado y sin cobrar. Importa más acá que en el semanal: el
+      // diario se reclama 7 veces más seguido.
+      let depositResult;
+      try {
+        depositResult = await jugaygana.creditUserBalance(username, refundAmount, jugayganaUserId);
+      } catch (creditErr) {
+        await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
+        logger.error(`[REFUND] daily — excepción al acreditar a ${username}, reserva liberada: ${creditErr.message}`);
+        return res.json({
+          success: false,
+          message: 'No pudimos acreditar el reembolso en este momento. Probá de nuevo en unos minutos.',
+          canClaim: true
+        });
+      }
+
+      if (!depositResult.success) {
+        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
+        return res.json({
+          success: false,
+          message: 'Error al acreditar el reembolso: ' + depositResult.error,
+          canClaim: true
+        });
+      }
+
+      const _refundTxId = depositResult.data?.transfer_id || depositResult.data?.transferId;
+      if (_refundTxId) await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: _refundTxId } }).catch(() => {});
+
+      // La plata YA está acreditada: de acá en adelante nada puede tirar, o el
+      // usuario vería "Error del servidor" habiendo cobrado (y el reintento le
+      // diría "ya reclamaste"). El Transaction es sólo para el dashboard.
+      try {
+        await Transaction.create({
+          id: uuidv4(),
+          type: 'refund',
+          amount: refundAmount,
+          username,
+          description: `Reembolso diario (${dateStr})`,
+          transactionId: _refundTxId,
+          timestamp: new Date()
+        });
+      } catch (txErr) {
+        logger.error(`[REFUND] daily — reembolso ACREDITADO a ${username} pero falló el Transaction: ${txErr.message}`);
+      }
+
+      // Meta CAPI — RefundClaim diario.
+      try {
+        const u = await User.findOne({ id: userId }).lean();
+        metaCapi.track(
+          'RefundClaim',
+          { email: u && u.email, phone: u && u.phone, externalId: userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
+          { value: refundAmount, currency: 'ARS', content_name: 'refund_daily', period: dateStr },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
+      res.json({
+        success: true,
+        message: `¡Reembolso diario de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${dailyPct}%)`,
+        amount: refundAmount,
+        percentage: dailyPct,
+        tier: tier.key,
+        netAmount: netLoss,
+        nextClaim: status.nextClaim
+      });
+    } finally {
+      setTimeout(() => releaseRefundLock(userId, 'daily'), 3000);
+    }
+  } catch (error) {
+    console.error('Error reclamando reembolso diario:', error);
+    res.json({ success: false, message: 'Error del servidor', canClaim: true });
+  }
 });
 
 app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
@@ -7091,9 +7297,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           .replace(/\{bonus\}/g, includeBonusInMessage ? bonus : 0)
           .replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose');
       } else if (includeBonusInMessage) {
-        messageContent = `🔒💰 Depósito de $${amount} (incluye $${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥`;
+        messageContent = `🔒💰 Depósito de $${amount} (incluye $${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso DIARIO (todos los dias), SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥`;
       } else {
-        messageContent = `🔒💰 Depósito de $${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥`;
+        messageContent = `🔒💰 Depósito de $${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balanceStr} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso DIARIO (todos los dias), SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥`;
       }
       
       const systemMessage = await Message.create({
@@ -8525,7 +8731,7 @@ async function initializeData() {
     const flag = await Config.findOne({ key: 'migration_refund_tiers_install100_done' }).lean();
     if (!flag || flag.value !== true) {
       const OLD_WELCOME_LINE = '• Reembolso DIARIO del 20%\n• Reembolso SEMANAL del 10%\n• Reembolso MENSUAL del 5%';
-      const NEW_WELCOME_LINE = '• Reembolso SEMANAL y MENSUAL según tu RANGO\n• 🥉 Bronce 3% · 🥈 Plata 5% · 🥇 Oro 10% de lo perdido';
+      const NEW_WELCOME_LINE = '• Reembolso DIARIO, SEMANAL y MENSUAL según tu RANGO\n• 🥉 Bronce 3% · 🥈 Plata 5% · 🥇 Oro 10% de lo perdido';
       const OLD_DEPOSIT_LINE = '🔥 Mañana podes revisar si tenes reembolso para reclamar de forma automatica 🔥';
       const NEW_DEPOSIT_LINE = '🔥 Recorda: tenes reembolso SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥';
       const OLD_INSTALL_APP_DEFAULT = '🎁━━━━━━━━━━━━━━━🎁\n📲 INSTALÁ LA APP\n   Y GANÁ $5.000 🎁\n🎁━━━━━━━━━━━━━━━🎁\n\n¿Todavía no instalaste la app? ¡Hacelo ahora y reclamá tu BONO DE $5.000! 🤑\n\n✅ Te avisamos al toque de tus bonos y reembolsos\n✅ Entrás más rápido y no perdés tu cuenta\n\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, elegí "Agregar a pantalla de inicio".\n\n🎁 Una vez instalada, abrí la app y tocá el botón "🎁 Reclamar $5.000" que vas a ver arriba del chat. ¡El bono se acredita al instante!';
@@ -8577,6 +8783,47 @@ async function initializeData() {
     }
   } catch (e) {
     logger.error(`[startup-migration] refund_tiers_install100 (reintenta al próximo arranque): ${e.message}`);
+  }
+
+  // One-shot (2026-08-14): el reembolso DIARIO volvió. Actualiza por SUBSTRING los
+  // comandos que quedaron diciendo "SEMANAL y MENSUAL" tras la migración de #97,
+  // para que vuelvan a nombrar los tres reembolsos.
+  // NO toca las reglas push B1/B2: se siembran desactivadas igual que las de
+  // semanal/mensual (`_seedDisabledAudiences`) y las prende el owner desde el panel
+  // cuando quiera — nunca activamos envíos masivos por migración.
+  // ⚠️ Si el owner editó esos textos a mano, el substring puede no matchear: en ese
+  // caso hay que actualizarlos desde COMANDOS (buscar "SEMANAL y MENSUAL").
+  try {
+    const flagD = await Config.findOne({ key: 'migration_refund_daily_restore_done' }).lean();
+    if (!flagD || flagD.value !== true) {
+      const PAIRS = [
+        ['• Reembolso SEMANAL y MENSUAL según tu RANGO', '• Reembolso DIARIO, SEMANAL y MENSUAL según tu RANGO'],
+        ['🔥 Recorda: tenes reembolso SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥',
+         '🔥 Recorda: tenes reembolso DIARIO (todos los dias), SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥']
+      ];
+      let updatedD = 0;
+      const cmdsD = await Command.find({ name: { $in: ['/sys_welcome', '/sys_deposit', '/sys_deposit_bonus'] } });
+      for (const cmd of cmdsD) {
+        const orig = String(cmd.response || '');
+        let next = orig;
+        for (const [from, to] of PAIRS) {
+          if (next.includes(from)) next = next.split(from).join(to);
+        }
+        if (next !== orig) {
+          cmd.response = next;
+          await cmd.save();
+          updatedD++;
+        }
+      }
+      logger.info(`[startup-migration] refund_daily_restore: comandos actualizados: ${updatedD}`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_refund_daily_restore_done' },
+        { key: 'migration_refund_daily_restore_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] refund_daily_restore (reintenta al próximo arranque): ${e.message}`);
   }
 
   // Backfill de usernameLower (camino rápido del login case-insensitive). Corre en
@@ -8745,13 +8992,13 @@ async function initializeData() {
       name: '/sys_deposit',
       description: 'Mensaje automático al realizar un depósito sin bonus. Variables disponibles: ${amount}, ${balance}',
       type: 'message',
-      response: '🔒💰 Depósito de ${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balance} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥'
+      response: '🔒💰 Depósito de ${amount} acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balance} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso DIARIO (todos los dias), SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥'
     },
     {
       name: '/sys_deposit_bonus',
       description: 'Mensaje automático al realizar un depósito con bonus. Variables disponibles: ${amount}, ${bonus}, ${balance}',
       type: 'message',
-      response: '🔒💰 Depósito de ${amount} (incluye ${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balance} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥'
+      response: '🔒💰 Depósito de ${amount} (incluye ${bonus} de bonificación) acreditado con éxito. ✅ \n💸 Tu nuevo saldo es ${balance} 💸\n\nPuedes verificarlo en: https://jugaygana.bet\n\n🔥 Recorda: tenes reembolso DIARIO (todos los dias), SEMANAL (lunes y martes) y MENSUAL (desde el dia 7) segun tu rango 🥉🥈🥇 🔥'
     },
     {
       name: '/sys_bonus',
@@ -8781,7 +9028,7 @@ async function initializeData() {
       name: '/sys_welcome',
       description: 'Mensaje de bienvenida que se envía cuando el usuario ingresa por primera vez (cada 24h). Variables: {username}, {cbu}',
       type: 'message',
-      response: '🎉 ¡Bienvenido a la Sala de Juegos, {username}!\n\n🎁 Beneficios exclusivos:\n• Reembolso SEMANAL y MENSUAL según tu RANGO\n• 🥉 Bronce 3% · 🥈 Plata 5% · 🥇 Oro 10% de lo perdido\n• Fueguito diario con recompensas\n• Atención 24/7\n\n💬 Escribe aquí para hablar con un agente.\n\nLink de pagina: https://www.jugaygana44.bet/\n\nCBU activo: {cbu}'
+      response: '🎉 ¡Bienvenido a la Sala de Juegos, {username}!\n\n🎁 Beneficios exclusivos:\n• Reembolso DIARIO, SEMANAL y MENSUAL según tu RANGO\n• 🥉 Bronce 3% · 🥈 Plata 5% · 🥇 Oro 10% de lo perdido\n• Fueguito diario con recompensas\n• Atención 24/7\n\n💬 Escribe aquí para hablar con un agente.\n\nLink de pagina: https://www.jugaygana44.bet/\n\nCBU activo: {cbu}'
     },
     {
       name: '/sys_cbu',
@@ -14149,11 +14396,11 @@ const _CLAIMS_EXAMPLE_NAMES = ['lucas', 'martin', 'jose', 'daniela', 'rodri', 'm
   'seba', 'noe', 'gonza', 'pao', 'juli', 'fede', 'mica', 'tomi'];
 
 // Genera reclamos de ejemplo para completar el feed cuando hay pocos reales.
-// Sin 'daily' (reembolso diario eliminado 2026-07-28) ni 'bono' (el bono de
-// instalación pasó a ser cupón 100% próxima carga, sin monto fijo mostrable).
+// Incluye 'daily' de nuevo (el diario volvió el 2026-08-14). Sigue SIN 'bono':
+// el bono de instalación es un cupón 100% próxima carga, sin monto mostrable.
 function _generateExampleClaims(n) {
   const kinds = ['ruleta', 'reembolso'];
-  const refundTypes = ['weekly', 'monthly'];
+  const refundTypes = ['daily', 'weekly', 'monthly'];
   const out = [];
   for (let i = 0; i < n; i++) {
     const kind = kinds[Math.floor(Math.random() * kinds.length)];

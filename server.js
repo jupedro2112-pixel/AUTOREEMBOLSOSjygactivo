@@ -7517,6 +7517,31 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         }
       }
 
+      // Cupón 100% de instalación: si el agente aplicó un bonus MANUAL del 100%
+      // o más de la carga, cuenta como ESE bono único → se consume (y si el
+      // cliente nunca lo reclamó, se deja directamente consumido). Cierra el
+      // doble-100% visto en producción (2026-08-15): el agente lo daba a mano,
+      // el cupón seguía "sin usar" y la carga automática después lo volvía a
+      // dar. Un bonus menor al 100% (p.ej. 20%) NO consume el cupón.
+      if (bonusActuallyApplied && parseFloat(bonus) >= parseFloat(amount)) {
+        try {
+          const usedBy = `${req.user?.username || 'agente'} (bonus manual ≥100%)`;
+          const mark = { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: usedBy };
+          const usedPending = await User.findOneAndUpdate(
+            { id: user.id, installBonus100Pending: true },
+            { $set: mark }
+          );
+          if (!usedPending) {
+            await User.findOneAndUpdate(
+              { id: user.id, installBonusClaimed: { $ne: true } },
+              { $set: Object.assign({ installBonusClaimed: true, installBonusClaimedAt: new Date(), installBonus100GrantedAt: new Date() }, mark) }
+            );
+          }
+        } catch (ibErr) {
+          logger.warn(`[install-bonus-100] no se pudo consumir por bonus manual: ${ibErr.message}`);
+        }
+      }
+
       // Obtener saldo actualizado del usuario. Reintenta para evitar el bug
       // histórico donde un fallo transitorio post-depósito hacía que el server
       // mandara "Tu nuevo saldo es $0" engañoso (el depósito SÍ se aplicó pero
@@ -8856,6 +8881,46 @@ async function initializeData() {
     }
   } catch (e) {
     logger.error(`[startup-migration] Falló purga one-shot de ChatStatus vacíos: ${e.message}`);
+  }
+
+  // One-shot migration (guardada con flag): consume el cupón install-bonus-100
+  // de todo usuario que YA recibió un bonus MANUAL del 100%+ en alguna carga
+  // (el Transaction de la carga manual guarda `bonus`; los de la auto-carga no
+  // lo usan, así que esto sólo agarra manuales). Sin esto, la carga automática
+  // les daría OTRO 100% — visto en producción la noche del lanzamiento
+  // (2026-08-15): los agentes venían aplicando el 100% a mano y el cupón
+  // quedaba "sin usar". La regla del owner es UN 100% por cliente en total.
+  try {
+    const flag = await Config.findOne({ key: 'migration_install100_consume_manual_done' }).lean();
+    if (!flag || flag.value !== true) {
+      const rows = await Transaction.aggregate([
+        { $match: { type: 'deposit', bonus: { $gt: 0 }, userId: { $ne: null } } },
+        { $match: { $expr: { $gte: ['$bonus', '$amount'] } } },
+        { $group: { _id: '$userId' } }
+      ]);
+      const ids = rows.map(r => r._id).filter(Boolean);
+      let consumed = 0;
+      if (ids.length > 0) {
+        const mark = { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: 'migracion-bonus-manual-100' };
+        const r1 = await User.updateMany(
+          { id: { $in: ids }, installBonus100Pending: true },
+          { $set: mark }
+        );
+        const r2 = await User.updateMany(
+          { id: { $in: ids }, installBonusClaimed: { $ne: true } },
+          { $set: Object.assign({ installBonusClaimed: true, installBonusClaimedAt: new Date(), installBonus100GrantedAt: new Date() }, mark) }
+        );
+        consumed = (r1.modifiedCount || 0) + (r2.modifiedCount || 0);
+      }
+      logger.info(`[startup-migration] install100: usuarios con 100% manual previo=${ids.length}, cupones consumidos ahora=${consumed} (one-shot)`);
+      await Config.findOneAndUpdate(
+        { key: 'migration_install100_consume_manual_done' },
+        { key: 'migration_install100_consume_manual_done', value: true },
+        { upsert: true }
+      );
+    }
+  } catch (e) {
+    logger.error(`[startup-migration] Falló consumo de install100 por bonus manual previo: ${e.message}`);
   }
 
   // One-shot migration (guardada con flag): VENCE todos los PromoBonus activos

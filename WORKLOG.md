@@ -8,6 +8,40 @@
 
 ## Sesión 2026-08-15
 
+### 113. "Da 100% en todas las cargas" — NO era el auto-bono: eran bonos MANUALES + cupón sin consumir
+- **Reporte del owner (capturas de JUGAYGANA + logs de las 2 instancias de EB):**
+  clientes con 100% repetido en varias cargas (atodiego852, RoyalLuis613).
+- **Diagnóstico (con línea de tiempo anclada):** el código del bono entró a
+  producción a las **23:56 ART del 14/08** (deploy 02:56 UTC). TODOS los 100%
+  duplicados de las capturas son ANTERIORES a esa hora → **bonos manuales de
+  agentes** (el mensaje "instalá la app" les decía a los clientes "avisale al
+  cajero"). Después del deploy, en TODO el log **ningún usuario recibió
+  `install_100` dos veces**, y la marca persiste entre instancias (royalBrenda812:
+  100% en una instancia a las 04:52 UTC → sus 2 cargas siguientes en la OTRA
+  instancia salieron con 20%). El agujero real: **el bonus manual del agente no
+  consumía el cupón**, así que el sistema después daba "su" 100% legítimo.
+  Discriminador para auditar: en Transacciones, los automáticos figuran como
+  `auto-hgcash`; los manuales llevan el nombre del agente.
+- **Fix 1 (carga manual, server.js):** si el agente aplica un bonus manual
+  **≥100% del monto**, se consume el cupón install-bonus-100 en esa misma
+  operación (pendiente → usado; nunca reclamado → queda directamente consumido,
+  `installBonus100UsedBy = '<agente> (bonus manual ≥100%)'`). Un bonus menor
+  (20%, etc.) NO lo consume.
+- **Fix 2 (migración one-shot `migration_install100_consume_manual_done`):**
+  consume el cupón de todo usuario que YA tenga un Transaction de depósito con
+  `bonus >= amount` (sólo los manuales usan ese campo; las auto-cargas no).
+  Regla del owner que esto implementa: **UN 100% por cliente en TOTAL**.
+- **Operativo (avisar a los agentes):** NO aplicar más el 100% "por instalación"
+  a mano en cargas que van a entrar por hgcash — es automático. Conviene editar
+  los comandos `/sys_install_app` y `/sys_install_bonus_100` desde el panel para
+  que dejen de decir "avisale al cajero" (los textos viven en la DB; se editan
+  desde COMANDOS).
+- **Observación aparte de los logs:** ~01:05 ART la cuenta cajero de JUGAYGANA
+  se quedó **sin saldo** ("not enough money") y un crédito de $360 a
+  maresteban649 se reintentó muchas veces sin entrar. Revisar saldo de la cuenta.
+- **Validado:** `node --check` OK. Solo backend → sin bump de `?v`. Back necesita
+  redeploy (la migración corre sola al arrancar y loguea cuántos consumió).
+
 ### 112. El menú del home arranca OCULTO (invierte el arranque de siempre)
 - **Pedido del owner:** que a los usuarios el menú ya les aparezca ocultado — "ahora
   es al revés". Una línea: `applyHomePanel(true, false)` en el init (app.js ~364).

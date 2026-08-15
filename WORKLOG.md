@@ -8,6 +8,57 @@
 
 ## Sesión 2026-08-15
 
+### 110. BONO AUTOMÁTICO en cargas hgcash: 100% primera carga + 20% todas (app + notifs)
+- **Pedido del owner (2026-08-15), sólo para cargas AUTOMÁTICAS por hgcash** (las
+  manuales las bonifica el agente a mano, como siempre):
+  1. **100% en la primera carga** si el cliente tiene la **app instalada con
+     notificaciones activas**. Es el MISMO cupón install-bonus-100 que ya existía:
+     si lo tenía pendiente (reclamado desde la app) se consume automático; si nunca
+     lo reclamó, se otorga y consume EN EL ACTO al detectar app+notifs. Queda
+     plasmado (`installBonus100UsedAt`/`UsedBy='auto-hgcash'`) → **no se repite**.
+  2. **20% en TODAS las cargas automáticas** mientras tenga app+notifs, **hasta el
+     31/08/2026 23:59 ART** (`HGCASH_APP_BONUS_20_UNTIL`). No se acumula con el
+     100% (la carga que lleva 100% no lleva además 20%).
+  3. **Sin app y/o notifs:** la carga entra SIN bono y se le manda un aviso
+     **editable** desde COMANDOS: **`/sys_deposit_no_app_20`** (vaciarlo lo apaga;
+     sólo se envía mientras la promo del 20% esté vigente).
+- **Detección app+notifs:** `_rouletteHasAppInstalled` (token FCM contexto
+  `standalone`) — el mismo gate que la ruleta; ese token sólo existe con la PWA
+  instalada Y el permiso de notificaciones concedido.
+- **DECISIONES a registrar:**
+  - El otorgamiento automático del 100% **NO exige teléfono verificado** (el claim
+    manual desde la app sí lo sigue exigiendo). Automático por detección = sin
+    fricción, decisión implícita del pedido. **SÍ se mantiene** el candado
+    anti-multicuenta por dispositivo (`_installBonusDeviceFree`, mismo guard del
+    claim; fail-closed ante error de DB).
+  - Los que ya cobraron el bono viejo de $5.000 o ya usaron el cupón NO reciben el
+    100% (`installBonusClaimed=true` los frena) — sí el 20%.
+  - ⚠️ El 100% es **excepción explícita del owner al "tope 30% en todo lo
+    automático"** (anotado en CLAUDE.md).
+- **Implementación (server.js):** `_hgcashApplyAppBonus(user, amount)` llamado en
+  `hgcashAutoCarga` después de acreditar la carga y ANTES de leer el balance (el
+  saldo del mensaje ya incluye el bono). Marca atómica del cupón ANTES de acreditar
+  (patrón reserva→acreditar de #96); si `creditUserBalance` falla, **deshace la
+  marca** (el cupón vuelve a pendiente / el otorgamiento se revierte) y avisa al
+  agente por nota admin-only para aplicarlo a mano. Pausa de 700 ms carga→bonus
+  (rate-limit JUGAYGANA, causa del bug "carga sí, bonus no"). Bono registrado como
+  `Transaction {type:'bonus', adminUsername:'auto-hgcash',
+  metadata.source:'auto_hgcash_bonus', kind:'install_100'|'app_20'}`. El mensaje al
+  cliente usa `/sys_deposit_bonus` cuando hubo bono (antes siempre `/sys_deposit`);
+  la nota admin-only de la carga ahora dice qué bono se sumó. Un solo camino de
+  carga automática (verificado: los demás `depositToUser` son manuales/devoluciones).
+- **Nota:** el `bonus` del Transaction de la CARGA queda en 0 (el registro del bono
+  es la Transaction 'bonus' separada, igual que el flujo manual que también la crea
+  aparte). El aviso sin-app NO reutiliza `/sys_install_app` (su copy dice "avisale
+  al cajero", obsoleto para el flujo automático).
+- **Validado:** `node --check` OK. Solo backend → sin bump de `?v`. **Back necesita
+  redeploy.** **PROBAR tras deploy:** (a) carga automática de un cliente con app+
+  notifs que nunca reclamó el bono → +100% acreditado y marcado usado; (b) segunda
+  carga automática del mismo → +20%; (c) cliente sin app → carga sin bono + aviso
+  `/sys_deposit_no_app_20`; (d) cliente con cupón pendiente reclamado desde la app
+  → la carga automática lo consume (+100%) y el banner del agente desaparece;
+  (e) después del 31/08 23:59 ART → ni 20% ni aviso (el 100% sigue).
+
 ### 109. Los chats VACÍOS ya no aparecen en Abiertos (eran interminables)
 - **Reportado por el owner (con screencast):** la pestaña Abiertos llena de chats
   "Sin mensajes" con fechas de junio; los cerraba a mano y aparecían más — inagotables.

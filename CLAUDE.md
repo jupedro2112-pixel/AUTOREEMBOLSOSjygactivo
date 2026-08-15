@@ -94,7 +94,9 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
 - **Bonos automáticos APAGADOS por flags** (owner 2026-06-24): `INACTIVIDAD_DISABLED`
   y `BONUS_STRATEGY_DISABLED` (server.js) + `CHARGE_BONUSES_DISABLED`
   (notificationRulesService) + bonos de encuesta con `bDays=[]`. Tope 30% en TODO lo
-  automático (cap de lectura en `_getActivePromoBonus` incluido).
+  automático (cap de lectura en `_getActivePromoBonus` incluido). **EXCEPCIÓN
+  (owner 2026-08-15):** el bono automático de las cargas hgcash con app+notifs
+  (100% primera carga / 20% hasta 31-08) — ver WORKLOG #110.
 - **Multi-instancia (AWS EB):** los crons son `setInterval` en CADA instancia; su
   idempotencia depende de índices únicos (EncuestaFire.slotKey, InactividadFire.fireKey,
   HgcashCharge.chargeKey, DailyRouletteSpin userId+dateKey). No quitar esos índices.

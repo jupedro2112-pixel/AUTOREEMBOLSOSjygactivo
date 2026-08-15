@@ -1911,6 +1911,159 @@ function _emitHgcashUpdate(kind) {
   try { notifyAdmins('hgcash_movement', { kind: kind || 'update', at: Date.now() }); } catch (_) {}
 }
 
+// ── BONO AUTOMÁTICO POR APP + NOTIFICACIONES (pedido del owner 2026-08-15) ──
+// Aplica SOLO en las cargas AUTOMÁTICAS por hgcash (las manuales las bonifica el
+// agente a mano, como siempre). Reglas:
+//  - 100% en la PRIMERA carga si el cliente tiene la app instalada con
+//    notificaciones activas (token FCM de contexto 'standalone' — el mismo gate
+//    que usa la ruleta: ese token sólo existe con la PWA instalada Y el permiso
+//    de notificaciones concedido). Es el MISMO cupón install-bonus-100: si ya lo
+//    tenía pendiente (lo reclamó desde la app) se consume; si nunca lo reclamó,
+//    se otorga y consume EN EL ACTO. Queda plasmado en User
+//    (installBonus100UsedAt / UsedBy='auto-hgcash') → no puede repetirse.
+//    ⚠️ Decisión del owner: el otorgamiento automático NO exige teléfono
+//    verificado (el claim manual sí lo exige) — se mantiene igual el candado
+//    anti-multicuenta por dispositivo. Los que ya cobraron el bono viejo de
+//    $5.000 o ya usaron el cupón NO entran (installBonusClaimed=true los frena).
+//  - 20% en TODAS las cargas automáticas mientras tenga app + notificaciones,
+//    hasta el 31/08/2026 23:59 ART. NO se acumula con el 100% (la carga que
+//    lleva el 100% no lleva además el 20%).
+// ⚠️ El 100% es una excepción EXPLÍCITA del owner al "tope 30% en todo lo
+// automático" documentado en CLAUDE.md.
+const HGCASH_APP_BONUS_20_PCT = 20;
+const HGCASH_APP_BONUS_20_UNTIL = new Date('2026-08-31T23:59:59.999-03:00');
+
+// Anti-multicuenta por dispositivo (mismo guard que install-bonus/claim): si un
+// token FCM de este usuario ya figura en OTRO usuario que ya reclamó el bono,
+// no se otorga. Ante error de DB devuelve false (fail-closed: es un bono).
+async function _installBonusDeviceFree(user) {
+  try {
+    const tokens = [];
+    if (user.fcmToken) tokens.push(user.fcmToken);
+    if (Array.isArray(user.fcmTokens)) {
+      for (const t of user.fcmTokens) {
+        if (t && t.token && !tokens.includes(t.token)) tokens.push(t.token);
+      }
+    }
+    if (tokens.length === 0) return true;
+    const conflict = await User.findOne({
+      id: { $ne: user.id },
+      installBonusClaimed: true,
+      $or: [{ fcmToken: { $in: tokens } }, { 'fcmTokens.token': { $in: tokens } }]
+    }).select('username').lean();
+    if (conflict) {
+      logger.warn(`[hgcash-bonus] 100% bloqueado por dispositivo repetido: user=${user.username} conflictWith=${conflict.username}`);
+    }
+    return !conflict;
+  } catch (e) {
+    logger.warn(`[hgcash-bonus] chequeo de dispositivo falló (no se otorga el 100%): ${e.message}`);
+    return false;
+  }
+}
+
+// Decide, acredita y deja plasmado el bono de una carga automática. La carga
+// principal YA está acreditada cuando se llama; cualquier fallo acá NO debe
+// tumbar el flujo (devuelve applied:false y avisa al agente para aplicarlo a
+// mano). Devuelve { applied, amount, kind: 'install_100'|'app_20'|null, hasApp }.
+async function _hgcashApplyAppBonus(user, amount) {
+  const out = { applied: false, amount: 0, kind: null, hasApp: false };
+  try {
+    out.hasApp = _rouletteHasAppInstalled(user);
+    if (!out.hasApp) return out;
+
+    // 1) ¿Le corresponde el 100% de primera carga? Marca ATÓMICA antes de
+    //    acreditar (mismo patrón reserva→acreditar de los reembolsos): dos
+    //    cargas concurrentes no pueden consumir el cupón dos veces.
+    let branch = null; // 'pending' (cupón reclamado) | 'auto_grant' (detección)
+    const usedPending = await User.findOneAndUpdate(
+      { id: user.id, installBonus100Pending: true },
+      { $set: { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: 'auto-hgcash' } }
+    );
+    if (usedPending) {
+      branch = 'pending';
+    } else if (await _installBonusDeviceFree(user)) {
+      const granted = await User.findOneAndUpdate(
+        { id: user.id, installBonusClaimed: { $ne: true } },
+        { $set: {
+          installBonusClaimed: true,
+          installBonusClaimedAt: new Date(),
+          installBonus100GrantedAt: new Date(),
+          installBonus100Pending: false,
+          installBonus100UsedAt: new Date(),
+          installBonus100UsedBy: 'auto-hgcash'
+        } }
+      );
+      if (granted) branch = 'auto_grant';
+    }
+
+    let pct = 0;
+    let kind = null;
+    if (branch) {
+      pct = 100; kind = 'install_100';
+    } else if (Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
+      pct = HGCASH_APP_BONUS_20_PCT; kind = 'app_20';
+    }
+    if (!pct) return out;
+
+    const bonusAmount = Math.round(Number(amount) * pct / 100);
+    if (!(bonusAmount > 0)) return out;
+
+    // Pausa anti rate-limit de JUGAYGANA entre la carga principal y el bonus
+    // (misma causa documentada del bug "carga sí, bonus no" del flujo manual).
+    await new Promise(r => setTimeout(r, 700));
+    const credit = await jugaygana.creditUserBalance(user.username, bonusAmount, user.jugayganaUserId || null);
+    if (!credit || !credit.success) {
+      // Deshacer la marca del 100% para que el cliente no pierda el cupón sin
+      // cobrarlo (guard por UsedBy='auto-hgcash' para no pisar otra marca).
+      if (branch === 'pending') {
+        try {
+          await User.updateOne(
+            { id: user.id, installBonus100UsedBy: 'auto-hgcash' },
+            { $set: { installBonus100Pending: true }, $unset: { installBonus100UsedAt: 1, installBonus100UsedBy: 1 } }
+          );
+        } catch (_) {}
+      } else if (branch === 'auto_grant') {
+        try {
+          await User.updateOne(
+            { id: user.id, installBonus100UsedBy: 'auto-hgcash' },
+            { $unset: { installBonusClaimed: 1, installBonusClaimedAt: 1, installBonus100GrantedAt: 1, installBonus100Pending: 1, installBonus100UsedAt: 1, installBonus100UsedBy: 1 } }
+          );
+        } catch (_) {}
+      }
+      const errStr = jugaygana.errToString((credit && credit.error) || 'fallo bonus');
+      await _emitAdminOnlyChatNote(user.id, user.username,
+        `🎁 ⚠️ El BONO AUTOMÁTICO del ${pct}% de la carga NO se pudo acreditar (${errStr}). Aplicalo a mano: $${bonusAmount.toLocaleString('es-AR')}.${branch ? ' El cupón 100% volvió a quedar pendiente.' : ''}`);
+      logger.error(`[hgcash-bonus] falló acreditación ${pct}% user=${user.username} $${bonusAmount}: ${errStr}`);
+      return out;
+    }
+
+    await Transaction.create({
+      id: uuidv4(),
+      type: 'bonus',
+      amount: bonusAmount,
+      username: user.username,
+      userId: user.id,
+      description: kind === 'install_100'
+        ? `Bono automático 100% primera carga (app instalada) sobre carga de $${Number(amount).toLocaleString('es-AR')}`
+        : `Bono automático ${pct}% por app instalada (hgcash) sobre carga de $${Number(amount).toLocaleString('es-AR')}`,
+      adminUsername: 'auto-hgcash',
+      adminRole: 'system',
+      transactionId: credit.data?.transfer_id || credit.data?.transferId,
+      metadata: { source: 'auto_hgcash_bonus', kind },
+      timestamp: new Date()
+    });
+
+    out.applied = true;
+    out.amount = bonusAmount;
+    out.kind = kind;
+    logger.info(`[hgcash-bonus] ${kind} acreditado user=${user.username} $${bonusAmount} (${pct}% de $${amount})`);
+    return out;
+  } catch (e) {
+    logger.error(`[hgcash-bonus] excepción (la carga principal ya está acreditada): ${e.message}`);
+    return out;
+  }
+}
+
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
 async function hgcashAutoCarga({ movement, comprobante, mode }) {
@@ -2071,17 +2224,25 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       timestamp: new Date()
     });
 
-    // Mensaje al cliente (usa /sys_deposit si está; si no, fallback).
+    // Bono automático por app + notificaciones (100% primera carga / 20% promo).
+    // Corre DESPUÉS de acreditar la carga y ANTES de leer el balance, así el
+    // saldo del mensaje ya incluye el bono. Nunca tira: si falla, avisa al
+    // agente y la carga sigue como si no hubiera bono.
+    const appBonus = await _hgcashApplyAppBonus(user, Number(amount));
+
+    // Mensaje al cliente (usa /sys_deposit o /sys_deposit_bonus si hubo bono).
     let newBalance = null;
     try {
       const balRes = await jugayganaMovements.getUserBalanceWithRetry(user.username);
       if (balRes.success) newBalance = balRes.balance;
     } catch (_) {}
     const balStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
-    const depositCmd = await Command.findOne({ name: '/sys_deposit', isActive: true });
-    const depositTpl = resolveSysContent(depositCmd, `🔒💰 Depósito de $${Number(amount).toLocaleString('es-AR')} acreditado con éxito. ✅\n💸 Tu nuevo saldo es ${balStr} 💸`);
+    const depositCmd = await Command.findOne({ name: appBonus.applied ? '/sys_deposit_bonus' : '/sys_deposit', isActive: true });
+    const depositTpl = resolveSysContent(depositCmd, appBonus.applied
+      ? `🔒💰 Depósito de $${Number(amount).toLocaleString('es-AR')} (incluye $${Number(appBonus.amount).toLocaleString('es-AR')} de bonificación) acreditado con éxito. ✅\n💸 Tu nuevo saldo es ${balStr} 💸`
+      : `🔒💰 Depósito de $${Number(amount).toLocaleString('es-AR')} acreditado con éxito. ✅\n💸 Tu nuevo saldo es ${balStr} 💸`);
     if (depositTpl) { // null = comando vaciado a propósito → no enviar mensaje al cliente
-      const clientMsg = depositTpl.replace(/\{amount\}/g, Number(amount)).replace(/\{bonus\}/g, 0).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose');
+      const clientMsg = depositTpl.replace(/\{amount\}/g, Number(amount)).replace(/\{bonus\}/g, appBonus.applied ? appBonus.amount : 0).replace(/\{balance\}/g, newBalance !== null ? newBalance : 'actualizándose');
       const sysMsg = await Message.create({
         id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
         receiverId: user.id, receiverRole: 'user', content: clientMsg, type: 'system', timestamp: new Date(), read: false
@@ -2094,13 +2255,41 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     const uSock = connectedUsers.get(user.id);
     if (uSock && newBalance !== null) uSock.emit('balance_updated', { balance: newBalance });
 
+    // Cargó SIN app instalada o sin notificaciones → esta carga fue sin el 20%.
+    // Aviso editable desde COMANDOS (/sys_deposit_no_app_20; vaciarlo lo apaga).
+    // Sólo mientras la promo del 20% está vigente (después sería publicidad falsa).
+    if (!appBonus.hasApp && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
+      try {
+        const noAppContent = await renderSystemCommand(
+          '/sys_deposit_no_app_20',
+          '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 100% EXTRA en tu primera carga\n• 🔥 20% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".',
+          { username: user.username }
+        );
+        if (noAppContent) {
+          const noAppMsg = await Message.create({
+            id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+            receiverId: user.id, receiverRole: 'user', content: noAppContent, type: 'system', timestamp: new Date(), read: false
+          });
+          const noAppData = { id: noAppMsg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content: noAppContent, timestamp: new Date(), type: 'system' };
+          io.to(`user_${user.id}`).emit('new_message', noAppData);
+          io.to(`chat_${user.id}`).emit('new_message', noAppData);
+          notifyAdmins('new_message', { message: noAppData, userId: user.id, username: user.username });
+        }
+      } catch (noAppErr) {
+        logger.warn(`[hgcash-bonus] aviso sin-app falló: ${noAppErr.message}`);
+      }
+    }
+
     // SLA: la auto-carga ES la respuesta al cliente → frena el reloj de demoras
     // (antes quedaba como "sin respuesta" porque la carga es automática, no un agente).
     try { await delayClockResolve(user.id, { responded: true, agentId: 'auto-hgcash', agentUsername: 'auto-hgcash', via: 'auto_carga', queueHint: 'cargas' }); } catch (_) {}
     // Oferta de recuperación 100% (no se envía si está etiquetado comunidad/no comunidad).
     await maybeSendRecoveryMessage(user);
 
-    await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.`);
+    const bonusNote = appBonus.applied
+      ? ` 🎁 + BONO AUTOMÁTICO ${appBonus.kind === 'install_100' ? '100% (primera carga, app instalada)' : '20% (app instalada)'}: $${Number(appBonus.amount).toLocaleString('es-AR')}.`
+      : '';
+    await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
     _emitHgcashUpdate('cargado');
     logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
   } catch (e) {
@@ -9239,6 +9428,12 @@ async function initializeData() {
       description: 'Mensaje de felicitación cuando el usuario desbloquea el cupón 100% próxima carga por instalar la app. Variables: {username}',
       type: 'message',
       response: '🎁 ¡Felicitaciones {username}! Por instalar la app desbloqueaste un BONO del 100% EXTRA en tu PRÓXIMA CARGA. 🚀 Avisale al cajero cuando cargues para que te lo aplique. 🥳'
+    },
+    {
+      name: '/sys_deposit_no_app_20',
+      description: 'Aviso tras una carga AUTOMÁTICA (hgcash) a clientes SIN app instalada o sin notificaciones: la carga entró sin el bono automático (100% primera / 20% todas). Variables: {username}. Si lo dejás vacío, no se envía.',
+      type: 'message',
+      response: '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 100% EXTRA en tu primera carga\n• 🔥 20% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".'
     },
     {
       name: '/sys_payout_paid',

@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v54'; // v54: equipos por prefijo de usuario (cartel de acceso por WhatsApp)
+const CACHE_VERSION = 'v55'; // v55: el menú del home arranca oculto
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

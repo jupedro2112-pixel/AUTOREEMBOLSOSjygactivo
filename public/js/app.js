@@ -359,9 +359,10 @@ function setupEventListeners() {
                     if (VIP.chat && VIP.chat.scrollToBottom) VIP.chat.scrollToBottom();
                 }, 340);
             });
-            // Siempre arranca abierto en cada ingreso: si el usuario lo quiere
-            // cerrar, lo cierra él. No se recuerda el estado entre sesiones.
-            applyHomePanel(false, false);
+            // Arranca OCULTO en cada ingreso (owner 2026-08-15 — antes arrancaba
+            // abierto): el chat ocupa toda la pantalla y el que quiere el menú lo
+            // baja con "Ver menú". No se recuerda el estado entre sesiones.
+            applyHomePanel(true, false);
         }
 
         const headerInstallBtn = document.getElementById('headerInstallBtn');

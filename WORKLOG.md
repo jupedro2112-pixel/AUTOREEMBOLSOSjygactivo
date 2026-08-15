@@ -8,6 +8,16 @@
 
 ## Sesión 2026-08-15
 
+### 112. El menú del home arranca OCULTO (invierte el arranque de siempre)
+- **Pedido del owner:** que a los usuarios el menú ya les aparezca ocultado — "ahora
+  es al revés". Una línea: `applyHomePanel(true, false)` en el init (app.js ~364).
+  El toggle "Ver menú/Ocultar menú" queda igual; sigue sin recordarse el estado
+  entre sesiones (antes siempre abierto, ahora siempre cerrado). Los reembolsos
+  viven dentro del panel (#104) → arrancan ocultos también; RETIRAR MI PREMIO
+  sigue afuera, siempre visible.
+- **Validado:** `node --check` OK. **`?v=55` + `CACHE_VERSION='v55'`** (cambió JS:
+  sin el bump, las PWAs cacheadas seguirían con el arranque viejo).
+
 ### 111. Los bonos automáticos hgcash se prenden/apagan y cambian de % desde el panel
 - **Pedido del owner (mismo día que #110):** poder APAGAR el 20% y el 100% desde el
   panel "por las dudas que empiece a darle a todos", y que los porcentajes sean

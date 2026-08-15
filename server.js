@@ -10126,6 +10126,41 @@ app.post('/api/admin/users/:userId/install-bonus-100/apply', authMiddleware, dep
   }
 });
 
+// AVISO INTERNO para el modal de depósito del panel: qué bono automático le
+// correspondería a este cliente si la carga hubiera entrado sola por hgcash.
+// Lo usa el agente cuando carga A MANO (comprobante que no matcheó, bajo
+// mínimo, etc.) para aplicar el mismo criterio. Sólo lectura: no consume nada.
+app.get('/api/admin/users/:userId/app-bonus-hint', authMiddleware, depositorMiddleware, async (req, res) => {
+  try {
+    const user = await User.findOne({ id: String(req.params.userId) })
+      .select('id username fcmToken fcmTokens fcmTokenContext installBonusClaimed installBonus100Pending installBonus100UsedAt installBonus100UsedBy')
+      .lean();
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const cfg = await getHgcashAppBonusConfig();
+    const hasApp = _rouletteHasAppInstalled(user);
+    const promo20Alive = cfg.allEnabled && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime();
+    let firstAvailable = false;
+    if (hasApp && cfg.firstEnabled) {
+      if (user.installBonus100Pending === true) {
+        firstAvailable = true;
+      } else if (user.installBonusClaimed !== true) {
+        firstAvailable = await _installBonusDeviceFree(user);
+      }
+    }
+    res.json({
+      hasApp,
+      firstAvailable,
+      firstPct: cfg.firstPct,
+      allActive: hasApp && promo20Alive,
+      allPct: cfg.allPct,
+      firstUsedBy: user.installBonus100UsedBy || null
+    });
+  } catch (error) {
+    logger.error(`app-bonus-hint: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // PLAN DE NOTIFICACIONES (encuesta inicial)
 // ============================================

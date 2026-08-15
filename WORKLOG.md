@@ -8,6 +8,26 @@
 
 ## Sesión 2026-08-15
 
+### 114. Aviso INTERNO de bono en el modal de depósito (cargas manuales)
+- **Pedido del owner:** cuando el comprobante no matchea y el agente carga a mano,
+  que el panel le AVISE qué bono automático le correspondería al cliente — pero
+  **interno**: al cliente no le llega nada, y el aviso lo dice explícitamente
+  ("🔒 AVISO INTERNO — el cliente NO ve este mensaje").
+- **Backend:** `GET /api/admin/users/:userId/app-bonus-hint` (depositorMiddleware;
+  sólo lectura, no consume nada). Devuelve `{hasApp, firstAvailable, firstPct,
+  allActive, allPct, firstUsedBy}` con la MISMA lógica del bono automático
+  (config del panel + detección app/notifs + cupón disponible + guard de
+  dispositivo + vigencia de la promo).
+- **Panel:** banner arriba del modal Depositar (`#depositAppBonusHint`, lo pinta
+  `loadDepositAppBonusHint()` al abrir; async y best-effort — si falla, el modal
+  sigue normal). 4 estados: primera carga disponible (+X%, dorado), 20% vigente
+  (verde, muestra quién usó el 100% si aplica), app sin bono que corresponda, y
+  sin app. Nada de esto envía mensajes al cliente.
+- **Cierra el circuito con #113:** el agente aplica el % sugerido en "Bonificación
+  extra" y, si es ≥100%, el cupón queda consumido solo.
+- **Validado:** `node --check` OK (server.js, admin.js); 573/573 divs, ids únicos.
+  Solo panel (network-first) + backend → sin bump de `?v`. Back necesita redeploy.
+
 ### 113. "Da 100% en todas las cargas" — NO era el auto-bono: eran bonos MANUALES + cupón sin consumir
 - **Reporte del owner (capturas de JUGAYGANA + logs de las 2 instancias de EB):**
   clientes con 100% repetido en varias cargas (atodiego852, RoyalLuis613).

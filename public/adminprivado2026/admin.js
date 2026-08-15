@@ -262,6 +262,8 @@ function setupEventListeners() {
         const bonusInfoEl = document.getElementById('bonusInfo');
         if (bonusInfoEl) bonusInfoEl.textContent = '';
         showModal('depositModal');
+        // Aviso INTERNO de bono automático (async, no bloquea el modal)
+        loadDepositAppBonusHint();
     });
     if (elements.btnBonus) {
         elements.btnBonus.addEventListener('click', () => {
@@ -3068,6 +3070,45 @@ async function sendCBU() {
         showToast(error.message || 'Error al enviar CBU', 'error');
     } finally {
         setButtonLoading(btnCBU, false, '<span class="icon icon-credit-card"></span> Enviar CBU');
+    }
+}
+
+// Aviso INTERNO en el modal de depósito: qué bono automático (app + notifs) le
+// correspondería a este cliente si su carga hubiera entrado sola por hgcash.
+// SOLO lo ve el agente — al cliente no se le envía ningún mensaje por esto.
+async function loadDepositAppBonusHint() {
+    const el = document.getElementById('depositAppBonusHint');
+    if (!el) return;
+    el.style.display = 'none';
+    el.innerHTML = '';
+    if (!selectedUserId) return;
+    try {
+        const r = await authFetch(`/api/admin/users/${selectedUserId}/app-bonus-hint`);
+        if (!r.ok) return; // sin permiso o error: no se muestra nada
+        const h = await r.json();
+        const base = 'border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.5;';
+        const tag = '<div style="font-weight:800;letter-spacing:.4px;margin-bottom:4px;">🔒 AVISO INTERNO — el cliente NO ve este mensaje</div>';
+        if (h.firstAvailable) {
+            el.style.cssText = base + 'background:rgba(212,175,55,.12);border:1px solid rgba(212,175,55,.55);color:#f0e6c8;';
+            el.innerHTML = tag +
+                `💥 Este cliente tiene la <b>APP con notificaciones</b> y <b>NUNCA usó su bono de primera carga</b> → le corresponde <b>+${h.firstPct}%</b>.<br>` +
+                'Aplicáselo en "Bonificación extra": al acreditarse queda <b>marcado como usado automáticamente</b> (no se puede repetir).';
+        } else if (h.allActive) {
+            el.style.cssText = base + 'background:rgba(40,167,69,.12);border:1px solid rgba(40,167,69,.55);color:#cdeed7;';
+            el.innerHTML = tag +
+                `🔥 Cliente con <b>APP + notificaciones</b> → le corresponde <b>+${h.allPct}%</b> en esta carga (promo vigente hasta el 31/08).` +
+                (h.firstUsedBy ? `<br><span style="opacity:.75;">Su 100% de primera carga ya fue usado (${h.firstUsedBy}).</span>` : '');
+        } else if (h.hasApp) {
+            el.style.cssText = base + 'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.18);color:#bbb;';
+            el.innerHTML = tag + '📲 Tiene la app, pero no le corresponde bono automático (100% ya usado y promo del 20% inactiva).';
+        } else {
+            el.style.cssText = base + 'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.18);color:#bbb;';
+            el.innerHTML = tag + '🚫 <b>SIN app instalada o sin notificaciones</b> → NO le corresponde bono automático.';
+        }
+        el.style.display = 'block';
+    } catch (e) {
+        // Best-effort: si falla, el modal funciona igual sin el aviso.
+        console.error('Error cargando aviso de bono:', e);
     }
 }
 

@@ -13217,6 +13217,17 @@ app.get('/api/admin/conversations', authMiddleware, adminMiddleware, async (req,
           as: 'lastMsg'
         }
       },
+      // ABIERTOS: los chats sin NINGÚN mensaje no se muestran — no hay nada que
+      // atender. Pasa masivamente porque Message tiene TTL de 3 días y el
+      // ChatStatus queda 'open' para siempre: la bienvenida expira y el chat
+      // aparece vacío ("Sin mensajes") hasta que un agente lo cierra a mano.
+      // Si el cliente escribe, el chat vuelve a tener mensajes y reaparece solo
+      // (además la reapertura de cerrados ya existe en send_message). Sólo se
+      // filtra 'open': en Pagos puede haber plata pendiente y Cerrados es
+      // archivo. ⚠️ El $limit 100 corre ANTES de este filtro: no starvea porque
+      // un chat con mensajes vivos tiene lastMessageAt dentro del TTL y ordena
+      // por encima de los vacíos viejos.
+      ...(status === 'open' ? [{ $match: { 'lastMsg.0': { $exists: true } } }] : []),
       {
         $project: {
           userId: 1,

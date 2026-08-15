@@ -4,7 +4,37 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-13**
+> **Última actualización: 2026-08-15**
+
+## Sesión 2026-08-15
+
+### 109. Los chats VACÍOS ya no aparecen en Abiertos (eran interminables)
+- **Reportado por el owner (con screencast):** la pestaña Abiertos llena de chats
+  "Sin mensajes" con fechas de junio; los cerraba a mano y aparecían más — inagotables.
+- **Causa:** `Message` tiene TTL de 3 días pero `ChatStatus` queda `open` para siempre.
+  Todo usuario que ingresó alguna vez recibió la bienvenida (que le creó el ChatStatus,
+  server.js ~5431); al expirar sus mensajes el chat queda abierto y vacío. La purga
+  one-shot previa (`migration_purge_empty_chatstatus_done`, #6, server.js ~8599) sólo
+  cubría usuarios que NUNCA ingresaron — estos sí ingresaron. Con ~9k usuarios, los
+  vacíos copaban el `$limit 100` del listado: cerrar uno hacía entrar al siguiente.
+- **Fix (server.js, `GET /api/admin/conversations`):** para `status === 'open'` se agregó
+  un `$match: {'lastMsg.0': {$exists: true}}` después del lookup del último mensaje —
+  chat sin ningún mensaje no se lista. **No se toca la DB**: los ChatStatus siguen `open`;
+  si el cliente escribe, vuelve a tener mensajes y reaparece solo (y la reapertura de
+  cerrados ya existía en send_message). Con el paso del tiempo es automático: un chat sin
+  actividad desaparece de Abiertos solo cuando su último mensaje expira (3 días), sin que
+  ningún agente tenga que cerrarlo.
+- **Alcance deliberado:** sólo Abiertos. **Pagos NO se filtra** (puede haber un retiro
+  pendiente aunque los mensajes hayan expirado) ni Cerrados/Comunidad (archivo / no fue
+  lo pedido; extender es trivial si molesta ahí también).
+- **Bordes anotados:** (1) el `$limit 100` corre ANTES del filtro — no starvea porque un
+  chat con mensajes vivos tiene `lastMessageAt` dentro del TTL y ordena arriba de los
+  vacíos viejos; (2) "Enviar a abiertos" sobre un chat sin mensajes lo deja invisible en
+  la lista hasta que alguien escriba (no hay nada que atender igual; el agente que lo
+  movió ya lo tiene abierto en el panel derecho).
+- **Validado:** `node --check` OK. Solo backend → sin bump de `?v`. **Back necesita
+  redeploy.** PROBAR tras deploy: Abiertos debe quedar solo con chats con mensajes;
+  escribirle a un chat vacío desde Usuarios/buscador y ver que aparece en Abiertos.
 
 ## Sesión 2026-08-14
 

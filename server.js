@@ -1930,8 +1930,32 @@ function _emitHgcashUpdate(kind) {
 //    lleva el 100% no lleva además el 20%).
 // ⚠️ El 100% es una excepción EXPLÍCITA del owner al "tope 30% en todo lo
 // automático" documentado en CLAUDE.md.
-const HGCASH_APP_BONUS_20_PCT = 20;
+// Interruptores y porcentajes EDITABLES desde el panel (COMANDOS → card "Bonos
+// automáticos hgcash"): Config['hgcashAppBonus'] = { firstEnabled, firstPct,
+// allEnabled, allPct }. Los defaults reproducen el pedido original (100% / 20%).
+// La fecha límite del bono "todas las cargas" queda fija en código.
 const HGCASH_APP_BONUS_20_UNTIL = new Date('2026-08-31T23:59:59.999-03:00');
+const HGCASH_APP_BONUS_DEFAULTS = { firstEnabled: true, firstPct: 100, allEnabled: true, allPct: 20 };
+
+function _hgcashBonusPct(v, fallback) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= 1 && n <= 200 ? n : fallback;
+}
+
+async function getHgcashAppBonusConfig() {
+  try {
+    const cfg = (await getConfig('hgcashAppBonus', null)) || {};
+    return {
+      firstEnabled: cfg.firstEnabled !== false,
+      firstPct: _hgcashBonusPct(cfg.firstPct, HGCASH_APP_BONUS_DEFAULTS.firstPct),
+      allEnabled: cfg.allEnabled !== false,
+      allPct: _hgcashBonusPct(cfg.allPct, HGCASH_APP_BONUS_DEFAULTS.allPct)
+    };
+  } catch (e) {
+    logger.warn(`[hgcash-bonus] no se pudo leer la config (uso defaults): ${e.message}`);
+    return Object.assign({}, HGCASH_APP_BONUS_DEFAULTS);
+  }
+}
 
 // Anti-multicuenta por dispositivo (mismo guard que install-bonus/claim): si un
 // token FCM de este usuario ya figura en OTRO usuario que ya reclamó el bono,
@@ -1966,42 +1990,53 @@ async function _installBonusDeviceFree(user) {
 // tumbar el flujo (devuelve applied:false y avisa al agente para aplicarlo a
 // mano). Devuelve { applied, amount, kind: 'install_100'|'app_20'|null, hasApp }.
 async function _hgcashApplyAppBonus(user, amount) {
-  const out = { applied: false, amount: 0, kind: null, hasApp: false };
+  const out = { applied: false, amount: 0, kind: null, hasApp: false, noticeOk: false, cfg: HGCASH_APP_BONUS_DEFAULTS };
   try {
     out.hasApp = _rouletteHasAppInstalled(user);
-    if (!out.hasApp) return out;
+    const cfg = await getHgcashAppBonusConfig();
+    out.cfg = cfg;
+    const promo20Alive = cfg.allEnabled && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime();
+    if (!out.hasApp) {
+      // El aviso "te perdiste el bono" sólo tiene sentido si HAY algún bono
+      // prendido que el cliente pueda destrabar instalando la app.
+      out.noticeOk = cfg.firstEnabled || promo20Alive;
+      return out;
+    }
 
-    // 1) ¿Le corresponde el 100% de primera carga? Marca ATÓMICA antes de
+    // 1) ¿Le corresponde el bono de primera carga? (sólo si está prendido desde
+    //    el panel — apagado NO consume el cupón). Marca ATÓMICA antes de
     //    acreditar (mismo patrón reserva→acreditar de los reembolsos): dos
     //    cargas concurrentes no pueden consumir el cupón dos veces.
     let branch = null; // 'pending' (cupón reclamado) | 'auto_grant' (detección)
-    const usedPending = await User.findOneAndUpdate(
-      { id: user.id, installBonus100Pending: true },
-      { $set: { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: 'auto-hgcash' } }
-    );
-    if (usedPending) {
-      branch = 'pending';
-    } else if (await _installBonusDeviceFree(user)) {
-      const granted = await User.findOneAndUpdate(
-        { id: user.id, installBonusClaimed: { $ne: true } },
-        { $set: {
-          installBonusClaimed: true,
-          installBonusClaimedAt: new Date(),
-          installBonus100GrantedAt: new Date(),
-          installBonus100Pending: false,
-          installBonus100UsedAt: new Date(),
-          installBonus100UsedBy: 'auto-hgcash'
-        } }
+    if (cfg.firstEnabled) {
+      const usedPending = await User.findOneAndUpdate(
+        { id: user.id, installBonus100Pending: true },
+        { $set: { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: 'auto-hgcash' } }
       );
-      if (granted) branch = 'auto_grant';
+      if (usedPending) {
+        branch = 'pending';
+      } else if (await _installBonusDeviceFree(user)) {
+        const granted = await User.findOneAndUpdate(
+          { id: user.id, installBonusClaimed: { $ne: true } },
+          { $set: {
+            installBonusClaimed: true,
+            installBonusClaimedAt: new Date(),
+            installBonus100GrantedAt: new Date(),
+            installBonus100Pending: false,
+            installBonus100UsedAt: new Date(),
+            installBonus100UsedBy: 'auto-hgcash'
+          } }
+        );
+        if (granted) branch = 'auto_grant';
+      }
     }
 
     let pct = 0;
     let kind = null;
     if (branch) {
-      pct = 100; kind = 'install_100';
-    } else if (Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
-      pct = HGCASH_APP_BONUS_20_PCT; kind = 'app_20';
+      pct = cfg.firstPct; kind = 'install_100';
+    } else if (promo20Alive) {
+      pct = cfg.allPct; kind = 'app_20';
     }
     if (!pct) return out;
 
@@ -2044,7 +2079,7 @@ async function _hgcashApplyAppBonus(user, amount) {
       username: user.username,
       userId: user.id,
       description: kind === 'install_100'
-        ? `Bono automático 100% primera carga (app instalada) sobre carga de $${Number(amount).toLocaleString('es-AR')}`
+        ? `Bono automático ${pct}% primera carga (app instalada) sobre carga de $${Number(amount).toLocaleString('es-AR')}`
         : `Bono automático ${pct}% por app instalada (hgcash) sobre carga de $${Number(amount).toLocaleString('es-AR')}`,
       adminUsername: 'auto-hgcash',
       adminRole: 'system',
@@ -2056,6 +2091,7 @@ async function _hgcashApplyAppBonus(user, amount) {
     out.applied = true;
     out.amount = bonusAmount;
     out.kind = kind;
+    out.pct = pct;
     logger.info(`[hgcash-bonus] ${kind} acreditado user=${user.username} $${bonusAmount} (${pct}% de $${amount})`);
     return out;
   } catch (e) {
@@ -2255,15 +2291,16 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     const uSock = connectedUsers.get(user.id);
     if (uSock && newBalance !== null) uSock.emit('balance_updated', { balance: newBalance });
 
-    // Cargó SIN app instalada o sin notificaciones → esta carga fue sin el 20%.
+    // Cargó SIN app instalada o sin notificaciones → esta carga fue sin bono.
     // Aviso editable desde COMANDOS (/sys_deposit_no_app_20; vaciarlo lo apaga).
-    // Sólo mientras la promo del 20% está vigente (después sería publicidad falsa).
-    if (!appBonus.hasApp && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
+    // noticeOk ya contempla que haya algún bono PRENDIDO y (para el 20%) vigente
+    // — si están apagados desde el panel, no se promete nada que no exista.
+    if (appBonus.noticeOk) {
       try {
         const noAppContent = await renderSystemCommand(
           '/sys_deposit_no_app_20',
-          '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 100% EXTRA en tu primera carga\n• 🔥 20% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".',
-          { username: user.username }
+          '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 {pctPrimera}% EXTRA en tu primera carga\n• 🔥 {pctTodas}% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".',
+          { username: user.username, pctPrimera: appBonus.cfg.firstPct, pctTodas: appBonus.cfg.allPct }
         );
         if (noAppContent) {
           const noAppMsg = await Message.create({
@@ -2287,7 +2324,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     await maybeSendRecoveryMessage(user);
 
     const bonusNote = appBonus.applied
-      ? ` 🎁 + BONO AUTOMÁTICO ${appBonus.kind === 'install_100' ? '100% (primera carga, app instalada)' : '20% (app instalada)'}: $${Number(appBonus.amount).toLocaleString('es-AR')}.`
+      ? ` 🎁 + BONO AUTOMÁTICO ${appBonus.pct}% ${appBonus.kind === 'install_100' ? '(primera carga, app instalada)' : '(app instalada)'}: $${Number(appBonus.amount).toLocaleString('es-AR')}.`
       : '';
     await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
     _emitHgcashUpdate('cargado');
@@ -9431,9 +9468,9 @@ async function initializeData() {
     },
     {
       name: '/sys_deposit_no_app_20',
-      description: 'Aviso tras una carga AUTOMÁTICA (hgcash) a clientes SIN app instalada o sin notificaciones: la carga entró sin el bono automático (100% primera / 20% todas). Variables: {username}. Si lo dejás vacío, no se envía.',
+      description: 'Aviso tras una carga AUTOMÁTICA (hgcash) a clientes SIN app instalada o sin notificaciones: la carga entró sin el bono automático. Variables: {username}, {pctPrimera}, {pctTodas} (los % configurados en la card "Bonos automáticos hgcash"). Si lo dejás vacío, no se envía.',
       type: 'message',
-      response: '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 100% EXTRA en tu primera carga\n• 🔥 20% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".'
+      response: '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 {pctPrimera}% EXTRA en tu primera carga\n• 🔥 {pctTodas}% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".'
     },
     {
       name: '/sys_payout_paid',
@@ -13598,6 +13635,38 @@ app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req
     res.json({ success: true, config: next });
   } catch (error) {
     console.error('Error guardando config hgcash:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Bonos automáticos por app + notificaciones de las cargas hgcash: interruptores
+// y porcentajes (Config['hgcashAppBonus']). Solo admin general — es plata.
+app.get('/api/admin/hgcash/app-bonus', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    res.json({ config: await getHgcashAppBonusConfig(), promo20Until: HGCASH_APP_BONUS_20_UNTIL.toISOString() });
+  } catch (error) {
+    logger.error(`GET /api/admin/hgcash/app-bonus: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/hgcash/app-bonus', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const cur = await getHgcashAppBonusConfig();
+    const b = req.body || {};
+    const next = {
+      firstEnabled: typeof b.firstEnabled === 'boolean' ? b.firstEnabled : cur.firstEnabled,
+      firstPct: _hgcashBonusPct(b.firstPct, cur.firstPct),
+      allEnabled: typeof b.allEnabled === 'boolean' ? b.allEnabled : cur.allEnabled,
+      allPct: _hgcashBonusPct(b.allPct, cur.allPct)
+    };
+    await setConfig('hgcashAppBonus', next);
+    logger.info(`[hgcash-bonus] config actualizada por ${req.user.username}: primera=${next.firstEnabled ? next.firstPct + '%' : 'OFF'} todas=${next.allEnabled ? next.allPct + '%' : 'OFF'}`);
+    res.json({ success: true, config: next });
+  } catch (error) {
+    logger.error(`POST /api/admin/hgcash/app-bonus: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

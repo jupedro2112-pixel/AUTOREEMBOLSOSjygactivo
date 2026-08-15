@@ -5243,8 +5243,80 @@ async function loadCBUConfig() {
     loadRefundTiers();
     // Cargar los equipos por prefijo de usuario (solo admin general)
     loadTeams();
+    // Cargar los bonos automáticos de las cargas hgcash (solo admin general)
+    loadHgAppBonus();
     // Cargar los premios del fueguito (solo admin general)
     loadFireMilestones();
+}
+
+// ====== Bonos automáticos hgcash: app + notificaciones (solo admin general) ======
+// Interruptores y % del bono de primera carga y del bono en todas las cargas
+// automáticas. Config['hgcashAppBonus'] en el backend.
+async function loadHgAppBonus() {
+    const form = document.getElementById('hgAppBonusForm');
+    const header = document.getElementById('hgAppBonusHeader');
+    try {
+        const r = await authFetch('/api/admin/hgcash/app-bonus');
+        if (!r.ok) {
+            // Sólo admin general: si no, se oculta la card entera.
+            if (form) form.style.display = 'none';
+            if (header) header.style.display = 'none';
+            return;
+        }
+        if (form) form.style.display = '';
+        if (header) header.style.display = '';
+        const j = await r.json();
+        const c = j.config || {};
+        const fe = document.getElementById('hgAppBonusFirstEnabled');
+        const fp = document.getElementById('hgAppBonusFirstPct');
+        const ae = document.getElementById('hgAppBonusAllEnabled');
+        const ap = document.getElementById('hgAppBonusAllPct');
+        if (fe) fe.checked = c.firstEnabled !== false;
+        if (fp) fp.value = c.firstPct || 100;
+        if (ae) ae.checked = c.allEnabled !== false;
+        if (ap) ap.value = c.allPct || 20;
+        const until = document.getElementById('hgAppBonusUntil');
+        if (until && j.promo20Until) {
+            const d = new Date(j.promo20Until);
+            until.textContent = d.toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' (hora argentina)';
+        }
+    } catch (e) {
+        console.error('Error cargando bonos hgcash:', e);
+    }
+}
+
+async function saveHgAppBonus() {
+    const msg = document.getElementById('hgAppBonusMsg');
+    const pct = (id, fallback) => {
+        const el = document.getElementById(id);
+        const n = el ? Math.round(Number(el.value)) : NaN;
+        return Number.isFinite(n) && n >= 1 && n <= 200 ? n : fallback;
+    };
+    const body = {
+        firstEnabled: !!(document.getElementById('hgAppBonusFirstEnabled') || {}).checked,
+        firstPct: pct('hgAppBonusFirstPct', 100),
+        allEnabled: !!(document.getElementById('hgAppBonusAllEnabled') || {}).checked,
+        allPct: pct('hgAppBonusAllPct', 20)
+    };
+    try {
+        const r = await authFetch('/api/admin/hgcash/app-bonus', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error al guardar');
+        const c = j.config || body;
+        if (msg) {
+            msg.style.color = '#28a745';
+            msg.textContent = `✅ Guardado — Primera carga: ${c.firstEnabled ? c.firstPct + '%' : 'APAGADO'} · Todas las cargas: ${c.allEnabled ? c.allPct + '%' : 'APAGADO'}`;
+        }
+        showToast('Bonos automáticos guardados', 'success');
+        loadHgAppBonus();
+    } catch (e) {
+        if (msg) { msg.style.color = '#dc3545'; msg.textContent = '❌ ' + e.message; }
+        showToast(e.message || 'Error al guardar bonos', 'error');
+    }
 }
 
 // ====== Rangos de reembolso bronce/plata/oro (solo admin general) ======

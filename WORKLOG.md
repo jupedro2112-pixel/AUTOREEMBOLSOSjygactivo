@@ -8,6 +8,30 @@
 
 ## Sesión 2026-08-15
 
+### 111. Los bonos automáticos hgcash se prenden/apagan y cambian de % desde el panel
+- **Pedido del owner (mismo día que #110):** poder APAGAR el 20% y el 100% desde el
+  panel "por las dudas que empiece a darle a todos", y que los porcentajes sean
+  editables.
+- **Config:** `Config['hgcashAppBonus']` = `{ firstEnabled, firstPct, allEnabled,
+  allPct }` — defaults `{true, 100, true, 20}` (reproducen #110 sin tocar nada).
+  Lectura con `getHgcashAppBonusConfig()` (sanitiza: % entero 1–200; ante error de
+  DB usa defaults). La FECHA límite del bono "todas" (31/08 23:59 ART) queda fija
+  en código (no se pidió editarla).
+- **Comportamiento:** interruptor apagado = la carga entra igual, sin bono. Con el
+  bono de primera carga APAGADO **NO se consume el cupón** (el chequeo está detrás
+  del flag). El aviso `/sys_deposit_no_app_20` sólo se envía si hay al menos un
+  bono prendido (y el de "todas", vigente) — no se promete nada apagado; ahora
+  soporta variables `{pctPrimera}` y `{pctTodas}` con los % configurados.
+- **Endpoints:** `GET/POST /api/admin/hgcash/app-bonus` (solo admin general, junto
+  a los otros de hgcash). Panel: card nueva "🎁 Bonos automáticos hgcash (app +
+  notificaciones)" en COMANDOS, debajo de Equipos (checkbox + % por bono, muestra
+  el vencimiento; se oculta sola si no es admin general, mismo patrón que Equipos).
+- **Validado:** `node --check` OK (server.js, admin.js); 572/572 divs, ids únicos.
+  Solo panel (network-first) + backend → sin bump de `?v`. Back necesita redeploy.
+  **PROBAR tras deploy:** apagar el 20% y hacer una carga automática con app (no
+  debe bonificar ni consumir cupón si también está apagado el de primera); cambiar
+  el % a otro valor y verificar el monto acreditado y el texto del aviso.
+
 ### 110. BONO AUTOMÁTICO en cargas hgcash: 100% primera carga + 20% todas (app + notifs)
 - **Pedido del owner (2026-08-15), sólo para cargas AUTOMÁTICAS por hgcash** (las
   manuales las bonifica el agente a mano, como siempre):

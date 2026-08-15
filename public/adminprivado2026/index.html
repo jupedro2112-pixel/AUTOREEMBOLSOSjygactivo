@@ -657,6 +657,44 @@
                             <div id="teamsMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>
 
+                        <!-- Bonos automáticos de las cargas hgcash (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="hgAppBonusHeader">
+                            <h3>🎁 Bonos automáticos hgcash (app + notificaciones)</h3>
+                        </div>
+                        <div class="cbu-form" id="hgAppBonusForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Bonos que se acreditan <b>SOLOS</b> en las cargas <b>AUTOMÁTICAS</b> por hgcash a
+                                clientes con la <b>app instalada y notificaciones activas</b> (las cargas manuales
+                                no cambian: ahí el bono lo aplica el agente).<br>
+                                El de <b>primera carga</b> usa el cupón de instalación: al acreditarse queda marcado
+                                como usado y <b>no se repite</b>. El de <b>todas las cargas</b> vence el
+                                <b><span id="hgAppBonusUntil">31/08 23:59 (hora argentina)</span></b>.<br>
+                                Destildá un bono para <b>frenarlo al instante</b> (la carga sigue entrando, sin bono).
+                            </p>
+                            <div style="background:rgba(212,175,55,.08);border:1px solid rgba(212,175,55,.35);border-radius:8px;padding:10px;margin-bottom:10px;">
+                                <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;">
+                                    <input type="checkbox" id="hgAppBonusFirstEnabled" style="width:auto;">
+                                    💥 Bono de PRIMERA carga (una sola vez por cliente)
+                                </label>
+                                <div class="form-group" style="margin-top:8px;">
+                                    <label for="hgAppBonusFirstPct">Porcentaje (1–200)</label>
+                                    <input type="number" id="hgAppBonusFirstPct" min="1" max="200" step="1" placeholder="100">
+                                </div>
+                            </div>
+                            <div style="background:rgba(212,175,55,.08);border:1px solid rgba(212,175,55,.35);border-radius:8px;padding:10px;margin-bottom:10px;">
+                                <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;">
+                                    <input type="checkbox" id="hgAppBonusAllEnabled" style="width:auto;">
+                                    🔥 Bono en TODAS las cargas automáticas (hasta el vencimiento)
+                                </label>
+                                <div class="form-group" style="margin-top:8px;">
+                                    <label for="hgAppBonusAllPct">Porcentaje (1–200)</label>
+                                    <input type="number" id="hgAppBonusAllPct" min="1" max="200" step="1" placeholder="20">
+                                </div>
+                            </div>
+                            <button class="btn-primary" onclick="saveHgAppBonus()">💾 Guardar bonos</button>
+                            <div id="hgAppBonusMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
+                        </div>
+
                         <!-- Premios del Fueguito (solo admin general) -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="fireMilestonesHeader">
                             <h3>🔥 Premios del Fueguito</h3>

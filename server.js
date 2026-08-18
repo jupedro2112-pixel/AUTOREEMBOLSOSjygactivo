@@ -1472,9 +1472,16 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     )) {
       opKey = '';
     }
+    // N° de operación demasiado corto: los números cortos se repiten entre bancos
+    // y entre días → falso "ya utilizado por otro usuario". Sin al menos 6
+    // caracteres no sirve como huella (los reales tienen 6+).
+    if (opKey && opKey.length < 6) opKey = '';
     let dedupeKey = opKey || null;
     // Fallback: combo que incluye el NOMBRE de origen (más único que el CBU repetido).
-    if (!dedupeKey && result.amount && (result.originHolder || result.originCbu || result.paymentDate)) {
+    // ⚠️ Exige originHolder u originCbu de verdad: monto+fecha SOLOS colisionan
+    // masivamente (dos clientes que transfirieron $5.000 el mismo día quedaban
+    // marcados como "el mismo comprobante" — falso positivo visto en producción).
+    if (!dedupeKey && result.amount && (result.originHolder || result.originCbu)) {
       dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate || ''}`);
     }
 
@@ -1503,7 +1510,9 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     let original = null;
     if (dupOr.length) {
       try {
-        original = await Comprobante.findOne({ isComprobante: true, $or: dupOr })
+        // messageId $ne: el MISMO mensaje puede analizarse dos veces (reintento
+        // del cliente / doble vía socket+HTTP) — eso no es un duplicado real.
+        original = await Comprobante.findOne({ isComprobante: true, messageId: { $ne: messageId }, $or: dupOr })
           .sort({ createdAt: 1 }).lean();
       } catch (e) {
         logger.warn(`[comprobante] error buscando duplicado: ${e.message}`);
@@ -1521,11 +1530,26 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
         });
       } catch (_) {}
       if (sameUser) {
-        await _emitAdminOnlyChatNote(userId, username,
-          `🧾 Comprobante REPETIDO (${dataDesc}). El propio cliente ya lo había enviado antes. Revisá antes de cargar.`);
+        // Reenvío inmediato (mismo cliente, < 10 min): casi siempre es el doble
+        // toque / "no me contestaron, lo mando de nuevo" — no un intento de
+        // cobrar dos veces. El aviso lo dice para no asustar al agente al pedo.
+        const _ageMin = (Date.now() - new Date(original.createdAt).getTime()) / 60000;
+        if (_ageMin < 10) {
+          await _emitAdminOnlyChatNote(userId, username,
+            `🧾 El cliente REENVIÓ el mismo comprobante hace instantes (${dataDesc}). Es la misma transferencia, no un duplicado sospechoso — cargala UNA sola vez.`);
+        } else {
+          await _emitAdminOnlyChatNote(userId, username,
+            `🧾 Comprobante REPETIDO (${dataDesc}). El propio cliente ya lo había enviado antes. Revisá antes de cargar.`);
+        }
       } else {
+        // Cómo matcheó importa para el nivel de alarma: imagen idéntica = certeza;
+        // huella de datos = puede ser colisión de lectura de la IA.
+        const _byImage = !!(imageHash && original.imageHash && original.imageHash === imageHash);
+        const _matchDesc = _byImage
+          ? 'La IMAGEN es idéntica (misma captura).'
+          : 'Coinciden los DATOS leídos por la IA (N°/origen) — puede ser un error de lectura: comparalos a ojo.';
         await _emitAdminOnlyChatNote(userId, username,
-          `🚨 COMPROBANTE YA UTILIZADO POR: @${original.username || original.userId}\n${dataDesc}\n⚠️ Ya lo había enviado otro usuario. NO cargar sin verificar.`);
+          `🚨 COMPROBANTE YA UTILIZADO POR: @${original.username || original.userId}\n${dataDesc}\n${_matchDesc}\n⚠️ NO cargar sin verificar.`);
       }
       return;
     }
@@ -6191,6 +6215,17 @@ function _isStaleClientWelcome(content) {
     /(Beneficios exclusivos|Reembolso\s+(DIARIO|SEMANAL|MENSUAL))/i.test(content);
 }
 
+// ¿Es la confirmación automática de reclamo de reembolso que manda la PWA?
+// ("🎁 Reembolso weekly reclamado: $31.200" — refunds.js). Es una NOTIFICACIÓN,
+// no un mensaje del cliente pidiendo atención: el mensaje se guarda y se ve en
+// el chat, pero NO reabre un chat cerrado (owner 2026-08-18: "que no estorbe")
+// ni arranca el reloj de demoras (nadie tiene que responderlo). Si un cliente
+// tipea ese texto a mano, lo único que "pierde" es la reapertura automática.
+function _isRefundClaimNotice(content) {
+  return typeof content === 'string' &&
+    /^🎁 Reembolso (daily|weekly|monthly|diario|semanal|mensual) reclamado:/i.test(content.trim());
+}
+
 app.post('/api/messages/send', authMiddleware, async (req, res) => {
   try {
     const { content, type = 'text', receiverId } = req.body;
@@ -6317,8 +6352,11 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       );
     }
     
-    // Si es usuario enviando mensaje, reabrir chat solo si estaba cerrado (no si está en pagos)
-    if (req.user.role === 'user') {
+    // Si es usuario enviando mensaje, reabrir chat solo si estaba cerrado (no si
+    // está en pagos). EXCEPCIÓN: la confirmación automática de reembolso NO
+    // reabre — el mensaje queda en el chat pero el chat sigue cerrado.
+    const isRefundNotice = req.user.role === 'user' && _isRefundClaimNotice(content);
+    if (req.user.role === 'user' && !isRefundNotice) {
       await ChatStatus.findOneAndUpdate(
         { userId: req.user.userId, status: 'closed' },
         { status: 'open', assignedTo: null, closedAt: null, closedBy: null }
@@ -6327,7 +6365,8 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
 
     // SLA: si el cliente escribió, arrancar el reloj de demora de respuesta
     // (los agentes resuelven el reloj en la rama de comando o en el emit de admin).
-    if (!isAdminRole) {
+    // La confirmación de reembolso no lo arranca: nadie tiene que responderla.
+    if (!isAdminRole && !isRefundNotice) {
       delayClockOnUserMessage(req.user.userId, content, type).catch(() => {}); // fire-and-forget
     }
 
@@ -6849,7 +6888,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
-          message: 'Error al acreditar el reembolso: ' + depositResult.error,
+          message: 'Error al acreditar el reembolso: ' + jugaygana.errToString(depositResult.error),
           canClaim: true
         });
       }
@@ -7041,7 +7080,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
-          message: 'Error al acreditar el reembolso: ' + depositResult.error,
+          message: 'Error al acreditar el reembolso: ' + jugaygana.errToString(depositResult.error),
           canClaim: true
         });
       }
@@ -7200,7 +7239,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
-          message: 'Error al acreditar el reembolso: ' + depositResult.error,
+          message: 'Error al acreditar el reembolso: ' + jugaygana.errToString(depositResult.error),
           canClaim: true
         });
       }
@@ -8440,7 +8479,9 @@ io.on('connection', (socket) => {
             { upsert: true, setDefaultsOnInsert: true }
           );
           // Solo los mensajes del usuario reabren el chat si estaba cerrado.
-          if (!isAdminRole) {
+          // EXCEPCIÓN: la confirmación automática de reembolso no reabre (igual
+          // que en /api/messages/send) — queda en el chat, el chat sigue cerrado.
+          if (!isAdminRole && !_isRefundClaimNotice(content)) {
             await ChatStatus.findOneAndUpdate(
               { userId: targetUserId, status: 'closed' },
               { status: 'open', closedAt: null, closedBy: null }
@@ -8452,7 +8493,8 @@ io.on('connection', (socket) => {
           // frena la entrega del mensaje (los helpers ya capturan sus errores).
           if (isAdminRole) {
             delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message', queueHint: roleQueueHint(socket.role) }).catch(() => {});
-          } else {
+          } else if (!_isRefundClaimNotice(content)) {
+            // La confirmación de reembolso no arranca el reloj de demoras.
             delayClockOnUserMessage(targetUserId, content, type).catch(() => {});
           }
         } catch (csErr) {

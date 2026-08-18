@@ -2857,7 +2857,7 @@
                     } else {
                         console.log('[FCM] ⚠️ No se pudo obtener el token FCM');
                         if (typeof showToast === 'function') {
-                            showToast('⚠️ Permiso concedido pero no se pudo obtener el token. Intenta de nuevo.', 'warning');
+                            showToast('⚠️ El permiso está dado, pero Google no respondió al registrar las notificaciones. Suele ser la conexión: probá con WiFi o buena señal, cerrá y abrí la app, y tocá Activar de nuevo.', 'warning');
                         }
                         return { success: false, error: 'No se pudo obtener el token' };
                     }

@@ -4,7 +4,51 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-15**
+> **Última actualización: 2026-08-18**
+
+## Sesión 2026-08-18
+
+### 115. Cuatro reportes del owner: chat que se abre por reembolsos, [object Object], token FCM y falsos duplicados de comprobantes
+- **(1) El reclamo de reembolso ya NO reabre el chat cerrado.** La confirmación
+  "🎁 Reembolso X reclamado: $Y" la manda la PWA como mensaje del usuario
+  (`refunds.js:328` → `/api/messages/send`) y la reapertura de chats cerrados la
+  disparaba igual que cualquier mensaje. Nuevo `_isRefundClaimNotice(content)`
+  (regex sobre el texto exacto, tipos en inglés y español): el mensaje se guarda
+  y se ve en el chat, pero NO reabre el chat NI arranca el reloj de demoras
+  (nadie tiene que responderlo). Guardas en `/api/messages/send` Y en el socket.
+  Si un cliente tipea ese texto a mano, sólo "pierde" la reapertura automática.
+- **(2) "[object Object]" al reclamar el diario** (Royalfabio880): los 3 claims
+  concatenaban `depositResult.error` (objeto) → ahora pasan por
+  `jugaygana.errToString`. **Causa de fondo del fallo real:** los logs muestran
+  que los fallos de `creditUserBalance` de esa noche son casi todos
+  `{"code":18,"message":"not enough money"}` → **la cuenta cajero de JUGAYGANA
+  sin saldo** (el semanal de $31.200 salió y minutos después el diario de
+  $31.960 no tenía fondos). El claim ya libera la reserva en ese caso
+  (canClaim:true) → el cliente puede reintentar cuando haya saldo. Es
+  OPERATIVO: mantener fondeada la cuenta cajero (2ª vez que aparece, ver #113).
+- **(3) "Permiso concedido pero no se pudo obtener el token"** (argennestor531):
+  el permiso de Android está OK pero `messaging.getToken()` (el registro contra
+  los servidores de Google/FCM) falla — ya hay una estrategia de 3 niveles de
+  reintento (getToken → deleteToken+getToken → re-registrar SW) y aun así no
+  sale: es del lado del TELÉFONO/RED (señal 3G en la captura; típico también de
+  Xiaomi/Oppo con servicios de Google restringidos). No hay fix de servidor
+  posible sin debilitar la validación anti-truchos (el claim exige token FCM
+  standalone real). Se mejoró el toast con pasos concretos (WiFi, cerrar/abrir
+  la app, reintentar). HTML-only → sin bump.
+- **(4) Falsos duplicados de comprobantes — 4 endurecimientos** en
+  `analyzeComprobanteFromMessage`:
+  · El combo fallback exige `originHolder` u `originCbu` (antes bastaba
+    monto+fecha → dos clientes con $5.000 el mismo día = "mismo comprobante").
+  · N° de operación con huella mínima de 6 caracteres (los cortos se repiten
+    entre bancos).
+  · `messageId: {$ne}` en la búsqueda: el mismo mensaje analizado 2 veces
+    (socket+HTTP / reintento) ya no se marca duplicado de sí mismo.
+  · Mensajes al agente con contexto: reenvío del MISMO cliente en <10 min =
+    "reenvió recién, cargala UNA vez" (no alarma); duplicado de OTRO usuario
+    distingue "imagen idéntica" (certeza) de "coinciden datos leídos por IA"
+    (puede ser error de lectura, comparar a ojo).
+- **Validado:** `node --check` OK. Back necesita redeploy; el cambio de
+  index.html es sólo texto de toast (sin bump de `?v`).
 
 ## Sesión 2026-08-15
 

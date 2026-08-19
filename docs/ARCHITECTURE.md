@@ -252,9 +252,17 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   monto + (N° operación==coelsa/externalID, o nombre de origen + destino consistente)
   dentro de una ventana (60min desde comprobante / 10min desde movimiento). Ambigüedad
   → NO carga. `hgcashAutoCarga`: claims atómicos de movimiento y comprobante → modo
-  sombra o real → **mínimo $2.000** (menor → needs_review + aviso) → candado
+  sombra o real → **mínimo $1.500** (menor → needs_review + aviso; era $2.000 hasta
+  2026-08-19) → candado
   HgcashCharge por coelsa → guard anti-duplicado (misma carga <8min → needs_review) →
+  lectura del saldo PREVIO (sólo si el 20% está en juego) →
   `depositToUser` → Transaction + mensaje + SLA. Fallo → reintentable hasta 3 veces.
+  **Bono automático app+notifs** (`_hgcashApplyAppBonus`): 100% primera carga /
+  20% todas (config panel, hasta 31/08). ⚠️ Desde 2026-08-19 el 20% NO se da si el
+  cliente tenía **más de $500 de saldo ANTES de la carga**
+  (`HGCASH_APP_BONUS_SKIP_BALANCE_ARS`; se le avisa con
+  `/sys_deposit_no_bonus_saldo`, editable — vaciarlo lo apaga; si la lectura de
+  saldo falla, el bono sale igual, fail-open). El 100% NO tiene esta condición.
   **Fan-out** (#94): reenvía el webhook crudo+firma a autoreembolsos.com
   (`HGCASH_FANOUT_URL`, 'off' para apagar).
 - **Retiro self-service**: `POST /api/withdrawal/request` — exige phoneVerified, lock

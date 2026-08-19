@@ -1591,7 +1591,7 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
 // raceWindowMinutes: ventana CORTA para el matcheo DESDE la transferencia (solo cubre
 //   el caso raro en que el comprobante llega segundos ANTES que el webhook). Mantenerla
 //   chica evita que una transferencia nueva cargue contra un comprobante viejo/sobrante.
-const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'], duplicateGuardMinutes: 8, minChargeARS: 2000 };
+const HGCASH_DEFAULTS = { enabled: false, cbu: '', accountId: '', accountName: '', mode: 'shadow', windowMinutes: 60, raceWindowMinutes: 10, currency: 'ARS', acceptStatuses: ['done'], duplicateGuardMinutes: 8, minChargeARS: 1500 };
 
 async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
@@ -1960,6 +1960,11 @@ function _emitHgcashUpdate(kind) {
 // La fecha límite del bono "todas las cargas" queda fija en código.
 const HGCASH_APP_BONUS_20_UNTIL = new Date('2026-08-31T23:59:59.999-03:00');
 const HGCASH_APP_BONUS_DEFAULTS = { firstEnabled: true, firstPct: 100, allEnabled: true, allPct: 20 };
+// Decisión owner (2026-08-19): si el cliente ya tiene MÁS de este saldo en la
+// cuenta ANTES de la carga, la carga automática entra igual pero SIN el bono
+// del 20% (se le avisa con /sys_deposit_no_bonus_saldo, editable). El 100% de
+// primera carga NO se ve afectado por esta condición.
+const HGCASH_APP_BONUS_SKIP_BALANCE_ARS = 500;
 
 function _hgcashBonusPct(v, fallback) {
   const n = Math.round(Number(v));
@@ -2013,8 +2018,10 @@ async function _installBonusDeviceFree(user) {
 // principal YA está acreditada cuando se llama; cualquier fallo acá NO debe
 // tumbar el flujo (devuelve applied:false y avisa al agente para aplicarlo a
 // mano). Devuelve { applied, amount, kind: 'install_100'|'app_20'|null, hasApp }.
-async function _hgcashApplyAppBonus(user, amount) {
-  const out = { applied: false, amount: 0, kind: null, hasApp: false, noticeOk: false, cfg: HGCASH_APP_BONUS_DEFAULTS };
+// preBalance = saldo ANTES de acreditar la carga (null si no se pudo leer): con
+// más de HGCASH_APP_BONUS_SKIP_BALANCE_ARS el 20% NO se da (skippedForBalance).
+async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
+  const out = { applied: false, amount: 0, kind: null, hasApp: false, noticeOk: false, skippedForBalance: false, preBalance: preBalance, cfg: HGCASH_APP_BONUS_DEFAULTS };
   try {
     out.hasApp = _rouletteHasAppInstalled(user);
     const cfg = await getHgcashAppBonusConfig();
@@ -2060,6 +2067,14 @@ async function _hgcashApplyAppBonus(user, amount) {
     if (branch) {
       pct = cfg.firstPct; kind = 'install_100';
     } else if (promo20Alive) {
+      // Con saldo previo MAYOR al tope, la carga entra SIN el 20% (el cliente ya
+      // cuenta con saldo). Si el saldo no se pudo leer (preBalance null), se da
+      // el bono como siempre — no se castiga al cliente por una lectura caída.
+      if (preBalance !== null && Number(preBalance) > HGCASH_APP_BONUS_SKIP_BALANCE_ARS) {
+        out.skippedForBalance = true;
+        logger.info(`[hgcash-bonus] 20% omitido por saldo previo user=${user.username} saldo=$${Number(preBalance)} > $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS}`);
+        return out;
+      }
       pct = cfg.allPct; kind = 'app_20';
     }
     if (!pct) return out;
@@ -2184,7 +2199,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   // movimiento en needs_review (lo consume la carga manual; no se pierde plata).
   try {
     const _minCfg = await getHgcashConfig();
-    const minCharge = Number(_minCfg.minChargeARS) > 0 ? Number(_minCfg.minChargeARS) : 2000;
+    const minCharge = Number(_minCfg.minChargeARS) > 0 ? Number(_minCfg.minChargeARS) : 1500;
     if (Number(amount) < minCharge) {
       await BankMovement.updateOne({ movementId: movement.movementId },
         { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `monto $${Number(amount)} menor al mínimo $${minCharge}` } });
@@ -2260,6 +2275,23 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   // Modo auto: cargar de verdad en JUGAYGANA.
   let charged = false; // true una vez que la acreditación se confirmó (evita reintentos que dupliquen)
   try {
+    // Saldo PREVIO a la carga (decisión owner 2026-08-19): con más de $500 en la
+    // cuenta, la carga entra igual pero SIN el bono del 20%. Se lee ANTES de
+    // acreditar (después el saldo ya incluye la carga) y SOLO cuando el 20%
+    // está en juego (app instalada + promo vigente y prendida) para no sumar
+    // llamadas a JUGAYGANA en el resto de las cargas. Best-effort: si la
+    // lectura falla, preBalance queda null y el bono sale como siempre.
+    let preBalance = null;
+    try {
+      if (_rouletteHasAppInstalled(user)) {
+        const _bonusCfg = await getHgcashAppBonusConfig();
+        if (_bonusCfg.allEnabled && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
+          const preRes = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+          if (preRes && preRes.success) preBalance = Number(preRes.balance);
+        }
+      }
+    } catch (_) {}
+
     const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)', user.jugayganaUserId || null);
     if (!result.success) {
       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
@@ -2288,7 +2320,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     // Corre DESPUÉS de acreditar la carga y ANTES de leer el balance, así el
     // saldo del mensaje ya incluye el bono. Nunca tira: si falla, avisa al
     // agente y la carga sigue como si no hubiera bono.
-    const appBonus = await _hgcashApplyAppBonus(user, Number(amount));
+    const appBonus = await _hgcashApplyAppBonus(user, Number(amount), preBalance);
 
     // Mensaje al cliente (usa /sys_deposit o /sys_deposit_bonus si hubo bono).
     let newBalance = null;
@@ -2341,6 +2373,32 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       }
     }
 
+    // El 20% se omitió porque el cliente ya tenía más de $500 de saldo antes de
+    // la carga → avisarle el motivo. Editable desde COMANDOS
+    // (/sys_deposit_no_bonus_saldo; vaciarlo lo apaga).
+    if (appBonus.skippedForBalance) {
+      try {
+        const saldoStr = Number(appBonus.preBalance).toLocaleString('es-AR');
+        const noBonusContent = await renderSystemCommand(
+          '/sys_deposit_no_bonus_saldo',
+          '🎁 {username}, esta carga entró SIN el bono del {pctTodas}% porque ya contás con saldo en tu cuenta (${saldo}). 💰\n\nEl bono automático se acredita cuando tu saldo es de ${limite} o menos al momento de cargar. ¡Gracias por tu carga! 🚀',
+          { username: user.username, saldo: saldoStr, pctTodas: appBonus.cfg.allPct, limite: HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR') }
+        );
+        if (noBonusContent) {
+          const noBonusMsg = await Message.create({
+            id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+            receiverId: user.id, receiverRole: 'user', content: noBonusContent, type: 'system', timestamp: new Date(), read: false
+          });
+          const noBonusData = { id: noBonusMsg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content: noBonusContent, timestamp: new Date(), type: 'system' };
+          io.to(`user_${user.id}`).emit('new_message', noBonusData);
+          io.to(`chat_${user.id}`).emit('new_message', noBonusData);
+          notifyAdmins('new_message', { message: noBonusData, userId: user.id, username: user.username });
+        }
+      } catch (noBonusErr) {
+        logger.warn(`[hgcash-bonus] aviso sin-bono-por-saldo falló: ${noBonusErr.message}`);
+      }
+    }
+
     // SLA: la auto-carga ES la respuesta al cliente → frena el reloj de demoras
     // (antes quedaba como "sin respuesta" porque la carga es automática, no un agente).
     try { await delayClockResolve(user.id, { responded: true, agentId: 'auto-hgcash', agentUsername: 'auto-hgcash', via: 'auto_carga', queueHint: 'cargas' }); } catch (_) {}
@@ -2349,7 +2407,9 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
 
     const bonusNote = appBonus.applied
       ? ` 🎁 + BONO AUTOMÁTICO ${appBonus.pct}% ${appBonus.kind === 'install_100' ? '(primera carga, app instalada)' : '(app instalada)'}: $${Number(appBonus.amount).toLocaleString('es-AR')}.`
-      : '';
+      : (appBonus.skippedForBalance
+        ? ` ℹ️ SIN bono ${appBonus.cfg.allPct}%: el cliente ya tenía $${Number(appBonus.preBalance).toLocaleString('es-AR')} de saldo antes de la carga (más de $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR')}).`
+        : '');
     await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
     _emitHgcashUpdate('cargado');
     logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
@@ -9580,6 +9640,12 @@ async function initializeData() {
       response: '🎁 {username}, esta carga entró SIN BONO. 😮\n\n📲 Instalá la app y activá las notificaciones para recibir:\n• 💥 {pctPrimera}% EXTRA en tu primera carga\n• 🔥 {pctTodas}% EXTRA en TODAS tus cargas automáticas (hasta el 31/08)\n\nSe acreditan SOLOS, sin pedir nada. 🚀\n📲 Tocá "📱 Instalar App" o, en el menú del navegador, "Agregar a pantalla de inicio".'
     },
     {
+      name: '/sys_deposit_no_bonus_saldo',
+      description: 'Aviso tras una carga AUTOMÁTICA (hgcash) cuando NO se dio el bono del 20% porque el cliente ya tenía más de $500 de saldo en la cuenta antes de cargar. Variables: {username}, {saldo} (saldo previo), {pctTodas} (% configurado), {limite} (tope de saldo, 500). Si lo dejás vacío, no se envía.',
+      type: 'message',
+      response: '🎁 {username}, esta carga entró SIN el bono del {pctTodas}% porque ya contás con saldo en tu cuenta (${saldo}). 💰\n\nEl bono automático se acredita cuando tu saldo es de ${limite} o menos al momento de cargar. ¡Gracias por tu carga! 🚀'
+    },
+    {
       name: '/sys_payout_paid',
       description: 'Mensaje automático "pago enviado" cuando un retiro se paga (pago automático por hgcash o "Pagar con otro banco"). Variables: ${amount}. Si lo dejás vacío, no se envía.',
       type: 'message',
@@ -12909,6 +12975,13 @@ app.get('/api/admin/reembolsos', authMiddleware, adminMiddleware, async (req, re
     const d7  = new Date(now - 7 * 24 * 60 * 60 * 1000);
     const d30 = new Date(now - 30 * 24 * 60 * 60 * 1000);
 
+    // Buscador: filtra SOLO la tabla de últimos reclamos por usuario (substring,
+    // case-insensitive). Las tarjetas de totales siguen siendo globales.
+    const search = String(req.query.search || '').trim().slice(0, 40);
+    const recentFilter = search
+      ? { username: { $regex: escapeRegex(search), $options: 'i' } }
+      : {};
+
     // Buckets por tipo y ventana, calculados en Mongo — no se trae toda la
     // colección de reembolsos a Node.
     const [agg, recent] = await Promise.all([
@@ -12925,7 +12998,7 @@ app.get('/api/admin/reembolsos', authMiddleware, adminMiddleware, async (req, re
           d1Amount:  { $sum: { $cond: [{ $gte: ['$claimedAt', d1] }, '$amount', 0] } }
         }}
       ]),
-      RefundClaim.find({}, {
+      RefundClaim.find(recentFilter, {
         username: 1, type: 1, amount: 1, netAmount: 1, percentage: 1, claimedAt: 1
       }).sort({ claimedAt: -1 }).limit(120).lean()
     ]);
@@ -12950,7 +13023,8 @@ app.get('/api/admin/reembolsos', authMiddleware, adminMiddleware, async (req, re
     res.json({
       types: types,
       total: total,
-      recent: recent
+      recent: recent,
+      search: search
     });
   } catch (error) {
     console.error('Error en admin/reembolsos:', error);

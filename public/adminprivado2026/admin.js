@@ -9561,14 +9561,31 @@ function _centRefundCard(title, t, color) {
         + '<div style="border-top:1px solid rgba(255,255,255,0.10);margin-top:5px;padding-top:5px;">'
         + win('Histórico', t.all) + '</div></div>';
 }
+// Buscador de usuario (filtra la tabla server-side; las tarjetas siguen globales).
+let _reembSearchTimer = null;
+function reembSearchChanged() {
+    clearTimeout(_reembSearchTimer);
+    _reembSearchTimer = setTimeout(loadReembolsos, 350);
+}
+function reembClearSearch() {
+    const inp = document.getElementById('reembSearchInput');
+    if (inp) inp.value = '';
+    loadReembolsos();
+}
 async function loadReembolsos() {
     const body = document.getElementById('reembolsosBody');
     if (!body) return;
+    const search = (document.getElementById('reembSearchInput')?.value || '').trim();
+    const clearBtn = document.getElementById('reembSearchClear');
+    if (clearBtn) clearBtn.style.display = search ? '' : 'none';
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
     try {
-        const r = await authFetch('/api/admin/reembolsos');
+        const r = await authFetch('/api/admin/reembolsos' + (search ? ('?search=' + encodeURIComponent(search)) : ''));
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || 'Error');
+        // Si el usuario siguió tipeando mientras cargaba, esta respuesta ya es vieja.
+        const nowSearch = (document.getElementById('reembSearchInput')?.value || '').trim();
+        if (nowSearch !== search) return;
         const types = j.types || {};
         const recent = j.recent || [];
         const typeLabels = { daily: 'Diario', weekly: 'Semanal', monthly: 'Mensual' };
@@ -9577,9 +9594,12 @@ async function loadReembolsos() {
         html += _centRefundCard('📆 Semanales', types.weekly, '#2196f3');
         html += _centRefundCard('🗓️ Mensuales', types.monthly, '#d4af37');
         html += '</div>';
-        html += '<h3 style="color:#d4af37;font-size:12.5px;text-transform:uppercase;letter-spacing:1px;margin:0 0 8px;">Últimos reembolsos reclamados</h3>';
+        html += '<h3 style="color:#d4af37;font-size:12.5px;text-transform:uppercase;letter-spacing:1px;margin:0 0 8px;">'
+            + (search ? ('Reembolsos de «' + _centEsc(search) + '»') : 'Últimos reembolsos reclamados') + '</h3>';
         if (!recent.length) {
-            html += '<div class="empty-state"><p>Todavía nadie reclamó reembolsos.</p></div>';
+            html += search
+                ? '<div class="empty-state"><p>Sin reembolsos para «' + _centEsc(search) + '».</p></div>'
+                : '<div class="empty-state"><p>Todavía nadie reclamó reembolsos.</p></div>';
         } else {
             html += '<table class="data-table"><thead><tr><th>Usuario</th><th>Tipo</th>'
                 + '<th style="text-align:right;">Monto</th><th style="text-align:right;">%</th>'

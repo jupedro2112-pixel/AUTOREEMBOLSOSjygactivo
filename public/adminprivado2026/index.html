@@ -1124,6 +1124,11 @@
                 <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:12px;margin-bottom:14px;">
                     <p style="margin:0;color:#bbb;font-size:11.5px;line-height:1.6;">Cuánta plata reclama la gente en reembolsos <strong>diarios</strong>, <strong>semanales</strong> y <strong>mensuales</strong>. Cada tarjeta muestra los totales de las últimas 24 h, 7 días, 30 días y el histórico.</p>
                 </div>
+                <!-- Buscador de usuario: filtra la tabla de últimos reclamos (las tarjetas de totales siguen siendo globales). Vive FUERA de reembolsosBody para que el re-render no lo borre. -->
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+                    <input type="text" id="reembSearchInput" placeholder="🔎 Buscar usuario…" oninput="reembSearchChanged()" onkeydown="if(event.key==='Enter'){event.preventDefault();loadReembolsos();}" style="background:#0a0a0a;color:#fff;border:1px solid rgba(255,255,255,0.20);padding:6px 10px;border-radius:6px;font-size:12px;flex:1;min-width:180px;max-width:320px;">
+                    <button id="reembSearchClear" onclick="reembClearSearch()" style="display:none;background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.20);padding:6px 10px;border-radius:6px;font-size:12px;cursor:pointer;">✕ Limpiar</button>
+                </div>
                 <div id="reembolsosBody">
                     <div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>
                 </div>

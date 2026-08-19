@@ -4,7 +4,50 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-18**
+> **Última actualización: 2026-08-19**
+
+## Sesión 2026-08-19
+
+### 116. Mínimo de carga $1.500 + el 20% no se da con saldo previo >$500 + buscador en Reembolsos reclamados
+- **(1) Mínimo de carga automática $2.000 → $1.500** (pedido del owner): cambiado el
+  default `minChargeARS` en `HGCASH_DEFAULTS` y el fallback del chequeo en
+  `hgcashAutoCarga`. La config guardada en DB NO persiste `minChargeARS` (el POST
+  del panel no lo incluye), así que el default de código es el valor efectivo —
+  verificado antes de tocar. El aviso al agente ya usa el valor calculado (no había
+  textos hardcodeados con $2.000 en el front).
+- **(2) El bono del 20% NO se da si el cliente ya tiene más de $500 de saldo**
+  (pedido del owner; sólo afecta el 20% "todas las cargas" — el 100% de primera
+  carga queda igual):
+  · Const `HGCASH_APP_BONUS_SKIP_BALANCE_ARS = 500` (server.js, junto a los
+    defaults del bono).
+  · En `hgcashAutoCarga` se lee el saldo PREVIO a acreditar
+    (`jugayganaMovements.getUserBalanceWithRetry`) — SOLO cuando el 20% está en
+    juego (app instalada + promo prendida y vigente), para no sumar llamadas a
+    JUGAYGANA en el resto de las cargas. Se pasa como 3er parámetro a
+    `_hgcashApplyAppBonus(user, amount, preBalance)`.
+  · Decisión en el helper: rama `app_20` con `preBalance > 500` → NO acredita,
+    devuelve `skippedForBalance:true`. **Fail-open:** si la lectura de saldo falla
+    (`preBalance` null), el bono sale como siempre — no se castiga al cliente por
+    una lectura caída de JUGAYGANA (es flaky).
+  · **Aviso al cliente EDITABLE:** comando nuevo `/sys_deposit_no_bonus_saldo`
+    (sembrado en systemCmds; vaciarlo lo apaga). Variables: `{username}`,
+    `{saldo}` (saldo previo), `{pctTodas}`, `{limite}`. La nota admin-only de la
+    carga también dice "SIN bono 20%: saldo previo $X (más de $500)".
+- **(3) Buscador de usuarios en "Reembolsos reclamados"** (panel admin, con captura):
+  · Backend: `GET /api/admin/reembolsos` acepta `?search=` (substring
+    case-insensitive con `escapeRegex`, máx 40 chars) que filtra SOLO la tabla de
+    últimos reclamos (limit 120); las tarjetas de totales por tipo siguen globales.
+  · Panel: input `#reembSearchInput` + botón "✕ Limpiar", estáticos en index.html
+    (FUERA de `#reembolsosBody` para que el re-render no los pise). Debounce 350ms
+    + Enter; guard anti-race (si el usuario siguió tipeando, la respuesta vieja se
+    descarta); título de la tabla y empty-state reflejan la búsqueda.
+- **Validado:** `node --check` OK (server.js, admin.js); 574/574 divs, ids únicos.
+  Solo backend + panel (network-first) → **sin bump de `?v`**. Back necesita
+  redeploy (siembra el comando nuevo). **PROBAR tras deploy:** (a) transferencia de
+  $1.500–$1.999 → debe cargar automático; <$1.500 → needs_review; (b) carga
+  automática de un cliente con app y saldo >$500 → carga SIN 20% + mensaje del
+  comando nuevo; con saldo ≤$500 → 20% normal; (c) buscar un usuario en Reembolsos
+  reclamados y ver solo sus reclamos.
 
 ## Sesión 2026-08-18
 

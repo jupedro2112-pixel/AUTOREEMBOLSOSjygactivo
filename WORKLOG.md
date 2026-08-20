@@ -31,6 +31,12 @@
   **`HGCASH_FANOUT_URL=off`** (kill switch que ya existía, #94). Si hgcash apunta
   DIRECTO a este entorno y vipcargas necesita la copia, apuntar a
   `https://vipcargas.com/api/hgcash/webhook` en vez de off.
+  ✅ **Aplicada por el owner el 20/08 ~12:15 UTC** (verificado en captura: la
+  propiedad quedó en `off` y el entorno se actualizó). Confirmado también que en
+  SSM (`/autoreembjyg/prod`) NUNCA hubo `HGCASH_FANOUT_URL`: el reenvío salía del
+  **default hardcodeado** del código. El fan-out de vipcargas → autoreembolsos SE
+  MANTIENE (es la única fuente de webhooks de este proyecto; un solo salto, sin
+  bucle posible con el guard nuevo).
 - **Fix de código (`_fanoutHgcashWebhook`), doble guard anti-bucle:**
   1. Webhook que llega con `X-Forwarded-By` (ya es un reenvío del hermano) → NO se
      re-reenvía (corta cualquier cadena/bucle entre los dos proyectos).

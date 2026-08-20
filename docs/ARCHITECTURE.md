@@ -311,9 +311,15 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   (reemplazó a refund-percents).
 - **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
   payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas.
-- **Ruleta diaria**: requiere PWA instalada (token FCM standalone) + cliente activo
-  (>10 cargas reales/30d). Pick ponderado + **budget pacing** (distribuye el
-  presupuesto diario por hora ART; si excede → fuerza SIN PREMIO). Auto-crédito.
+- **Ruleta diaria**: requiere PWA instalada (token FCM standalone). El gate de
+  "cliente activo" (>10 cargas reales/30d, #71) está **APAGADO** desde 2026-08-20
+  (`ROULETTE_ACTIVE_GATE_DISABLED=true`, owner: para TODOS los que tengan la app).
+  Pick ponderado + **budget pacing** (distribuye el presupuesto diario por hora
+  ART; si excede → fuerza SIN PREMIO; el total del día nunca supera el tope).
+  ⚠️ **Fail-closed desde 2026-08-20:** sin tope activo (checkbox apagado o $0) o
+  ante error de DB en el pacing → TODOS los giros salen SIN PREMIO (con la ruleta
+  abierta a toda la base, un descuido de config no puede regalar sin límite).
+  Auto-crédito.
 - **Fueguito**: reclamo diario sin requisitos; premios de hitos (editables en panel,
   Config['fireMilestones']) exigen actividad de cargas y expiran el mismo día.
 - **Bono instalación** (desde 2026-07-28 = **cupón 100% EXTRA en la próxima carga**,

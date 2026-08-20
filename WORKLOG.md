@@ -8,6 +8,37 @@
 
 ## Sesión 2026-08-20
 
+### 118. RULETA DIARIA abierta a todos los que tengan la app + tope diario fail-closed
+- **Pedido del owner:** "volver a habilitar" la ruleta diaria. Diagnóstico: nunca
+  estuvo apagada (no existe interruptor) — lo que la escondía era el gate de
+  "cliente activo" (>10 cargas reales/30d, #71): en esta base migrada casi nadie
+  lo cumple → la card no se mostraba a nadie.
+- **Decisión del owner (2026-08-20):** (a) puede girar TODO cliente con la app
+  instalada + notificaciones (sin mínimo de cargas); (b) el tope de plata regalada
+  por día se edita desde el panel y se reparte a lo largo de las 24 hs; (c) el
+  total del día NUNCA puede superar el tope.
+- **Gate apagado:** `ROULETTE_ACTIVE_GATE_DISABLED = true` (server.js) —
+  `_rouletteIsActiveClient` devuelve `{active:true}` sin consultar la DB. El
+  código del gate queda intacto para reponerlo con `false`. Status y spin no se
+  tocaron (leen `act.active`).
+- **El pacing pedido YA existía** (reparto lineal del budget por hora ART, fuerza
+  SIN PREMIO si el premio supera el acumulado que corresponde a la hora; el
+  budget no gastado a la mañana queda disponible más tarde). Se documenta que el
+  tope es duro: no hay camino que lo supere.
+- **NUEVO — fail-closed del tope** (antes era al revés y quedaba peligroso con la
+  ruleta abierta a toda la base): SIN tope activo (checkbox apagado o monto $0)
+  los giros salen SIEMPRE SIN PREMIO (antes: sin tope = premios SIN LÍMITE).
+  Ídem ante error de DB en el pacing (antes fallaba "silencioso" y dejaba pasar
+  el premio). Cartel del panel actualizado con la nueva semántica.
+- **Operativo (owner):** entrar a panel → Ruleta diaria → activar el tope y poner
+  el monto diario — sin eso la ruleta gira pero no regala nada. El botón
+  "Reiniciar ruleta de HOY" y la simulación de giro quedan igual.
+- **Validado:** `node --check` OK (server.js, admin.js); 574/574 divs, ids únicos.
+  Solo backend + panel (network-first) → sin bump de `?v`. Back necesita redeploy.
+  **PROBAR tras deploy:** un cliente con app y pocas cargas debe ver la card y
+  poder girar; con el tope apagado todos los giros salen SIN PREMIO; con tope
+  puesto, los premios respetan el reparto horario (ver "gastado/tope" en el panel).
+
 ### 117. 🔴 INCIDENTE: entorno caído (504 en todo) por BUCLE del fan-out hgcash contra sí mismo
 - **Síntoma:** EB "Severe" desde las 07:14 UTC del 20/08; 504 Gateway Time-out en
   todas las URLs; ELB con 43,5% de 4xx. El deploy del 19/08 20:04 UTC NO fue la

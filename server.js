@@ -14895,8 +14895,13 @@ function _rouletteHasAppInstalled(u) {
 // "Cliente activo" para la ruleta (owner 2026-06-24): MÁS DE 10 cargas REALES
 // (deposits, sin contar regalos/devoluciones) en los últimos 30 días. Devuelve
 // { active, count }. Ante error de lectura NO bloquea (no castiga por un fallo de DB).
+// ⚠️ GATE APAGADO por el owner (2026-08-20): la ruleta vuelve a ser para TODOS
+// los que tengan la app instalada con notificaciones (el freno del gasto es el
+// tope diario del panel, que ahora es fail-closed). Para reponer el gate: false.
+const ROULETTE_ACTIVE_GATE_DISABLED = true;
 const ROULETTE_MIN_CARGAS_30D = 10; // "más de" esto → activo (11+)
 async function _rouletteIsActiveClient(userId, username) {
+  if (ROULETTE_ACTIVE_GATE_DISABLED) return { active: true, count: null };
   try {
     const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
     const count = await Transaction.countDocuments({
@@ -15254,11 +15259,22 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     // repartido a lo largo del día (24h ART). Si dar este premio ahora
     // pasaría el target acumulado para la hora actual, forzamos SIN PREMIO.
     // Esto evita que se vacíe el budget en las primeras horas del día.
+    // ⚠️ FAIL-CLOSED (owner 2026-08-20, al abrir la ruleta a toda la base):
+    // SIN tope activo (checkbox apagado o monto $0) los giros salen SIEMPRE
+    // SIN PREMIO — un descuido de config no puede regalar plata sin límite.
+    // La regla del owner: el total del día JAMÁS supera el tope.
     try {
       const cfg = await getConfig('rouletteBudget').catch(() => null);
       const budgetARS = Math.max(0, Number(cfg && cfg.dailyBudgetARS) || 0);
       const budgetEnabled = !!(cfg && cfg.enabled !== false && budgetARS > 0);
-      if (budgetEnabled && prizeARS > 0) {
+      if (prizeARS > 0 && !budgetEnabled) {
+        logger.info(`[ROULETTE] SIN TOPE configurado — forzando SIN PREMIO para ${username} (activá el tope diario en el panel para que la ruleta reparta premios)`);
+        const noPrize = ROULETTE_PRIZES.find(p => Number(p.value) === 0);
+        if (noPrize) {
+          pick = noPrize;
+          prizeARS = 0;
+        }
+      } else if (budgetEnabled && prizeARS > 0) {
         const agg = await DailyRouletteSpin.aggregate([
           { $match: { dateKey, status: { $in: ['credited', 'won'] }, prizeARS: { $gt: 0 } } },
           { $group: { _id: null, total: { $sum: '$prizeARS' } } }
@@ -15284,7 +15300,14 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         }
       }
     } catch (e) {
-      logger.warn(`[ROULETTE] budget-pacing falló (silencioso): ${e.message}`);
+      // Fail-closed también ante un error de DB: mejor un giro sin premio que
+      // regalar por encima del tope (la ruleta está abierta a toda la base).
+      logger.warn(`[ROULETTE] budget-pacing falló — forzando SIN PREMIO: ${e.message}`);
+      const noPrize = ROULETTE_PRIZES.find(p => Number(p.value) === 0);
+      if (noPrize) {
+        pick = noPrize;
+        prizeARS = 0;
+      }
     }
 
     const initialStatus = prizeARS > 0 ? 'won' : 'no_prize';

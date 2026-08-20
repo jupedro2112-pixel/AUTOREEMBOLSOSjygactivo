@@ -2529,8 +2529,31 @@ function _hgcashFanoutUrl() {
 
 function _fanoutHgcashWebhook(req) {
   try {
+    // ── ANTI-BUCLE (incidente 2026-08-20) ────────────────────────────────────
+    // 1) Un webhook que YA viene reenviado por el proyecto hermano trae el
+    //    header X-Forwarded-By: NO se re-reenvía (cortaba acá y no había chequeo:
+    //    este entorno ES autoreembolsos.com y el default del fanout apuntaba a
+    //    su propio dominio → cada webhook se reenviaba a sí mismo en bucle
+    //    infinito hasta tumbar el entorno con 504).
+    if (req.get('X-Forwarded-By')) return;
     const url = _hgcashFanoutUrl();
     if (!url) return;
+    // 2) Nunca reenviar a nuestro PROPIO dominio (PUBLIC_BASE_URL o el host del
+    //    request): aunque la config quede mal, el bucle no se puede armar.
+    try {
+      const dstHost = new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
+      const ownHosts = [];
+      const pub = String(process.env.PUBLIC_BASE_URL || '').trim();
+      if (pub) { try { ownHosts.push(new URL(pub).hostname); } catch (_) {} }
+      const reqHost = String(req.get('host') || '').split(':')[0];
+      if (reqHost) ownHosts.push(reqHost);
+      for (const h of ownHosts) {
+        if (String(h).replace(/^www\./i, '').toLowerCase() === dstHost) {
+          logger.warn(`[hgcash-fanout] la URL de reenvío (${dstHost}) es NUESTRO propio dominio — reenvío omitido (anti-bucle). Configurá HGCASH_FANOUT_URL=off o apuntala al proyecto hermano.`);
+          return;
+        }
+      }
+    } catch (_) {}
     const axios = require('axios');
     const rawBody = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
     const headers = {

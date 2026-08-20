@@ -264,7 +264,12 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `/sys_deposit_no_bonus_saldo`, editable — vaciarlo lo apaga; si la lectura de
   saldo falla, el bono sale igual, fail-open). El 100% NO tiene esta condición.
   **Fan-out** (#94): reenvía el webhook crudo+firma a autoreembolsos.com
-  (`HGCASH_FANOUT_URL`, 'off' para apagar).
+  (`HGCASH_FANOUT_URL`, 'off' para apagar). ⚠️ **Guard anti-bucle** (#117,
+  incidente 2026-08-20): NO se reenvía si el webhook ya trae `X-Forwarded-By`
+  (es un reenvío del hermano) ni si el destino es nuestro PROPIO dominio
+  (`PUBLIC_BASE_URL`/host del request) — sin ese guard, este código corriendo
+  EN autoreembolsos.com se reenviaba a sí mismo en bucle infinito hasta
+  tumbar el entorno (504 en todo).
 - **Retiro self-service**: `POST /api/withdrawal/request` — exige phoneVerified, lock
   anti-doble, chequeo de saldo (UX), dedup 10min → crea PendingPayout
   (`deductAtPay:true`, SIN descontar) → mueve el chat a Pagos. El AGENTE confirma:

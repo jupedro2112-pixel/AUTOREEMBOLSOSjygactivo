@@ -4,7 +4,44 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-19**
+> **Última actualización: 2026-08-20**
+
+## Sesión 2026-08-20
+
+### 117. 🔴 INCIDENTE: entorno caído (504 en todo) por BUCLE del fan-out hgcash contra sí mismo
+- **Síntoma:** EB "Severe" desde las 07:14 UTC del 20/08; 504 Gateway Time-out en
+  todas las URLs; ELB con 43,5% de 4xx. El deploy del 19/08 20:04 UTC NO fue la
+  causa (nada del diff toca el webhook; el bucle venía de antes, ver abajo).
+- **Causa raíz:** el fan-out de webhooks (#94) reenvía todo webhook firmado a
+  `https://www.autoreembolsos.com/api/hgcash/webhook` (default), pero **este
+  entorno ES autoreembolsos.com** → se reenviaba a sí mismo. El reenvío llega con
+  firma válida (mismo secret) y NO había chequeo de `X-Forwarded-By` → se volvía
+  a reenviar: **bucle infinito**. Los webhooks TRANSACTION_REQUEST son los peores:
+  el handler responde 200 ANTES de procesar → el reenvío "sale bien" → bucle sin
+  amortiguación. En los logs, el MISMO pago (`ext=null` = ni siquiera es de este
+  proyecto, viene del hermano) se procesó 30.700 veces entre las 06 y 07 UTC.
+- **Por qué "funcionaba bien" antes:** los reenvíos a sí mismo morían rápido con
+  429 (rate-limit) — el bucle zumbaba capado (~500-1.600 warns/h desde el 16/08,
+  todos 429). La madrugada del 20/08 los webhooks de pago fueron sembrando bucles
+  (5k→9k→30k por hora); a las 06:40 el server dejó de responder en <8s → los 429
+  pasaron a timeout (sin freno + reintentos) → ~115.000 reenvíos fallidos POR HORA
+  en CADA instancia → event loop saturado → 504 general. Hubo un casi-colapso
+  previo el 19/08 a las 23:00 UTC (18,5k) que se recuperó solo.
+- **Mitigación INMEDIATA (owner, consola EB, sin deploy):** propiedad de entorno
+  **`HGCASH_FANOUT_URL=off`** (kill switch que ya existía, #94). Si hgcash apunta
+  DIRECTO a este entorno y vipcargas necesita la copia, apuntar a
+  `https://vipcargas.com/api/hgcash/webhook` en vez de off.
+- **Fix de código (`_fanoutHgcashWebhook`), doble guard anti-bucle:**
+  1. Webhook que llega con `X-Forwarded-By` (ya es un reenvío del hermano) → NO se
+     re-reenvía (corta cualquier cadena/bucle entre los dos proyectos).
+  2. Si el host del fanout == nuestro propio dominio (`PUBLIC_BASE_URL` o el host
+     del request, normalizando www.) → NO se reenvía y se loguea el aviso. Aunque
+     la config quede mal, el bucle no se puede armar.
+- **Lección (aplica al repo hermano vipcargas, MISMO código):** el default
+  hardcodeado del fanout apuntando a un dominio fijo es una bomba cuando el mismo
+  código corre EN ese dominio. El guard nuevo protege a ambos.
+- **Validado:** `node --check` OK. Solo backend → sin bump de `?v`. Back necesita
+  redeploy (el guard queda activo aunque después se re-habilite el fanout).
 
 ## Sesión 2026-08-19
 

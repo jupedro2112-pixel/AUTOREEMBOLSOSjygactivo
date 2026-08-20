@@ -99,6 +99,10 @@
     juego (app instalada + promo prendida y vigente), para no sumar llamadas a
     JUGAYGANA en el resto de las cargas. Se pasa como 3er parámetro a
     `_hgcashApplyAppBonus(user, amount, preBalance)`.
+    **Ajuste 2026-08-20:** la lectura pasa a `{maxAttempts:1}` (sin retry) — con
+    JUGAYGANA lento, los 3 intentos con backoff del default metían hasta ~40s de
+    demora visible en la carga automática (reporte del owner: una carga tardó
+    ~50s y otra ~11s). Es best-effort: si falla, el bono sale igual (fail-open).
   · Decisión en el helper: rama `app_20` con `preBalance > 500` → NO acredita,
     devuelve `skippedForBalance:true`. **Fail-open:** si la lectura de saldo falla
     (`preBalance` null), el bono sale como siempre — no se castiga al cliente por

@@ -2286,7 +2286,10 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       if (_rouletteHasAppInstalled(user)) {
         const _bonusCfg = await getHgcashAppBonusConfig();
         if (_bonusCfg.allEnabled && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
-          const preRes = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+          // UN solo intento (sin retry): esta lectura es best-effort y corre en el
+          // camino crítico de la carga — con JUGAYGANA lento, 3 intentos con
+          // backoff sumaban hasta ~40s de demora visible para el cliente.
+          const preRes = await jugayganaMovements.getUserBalanceWithRetry(user.username, { maxAttempts: 1 });
           if (preRes && preRes.success) preBalance = Number(preRes.balance);
         }
       }

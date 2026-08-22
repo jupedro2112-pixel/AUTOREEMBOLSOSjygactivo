@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v55'; // v55: el menú del home arranca oculto
+const CACHE_VERSION = 'v56'; // v56: install-btn oculto en login (fix Registrarse iPhone) + token nuevo al cerrar sesiones
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

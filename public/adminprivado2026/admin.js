@@ -9033,8 +9033,16 @@ async function rouletteTestSpin() {
     }
 }
 
+// Buscador de usuario en el historial (filtra server-side por substring;
+// las tarjetas de stats siguen mostrando el total del período).
+let _rouletteSearchTimer = null;
+function rouletteSearchChanged() {
+    clearTimeout(_rouletteSearchTimer);
+    _rouletteSearchTimer = setTimeout(loadRouletteAdmin, 350);
+}
 async function loadRouletteAdmin() {
     const days = parseInt((document.getElementById('rouletteDays') || {}).value || '14', 10) || 14;
+    const search = (document.getElementById('rouletteSearchInput')?.value || '').trim();
     const body = document.getElementById('rouletteAdminBody');
     if (!body) return;
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
@@ -9043,8 +9051,11 @@ async function loadRouletteAdmin() {
     try {
         const [statsResp, historyResp] = await Promise.all([
             rouletteAuthFetch('/api/admin/roulette/stats?days=' + days),
-            rouletteAuthFetch('/api/admin/roulette/history?pageSize=100')
+            rouletteAuthFetch('/api/admin/roulette/history?pageSize=100' + (search ? '&username=' + encodeURIComponent(search) : ''))
         ]);
+        // Si el admin siguió tipeando mientras cargaba, esta respuesta ya es vieja.
+        const nowSearch = (document.getElementById('rouletteSearchInput')?.value || '').trim();
+        if (nowSearch !== search) return;
         const stats = await statsResp.json();
         const history = await historyResp.json();
         if (!statsResp.ok || !stats.success) {
@@ -9105,10 +9116,13 @@ async function loadRouletteAdmin() {
         }
 
         // === Historial reciente ===
-        html += '<h3 style="color:#ffd700;font-size:12px;margin:18px 0 8px;letter-spacing:1.5px;text-transform:uppercase;">🏆 Quién ganó qué (últimos 100)</h3>';
+        html += '<h3 style="color:#ffd700;font-size:12px;margin:18px 0 8px;letter-spacing:1.5px;text-transform:uppercase;">'
+            + (search ? ('🔎 Giros de «' + escapeHtml(search) + '» (últimos 100)') : '🏆 Quién ganó qué (últimos 100)') + '</h3>';
         const items = (history && history.items) || [];
         if (items.length === 0) {
-            html += '<div style="color:#aaa;text-align:center;padding:20px;background:rgba(255,255,255,0.03);border-radius:8px;">Todavía nadie giró la ruleta.</div>';
+            html += search
+                ? '<div style="color:#aaa;text-align:center;padding:20px;background:rgba(255,255,255,0.03);border-radius:8px;">Sin giros para «' + escapeHtml(search) + '».</div>'
+                : '<div style="color:#aaa;text-align:center;padding:20px;background:rgba(255,255,255,0.03);border-radius:8px;">Todavía nadie giró la ruleta.</div>';
         } else {
             html += '<div style="background:rgba(0,0,0,0.20);border-radius:8px;overflow:hidden;max-height:60vh;overflow-y:auto;">';
             html += '<table style="width:100%;border-collapse:collapse;font-size:11.5px;">';

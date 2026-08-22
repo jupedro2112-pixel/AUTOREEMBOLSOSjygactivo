@@ -1467,6 +1467,7 @@
                 <div class="panel-header">
                     <h2>🎰 Ruleta diaria</h2>
                     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="text" id="rouletteSearchInput" placeholder="🔎 Buscar usuario…" oninput="rouletteSearchChanged()" onkeydown="if(event.key==='Enter'){event.preventDefault();loadRouletteAdmin();}" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;min-width:150px;">
                         <select id="rouletteDays" onchange="loadRouletteAdmin()" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-weight:700;">
                             <option value="7">Últimos 7 días</option>
                             <option value="14" selected>Últimos 14 días</option>

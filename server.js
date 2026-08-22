@@ -4461,14 +4461,28 @@ app.post('/api/auth/change-password', authMiddleware, authLimiter, async (req, r
     if (closeAllSessions) {
       user.tokenVersion = (user.tokenVersion || 0) + 1;
     }
-    
+
     await user.save();
 
     await syncPasswordToJugaygana(user, newPassword, 'change-password');
 
+    // "Cerrar sesiones" cierra las DEMÁS sesiones, no la que está cambiando la
+    // clave (pedido owner 2026-08-22): el bump de tokenVersion invalida todos
+    // los tokens viejos, así que a ESTA sesión se le emite uno nuevo con la
+    // versión nueva y sigue logueada. El resto muere en el próximo request.
+    let freshToken = null;
+    if (closeAllSessions) {
+      freshToken = jwt.sign(
+        { userId: user.id, username: user.username, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
+        JWT_SECRET,
+        { expiresIn: '90d' }
+      );
+    }
+
     res.json({
       message: 'Contraseña cambiada exitosamente',
       sessionsClosed: closeAllSessions || false,
+      token: freshToken,
       phoneVerified: !!user.phoneVerified,
       phone: user.phone || null
     });
@@ -4594,12 +4608,24 @@ app.post('/api/auth/change-password/pending', authMiddleware, authLimiter, async
 
     await syncPasswordToJugaygana(user, newPassword, 'change-password');
 
+    // Igual que en /change-password: cerrar sesiones NO incluye a la sesión
+    // que está haciendo el cambio — se le emite un token con la versión nueva.
+    let freshToken = null;
+    if (closeAllSessions) {
+      freshToken = jwt.sign(
+        { userId: user.id, username: user.username, role: user.role, tokenVersion: user.tokenVersion ?? 0 },
+        JWT_SECRET,
+        { expiresIn: '90d' }
+      );
+    }
+
     res.json({
       message: 'Contraseña cambiada. Entraste en modo temporal.',
       temporaryAccess: true,
       pendingAccessCode: pendingCode,
       phoneVerificationPending: true,
-      sessionsClosed: closeAllSessions || false
+      sessionsClosed: closeAllSessions || false,
+      token: freshToken
     });
   } catch (error) {
     logger.error(`Error en change-password/pending: ${error.message}`);
@@ -15461,7 +15487,12 @@ app.get('/api/admin/roulette/history', authMiddleware, adminMiddleware, async (r
     const filter = {};
     if (req.query.status) filter.status = String(req.query.status);
     if (req.query.minPrize) filter.prizeARS = { $gte: Number(req.query.minPrize) };
-    if (req.query.username) filter.username = String(req.query.username).toLowerCase();
+    // Buscador del panel: substring (antes era match exacto, inservible para
+    // buscar). El campo se guarda en minúsculas → se baja el término también.
+    if (req.query.username) {
+      const term = String(req.query.username).trim().toLowerCase().slice(0, 40);
+      if (term) filter.username = { $regex: escapeRegex(term) };
+    }
 
     const [items, total] = await Promise.all([
       DailyRouletteSpin.find(filter)

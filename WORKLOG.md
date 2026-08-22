@@ -4,7 +4,49 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-20**
+> **Última actualización: 2026-08-22**
+
+## Sesión 2026-08-22
+
+### 119. Buscador en Ruleta diaria + "cerrar sesiones" no mata la sesión propia + fix Registrarse en iPhone
+- **(1) Buscador de usuario en la sección Ruleta diaria del panel.** Input
+  `#rouletteSearchInput` junto al selector de días (debounce 350ms + Enter +
+  guard anti-race). Filtra server-side la tabla "Quién ganó qué" — el endpoint
+  `GET /api/admin/roulette/history` pasa de match EXACTO de `username` a
+  substring case-insensitive (`escapeRegex`, término en minúsculas porque el
+  campo se guarda lower, máx 40 chars). Las tarjetas de stats siguen mostrando
+  el total del período. Título y empty-state reflejan la búsqueda.
+- **(2) "Cerrar todas las sesiones" al cambiar la clave ya NO desloguea a la
+  sesión que hace el cambio** (pedido del owner). Antes: el bump de
+  `tokenVersion` invalidaba TODOS los tokens (incluido el propio) y el front
+  forzaba re-login. Ahora los DOS endpoints (`/api/auth/change-password` y
+  `/change-password/pending`) emiten un **token nuevo** (payload idéntico al
+  login, 90d, con el tokenVersion nuevo) en el campo `token` de la respuesta
+  cuando `closeAllSessions` — las demás sesiones mueren en su próximo request,
+  esta sigue. `auth.js` guarda el token (localStorage + VIP.state) en los dos
+  caminos (normal y entrada temporal) y el toast pasa a "Se cerraron las demás
+  sesiones. Esta sesión sigue activa". **Fallback:** si el backend viejo no
+  manda `token` (rolling deploy), se mantiene el comportamiento anterior
+  (re-login) — sin ventana rota en ninguna dirección.
+- **(3) iPhone: "Registrarse" no se dejaba presionar.** Causa: el botón
+  flotante "📱 Agregar a Inicio" (`#pwaInstallButton`, position:fixed,
+  z-index 9999, bottom ~80px) se muestra SIEMPRE en iOS (no hay
+  beforeinstallprompt) y en pantallas cortas quedaba fijo ENCIMA del botón
+  "📝 Registrarse" del login → el toque se lo comía el flotante (abría las
+  instrucciones de instalación o no hacía "nada" visible). Fix: el flotante
+  NO se muestra mientras `#loginScreen` esté visible (además instalar la PWA
+  sin sesión en iOS es contraproducente: abriría deslogueada, el traspaso de
+  sesión de #101 necesita login). Un MutationObserver sobre la clase `hidden`
+  de `#loginScreen` lo muestra al entrar y lo esconde al volver al login.
+  Aplica a todas las plataformas (mismo riesgo de solape en Android).
+- **Validado:** `node --check` OK (server.js, auth.js, admin.js, SW); divs
+  balanceados e ids únicos en ambos index.html. **`?v=56` +
+  `CACHE_VERSION='v56'`** (cambiaron index.html y auth.js juntos, regla #97).
+  Back necesita redeploy. **PROBAR tras deploy:** (a) buscar un usuario en
+  Ruleta diaria; (b) cambiar clave con "cerrar sesiones" tildado → la sesión
+  actual sigue viva y otra sesión abierta del mismo user queda inválida;
+  (c) en un iPhone real, pantalla de login → tocar "Registrarse" (debe abrir
+  el modal; el botón flotante no debe verse hasta después de entrar).
 
 ## Sesión 2026-08-20
 

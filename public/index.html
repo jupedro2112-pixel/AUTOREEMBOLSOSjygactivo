@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=55">
-    <link rel="stylesheet" href="/css/login.css?v=55">
-    <link rel="stylesheet" href="/css/header.css?v=55">
-    <link rel="stylesheet" href="/css/chat.css?v=55">
-    <link rel="stylesheet" href="/css/modals.css?v=55">
-    <link rel="stylesheet" href="/css/responsive.css?v=55">
+    <link rel="stylesheet" href="/css/base.css?v=56">
+    <link rel="stylesheet" href="/css/login.css?v=56">
+    <link rel="stylesheet" href="/css/header.css?v=56">
+    <link rel="stylesheet" href="/css/chat.css?v=56">
+    <link rel="stylesheet" href="/css/modals.css?v=56">
+    <link rel="stylesheet" href="/css/responsive.css?v=56">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -1928,25 +1928,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=55"></script>
-    <script src="/js/campaign.js?v=55"></script>
-    <script src="/js/meta-pixel.js?v=55"></script>
-    <script src="/js/auth.js?v=55"></script>
-    <script src="/js/socket.js?v=55"></script>
-    <script src="/js/chat.js?v=55"></script>
-    <script src="/js/refunds.js?v=55"></script>
-    <script src="/js/fire.js?v=55"></script>
-    <script src="/js/roulette.js?v=55"></script>
-    <script src="/js/reviews.js?v=55"></script>
-    <script src="/js/promobonus.js?v=55"></script>
-    <script src="/js/notifications.js?v=55"></script>
-    <script src="/js/ui.js?v=55"></script>
-    <script src="/js/withdraw.js?v=55"></script>
-    <script src="/js/installbonus.js?v=55"></script>
-    <script src="/js/notifsurvey.js?v=55"></script>
-    <script src="/js/publisherwelcome.js?v=55"></script>
-    <script src="/js/apptest.js?v=55"></script>
-    <script src="/js/app.js?v=55"></script>
+    <script src="/js/config.js?v=56"></script>
+    <script src="/js/campaign.js?v=56"></script>
+    <script src="/js/meta-pixel.js?v=56"></script>
+    <script src="/js/auth.js?v=56"></script>
+    <script src="/js/socket.js?v=56"></script>
+    <script src="/js/chat.js?v=56"></script>
+    <script src="/js/refunds.js?v=56"></script>
+    <script src="/js/fire.js?v=56"></script>
+    <script src="/js/roulette.js?v=56"></script>
+    <script src="/js/reviews.js?v=56"></script>
+    <script src="/js/promobonus.js?v=56"></script>
+    <script src="/js/notifications.js?v=56"></script>
+    <script src="/js/ui.js?v=56"></script>
+    <script src="/js/withdraw.js?v=56"></script>
+    <script src="/js/installbonus.js?v=56"></script>
+    <script src="/js/notifsurvey.js?v=56"></script>
+    <script src="/js/publisherwelcome.js?v=56"></script>
+    <script src="/js/apptest.js?v=56"></script>
+    <script src="/js/app.js?v=56"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA
@@ -3196,6 +3196,23 @@
         // ============================================
         // MOSTRAR BOTÓN DE INSTALACIÓN
         // ============================================
+        // ⚠️ El botón flotante NO se muestra mientras la pantalla de LOGIN esté
+        // visible: es position:fixed con z-index 9999 y en iPhone quedaba fijo
+        // ENCIMA del botón "📝 Registrarse" (pantallas cortas) — el toque se lo
+        // comía el flotante y el registro "no se dejaba presionar". Además, en
+        // iOS instalar la PWA sin sesión iniciada la haría abrir deslogueada
+        // (el traspaso de sesión necesita login). Cuando el usuario entra, el
+        // observer de abajo lo vuelve a mostrar solo.
+        let _pwaInstallBtnWanted = false;
+        function _isLoginScreenVisible() {
+            const ls = document.getElementById('loginScreen');
+            return !!(ls && !ls.classList.contains('hidden'));
+        }
+        function _refreshInstallBtnVisibility() {
+            const installBtn = document.getElementById('pwaInstallButton');
+            if (!installBtn) return;
+            installBtn.style.display = (_pwaInstallBtnWanted && !_isLoginScreenVisible()) ? 'flex' : 'none';
+        }
         function showInstallButton() {
             // Crear botón si no existe
             let installBtn = document.getElementById('pwaInstallButton');
@@ -3205,29 +3222,41 @@
                 installBtn.className = 'pwa-install-btn';
                 installBtn.innerHTML = '📱 Instalar App';
                 document.body.appendChild(installBtn);
-                
+
                 // Agregar evento click
                 installBtn.addEventListener('click', handleInstallClick);
             }
-            
-            // Mostrar el botón
-            installBtn.style.display = 'flex';
-            
+
             // Si es iOS, mostrar instrucciones especiales
             if (isIOS) {
                 installBtn.innerHTML = '📱 Agregar a Inicio';
             }
+
+            // Mostrar el botón (salvo que el login esté visible)
+            _pwaInstallBtnWanted = true;
+            _refreshInstallBtnVisibility();
         }
-        
+
         // ============================================
         // OCULTAR BOTÓN DE INSTALACIÓN
         // ============================================
         function hideInstallButton() {
+            _pwaInstallBtnWanted = false;
             const installBtn = document.getElementById('pwaInstallButton');
             if (installBtn) {
                 installBtn.style.display = 'none';
             }
         }
+
+        // Reacciona al cambio login ↔ chat (ui.js togglea la clase 'hidden'):
+        // al entrar aparece el botón; al volver al login se esconde.
+        (function () {
+            const ls = document.getElementById('loginScreen');
+            if (ls && window.MutationObserver) {
+                new MutationObserver(_refreshInstallBtnVisibility)
+                    .observe(ls, { attributes: true, attributeFilter: ['class'] });
+            }
+        })();
         
         // ============================================
         // MANEJAR CLICK EN BOTÓN DE INSTALACIÓN

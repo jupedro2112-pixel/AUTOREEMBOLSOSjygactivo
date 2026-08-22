@@ -921,6 +921,12 @@ VIP.auth = (function () {
 
             if (response.ok) {
                 VIP.state.passwordChangePending = false;
+                // Si cerró las demás sesiones, el server emite un token NUEVO
+                // (con el tokenVersion nuevo) para que ESTA sesión siga viva.
+                if (data && data.token) {
+                    VIP.state.currentToken = data.token;
+                    localStorage.setItem('userToken', data.token);
+                }
                 // Actualizar contraseña en memoria de sesión para el modal de plataforma
                 VIP.state.sessionPassword = newPassword;
                 // Reflejar el teléfono verificado en el estado local para no volver a pedirlo.
@@ -947,11 +953,18 @@ VIP.auth = (function () {
                 document.getElementById('closeAllSessions').checked = false;
 
                 if (closeAllSessions) {
-                    VIP.ui.showToast('🔒 Todas las sesiones han sido cerradas. Por favor, vuelve a iniciar sesión.', 'info');
-                    setTimeout(() => {
-                        localStorage.removeItem('userToken');
-                        location.reload();
-                    }, 2000);
+                    if (data && data.token) {
+                        // La sesión actual quedó con el token nuevo: no se desloguea.
+                        VIP.ui.showToast('🔒 Se cerraron las demás sesiones. Esta sesión sigue activa.', 'info');
+                    } else {
+                        // Backend viejo (sin token nuevo en la respuesta): el token
+                        // actual quedó inválido → comportamiento anterior.
+                        VIP.ui.showToast('🔒 Todas las sesiones han sido cerradas. Por favor, vuelve a iniciar sesión.', 'info');
+                        setTimeout(() => {
+                            localStorage.removeItem('userToken');
+                            location.reload();
+                        }, 2000);
+                    }
                 }
                 return true;
             }
@@ -1107,7 +1120,14 @@ VIP.auth = (function () {
                 VIP.state.currentUser.phoneVerified = false;
                 VIP.state.currentUser.phoneVerificationPending = true;
             }
-            _temporalCloseAllSessions = !!_vipChangePwdPending.closeAllSessions;
+            // Si cerró las demás sesiones, el server manda un token nuevo para
+            // que ESTA sesión siga viva → solo se fuerza re-login si el backend
+            // no lo mandó (backend viejo).
+            if (data && data.token) {
+                VIP.state.currentToken = data.token;
+                localStorage.setItem('userToken', data.token);
+            }
+            _temporalCloseAllSessions = !!_vipChangePwdPending.closeAllSessions && !(data && data.token);
             _vipChangePwdPending = null;
             _stopChangePwdResendCooldown();
 

@@ -8,6 +8,38 @@
 
 ## Sesión 2026-08-25
 
+### 122. 🎯 CULPABLE IDENTIFICADO: saturación del camino a JUGAYGANA (proxy) — caches + menos polling
+- **Evidencia de la instrumentación de #121 (logs con [slow-req], 20 min de
+  datos):** 1.610 requests lentos y TODOS son endpoints que llaman a JUGAYGANA:
+  `GET /api/balance/live` 1.226 veces (~2s c/u), `GET /api/refunds/status` 286
+  (~4.5s, hace 4 llamadas NETWIN), claims ~6s, `admin/deposit` ~7s,
+  `payouts/pay` ~11s, login ~3.6s. NINGÚN endpoint puro-Mongo aparece; el
+  event-loop está limpio (una sola traba de 513ms) y el adapter Redis de
+  Socket.IO está ACTIVO en ambas instancias ("multi-instance mode active").
+- **La cadena:** cada PWA online consultaba su saldo cada 30s → cada consulta =
+  1 llamada a JUGAYGANA vía el proxy residencial rotativo → con cientos de
+  clientes son varias llamadas/segundo → el proxy/proveedor responde a ~2s →
+  TODO lo que toca JUGAYGANA se arrastra (incluidas las acciones de los
+  agentes: depósitos, pagos) → "el panel anda lento".
+- **Fixes (bajar el tráfico a JUGAYGANA sin tocar flujos de plata):**
+  1. `/api/balance/live` con **cache de 20s por usuario** + ante fallo de
+     JUGAYGANA sirve el último saldo conocido (≤2 min, flag `stale`) en vez de
+     400. El saldo real igual llega al instante por socket al acreditar cargas.
+  2. **Poll del cliente 30s → 90s** (ui.js) + no pollea con la pestaña oculta.
+     El poll es solo respaldo del socket `balance_updated`.
+  3. `/api/refunds/status` con **cache de 3 min por usuario** (data de display;
+     res.json interceptado para cachear sin reescribir el handler). Se INVALIDA
+     en los 3 claims (`_invalidateRefundsStatus`: al entrar Y al terminar el
+     claim, así un status concurrente no re-puebla el estado viejo). La puerta
+     real del claim sigue siendo el índice único — el cache no toca plata.
+  Caches en memoria por instancia con poda cada 10 min (unref).
+- **Pendiente si sigue lento tras esto:** el proxy en sí (webshare residencial
+  rotativo, ~2s por request). Opciones: plan mejor / proxy estático / revisar
+  ancho de banda (ya se agotó una vez, #99). Decisión de plata del owner.
+- **Validado:** `node --check` OK (server.js, ui.js). Cambio de JS puro → sin
+  bump de `?v` (SW SWR revalida /js/ en la próxima carga, #90). Back necesita
+  redeploy.
+
 ### 121. La teoría de capacidad de #120 QUEDÓ DESCARTADA — instrumentación para cazar la lentitud real
 - **Datos nuevos (gráficos de CloudWatch del owner, 25/08 04:00 UTC):** CPU del
   entorno ~5% promedio con picos de 13%; saldo de créditos de CPU planchado en

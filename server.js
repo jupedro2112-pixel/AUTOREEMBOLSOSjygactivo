@@ -6750,10 +6750,43 @@ function computeRefundTier(monthNetLoss, tiers) {
   return { key, label: REFUND_TIER_META[key].label, emoji: REFUND_TIER_META[key].emoji, percent: tiers[key].percent };
 }
 
+// Cache del status de reembolsos por usuario (incidente 2026-08-25): cada
+// ingreso de usuario disparaba 4 llamadas NETWIN a JUGAYGANA (~4.5s el request
+// bajo carga). El status es data de DISPLAY: 3 minutos de cache son invisibles
+// para el cliente. Se INVALIDA al reclamar cualquier reembolso (el claim
+// recalcula todo en serio — la puerta real es el índice único, no este cache).
+const _refundsStatusCache = new Map(); // userId -> { data, ts }
+const REFUNDS_STATUS_CACHE_MS = 3 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - REFUNDS_STATUS_CACHE_MS;
+  for (const [k, v] of _refundsStatusCache) { if (v.ts < cutoff) _refundsStatusCache.delete(k); }
+}, 10 * 60 * 1000).unref();
+function _invalidateRefundsStatus(req, res) {
+  try { _refundsStatusCache.delete(req.user.userId); } catch (_) {}
+  // También al TERMINAR el claim (el estado cambió recién ahí; sin esto, un
+  // status concurrente podía re-poblar el cache con el estado viejo).
+  res.on('finish', () => { try { _refundsStatusCache.delete(req.user.userId); } catch (_) {} });
+}
+
 app.get('/api/refunds/status', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
     const username = req.user.username;
+
+    const _cachedStatus = _refundsStatusCache.get(userId);
+    if (_cachedStatus && Date.now() - _cachedStatus.ts < REFUNDS_STATUS_CACHE_MS) {
+      return res.json(_cachedStatus.data);
+    }
+    // Capturar la respuesta para cachearla sin reescribir el resto del handler.
+    const _origJson = res.json.bind(res);
+    res.json = (body) => {
+      try {
+        if (res.statusCode === 200 && body && !body.error) {
+          _refundsStatusCache.set(userId, { data: body, ts: Date.now() });
+        }
+      } catch (_) {}
+      return _origJson(body);
+    };
 
     const userInfo = await jugaygana.getUserInfoByName(username);
     const currentBalance = userInfo ? userInfo.balance : 0;
@@ -6892,6 +6925,7 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
 // que un cliente puede cobrar por la misma pérdida en los tres. No se descuentan
 // entre sí — igual que el solape preexistente entre semanal y mensual (#73).
 app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
+  _invalidateRefundsStatus(req, res);
   try {
     const userId = req.user.userId;
     const username = req.user.username;
@@ -7088,6 +7122,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
+  _invalidateRefundsStatus(req, res);
   try {
     const userId = req.user.userId;
     const username = req.user.username;
@@ -7275,6 +7310,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
+  _invalidateRefundsStatus(req, res);
   try {
     const userId = req.user.userId;
     const username = req.user.username;
@@ -7557,22 +7593,49 @@ app.get('/api/balance', authMiddleware, async (req, res) => {
   }
 });
 
+// Cache corto del saldo por usuario (incidente 2026-08-25): cada PWA online
+// consultaba el saldo cada 30s y CADA consulta era una llamada a JUGAYGANA por
+// el proxy (~2s c/u) — cientos de clientes = varias llamadas/segundo que
+// saturaban el camino al proveedor y arrastraban TODOS los flujos (depósitos,
+// reembolsos, pagos). 20s de cache + servir el último valor conocido ante un
+// fallo cortan la mayor parte de ese tráfico sin que el usuario note nada
+// (el saldo igual se actualiza en el acto por socket al acreditar cargas).
+const _balanceLiveCache = new Map(); // username -> { balance, ts }
+const BALANCE_LIVE_CACHE_MS = 20000;
+const BALANCE_LIVE_STALE_MS = 2 * 60 * 1000; // ante fallo, servir hasta 2 min viejo
+setInterval(() => {
+  const cutoff = Date.now() - BALANCE_LIVE_STALE_MS;
+  for (const [k, v] of _balanceLiveCache) { if (v.ts < cutoff) _balanceLiveCache.delete(k); }
+}, 10 * 60 * 1000).unref();
+
 app.get('/api/balance/live', authMiddleware, async (req, res) => {
   try {
     const username = req.user.username;
+    const cached = _balanceLiveCache.get(username);
+    if (cached && Date.now() - cached.ts < BALANCE_LIVE_CACHE_MS) {
+      return res.json({
+        balance: cached.balance,
+        username,
+        updatedAt: new Date(cached.ts).toISOString()
+      });
+    }
     const result = await jugayganaMovements.getUserBalance(username);
-    
+
     if (result.success) {
+      _balanceLiveCache.set(username, { balance: result.balance, ts: Date.now() });
       await User.updateOne(
         { username },
         { balance: result.balance }
       );
-      
+
       res.json({
         balance: result.balance,
         username: result.username,
         updatedAt: new Date().toISOString()
       });
+    } else if (cached && Date.now() - cached.ts < BALANCE_LIVE_STALE_MS) {
+      // JUGAYGANA no respondió: mejor el último saldo conocido que un error.
+      res.json({ balance: cached.balance, username, updatedAt: new Date(cached.ts).toISOString(), stale: true });
     } else {
       res.status(400).json({ error: result.error });
     }

@@ -188,7 +188,14 @@ VIP.ui = (function () {
         if (VIP.state.balanceCheckInterval) {
             clearInterval(VIP.state.balanceCheckInterval);
         }
-        VIP.state.balanceCheckInterval = setInterval(syncBalance, 30000);
+        // 90s (antes 30s): cada poll es una llamada a JUGAYGANA vía proxy en el
+        // server; con cientos de clientes online el poll de 30s saturaba el
+        // camino al proveedor (incidente 2026-08-25). Las cargas igual actualizan
+        // el saldo AL INSTANTE por socket (balance_updated) — el poll es respaldo.
+        // Con la pestaña oculta no se pollea (patrón de la ruleta, #90).
+        VIP.state.balanceCheckInterval = setInterval(() => {
+            if (!document.hidden) syncBalance();
+        }, 90000);
     }
 
     function stopBalancePolling() {

@@ -611,6 +611,39 @@ const PORT = process.env.PORT || 3000;
 let JWT_SECRET;
 
 // ============================================
+// DIAGNÓSTICO DE LENTITUD (incidente 2026-08-25: "los chats tardan en cargar"
+// con CPU al 5% y tráfico tranquilo — hay que ver QUÉ endpoint/recurso es el
+// lento). Dos medidores baratos, siempre prendidos:
+//   [slow-req]  loguea todo request de /api/ que tarde >1.5s (ruta + ms + user).
+//   [event-loop] detecta trabas del event loop >500ms (bloqueos que el promedio
+//                de CPU esconde y que cuelgan health checks y requests).
+// Costo por request: una resta de timestamps — despreciable.
+// ============================================
+const SLOW_REQ_MS = 1500;
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  const t0 = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - t0;
+    if (ms > SLOW_REQ_MS) {
+      const who = (req.user && req.user.username) ? ` user=${req.user.username}` : '';
+      logger.warn(`[slow-req] ${req.method} ${String(req.originalUrl || req.path).slice(0, 120)} ${ms}ms status=${res.statusCode}${who}`);
+    }
+  });
+  next();
+});
+{
+  let _elPrev = Date.now();
+  const _elTick = setInterval(() => {
+    const now = Date.now();
+    const lag = now - _elPrev - 1000;
+    if (lag > 500) logger.warn(`[event-loop] traba de ${lag}ms (el proceso estuvo bloqueado sin atender nada)`);
+    _elPrev = now;
+  }, 1000);
+  if (_elTick.unref) _elTick.unref();
+}
+
+// ============================================
 // MIDDLEWARE DE SEGURIDAD
 // ============================================
 const compression = require('compression');

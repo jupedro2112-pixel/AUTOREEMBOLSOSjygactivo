@@ -8,6 +8,31 @@
 
 ## Sesión 2026-08-25
 
+### 121. La teoría de capacidad de #120 QUEDÓ DESCARTADA — instrumentación para cazar la lentitud real
+- **Datos nuevos (gráficos de CloudWatch del owner, 25/08 04:00 UTC):** CPU del
+  entorno ~5% promedio con picos de 13%; saldo de créditos de CPU planchado en
+  577 (llenos); instancias t3.medium; trigger de escalado ya estaba bien
+  (CPUUtilization 70/30). Y los agentes reportan "está muy tranquilo, solo que
+  tarda en cargar los chats" → lento SIN carga. **No es capacidad** (el
+  razonamiento de #120 era plausible pero los gráficos lo refutan).
+- **Sospechosos vigentes:** (1) MongoDB Atlas lento/saturado (cargar un chat es
+  puro Mongo; revisar métricas del cluster en Atlas: tier, conexiones, latencia);
+  (2) trabas cortas del event loop que el promedio de CPU esconde; (3) llamadas
+  a JUGAYGANA en el camino de abrir chat. El log de healthd sigue roto → no hay
+  latencias de requests en ningún lado, por eso se instrumenta:
+- **Instrumentación agregada (server.js, siempre prendida, costo despreciable):**
+  · `[slow-req]`: loguea todo request de /api/ que tarde >1.5s (método, ruta,
+    ms, status, user). Umbral en `SLOW_REQ_MS`.
+  · `[event-loop]`: tick de 1s; si el timer se corre >500ms, loguea la traba
+    (detecta bloqueos del proceso invisibles en el promedio de CPU).
+- **Cómo se usa tras el deploy:** dejar correr unas horas (ideal cruzar el pico
+  nocturno) → EB → Registros → últimas 100 líneas o bundle completo → buscar
+  `[slow-req]` (QUÉ endpoint es lento) y `[event-loop]` (si hay bloqueos). Además
+  el arranque fresco vuelve a loguear si el adapter Redis de Socket.IO quedó en
+  "multi-instance mode active" o cayó a single-instance (explicaría los mensajes
+  "en visto": eventos que no cruzan entre instancias).
+- **Validado:** `node --check` OK. Solo backend → sin bump de `?v`.
+
 ### 120. ANÁLISIS: Warning intermitente de EB + chats "en visto" = CAPACIDAD en el pico nocturno (no es bug)
 - **Síntoma:** EB Warning↔Ok cada ~10 min ("TargetGroups reduced health") entre
   las 00:25 y 03:28 UTC del 25/08; agentes reportan chats que no cargan y

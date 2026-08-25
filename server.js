@@ -6063,7 +6063,7 @@ app.post('/api/admin/sync-all-jugaygana', authMiddleware, adminMiddleware, async
 
 app.get('/api/admin/sync-status', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    const totalUsers = await User.countDocuments();
+    const totalUsers = await User.estimatedDocumentCount();
     const jugayganaUsers = await User.countDocuments({ jugayganaUserId: { $ne: null } });
     const pendingUsers = await User.countDocuments({ jugayganaUserId: null, role: 'user' });
     
@@ -12446,21 +12446,29 @@ app.get('/api/admin/stats', authMiddleware, adminMiddleware, async (req, res) =>
     if (_cachedAdminStats.data && now - _cachedAdminStats.lastUpdate < _STATS_CACHE_TTL) {
       return res.json(_cachedAdminStats.data);
     }
-    const totalUsers = await User.countDocuments();
+    // Conteos SIN filtro con estimatedDocumentCount (lee metadata de la
+    // colección, ~0ms). Antes countDocuments() escaneaba la colección COMPLETA
+    // (messages 62k docs ~490ms, transactions 97k ~120ms) — Atlas mostraba
+    // estos escaneos corriendo miles de veces por día (hallazgo 2026-08-25).
+    // Son contadores de display: el conteo aproximado es idéntico en la práctica.
+    const totalUsers = await User.estimatedDocumentCount();
     const onlineUsers = await User.countDocuments({ lastLogin: { $gte: new Date(Date.now() - 5 * 60 * 1000) } });
-    const totalMessages = await Message.countDocuments();
-    const totalTransactions = await Transaction.countDocuments();
-    
-    // Transacciones de hoy
+    const totalMessages = await Message.estimatedDocumentCount();
+    const totalTransactions = await Transaction.estimatedDocumentCount();
+
+    // Transacciones de hoy: suma EN Mongo (antes traía todos los docs del día
+    // a Node para sumarlos en JS).
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayTransactions = await Transaction.find({ timestamp: { $gte: today } }).lean();
-    
+    const todayAgg = await Transaction.aggregate([
+      { $match: { timestamp: { $gte: today }, type: { $in: ['deposit', 'withdrawal'] } } },
+      { $group: { _id: '$type', total: { $sum: '$amount' } } }
+    ]);
     let todayDeposits = 0;
     let todayWithdrawals = 0;
-    todayTransactions.forEach(t => {
-      if (t.type === 'deposit') todayDeposits += t.amount;
-      if (t.type === 'withdrawal') todayWithdrawals += t.amount;
+    todayAgg.forEach(g => {
+      if (g._id === 'deposit') todayDeposits = g.total;
+      if (g._id === 'withdrawal') todayWithdrawals = g.total;
     });
     
     const result = { totalUsers, onlineUsers, totalMessages, totalTransactions, todayDeposits, todayWithdrawals };

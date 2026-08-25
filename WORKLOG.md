@@ -32,6 +32,21 @@
   "multi-instance mode active" o cayó a single-instance (explicaría los mensajes
   "en visto": eventos que no cruzan entre instancias).
 - **Validado:** `node --check` OK. Solo backend → sin bump de `?v`.
+- **DATOS DE ATLAS (Query Insights, mismo día):** la query que carga los
+  mensajes del chat tarda **1ms** → Mongo NO es lo que cuelga "Cargando
+  mensajes" (buscar la traba en Node con [slow-req]/[event-loop]). Pero hay
+  derroche real: (1) `chatstatuses` aggregate del listado de conversaciones:
+  80.3k ejecuciones/día × 127ms = 2,8 h/día (falta índice status+lastMessageAt
+  — lo recomienda Performance Advisor, crear DESDE ATLAS); (2) conteos
+  filterless (`countDocuments()`) escaneando messages (62k docs, 492ms) y
+  transactions (97k, 117ms) miles de veces/día; (3) `bankmovements` find de
+  150ms examinando 10k docs (falta índice). Performance Advisor tiene 10
+  recomendaciones de índices pendientes de revisar.
+- **Fix aplicado (server.js):** `/api/admin/stats` y `/api/admin/sync-status`
+  pasan los conteos sin filtro a `estimatedDocumentCount()` (metadata, ~0ms) y
+  la suma de depósitos/retiros de hoy pasa de `find().lean()` + suma en JS a
+  una agregación `$group` en Mongo. Display-only → el conteo estimado es
+  equivalente en la práctica.
 
 ### 120. ANÁLISIS: Warning intermitente de EB + chats "en visto" = CAPACIDAD en el pico nocturno (no es bug)
 - **Síntoma:** EB Warning↔Ok cada ~10 min ("TargetGroups reduced health") entre

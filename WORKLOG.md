@@ -4,7 +4,37 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-22**
+> **Última actualización: 2026-08-25**
+
+## Sesión 2026-08-25
+
+### 120. ANÁLISIS: Warning intermitente de EB + chats "en visto" = CAPACIDAD en el pico nocturno (no es bug)
+- **Síntoma:** EB Warning↔Ok cada ~10 min ("TargetGroups reduced health") entre
+  las 00:25 y 03:28 UTC del 25/08; agentes reportan chats que no cargan y
+  respuestas que "quedan en visto" (el mensaje se guarda pero el cliente no lo
+  ve en vivo). El owner reinició los app servers y "se arregló".
+- **Análisis de logs (2 instancias, bundles completos):** CERO fallas — sin
+  tormentas, sin OOM, sin errores de nginx/kernel/Redis/Mongo, app logueando
+  normal durante toda la ventana. La correlación es de CARGA: el Warning ocurre
+  EXACTAMENTE en el pico nocturno (21:30–00:30 ART; conexiones 344→565/h por
+  instancia, pico previo de 947/h). Bajo pico, la instancia tarda de más en
+  contestar algún health check del ELB por momentos → Warning; se recupera sola.
+  Los síntomas de los agentes son la misma lentitud (eventos de socket demorados
+  → "visto"; requests lentos → "Cargando mensajes…"). El reinicio coincidió con
+  el fin del pico — VA A REPETIRSE cada noche si no se agranda la capacidad.
+- **Recomendación (config EB, no código):** Configuración → Capacidad → subir
+  mínimo de instancias 2→3 y/o subir el tipo de instancia (t3.small→medium).
+- **Pendiente de código que aliviaría el pico (no hecho):** cachear
+  `/api/refunds/status` (hoy 4 llamadas NETWIN a JUGAYGANA por CADA ingreso de
+  usuario — lo más pesado por sesión, ver nota en #102).
+- **Notas sueltas del análisis:** (a) los reportes de Telegram eran de agentes
+  de GIROX (otro proyecto/entorno; NUEVOgirox también Warning y
+  Paginaaaacreada-env-1 Degraded — misma receta, otro repo); (b) el logging de
+  healthd (application.log de nginx) está ROTO en ambas instancias desde hace
+  días (720 warns/h "does not exist") → EB no tiene métricas de requests, la
+  salud sale solo del ELB; inofensivo pero explica la poca visibilidad;
+  (c) el ssm-agent loguea "Failed to connect to Systems Manager" cada ~15 min
+  en ambas instancias desde siempre (ruido crónico, probable permiso IAM).
 
 ## Sesión 2026-08-22
 

@@ -47,6 +47,17 @@
   la suma de depósitos/retiros de hoy pasa de `find().lean()` + suma en JS a
   una agregación `$group` en Mongo. Display-only → el conteo estimado es
   equivalente en la práctica.
+- **Performance Advisor (revisado con el owner):** de las 10 recomendaciones se
+  crean SOLO 2 desde Atlas (sin deploy): `refundclaims {username, claimedAt}`
+  (el buscador de Reembolsos reclamados de #116: 303ms escaneando 76k docs) y
+  `bankmovements {matchedUserId, createdAt, matchStatus}` (589ms, flujo
+  hgcashConsumeOnManualDeposit). Las otras 8 se DESCARTAN: consultas de ~1
+  vez/día sobre `users` (que ya tiene 56 índices — sobre-indexada; el Advisor
+  también sugiere borrar 22, pendiente de revisar con cuidado otro día porque
+  varios pueden ser candados de idempotencia). El índice de `chatstatuses`
+  {status, lastMessageAt} YA existe en el modelo — los 127ms del listado de
+  conversaciones son el $lookup del último mensaje por chat (diseño, no falta
+  de índice); optimizable a futuro bajando la frecuencia de polling del panel.
 
 ### 120. ANÁLISIS: Warning intermitente de EB + chats "en visto" = CAPACIDAD en el pico nocturno (no es bug)
 - **Síntoma:** EB Warning↔Ok cada ~10 min ("TargetGroups reduced health") entre

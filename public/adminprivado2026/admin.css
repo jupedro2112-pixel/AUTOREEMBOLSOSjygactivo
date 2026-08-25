@@ -63,6 +63,7 @@ body {
 .icon-gamepad::before { content: "🎮"; }
 .icon-user::before { content: "👤"; }
 .icon-lock::before { content: "🔒"; }
+.icon-robot::before { content: "🤖"; }
 .icon-sign-in::before { content: "➡️"; }
 .icon-comments::before { content: "💬"; }
 .icon-users::before { content: "👥"; }
@@ -846,6 +847,21 @@ body {
     text-align: right;
     opacity: 0.75;
     font-size: 10.5px;
+}
+
+/* Mensaje de sistema INTERNO (adminOnly): el cliente NO lo recibe. VERDE para
+   distinguirlo al toque de los automáticos (naranja), con etiqueta explícita. */
+.message.system.internal {
+    background: rgba(37, 211, 102, 0.14);
+    border-color: #25d366;
+    color: #9ff5c0;
+}
+.message.system.internal .internal-badge {
+    color: #2ee06f;
+    font-size: 10.5px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
 }
 
 .message-header {

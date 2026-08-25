@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v24';
+const CACHE_VERSION = 'v25'; // v25: mensajes de sistema internos (adminOnly) en verde con etiqueta INTERNO
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).

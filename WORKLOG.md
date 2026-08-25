@@ -8,6 +8,26 @@
 
 ## Sesión 2026-08-25
 
+### 123. Panel: mensajes de sistema INTERNOS (adminOnly) en VERDE con etiqueta "🔒 INTERNO" (réplica #198 del gemelo)
+- **Problema:** en el chat del panel todos los mensajes de sistema se veían
+  naranjas iguales — imposible distinguir cuáles le LLEGARON al cliente
+  (automáticos) de los internos del equipo (cierre de chat, alertas de bonus,
+  comprobante repetido, etc.).
+- **La distinción ya viajaba en los datos:** `adminOnly: true` (verificado en
+  esta repo: el GET de mensajes lo proyecta —server.js `adminOnly: 1`— y los
+  payloads de socket de `_emitAdminOnlyChatNote` lo incluyen). Solo se PINTA:
+  cero backend.
+- **Cambio (solo panel):** `createMessageElement` rama `type==='system'` (único
+  punto de render: el camino en vivo delega acá, #21): `adminOnly===true` →
+  clase `message system internal` + badge "🔒 INTERNO — el cliente NO lo ve"
+  y sin ícono; NO interno → ícono 🤖 (`.icon-robot`, reemplaza al 🔒 que era
+  engañoso: parecían internos y el cliente los había visto). CSS: internos en
+  VERDE (`rgba(37,211,102,…)` + `#25d366`), automáticos quedan naranjas.
+- **Validado:** `node --check` OK (admin.js, admin-sw.js); llaves CSS 311/311.
+  **admin-sw bump v24 → v25.** Solo estáticos del panel → deploy y recargar.
+  **PROBAR:** "Chat cerrado por..." y alertas internas en verde con etiqueta;
+  confirmaciones de depósito/bono (que el cliente sí vio) en naranja con 🤖.
+
 ### 122. 🎯 CULPABLE IDENTIFICADO: saturación del camino a JUGAYGANA (proxy) — caches + menos polling
 - **Evidencia de la instrumentación de #121 (logs con [slow-req], 20 min de
   datos):** 1.610 requests lentos y TODOS son endpoints que llaman a JUGAYGANA:

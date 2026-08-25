@@ -6243,15 +6243,23 @@ async function sendPushNotification(userId, message) {
 
 // Crear elemento de mensaje optimizado
 function createMessageElement(message) {
-    // Fix #3: Mensajes de sistema (ej. cierre de chat) con estilo propio
+    // Fix #3: Mensajes de sistema (ej. cierre de chat) con estilo propio.
+    // Los INTERNOS (adminOnly: el cliente NUNCA los recibió — cierre de chat,
+    // alertas de bonus, comprobante repetido, etc.) van en VERDE con etiqueta
+    // "🔒 INTERNO"; los automáticos que el cliente SÍ recibió quedan naranjas
+    // con 🤖 (antes llevaban 🔒, engañoso: parecían internos y el cliente los
+    // había visto).
     if (message.type === 'system') {
+        const isInternal = message.adminOnly === true;
         const div = document.createElement('div');
-        div.className = 'message system';
+        div.className = 'message system' + (isInternal ? ' internal' : '');
         div.dataset.messageid = message.id || '';
-        // Mostrar la hora de envío también en los mensajes automáticos (naranja),
+        // Mostrar la hora de envío también en los mensajes automáticos,
         // para poder corroborar a qué horario se enviaron y controlar demoras.
         const time = formatChatTime(message.timestamp || new Date());
-        div.innerHTML = `<div class="message-content"><span class="icon icon-lock"></span> <span>${escapeHtml(message.content)}</span></div><div class="message-time system-time">${time}</div>`;
+        const badge = isInternal ? '<div class="internal-badge">🔒 INTERNO — el cliente NO lo ve</div>' : '';
+        const icon = isInternal ? '' : '<span class="icon icon-robot"></span> ';
+        div.innerHTML = `${badge}<div class="message-content">${icon}<span>${escapeHtml(message.content)}</span></div><div class="message-time system-time">${time}</div>`;
         return div;
     }
     

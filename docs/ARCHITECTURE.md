@@ -92,9 +92,13 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
 - **BankMovement** — cada movimiento que hgcash notifica por webhook. `matchStatus`:
   pending→claiming→shadow_matched|auto_charged|manual_charged|needs_review|duplicate|
   error|ignored. Dedupe por `movementId` único.
-- **Comprobante** — cada imagen que la IA (Claude vision) clasificó como comprobante.
-  `dedupeKey` (N° operación normalizado, descartando CBU/CUIT) + `imageHash` (SHA-256)
-  para detectar reutilización. `bankMatchStatus` para la auto-carga.
+- **Comprobante** — cada imagen que la IA (Claude vision, `claude-opus-5` con salida
+  estructurada json_schema desde #126; env `COMPROBANTE_AI_MODEL`) clasificó como
+  comprobante. `dedupeKey` (N° operación normalizado, descartando CBU/CUIT/alias/pedazos
+  de CBU/etiqueta sospechosa → `operationNumberRejected`; fallback
+  `monto|origen|cbu|fecha|hora` que EXIGE fecha) + `imageHash` (SHA-256) para detectar
+  reutilización. Aviso de duplicado en 3 niveles (imagen / N° / solo datos = "posible").
+  `bankMatchStatus` para la auto-carga.
 - **HgcashCharge** — candado de idempotencia de la carga automática: índice único por
   `chargeKey` (coelsaCode) — la MISMA transferencia se acredita UNA sola vez entre
   instancias. Si la carga falla en JUGAYGANA, el registro se BORRA para permitir retry.

@@ -26,13 +26,18 @@ const comprobanteSchema = new mongoose.Schema({
 
   // Datos extraídos del comprobante (los que la IA pudo leer)
   operationNumber: { type: String, default: null, trim: true },
+  // Etiqueta impresa junto al N° de operación ("Referencia", "ID de transacción"…) — #126
+  operationLabel: { type: String, default: null, trim: true },
+  // N° de operación que la IA devolvió pero se DESCARTÓ por parecer CBU/CUIT/alias (#126, auditoría)
+  operationNumberRejected: { type: String, default: null, trim: true },
   amount: { type: Number, default: null },
   originHolder: { type: String, default: null, trim: true }, // titular / origen
   originCbu: { type: String, default: null, trim: true },    // CBU/CVU/alias origen
   destHolder: { type: String, default: null, trim: true },   // titular / destino (quién recibe)
   destCbu: { type: String, default: null, trim: true },      // CBU/CVU/alias destino (a quién se envió)
   bank: { type: String, default: null, trim: true },
-  paymentDate: { type: String, default: null, trim: true },  // fecha/hora tal como figura
+  paymentDate: { type: String, default: null, trim: true },  // fecha tal como figura
+  paymentTime: { type: String, default: null, trim: true },  // hora tal como figura (#126; separa 2 transferencias iguales del mismo día)
   rawText: { type: String, default: null },                  // texto crudo leído (debug)
 
   // Huella para detectar duplicados. Se arma con el N° de operación normalizado;

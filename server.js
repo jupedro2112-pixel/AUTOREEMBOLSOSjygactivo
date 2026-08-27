@@ -1495,38 +1495,59 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     const _destDig = _digits(result.destCbu);
     const _origDig = _digits(result.originCbu);
     const _rawOp = String(result.operationNumber || '').replace(/\s/g, '');
+    const _opDig = _digits(_rawOp);
     // CUIT/CUIL = 11 dígitos con prefijo válido (20/23/24/27/30/33/34), con o sin guiones.
     const _looksLikeCuit = /^(20|23|24|27|30|33|34)-?\d{8}-?\d$/.test(_rawOp) || /^(20|23|24|27|30|33|34)\d{9}$/.test(opKey);
+    // #126: la etiqueta impresa junto al número delata cuando la IA agarró otra cosa
+    // ("CBU", "CVU", "CUIT", "Alias", "Cuenta", "Tarjeta"…).
+    const _badLabel = /\b(cbu|cvu|cuit|cuil|alias|cuenta|tarjeta|cliente|dni)\b/i.test(String(result.operationLabel || ''));
+    // #126: N° que es un PEDAZO del CBU (la IA a veces devuelve 8-20 dígitos del CBU
+    // recortado) → también se descarta.
+    const _partOfCbu = _opDig.length >= 8 && ((_destDig && _destDig.includes(_opDig)) || (_origDig && _origDig.includes(_opDig)));
+    let opRejected = null;
     if (opKey && (
       (_destDig && opKey === _destDig) ||
       (_origDig && opKey === _origDig) ||
       /^\d{18,}$/.test(opKey) ||
-      _looksLikeCuit
+      _looksLikeCuit || _badLabel || _partOfCbu
     )) {
+      opRejected = _rawOp;
       opKey = '';
     }
     // N° de operación demasiado corto: los números cortos se repiten entre bancos
     // y entre días → falso "ya utilizado por otro usuario". Sin al menos 6
     // caracteres no sirve como huella (los reales tienen 6+).
-    if (opKey && opKey.length < 6) opKey = '';
+    if (opKey && opKey.length < 6) { opRejected = opRejected || _rawOp; opKey = ''; }
+    // El N° descartado NO se guarda como operationNumber (antes quedaba y el agente
+    // veía "op. N°<CBU>" en el chat; y el match hgcash lo usaba tal cual). Queda en
+    // operationNumberRejected para auditoría.
+    if (opRejected) {
+      logger.info(`[comprobante] N° de operación descartado (${_badLabel ? 'etiqueta ' + result.operationLabel : _partOfCbu ? 'parte del CBU' : _looksLikeCuit ? 'CUIT' : 'CBU/largo/corto'}): ${opRejected}`);
+      result.operationNumber = null;
+    }
     let dedupeKey = opKey || null;
     // Fallback: combo que incluye el NOMBRE de origen (más único que el CBU repetido).
-    // ⚠️ Exige originHolder u originCbu de verdad: monto+fecha SOLOS colisionan
-    // masivamente (dos clientes que transfirieron $5.000 el mismo día quedaban
-    // marcados como "el mismo comprobante" — falso positivo visto en producción).
-    if (!dedupeKey && result.amount && (result.originHolder || result.originCbu)) {
-      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate || ''}`);
+    // ⚠️ Exige originHolder u originCbu de verdad Y una fecha: monto+origen SIN fecha
+    // colisionaba con cualquier transferencia anterior de la misma persona por el
+    // mismo monto (falso "ya utilizado" — #126). Si hay hora, va también: dos
+    // transferencias iguales del mismo día son legítimas y se distinguen por hora.
+    const _comboByData = !dedupeKey && result.amount && (result.originHolder || result.originCbu) && result.paymentDate;
+    if (_comboByData) {
+      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate}|${result.paymentTime || ''}`);
     }
 
     const base = {
       id: uuidv4(), userId, username, messageId,
       isComprobante: true, aiConfidence: result.confidence || 0,
       operationNumber: result.operationNumber || null,
+      operationLabel: result.operationLabel || null,
+      operationNumberRejected: opRejected || null,
       amount: result.amount, originHolder: result.originHolder || null,
       originCbu: result.originCbu || null,
       destHolder: result.destHolder || null, destCbu: result.destCbu || null,
       bank: result.bank || null,
-      paymentDate: result.paymentDate || null, rawText: result.rawText || null,
+      paymentDate: result.paymentDate || null, paymentTime: result.paymentTime || null,
+      rawText: result.rawText || null,
       dedupeKey, imageHash, model: result.model, createdAt: new Date()
     };
 
@@ -1577,12 +1598,23 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       } else {
         // Cómo matcheó importa para el nivel de alarma: imagen idéntica = certeza;
         // huella de datos = puede ser colisión de lectura de la IA.
+        // #126: tres niveles. Imagen idéntica = certeza. Mismo N° de operación = casi
+        // certeza. Combo monto+origen+fecha (sin N°) = POSIBLE: puede ser una segunda
+        // transferencia legítima de la misma persona o un error de lectura → el aviso
+        // ya no dice "YA UTILIZADO" a secas.
         const _byImage = !!(imageHash && original.imageHash && original.imageHash === imageHash);
-        const _matchDesc = _byImage
-          ? 'La IMAGEN es idéntica (misma captura).'
-          : 'Coinciden los DATOS leídos por la IA (N°/origen) — puede ser un error de lectura: comparalos a ojo.';
-        await _emitAdminOnlyChatNote(userId, username,
-          `🚨 COMPROBANTE YA UTILIZADO POR: @${original.username || original.userId}\n${dataDesc}\n${_matchDesc}\n⚠️ NO cargar sin verificar.`);
+        const _byOpNumber = !_byImage && !!opKey && original.dedupeKey === dedupeKey;
+        const _who = `@${original.username || original.userId}`;
+        if (_byImage) {
+          await _emitAdminOnlyChatNote(userId, username,
+            `🚨 COMPROBANTE YA UTILIZADO POR: ${_who}\n${dataDesc}\nLa IMAGEN es idéntica (misma captura).\n⚠️ NO cargar sin verificar.`);
+        } else if (_byOpNumber) {
+          await _emitAdminOnlyChatNote(userId, username,
+            `🚨 COMPROBANTE YA UTILIZADO POR: ${_who}\n${dataDesc}\nMismo N° de operación${original.operationNumber ? ' (' + original.operationNumber + ')' : ''} que el que envió ${_who}.\n⚠️ NO cargar sin verificar a ojo que el N° coincide.`);
+        } else {
+          await _emitAdminOnlyChatNote(userId, username,
+            `⚠️ POSIBLE comprobante repetido — ${_who} ya envió uno con el MISMO monto, origen y fecha${original.paymentTime ? ' (' + original.paymentTime + ')' : ''}.\n${dataDesc}\nNo hay N° de operación para confirmarlo: puede ser otra transferencia legítima o un error de lectura. Compará las dos imágenes a ojo antes de cargar.`);
+        }
       }
       return;
     }

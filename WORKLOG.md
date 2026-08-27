@@ -8,6 +8,57 @@
 
 ## Sesión 2026-08-27
 
+### 126. IA de comprobantes: modelo Opus 5 + salida estructurada + prompt que distingue CBU/CUIT de N° de operación + duplicados "posibles" en vez de "YA UTILIZADO"
+- **Queja del owner:** "la IA es muy inútil a veces": (a) hay N° de comprobante Y
+  CBU en la imagen y devuelve el CBU como N° de operación; (b) marca
+  "COMPROBANTE YA UTILIZADO POR @x" cuando nunca fue usado por nadie.
+- **Causas:** (a) el modelo era `claude-haiku-4-5` (el más chico) con un prompt
+  de una línea por campo; el server descartaba el N° si era IGUAL al CBU leído o
+  ≥18 dígitos, pero no si era un pedazo del CBU, y aunque lo descartara dejaba
+  el valor en `operationNumber` → el agente veía "op. N°<CBU>" en el chat. (b) La
+  huella de fallback sin N° de operación era `monto|origen|cbuOrigen|fecha` con
+  `fecha` OPCIONAL: sin fecha, cualquier transferencia anterior de la misma
+  persona por el mismo monto (o dos del mismo día) daba "🚨 YA UTILIZADO".
+- **`src/services/comprobanteAiService.js` (reescrito):**
+  · Modelo default **`claude-opus-5`** (era haiku-4-5). Sigue configurable con
+    `COMPROBANTE_AI_MODEL` (⚠️ si esa env está seteada en EB/SSM con haiku,
+    PISA el default: borrarla o ponerla en `claude-opus-5`/`claude-sonnet-5`).
+    Costo aprox. por comprobante: ~US$0,01-0,02 (era ~0,003).
+  · **Salida estructurada** (`output_config.format` = json_schema con las 12
+    claves, `additionalProperties:false`): la API garantiza JSON válido.
+    `parseJsonLoose` queda de red de seguridad.
+  · Prompt nuevo en `system` (cacheable) con reglas explícitas: CBU = 22
+    dígitos, CUIT = 11 con formato XX-XXXXXXXX-X, alias = palabras con puntos →
+    NUNCA son N° de operación; lista de etiquetas válidas ("Número de
+    operación", "Referencia", "ID de transacción"…); origen vs destino; monto;
+    null antes que un dato dudoso. Campos nuevos: `numero_operacion_etiqueta`
+    (la etiqueta impresa junto al número) y `hora` separada de `fecha`.
+  · `effort: 'medium'`, `max_tokens 4096` (thinking adaptativo cuenta contra
+    max_tokens), timeout 90 s, refusal-fallback beta (`fallbacks:'default'`
+    + header `server-side-fallback-2026-07-01`) con reintento sin la beta ante
+    HTTP 400; `stop_reason:'refusal'` → error controlado.
+- **server.js (`analyzeComprobanteFromMessage`):**
+  · Descarta el N° también si la ETIQUETA dice cbu/cvu/cuit/cuil/alias/cuenta/
+    tarjeta/cliente/dni, o si son ≥8 dígitos contenidos en el CBU origen/destino
+    (pedazo del CBU). Todo N° descartado pasa a `operationNumberRejected`
+    (auditoría) y `operationNumber` queda null (el chat muestra "s/N°
+    operación"; el match hgcash no lo usa).
+  · Huella de fallback EXIGE fecha y suma la hora: `monto|origen|cbu|fecha|hora`.
+    Sin fecha → sin huella → estado `no_key` ("verificá a mano"), no falso
+    duplicado.
+  · Aviso de duplicado de OTRO usuario en 3 niveles: imagen idéntica → "🚨 YA
+    UTILIZADO"; mismo N° de operación → "🚨 YA UTILIZADO (mismo N°…)"; solo
+    combo de datos → "⚠️ POSIBLE comprobante repetido… puede ser otra
+    transferencia legítima o error de lectura, compará a ojo".
+- **Modelo Comprobante:** campos nuevos `operationLabel`, `operationNumberRejected`,
+  `paymentTime` (sin migración).
+- **Validado:** `node --check` OK (server.js, comprobanteAiService.js,
+  Comprobante.js). No se puede probar la API localmente (sin node_modules ni
+  key): **probar tras deploy** con 2-3 comprobantes reales (Mercado Pago con
+  "Número de operación" + CBU visible; uno de banco con "Referencia"; y el
+  mismo comprobante reenviado por otro usuario) y mirar el log
+  `[comprobante-ai]` por errores 400 del schema/beta.
+
 ### 125. Auto-carga hgcash: comprobante a un CBU de OTRO proyecto (mismo titular) ya NO conecta
 - **Reporte del owner (Telegram de los agentes):** a un cliente se le cargó
   automático un comprobante cuya transferencia había ido al CBU `…212` del

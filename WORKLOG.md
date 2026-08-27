@@ -8,6 +8,26 @@
 
 ## Sesión 2026-08-27
 
+### 131. Auto-carga hgcash: el guard "POSIBLE DUPLICADO (<8 min)" ya no frena una SEGUNDA transferencia real
+- **Reporte del owner (captura):** cliente mandó $2.000, comprobante verificado
+  único (op. distinta), y la auto-carga igual frenó con "⚠️ POSIBLE DUPLICADO —
+  ya se le cargó $2.000 hace pocos minutos" porque había cargado $2.000 un
+  rato antes. Coelsa y horario eran otros.
+- **Causa:** la "red de seguridad" de `hgcashAutoCarga` miraba SOLO "mismo
+  usuario + mismo monto + deposit en <`duplicateGuardMinutes`(8) min" en
+  Transaction, sin distinguir si esa carga anterior era OTRA transferencia. El
+  candado real contra doble acreditación es `HgcashCharge` (índice único por
+  coelsa) y ya había pasado; el guard existe para el caso "el agente cargó a
+  mano y DESPUÉS llega el aviso del banco" (manual sin coelsa).
+- **Fix:** una carga reciente del mismo monto cuenta como posible duplicado
+  SOLO si no se puede probar que es otra transferencia: auto-carga hgcash con
+  `metadata.movementId` distinto → no cuenta; carga manual que consumió otro
+  movimiento (`BankMovement manual_charged`, mismo monto, ventana, movementId
+  distinto) → no cuenta (una por manual); carga manual sin movimiento asociado
+  → SÍ cuenta (caso original). Si no queda ninguna "inexplicada", la carga
+  sigue sola; se loguea `[hgcash] N carga(s) reciente(s)… son OTRAS transferencias`.
+- **Validado:** `node --check` OK. Solo backend → redeploy.
+
 ### 130. SMS Masivo: la clave se exige del lado SERVER en preview y envío
 - Cierra la nota de #129: `POST /api/admin/bulk-sms` y `/bulk-sms/preview`
   ahora reciben `password` en el body y lo verifican con `_smsPasswordCheck`

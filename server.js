@@ -2384,9 +2384,37 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     const guardMin = Number(_hgCfg.duplicateGuardMinutes) >= 0 ? Number(_hgCfg.duplicateGuardMinutes) : 8;
     if (guardMin > 0) {
       const sinceGuard = new Date(Date.now() - guardMin * 60 * 1000);
-      const recent = await Transaction.findOne({
+      // #131: antes bastaba "mismo usuario + mismo monto en <8 min" para frenar,
+      // aunque la carga anterior fuera OTRA transferencia (otro coelsa, otro
+      // comprobante verificado como único). Dos cargas iguales seguidas son
+      // comunes y legítimas. Ahora una carga reciente solo cuenta como "posible
+      // duplicado" si NO se puede probar que es otra transferencia:
+      //   · auto-carga hgcash ligada a OTRO movimiento (movementId distinto) → no cuenta;
+      //   · carga manual que consumió OTRO movimiento hgcash (manual_charged) → no cuenta;
+      //   · carga manual sin movimiento asociado → SÍ cuenta (este aviso del banco
+      //     puede ser justo el de esa carga manual — caso original del guard).
+      const recents = await Transaction.find({
         userId: user.id, type: 'deposit', amount: Number(amount), timestamp: { $gte: sinceGuard }
       }).lean();
+      let recent = null;
+      if (recents.length) {
+        let manualConsumedOther = null;
+        for (const t of recents) {
+          const md = t.metadata || {};
+          if (md.source === 'auto_hgcash' && md.movementId && md.movementId !== movement.movementId) continue; // otra transferencia
+          if (md.source !== 'auto_hgcash') {
+            if (manualConsumedOther === null) {
+              manualConsumedOther = await BankMovement.countDocuments({
+                matchedUserId: user.id, matchStatus: 'manual_charged', amount: Number(amount),
+                movementId: { $ne: movement.movementId }, chargedAt: { $gte: sinceGuard }
+              });
+            }
+            if (manualConsumedOther > 0) { manualConsumedOther--; continue; } // esa manual ya tiene su propio movimiento
+          }
+          recent = t; break;
+        }
+        if (!recent) logger.info(`[hgcash] ${recents.length} carga(s) reciente(s) de $${amount} a ${user.username} son OTRAS transferencias → sigue la auto-carga (coelsa ${chargeKey || '-'})`);
+      }
       if (recent) {
         if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
         await BankMovement.updateOne({ movementId: movement.movementId },

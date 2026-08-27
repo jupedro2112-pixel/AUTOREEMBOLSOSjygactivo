@@ -267,7 +267,8 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   con nota ⛔ al agente y nunca se auto-carga (#125). `hgcashAutoCarga`: claims atómicos de movimiento y comprobante → modo
   sombra o real → **mínimo $1.500** (menor → needs_review + aviso; era $2.000 hasta
   2026-08-19) → candado
-  HgcashCharge por coelsa → guard anti-duplicado (misma carga <8min → needs_review) →
+  HgcashCharge por coelsa → guard anti-duplicado (misma carga <8min → needs_review, salvo
+  que la carga anterior esté ligada a OTRA transferencia — #131) →
   lectura del saldo PREVIO (sólo si el 20% está en juego) →
   `depositToUser` → Transaction + mensaje + SLA. Fallo → reintentable hasta 3 veces.
   **Bono automático app+notifs** (`_hgcashApplyAppBonus`): 100% primera carga /

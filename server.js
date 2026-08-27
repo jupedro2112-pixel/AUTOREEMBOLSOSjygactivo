@@ -1363,8 +1363,6 @@ async function addExternalUser(userData) {
 
 // Registrar actividad de usuario (para fueguito)
 async function recordUserActivity(userId, type, amount) {
-  // #132: una carga acreditada = problema resuelto → encuesta 👍👎 (con tope por cliente).
-  if (type === 'deposit') { try { _scheduleRatingRequest(userId, 'deposit'); } catch (_) {} }
   try {
     const today = new Date().toDateString();
     
@@ -1908,7 +1906,6 @@ async function ensureHgcashAccountIdSaved(accountId) {
 // Avisa al cliente (y a los admins) que su retiro fue pagado. El texto es editable
 // desde COMANDOS (/sys_payout_paid); si se vacía ese comando, no se envía nada.
 async function notifyPayoutPaid(payout) {
-  try { _scheduleRatingRequest(payout.userId, 'payout'); } catch (_) {} // #132 encuesta tras pago
   try {
     const content = await renderSystemCommand(
       '/sys_payout_paid',
@@ -1923,6 +1920,7 @@ async function notifyPayoutPaid(payout) {
     const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: payout.userId, receiverRole: 'user', content, timestamp: new Date(), type: 'system' };
     io.to(`user_${payout.userId}`).emit('new_message', data);
     io.to(`chat_${payout.userId}`).emit('new_message', data);
+    _scheduleRatingRequest(payout.userId, 'payout'); // #132/#134: encuesta 👍👎 DESPUÉS del aviso de pago
     notifyAdmins('new_message', { message: data, userId: payout.userId, username: payout.username });
   } catch (e) {
     logger.warn(`[hgcash-pay] notifyPayoutPaid falló: ${e.message}`);
@@ -2510,6 +2508,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       const msgData = { id: sysMsg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: user.id, receiverRole: 'user', content: clientMsg, timestamp: new Date(), type: 'system' };
       io.to(`user_${user.id}`).emit('new_message', msgData);
       io.to(`chat_${user.id}`).emit('new_message', msgData);
+      _scheduleRatingRequest(user.id, 'deposit'); // #132/#134: encuesta 👍👎 DESPUÉS del mensaje de carga
       notifyAdmins('new_message', { message: msgData, userId: user.id, username: user.username });
     }
     const uSock = connectedUsers.get(user.id);
@@ -5998,6 +5997,9 @@ app.post('/api/chat/rating', authMiddleware, async (req, res) => {
       } else throw e;
     }
     await Message.updateOne({ id: msg.id }, { $set: { 'metadata.rated': rating, 'metadata.ratedAt': new Date(), 'metadata.comment': cleanComment || null } });
+    if (rating === 'up') {
+      await _emitAdminOnlyChatNote(req.user.userId, req.user.username, '👍 El cliente calificó BIEN la atención.');
+    }
     if (rating === 'down') {
       await _emitAdminOnlyChatNote(req.user.userId, req.user.username,
         `👎 El cliente calificó MAL la atención${cleanComment ? `: “${cleanComment}”` : ' (sin comentario todavía)'}. Un supervisor lo va a revisar.`);
@@ -8697,6 +8699,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       
       // Emitir a la sala del chat (para admins que están viendo)
       io.to(`chat_${user.id}`).emit('new_message', messageData);
+      _scheduleRatingRequest(user.id, 'deposit'); // #132/#134: encuesta 👍👎 DESPUÉS del mensaje de carga
       
       // Notificar a todos los admins
       notifyAdmins('new_message', {
@@ -10718,6 +10721,7 @@ app.post('/api/movements/deposit', authMiddleware, depositorMiddleware, async (r
 
     if (result.success) {
       await recordUserActivity(req.user.userId, 'deposit', amount);
+      _scheduleRatingRequest(req.user.userId, 'deposit'); // #132: solo manda si un agente habló en 24 h
 
       // Meta CAPI — Purchase (depósito self-service desde la app del usuario).
       try {

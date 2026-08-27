@@ -13,6 +13,22 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 134. Encuesta 👍👎: ahora sale DESPUÉS del mensaje de carga/pago (salía antes) + nota interna también con 👍
+- **Captura del owner (Render/EB, 08:36):** la encuesta llegó a las 08:36:58 y
+  "¡Carga acreditada!" a las 08:37:00 → orden invertido. Causa: el hook estaba
+  en `recordUserActivity('deposit')`, que corre ANTES del mensaje al cliente
+  (en el medio hay bono automático + lectura de saldo en JUGAYGANA, más de 2 s).
+- **Fix:** el hook se sacó de `recordUserActivity` y se puso en los puntos
+  exactos, después del `emit('new_message')` al cliente: auto-carga hgcash,
+  carga manual del panel, `notifyPayoutPaid` (pago) y carga self-service
+  (después de registrar actividad; solo manda si un agente habló en 24 h).
+  Sigue el delay de 2 s → la encuesta aparece siempre DEBAJO de la confirmación.
+- **Dónde se ve la respuesta:** 👍 → nota interna verde "👍 El cliente calificó
+  BIEN la atención" (nuevo) + cuenta en el ranking de Auditoría. 👎 → nota
+  interna "👎 El cliente calificó MAL…" con el motivo, alerta Telegram, fila en
+  Auditoría → "Calificaciones negativas" y auditoría IA inmediata del tramo.
+- **Validado:** `node --check` OK; rutas sin cambios de posición (sin riesgo TDZ).
+
 ### 133. 🔴 Deploy de #132 tumbó el server (502): rutas registradas antes de `const authMiddleware` (TDZ) — FIX
 - **Síntoma:** deploy 2026-08-27 23:03 UTC → 502 Bad Gateway en todo; el owner
   volvió a la versión anterior. Logs (web.stdout.log, ambas instancias):

@@ -116,6 +116,12 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   bumpear `?v` y `CACHE_VERSION` del SW al mismo número (sin eso, una carga corre
   HTML nuevo + JS viejo cacheado). Detalle completo en `docs/ARCHITECTURE.md` §7.
 
+- **TDZ en server.js (incidente #133):** `authMiddleware`, `adminMiddleware`, etc. son
+  `const` definidos en ~L3270-3400. **Toda ruta `app.get/post(...)` que los use tiene que
+  estar DESPUÉS de esa línea** (las funciones sí pueden ir antes: hoisting). Si no, el
+  server muere al arrancar con "Cannot access 'X' before initialization" y `node --check`
+  NO lo avisa. Ante una ruta nueva, ubicarla cerca de rutas existentes similares.
+
 ## Flujo de trabajo del asistente
 
 1. Leer `WORKLOG.md` al iniciar.

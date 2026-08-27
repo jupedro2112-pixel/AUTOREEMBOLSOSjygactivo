@@ -13,6 +13,27 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 133. 🔴 Deploy de #132 tumbó el server (502): rutas registradas antes de `const authMiddleware` (TDZ) — FIX
+- **Síntoma:** deploy 2026-08-27 23:03 UTC → 502 Bad Gateway en todo; el owner
+  volvió a la versión anterior. Logs (web.stdout.log, ambas instancias):
+  `ReferenceError: Cannot access 'authMiddleware' before initialization` en
+  `server.js:2937` (`app.post('/api/chat/rating', authMiddleware, …)`), en
+  loop de reinicio cada 2 s.
+- **Causa:** en #132 puse las 7 rutas de auditoría/👍👎 junto a las funciones
+  (~L2600, antes del webhook hgcash), pero `authMiddleware` es un `const`
+  definido en ~L3270 → al evaluar el módulo la ruta se registra antes de la
+  inicialización (temporal dead zone) y el proceso muere al arrancar.
+  `node --check` NO lo detecta (es error de runtime, no de sintaxis). Las
+  funciones (`_auditConversation`, etc.) sí pueden estar ahí (hoisting).
+- **Fix:** las 7 rutas se movieron al bloque de Config privada (después de
+  `verify-sms-password`, antes de `/private-config/password`), con comentario
+  de advertencia. Scan hecho: ninguna otra `app.*` usa un middleware antes de
+  su `const` (la única anterior es `app.use('/api/', generalLimiter)` y ese
+  const está arriba). Regla nueva en CLAUDE.md.
+- **Validado:** `node --check` OK. **Necesita redeploy** (es el mismo #132 +
+  este fix). Nada de #132 llegó a correr en producción (el proceso nunca
+  levantó), así que no hay datos ni efectos a limpiar.
+
 ### 132. AUDITORÍA DE ATENCIÓN en 3 capas + encuesta 👍👎 al cliente + alertas a Telegram
 - **Pedido del owner:** con ~10 chats/segundo en 10 proyectos es imposible
   revisar todo a mano; quiere control del 100% de la atención (mal trato,

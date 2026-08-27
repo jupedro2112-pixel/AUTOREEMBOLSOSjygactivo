@@ -2933,172 +2933,6 @@ async function _sendRatingRequest(userId, trigger) {
   }
 }
 
-// El cliente responde 👍/👎 (+ motivo si 👎).
-app.post('/api/chat/rating', authMiddleware, async (req, res) => {
-  try {
-    if (isAdminRole(req.user.role)) return res.status(403).json({ error: 'Solo clientes' });
-    const { messageId, rating, comment } = req.body || {};
-    if (!messageId || !['up', 'down'].includes(rating)) return res.status(400).json({ error: 'Datos inválidos' });
-    const msg = await Message.findOne({ id: String(messageId), receiverId: req.user.userId, type: 'system' }).lean();
-    if (!msg || !msg.metadata || msg.metadata.kind !== 'rating_request') return res.status(404).json({ error: 'Encuesta no encontrada' });
-    const cleanComment = String(comment || '').trim().slice(0, 1000);
-    let doc;
-    try {
-      doc = await ChatRating.create({
-        id: uuidv4(), userId: req.user.userId, username: req.user.username, messageId: msg.id,
-        rating, comment: cleanComment, agents: (msg.metadata.agents || []), closedBy: null
-      });
-    } catch (e) {
-      if (e && e.code === 11000) {
-        // Ya calificó: si ahora manda el motivo del 👎, lo agregamos.
-        if (rating === 'down' && cleanComment) await ChatRating.updateOne({ messageId: msg.id }, { $set: { comment: cleanComment } });
-        doc = await ChatRating.findOne({ messageId: msg.id }).lean();
-      } else throw e;
-    }
-    await Message.updateOne({ id: msg.id }, { $set: { 'metadata.rated': rating, 'metadata.ratedAt': new Date(), 'metadata.comment': cleanComment || null } });
-    if (rating === 'down') {
-      await _emitAdminOnlyChatNote(req.user.userId, req.user.username,
-        `👎 El cliente calificó MAL la atención${cleanComment ? `: “${cleanComment}”` : ' (sin comentario todavía)'}. Un supervisor lo va a revisar.`);
-      // Alerta Telegram cuando llega el motivo (o el 👎 solo si no manda motivo en 3 min).
-      const alertNow = !!cleanComment;
-      const sendAlert = async () => {
-        try {
-          const fresh = await ChatRating.findOne({ messageId: msg.id }).lean();
-          if (!fresh || fresh.alerted) return;
-          if (!telegramAlert.isEnabled()) return;
-          const e = telegramAlert.esc;
-          const r = await telegramAlert.send([
-            `👎 <b>${e(_projectLabel())}</b> — calificación NEGATIVA · @${e(req.user.username)}`,
-            fresh.agents && fresh.agents.length ? `Agente(s): ${e(fresh.agents.join(', '))}` : '',
-            fresh.comment ? `📝 “${e(fresh.comment)}”` : '📝 (sin motivo)',
-            `👉 <a href="${_panelChatLink(req.user.userId, req.user.username)}">Abrir chat en el panel</a>`
-          ].filter(Boolean).join('\n'));
-          if (r.ok) await ChatRating.updateOne({ messageId: msg.id }, { $set: { alerted: true } });
-        } catch (_) {}
-      };
-      if (alertNow) sendAlert(); else setTimeout(sendAlert, 3 * 60 * 1000);
-      // Disparar auditoría IA del tramo ahora mismo (no esperar al idle).
-      setTimeout(() => { _auditConversation(req.user.userId, 'rating_down').catch(() => {}); }, 5000);
-    }
-    const thanks = rating === 'down'
-      ? await renderSystemCommand('/sys_rating_thanks_negative', '🙏 Gracias por contarnos. Un supervisor va a leer tu mensaje y revisar lo que pasó.', {})
-      : await renderSystemCommand('/sys_rating_thanks', '🙏 ¡Gracias! Nos alegra haberte ayudado.', {});
-    res.json({ success: true, rating, thanks: thanks || null, needComment: rating === 'down' && !cleanComment });
-  } catch (error) {
-    logger.error(`[rating] ${error.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-// ── Endpoints del panel (🕵️ Auditoría) ─────────────────────────────────────
-app.get('/api/admin/audit/list', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
-    const q = { createdAt: { $gte: new Date(Date.now() - days * 86400000) } };
-    const filter = String(req.query.filter || 'alerts');
-    if (filter === 'alerts') q.$or = [{ score: { $lte: 5 } }, { 'flags.0': { $exists: true } }];
-    else if (filter === 'unreviewed') { q.reviewed = false; q.$or = [{ score: { $lte: 5 } }, { 'flags.0': { $exists: true } }]; }
-    else if (filter === 'good') q.score = { $gte: 8 };
-    if (req.query.agent) q.agents = String(req.query.agent);
-    if (req.query.flag && ChatAudit.FLAGS.includes(String(req.query.flag))) q.flags = String(req.query.flag);
-    if (req.query.username) q.username = new RegExp(escapeRegex(String(req.query.username).slice(0, 40)), 'i');
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1), limit = 40;
-    const [items, total] = await Promise.all([
-      ChatAudit.find(q).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-      ChatAudit.countDocuments(q)
-    ]);
-    res.json({ items, total, page, pages: Math.ceil(total / limit), flags: ChatAudit.FLAGS, labels: _AUDIT_FLAG_LABEL });
-  } catch (error) {
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-app.get('/api/admin/audit/agents', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
-    const since = new Date(Date.now() - days * 86400000);
-    const [byAgent, ratings, totals] = await Promise.all([
-      ChatAudit.aggregate([
-        { $match: { createdAt: { $gte: since }, source: 'ai' } },
-        { $unwind: '$agents' },
-        { $group: { _id: '$agents', chats: { $sum: 1 }, avgScore: { $avg: '$score' },
-          bad: { $sum: { $cond: [{ $lte: ['$score', 4] }, 1, 0] } },
-          flagged: { $sum: { $cond: [{ $gt: [{ $size: '$flags' }, 0] }, 1, 0] } },
-          malTrato: { $sum: { $cond: [{ $in: ['mal_trato', '$flags'] }, 1, 0] } },
-          sinSolucion: { $sum: { $cond: [{ $in: ['sin_solucion', '$flags'] }, 1, 0] } } } },
-        { $sort: { avgScore: 1 } }
-      ]),
-      ChatRating.aggregate([
-        { $match: { createdAt: { $gte: since } } },
-        { $unwind: { path: '$agents', preserveNullAndEmptyArrays: true } },
-        { $group: { _id: '$agents', up: { $sum: { $cond: [{ $eq: ['$rating', 'up'] }, 1, 0] } }, down: { $sum: { $cond: [{ $eq: ['$rating', 'down'] }, 1, 0] } } } }
-      ]),
-      ChatAudit.aggregate([
-        { $match: { createdAt: { $gte: since } } },
-        { $group: { _id: '$source', n: { $sum: 1 }, avgScore: { $avg: '$score' }, alerted: { $sum: { $cond: ['$alerted', 1, 0] } }, unreviewed: { $sum: { $cond: [{ $and: [{ $eq: ['$reviewed', false] }, { $or: [{ $lte: ['$score', 5] }, { $gt: [{ $size: '$flags' }, 0] }] }] }, 1, 0] } } } }
-      ])
-    ]);
-    const rMap = {}; ratings.forEach(r => { rMap[r._id || '(sin agente)'] = { up: r.up, down: r.down }; });
-    const agents = byAgent.map(a => ({ agent: a._id, chats: a.chats, avgScore: Math.round((a.avgScore || 0) * 10) / 10, bad: a.bad, flagged: a.flagged, malTrato: a.malTrato, sinSolucion: a.sinSolucion, up: (rMap[a._id] || {}).up || 0, down: (rMap[a._id] || {}).down || 0 }));
-    const ratingTotals = await ChatRating.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: '$rating', n: { $sum: 1 } } }]);
-    res.json({ days, agents, totals, ratings: Object.fromEntries(ratingTotals.map(r => [r._id, r.n])), ratingsNoAgent: rMap['(sin agente)'] || null, telegram: telegramAlert.isEnabled(), aiEnabled: chatAuditAi.isEnabled() });
-  } catch (error) {
-    logger.error(`[audit] agents: ${error.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-app.post('/api/admin/audit/:id/review', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const note = String((req.body || {}).note || '').slice(0, 500);
-    const r = await ChatAudit.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date(), reviewNote: note } });
-    if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-app.get('/api/admin/audit/ratings', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
-    const q = { createdAt: { $gte: new Date(Date.now() - days * 86400000) } };
-    if (req.query.rating === 'down') q.rating = 'down';
-    if (req.query.unreviewed === '1') { q.reviewed = false; q.rating = 'down'; }
-    const items = await ChatRating.find(q).sort({ createdAt: -1 }).limit(200).lean();
-    res.json({ items });
-  } catch (error) {
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-app.post('/api/admin/audit/ratings/:id/review', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const r = await ChatRating.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date() } });
-    if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
-// Auditar YA una conversación (botón del panel).
-app.post('/api/admin/audit/run/:userId', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const a = await _auditConversation(String(req.params.userId), 'manual');
-    if (!a) return res.json({ success: true, audit: null, message: 'Nada nuevo para auditar (sin mensajes nuevos, o la IA está apagada)' });
-    res.json({ success: true, audit: a });
-  } catch (error) {
-    res.status(500).json({ error: 'Error del servidor' });
-  }
-});
-
 // Webhook de hgcash: movimientos de cuenta (acreditaciones entrantes). SIN
 // authMiddleware (lo llama el banco). Valida firma HMAC sobre el body CRUDO,
 // guarda el movimiento (dedupe por id), responde 2xx rápido y matchea en
@@ -6131,6 +5965,177 @@ app.post('/api/admin/private-config/telegram-test', authMiddleware, adminMiddlew
     const r = await telegramAlert.sendTest(_projectLabel());
     if (!r.ok) return res.status(400).json({ error: 'Telegram respondió error: ' + (r.error || '?') });
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ── Rutas de auditoría / 👍👎 (#132) ─────────────────────────────────────────
+// ⚠️ Van ACÁ (después de `const authMiddleware`, L~3436) y NO junto a las funciones
+// de auditoría (~L2600): registrar una ruta con authMiddleware antes de esa línea
+// tira "Cannot access 'authMiddleware' before initialization" al arrancar (TDZ) y
+// tumba el server — pasó en el deploy del 2026-08-27 23:03 (#133). node --check NO lo detecta.
+// El cliente responde 👍/👎 (+ motivo si 👎).
+app.post('/api/chat/rating', authMiddleware, async (req, res) => {
+  try {
+    if (isAdminRole(req.user.role)) return res.status(403).json({ error: 'Solo clientes' });
+    const { messageId, rating, comment } = req.body || {};
+    if (!messageId || !['up', 'down'].includes(rating)) return res.status(400).json({ error: 'Datos inválidos' });
+    const msg = await Message.findOne({ id: String(messageId), receiverId: req.user.userId, type: 'system' }).lean();
+    if (!msg || !msg.metadata || msg.metadata.kind !== 'rating_request') return res.status(404).json({ error: 'Encuesta no encontrada' });
+    const cleanComment = String(comment || '').trim().slice(0, 1000);
+    let doc;
+    try {
+      doc = await ChatRating.create({
+        id: uuidv4(), userId: req.user.userId, username: req.user.username, messageId: msg.id,
+        rating, comment: cleanComment, agents: (msg.metadata.agents || []), closedBy: null
+      });
+    } catch (e) {
+      if (e && e.code === 11000) {
+        // Ya calificó: si ahora manda el motivo del 👎, lo agregamos.
+        if (rating === 'down' && cleanComment) await ChatRating.updateOne({ messageId: msg.id }, { $set: { comment: cleanComment } });
+        doc = await ChatRating.findOne({ messageId: msg.id }).lean();
+      } else throw e;
+    }
+    await Message.updateOne({ id: msg.id }, { $set: { 'metadata.rated': rating, 'metadata.ratedAt': new Date(), 'metadata.comment': cleanComment || null } });
+    if (rating === 'down') {
+      await _emitAdminOnlyChatNote(req.user.userId, req.user.username,
+        `👎 El cliente calificó MAL la atención${cleanComment ? `: “${cleanComment}”` : ' (sin comentario todavía)'}. Un supervisor lo va a revisar.`);
+      // Alerta Telegram cuando llega el motivo (o el 👎 solo si no manda motivo en 3 min).
+      const alertNow = !!cleanComment;
+      const sendAlert = async () => {
+        try {
+          const fresh = await ChatRating.findOne({ messageId: msg.id }).lean();
+          if (!fresh || fresh.alerted) return;
+          if (!telegramAlert.isEnabled()) return;
+          const e = telegramAlert.esc;
+          const r = await telegramAlert.send([
+            `👎 <b>${e(_projectLabel())}</b> — calificación NEGATIVA · @${e(req.user.username)}`,
+            fresh.agents && fresh.agents.length ? `Agente(s): ${e(fresh.agents.join(', '))}` : '',
+            fresh.comment ? `📝 “${e(fresh.comment)}”` : '📝 (sin motivo)',
+            `👉 <a href="${_panelChatLink(req.user.userId, req.user.username)}">Abrir chat en el panel</a>`
+          ].filter(Boolean).join('\n'));
+          if (r.ok) await ChatRating.updateOne({ messageId: msg.id }, { $set: { alerted: true } });
+        } catch (_) {}
+      };
+      if (alertNow) sendAlert(); else setTimeout(sendAlert, 3 * 60 * 1000);
+      // Disparar auditoría IA del tramo ahora mismo (no esperar al idle).
+      setTimeout(() => { _auditConversation(req.user.userId, 'rating_down').catch(() => {}); }, 5000);
+    }
+    const thanks = rating === 'down'
+      ? await renderSystemCommand('/sys_rating_thanks_negative', '🙏 Gracias por contarnos. Un supervisor va a leer tu mensaje y revisar lo que pasó.', {})
+      : await renderSystemCommand('/sys_rating_thanks', '🙏 ¡Gracias! Nos alegra haberte ayudado.', {});
+    res.json({ success: true, rating, thanks: thanks || null, needComment: rating === 'down' && !cleanComment });
+  } catch (error) {
+    logger.error(`[rating] ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ── Endpoints del panel (🕵️ Auditoría) ─────────────────────────────────────
+app.get('/api/admin/audit/list', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const q = { createdAt: { $gte: new Date(Date.now() - days * 86400000) } };
+    const filter = String(req.query.filter || 'alerts');
+    if (filter === 'alerts') q.$or = [{ score: { $lte: 5 } }, { 'flags.0': { $exists: true } }];
+    else if (filter === 'unreviewed') { q.reviewed = false; q.$or = [{ score: { $lte: 5 } }, { 'flags.0': { $exists: true } }]; }
+    else if (filter === 'good') q.score = { $gte: 8 };
+    if (req.query.agent) q.agents = String(req.query.agent);
+    if (req.query.flag && ChatAudit.FLAGS.includes(String(req.query.flag))) q.flags = String(req.query.flag);
+    if (req.query.username) q.username = new RegExp(escapeRegex(String(req.query.username).slice(0, 40)), 'i');
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1), limit = 40;
+    const [items, total] = await Promise.all([
+      ChatAudit.find(q).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ChatAudit.countDocuments(q)
+    ]);
+    res.json({ items, total, page, pages: Math.ceil(total / limit), flags: ChatAudit.FLAGS, labels: _AUDIT_FLAG_LABEL });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/admin/audit/agents', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const since = new Date(Date.now() - days * 86400000);
+    const [byAgent, ratings, totals] = await Promise.all([
+      ChatAudit.aggregate([
+        { $match: { createdAt: { $gte: since }, source: 'ai' } },
+        { $unwind: '$agents' },
+        { $group: { _id: '$agents', chats: { $sum: 1 }, avgScore: { $avg: '$score' },
+          bad: { $sum: { $cond: [{ $lte: ['$score', 4] }, 1, 0] } },
+          flagged: { $sum: { $cond: [{ $gt: [{ $size: '$flags' }, 0] }, 1, 0] } },
+          malTrato: { $sum: { $cond: [{ $in: ['mal_trato', '$flags'] }, 1, 0] } },
+          sinSolucion: { $sum: { $cond: [{ $in: ['sin_solucion', '$flags'] }, 1, 0] } } } },
+        { $sort: { avgScore: 1 } }
+      ]),
+      ChatRating.aggregate([
+        { $match: { createdAt: { $gte: since } } },
+        { $unwind: { path: '$agents', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: '$agents', up: { $sum: { $cond: [{ $eq: ['$rating', 'up'] }, 1, 0] } }, down: { $sum: { $cond: [{ $eq: ['$rating', 'down'] }, 1, 0] } } } }
+      ]),
+      ChatAudit.aggregate([
+        { $match: { createdAt: { $gte: since } } },
+        { $group: { _id: '$source', n: { $sum: 1 }, avgScore: { $avg: '$score' }, alerted: { $sum: { $cond: ['$alerted', 1, 0] } }, unreviewed: { $sum: { $cond: [{ $and: [{ $eq: ['$reviewed', false] }, { $or: [{ $lte: ['$score', 5] }, { $gt: [{ $size: '$flags' }, 0] }] }] }, 1, 0] } } } }
+      ])
+    ]);
+    const rMap = {}; ratings.forEach(r => { rMap[r._id || '(sin agente)'] = { up: r.up, down: r.down }; });
+    const agents = byAgent.map(a => ({ agent: a._id, chats: a.chats, avgScore: Math.round((a.avgScore || 0) * 10) / 10, bad: a.bad, flagged: a.flagged, malTrato: a.malTrato, sinSolucion: a.sinSolucion, up: (rMap[a._id] || {}).up || 0, down: (rMap[a._id] || {}).down || 0 }));
+    const ratingTotals = await ChatRating.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: '$rating', n: { $sum: 1 } } }]);
+    res.json({ days, agents, totals, ratings: Object.fromEntries(ratingTotals.map(r => [r._id, r.n])), ratingsNoAgent: rMap['(sin agente)'] || null, telegram: telegramAlert.isEnabled(), aiEnabled: chatAuditAi.isEnabled() });
+  } catch (error) {
+    logger.error(`[audit] agents: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/audit/:id/review', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const note = String((req.body || {}).note || '').slice(0, 500);
+    const r = await ChatAudit.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date(), reviewNote: note } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/admin/audit/ratings', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const q = { createdAt: { $gte: new Date(Date.now() - days * 86400000) } };
+    if (req.query.rating === 'down') q.rating = 'down';
+    if (req.query.unreviewed === '1') { q.reviewed = false; q.rating = 'down'; }
+    const items = await ChatRating.find(q).sort({ createdAt: -1 }).limit(200).lean();
+    res.json({ items });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/audit/ratings/:id/review', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const r = await ChatRating.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date() } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Auditar YA una conversación (botón del panel).
+app.post('/api/admin/audit/run/:userId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const a = await _auditConversation(String(req.params.userId), 'manual');
+    if (!a) return res.json({ success: true, audit: null, message: 'Nada nuevo para auditar (sin mensajes nuevos, o la IA está apagada)' });
+    res.json({ success: true, audit: a });
   } catch (error) {
     res.status(500).json({ error: 'Error del servidor' });
   }

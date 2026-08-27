@@ -652,6 +652,22 @@ function setupRoleBasedUI() {
     if (pcNavItem) {
         pcNavItem.style.display = role === 'admin' ? '' : 'none';
     }
+    // Auditoría (#132): solo admin general
+    const auNavItem = document.querySelector('.nav-item-audit');
+    if (auNavItem) {
+        auNavItem.style.display = role === 'admin' ? '' : 'none';
+        if (role === 'admin') { refreshAuditBadge(); setInterval(refreshAuditBadge, 5 * 60 * 1000); }
+    }
+    // Deep-link desde Telegram: /adminprivado2026/?chat=<userId>&u=<username>
+    try {
+        const qp = new URLSearchParams(location.search);
+        const dlUser = qp.get('chat');
+        if (dlUser && !window._deepLinkDone) {
+            window._deepLinkDone = true;
+            history.replaceState(null, '', location.pathname);
+            setTimeout(() => { try { selectConversation(dlUser, qp.get('u') || ''); } catch (_) {} }, 1500);
+        }
+    } catch (_) {}
 
     // Cuentas Publicistas y Dashboard Publicistas: sólo admin general
     const paNavItem = document.querySelector('.nav-item-publisher-admins');
@@ -4545,6 +4561,13 @@ function switchSection(section) {
         loadPublishersRanking();
         loadPublishersDashboard();
     }
+    if (section === 'audit') {
+        if (currentAdmin?.role !== 'admin') {
+            showToast('No tienes permiso para acceder a esta sección', 'error');
+            return;
+        }
+        loadAudit();
+    }
     if (section === 'privateConfig') {
         if (currentAdmin?.role !== 'admin') {
             showToast('No tienes permiso para acceder a esta sección', 'error');
@@ -5107,7 +5130,7 @@ function _pcShow(id, on) { const el = document.getElementById(id); if (el) el.cl
 
 async function loadPrivateConfig() {
     _pcPassword = null;
-    _pcShow('pcAiCard', false); _pcShow('pcUnlockedBar', false); _pcShow('pcChangePassForm', false);
+    _pcShow('pcAiCard', false); _pcShow('pcAuditCard', false); _pcShow('pcUnlockedBar', false); _pcShow('pcChangePassForm', false);
     _pcShow('pcSetupForm', false); _pcShow('pcUnlockForm', false);
     const hint = document.getElementById('pcLockHint');
     try {
@@ -5156,6 +5179,8 @@ async function unlockPrivateConfig() {
         _pcShow('pcUnlockForm', false); _pcShow('pcUnlockedBar', true); _pcShow('pcAiCard', true);
         const hint = document.getElementById('pcLockHint'); if (hint) hint.textContent = 'Los cambios que guardes acá aplican en producción sin deploy.';
         renderPrivateAiConfig(j.ai || {});
+        _pcShow('pcAuditCard', true);
+        renderPrivateAuditConfig(j.audit || {});
     } catch (e) { showToast('Error de conexión', 'error'); }
 }
 
@@ -5230,6 +5255,181 @@ async function savePrivateAiConfig() {
         showToast('Config de IA guardada', 'success');
         renderPrivateAiConfig(j.ai || {});
     } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ---- Config privada → Auditoría + Telegram (#132) ----
+function renderPrivateAuditConfig(a) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v === undefined || v === null) ? '' : v; };
+    const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    chk('pcAuditEnabled', a.enabled !== false); chk('pcAuditRules', a.rulesEnabled !== false); chk('pcAuditRating', a.ratingEnabled !== false);
+    set('pcAuditModel', a.model || ''); set('pcAuditEffort', a.effort || '');
+    set('pcAuditIdle', a.idleMinutes); set('pcAuditMinScore', a.minScoreAlert); set('pcAuditRatingCooldown', a.ratingCooldownHours); set('pcAuditMaxPerTick', a.maxPerTick);
+    set('pcTgToken', ''); chk('pcTgTokenClear', false); set('pcTgChatId', a.telegramChatId || '');
+    const th = document.getElementById('pcTgTokenHint'); if (th) th.textContent = a.telegramTokenSet ? `(guardado: ${a.telegramTokenHint})` : '(sin token en el panel)';
+    const flags = document.getElementById('pcAuditFlags');
+    if (flags) {
+        const labels = { queja:'queja', mal_trato:'mal trato', sin_solucion:'sin solución', cliente_enojado:'cliente enojado', promesa_incumplida:'promesa incumplida', error_plata:'error de plata', respuesta_pobre:'respuesta pobre', demora:'demora', posible_fraude:'posible fraude', insulto_cliente:'insulto del cliente', mensaje_repetido:'mensaje repetido', sin_respuesta:'sin respuesta', cerrado_sin_responder:'cerrado sin responder' };
+        flags.innerHTML = (a.allFlags || []).map(f => `<label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" class="pcAuditFlag" value="${f}" ${(a.alertFlags || []).includes(f) ? 'checked' : ''}> ${escapeHtml(labels[f] || f)}</label>`).join('');
+    }
+    const st = document.getElementById('pcAuditStatus');
+    const e = a.effective || {};
+    if (st) st.innerHTML = `<b>En uso ahora:</b> IA ${e.audit && e.audit.enabled ? '🟢' : '⚪'} <code>${escapeHtml((e.audit || {}).model || '')}</code> · Telegram ${e.telegram && e.telegram.enabled ? '🟢 conectado (chat ' + escapeHtml(e.telegram.chatId || '') + ')' : '⚪ sin configurar'} · proyecto <code>${escapeHtml(a.projectLabel || '')}</code>` +
+        (a.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(a.updatedBy)} · ${a.updatedAt ? new Date(a.updatedAt).toLocaleString('es-AR') : ''}</span>` : '');
+}
+async function savePrivateAuditConfig() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    const v = (id) => (document.getElementById(id) || {}).value;
+    const c = (id) => !!(document.getElementById(id) || {}).checked;
+    const audit = {
+        enabled: c('pcAuditEnabled'), rulesEnabled: c('pcAuditRules'), ratingEnabled: c('pcAuditRating'),
+        model: v('pcAuditModel') || '', effort: v('pcAuditEffort') || '',
+        idleMinutes: v('pcAuditIdle'), minScoreAlert: v('pcAuditMinScore'), ratingCooldownHours: v('pcAuditRatingCooldown'), maxPerTick: v('pcAuditMaxPerTick'),
+        alertFlags: Array.from(document.querySelectorAll('.pcAuditFlag:checked')).map(x => x.value),
+        telegramChatId: (v('pcTgChatId') || '').trim()
+    };
+    const tok = (v('pcTgToken') || '').trim();
+    if (c('pcTgTokenClear')) audit.telegramBotToken = 'CLEAR'; else if (tok) audit.telegramBotToken = tok;
+    try {
+        const r = await authFetch('/api/admin/private-config/audit', { method: 'POST', body: JSON.stringify({ password: _pcPassword, audit }) });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); return; }
+        showToast('Auditoría guardada', 'success');
+        renderPrivateAuditConfig(j.audit || {});
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+async function testPrivateTelegram() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/private-config/telegram-test', { method: 'POST', body: JSON.stringify({ password: _pcPassword }) });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Falló', 'error'); return; }
+        showToast('Mensaje de prueba enviado a Telegram', 'success');
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+// ============================================
+// AUDITORÍA DE ATENCIÓN (#132) — sección del panel
+// ============================================
+const AUDIT_FLAG_LABELS = { queja:'queja', mal_trato:'MAL TRATO', sin_solucion:'sin solución', cliente_enojado:'cliente enojado', promesa_incumplida:'promesa incumplida', error_plata:'ERROR DE PLATA', respuesta_pobre:'respuesta pobre', demora:'demora', posible_fraude:'posible fraude', insulto_cliente:'insulto del cliente', mensaje_repetido:'mensaje repetido', sin_respuesta:'SIN RESPUESTA', cerrado_sin_responder:'cerrado sin responder' };
+function _auditDays() { return (document.getElementById('auditDays') || {}).value || '7'; }
+function _scoreBadge(score) {
+    if (score === null || score === undefined) return '<span style="background:#555;color:#fff;border-radius:8px;padding:1px 7px;font-size:11px;">regla</span>';
+    const color = score <= 2 ? '#c0392b' : score <= 4 ? '#e67e22' : score <= 6 ? '#b7950b' : '#1e8449';
+    return `<span style="background:${color};color:#fff;border-radius:8px;padding:1px 8px;font-weight:900;font-size:12px;">${score}/10</span>`;
+}
+function _flagChips(flags) {
+    return (flags || []).map(f => `<span style="background:rgba(255,80,80,.18);border:1px solid rgba(255,80,80,.4);border-radius:8px;padding:1px 6px;font-size:10.5px;margin-right:4px;">${escapeHtml(AUDIT_FLAG_LABELS[f] || f)}</span>`).join('');
+}
+async function refreshAuditBadge() {
+    try {
+        const r = await authFetch('/api/admin/audit/agents?days=7');
+        if (!r.ok) return;
+        const j = await r.json();
+        const un = (j.totals || []).reduce((n, t) => n + (t.unreviewed || 0), 0);
+        const b = document.getElementById('auditBadge');
+        if (b) { b.textContent = String(un); b.style.display = un > 0 ? '' : 'none'; }
+    } catch (_) {}
+}
+async function loadAudit() {
+    loadAuditAgents();
+    loadAuditRatings();
+    loadAuditList(1);
+}
+async function loadAuditAgents() {
+    const body = document.getElementById('auditAgentsBody');
+    const sum = document.getElementById('auditSummary');
+    const st = document.getElementById('auditStatusLine');
+    try {
+        const r = await authFetch('/api/admin/audit/agents?days=' + _auditDays());
+        const j = await r.json();
+        if (!r.ok) { if (body) body.innerHTML = `<tr><td colspan="9" style="color:#888;text-align:center;">${escapeHtml(j.error || 'Sin acceso')}</td></tr>`; return; }
+        if (st) st.textContent = (j.aiEnabled ? 'IA 🟢' : 'IA ⚪ apagada/sin key') + ' · ' + (j.telegram ? 'Telegram 🟢' : 'Telegram ⚪ (configurar en 🔐 Config privada)');
+        const ai = (j.totals || []).find(t => t._id === 'ai') || {};
+        const rules = (j.totals || []).find(t => t._id === 'rules') || {};
+        const un = (j.totals || []).reduce((n, t) => n + (t.unreviewed || 0), 0);
+        const tile = (label, val, color) => `<div style="background:var(--bg-secondary,#1a1a2e);border-radius:10px;padding:10px 14px;min-width:120px;"><div style="font-size:11px;color:#888;">${label}</div><div style="font-size:20px;font-weight:900;color:${color || '#fff'};">${val}</div></div>`;
+        if (sum) sum.innerHTML = tile('Chats auditados (IA)', ai.n || 0) + tile('Puntaje promedio', ai.avgScore ? (Math.round(ai.avgScore * 10) / 10) : '-', ai.avgScore && ai.avgScore < 6 ? '#e67e22' : '#25d366') + tile('Alertas de reglas', rules.n || 0, '#e67e22') + tile('Pendientes de revisar', un, un ? '#ff5050' : '#25d366') + tile('👍 / 👎', `${(j.ratings || {}).up || 0} / ${(j.ratings || {}).down || 0}`, (j.ratings || {}).down ? '#ff5050' : '#25d366');
+        if (!body) return;
+        if (!(j.agents || []).length) { body.innerHTML = '<tr><td colspan="9" style="color:#888;text-align:center;">Todavía no hay auditorías con agente en este período.</td></tr>'; return; }
+        body.innerHTML = j.agents.map(a => `<tr>
+            <td><a href="#" onclick="document.getElementById('auditAgent').value='${escapeHtml(a.agent)}';loadAuditList(1);return false;">${escapeHtml(a.agent)}</a></td>
+            <td>${a.chats}</td><td>${_scoreBadge(a.avgScore)}</td>
+            <td style="color:${a.bad ? '#ff5050' : 'inherit'};">${a.bad}</td><td>${a.flagged}</td><td style="color:${a.malTrato ? '#ff5050' : 'inherit'};">${a.malTrato}</td><td>${a.sinSolucion}</td>
+            <td style="color:#25d366;">${a.up}</td><td style="color:${a.down ? '#ff5050' : 'inherit'};">${a.down}</td></tr>`).join('');
+    } catch (e) { if (body) body.innerHTML = '<tr><td colspan="9" style="color:#888;text-align:center;">Error de conexión</td></tr>'; }
+}
+async function loadAuditRatings() {
+    const box = document.getElementById('auditRatingsBody');
+    if (!box) return;
+    try {
+        const r = await authFetch('/api/admin/audit/ratings?days=' + _auditDays() + '&rating=down');
+        const j = await r.json();
+        const items = (j.items || []);
+        if (!items.length) { box.innerHTML = '<div style="color:#888;font-size:12.5px;">Sin calificaciones negativas en el período. 🎉</div>'; return; }
+        box.innerHTML = items.map(it => `<div style="border:1px solid rgba(255,80,80,.35);border-radius:10px;padding:10px;background:rgba(255,80,80,.06);${it.reviewed ? 'opacity:.6;' : ''}">
+            <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
+                <div><b>👎 @${escapeHtml(it.username || it.userId)}</b> <span style="color:#888;font-size:11px;">${new Date(it.createdAt).toLocaleString('es-AR')}</span> ${it.agents && it.agents.length ? `<span style="font-size:11px;color:#aaa;">· atendió: ${escapeHtml(it.agents.join(', '))}</span>` : ''}</div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="selectConversation('${escapeHtml(it.userId)}','${escapeHtml(it.username || '')}');switchSection('chats')">Abrir chat</button>
+                    ${it.reviewed ? `<span style="font-size:11px;color:#25d366;">✓ visto por ${escapeHtml(it.reviewedBy || '')}</span>` : `<button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="reviewAuditRating('${escapeHtml(it.id)}')">Marcar visto</button>`}
+                </div>
+            </div>
+            <div style="margin-top:6px;font-size:13px;">${it.comment ? '📝 “' + escapeHtml(it.comment) + '”' : '<span style="color:#888;">(sin motivo)</span>'}</div>
+        </div>`).join('');
+    } catch (e) { box.innerHTML = '<div style="color:#888;">Error de conexión</div>'; }
+}
+async function loadAuditList(page) {
+    const box = document.getElementById('auditListBody');
+    const pag = document.getElementById('auditPagination');
+    if (!box) return;
+    window._auditPage = page || 1;
+    const qs = new URLSearchParams({ days: _auditDays(), filter: (document.getElementById('auditFilter') || {}).value || 'unreviewed', page: String(window._auditPage) });
+    const flag = (document.getElementById('auditFlag') || {}).value; if (flag) qs.set('flag', flag);
+    const agent = ((document.getElementById('auditAgent') || {}).value || '').trim(); if (agent) qs.set('agent', agent);
+    const user = ((document.getElementById('auditUser') || {}).value || '').trim(); if (user) qs.set('username', user);
+    try {
+        const r = await authFetch('/api/admin/audit/list?' + qs.toString());
+        const j = await r.json();
+        if (!r.ok) { box.innerHTML = `<div style="color:#888;">${escapeHtml(j.error || 'Sin acceso')}</div>`; return; }
+        const fsel = document.getElementById('auditFlag');
+        if (fsel && fsel.options.length <= 1 && j.flags) fsel.innerHTML = '<option value="">Cualquier bandera</option>' + j.flags.map(f => `<option value="${f}">${escapeHtml(AUDIT_FLAG_LABELS[f] || f)}</option>`).join('');
+        const items = j.items || [];
+        if (!items.length) { box.innerHTML = '<div style="color:#888;font-size:12.5px;">Nada para mostrar con este filtro.</div>'; if (pag) pag.innerHTML = ''; return; }
+        box.innerHTML = items.map(it => `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px;background:rgba(255,255,255,.02);${it.reviewed ? 'opacity:.6;' : ''}">
+            <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
+                <div>${_scoreBadge(it.score)} <b>@${escapeHtml(it.username || it.userId)}</b> <span style="color:#888;font-size:11px;">${new Date(it.createdAt).toLocaleString('es-AR')} · ${it.source === 'ai' ? 'IA' : 'regla'}${it.alerted ? ' · 📨' : ''}</span>
+                    ${it.agents && it.agents.length ? `<span style="font-size:11px;color:#aaa;">· ${escapeHtml(it.agents.join(', '))}${it.responsibleAgent ? ' (resp: ' + escapeHtml(it.responsibleAgent) + ')' : ''}</span>` : '<span style="font-size:11px;color:#ff5050;">· sin agente</span>'}</div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="selectConversation('${escapeHtml(it.userId)}','${escapeHtml(it.username || '')}');switchSection('chats')">Abrir chat</button>
+                    ${it.reviewed ? `<span style="font-size:11px;color:#25d366;">✓ ${escapeHtml(it.reviewedBy || '')}${it.reviewNote ? ': ' + escapeHtml(it.reviewNote) : ''}</span>` : `<button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="reviewAudit('${escapeHtml(it.id)}')">Marcar visto</button>`}
+                </div>
+            </div>
+            <div style="margin-top:6px;">${_flagChips(it.flags)}</div>
+            <div style="margin-top:6px;font-size:13px;">${escapeHtml(it.summary || '')}</div>
+            ${it.quote ? `<div style="margin-top:4px;font-size:12px;color:#aaa;">💬 “${escapeHtml(it.quote)}”</div>` : ''}
+        </div>`).join('');
+        if (pag) {
+            let h = '';
+            for (let p = 1; p <= Math.min(j.pages || 1, 20); p++) h += `<button class="btn-secondary" style="font-size:11px;padding:3px 8px;${p === j.page ? 'font-weight:900;border-color:#d4af37;' : ''}" onclick="loadAuditList(${p})">${p}</button>`;
+            pag.innerHTML = (j.pages > 1 ? h : '') + `<span style="font-size:11px;color:#888;align-self:center;margin-left:6px;">${j.total} resultado(s)</span>`;
+        }
+    } catch (e) { box.innerHTML = '<div style="color:#888;">Error de conexión</div>'; }
+}
+async function reviewAudit(id) {
+    const note = prompt('Nota (opcional): qué se hizo / a quién se le habló', '') ;
+    if (note === null) return;
+    try {
+        const r = await authFetch('/api/admin/audit/' + encodeURIComponent(id) + '/review', { method: 'POST', body: JSON.stringify({ note }) });
+        if (!r.ok) { showToast('No se pudo marcar', 'error'); return; }
+        loadAuditList(window._auditPage || 1); refreshAuditBadge();
+    } catch (_) { showToast('Error de conexión', 'error'); }
+}
+async function reviewAuditRating(id) {
+    try {
+        const r = await authFetch('/api/admin/audit/ratings/' + encodeURIComponent(id) + '/review', { method: 'POST', body: '{}' });
+        if (!r.ok) { showToast('No se pudo marcar', 'error'); return; }
+        loadAuditRatings();
+    } catch (_) { showToast('Error de conexión', 'error'); }
 }
 
 let smsAccessGranted = false;

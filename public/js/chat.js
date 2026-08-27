@@ -40,6 +40,75 @@ VIP.chat = (function () {
         }
     }
 
+    // ---- Encuesta de atención 👍👎 (#132) ----
+    // El card vive dentro del mensaje de sistema. Estados: sin calificar → 2 botones;
+    // 👎 sin motivo → textarea; calificado → agradecimiento.
+    function buildRatingCardHtml(message) {
+        const id = escapeHtml(message.id || '');
+        const md = message.metadata || {};
+        const btn = 'border:none;border-radius:12px;padding:10px 18px;font-size:22px;cursor:pointer;line-height:1;';
+        if (md.rated === 'up') {
+            return `<div class="rating-card" data-rating-card="${id}" style="margin-top:10px;font-size:13px;opacity:.85;">👍 ¡Gracias por tu calificación!</div>`;
+        }
+        if (md.rated === 'down') {
+            return md.comment
+                ? `<div class="rating-card" data-rating-card="${id}" style="margin-top:10px;font-size:13px;opacity:.85;">👎 Gracias por contarnos. Un supervisor va a revisar lo que pasó.</div>`
+                : `<div class="rating-card" data-rating-card="${id}" style="margin-top:10px;">${ratingCommentBoxHtml(id)}</div>`;
+        }
+        return `<div class="rating-card" data-rating-card="${id}" style="margin-top:10px;display:flex;gap:12px;justify-content:center;">` +
+            `<button type="button" style="${btn}background:rgba(37,211,102,.18);" onclick="VIP.chat.rateChat('${id}','up')" aria-label="Bien">👍</button>` +
+            `<button type="button" style="${btn}background:rgba(255,80,80,.18);" onclick="VIP.chat.rateChat('${id}','down')" aria-label="Mal">👎</button>` +
+            `</div>`;
+    }
+    function ratingCommentBoxHtml(id) {
+        return `<div style="font-size:13px;margin-bottom:6px;">👎 Contanos qué pasó. <b>Lo va a leer un supervisor.</b></div>` +
+            `<textarea id="rateBox-${id}" rows="3" maxlength="1000" placeholder="Ej: me respondieron mal / no me cargaron / tardaron mucho…" style="width:100%;border-radius:10px;border:1px solid rgba(255,255,255,.25);background:rgba(0,0,0,.25);color:inherit;padding:8px;font-family:inherit;font-size:14px;"></textarea>` +
+            `<button type="button" style="margin-top:6px;width:100%;border:none;border-radius:10px;padding:9px;font-weight:700;background:#d4af37;color:#000;cursor:pointer;" onclick="VIP.chat.submitRatingComment('${id}')">Enviar</button>`;
+    }
+    async function postRating(messageId, rating, comment) {
+        const response = await fetch(`${VIP.config.API_URL}/api/chat/rating`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${VIP.state.currentToken}` },
+            body: JSON.stringify({ messageId, rating, comment: comment || '' })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'No se pudo enviar');
+        return data;
+    }
+    function setRatingCard(messageId, html) {
+        const card = document.querySelector(`[data-rating-card="${messageId}"]`);
+        if (card) { card.style.display = ''; card.innerHTML = html; }
+    }
+    async function rateChat(messageId, rating) {
+        try {
+            const card = document.querySelector(`[data-rating-card="${messageId}"]`);
+            if (card) card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+            const data = await postRating(messageId, rating, '');
+            if (rating === 'up') {
+                setRatingCard(messageId, `<div style="font-size:13px;opacity:.85;">👍 ${escapeHtml(data.thanks || '¡Gracias por tu calificación!')}</div>`);
+            } else {
+                setRatingCard(messageId, ratingCommentBoxHtml(escapeHtml(messageId)));
+                const ta = document.getElementById(`rateBox-${messageId}`);
+                if (ta) ta.focus();
+            }
+        } catch (e) {
+            if (VIP.ui && VIP.ui.showToast) VIP.ui.showToast(e.message || 'No se pudo enviar', 'error');
+            const card = document.querySelector(`[data-rating-card="${messageId}"]`);
+            if (card) card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        }
+    }
+    async function submitRatingComment(messageId) {
+        const ta = document.getElementById(`rateBox-${messageId}`);
+        const comment = ta ? ta.value.trim() : '';
+        if (!comment) { if (ta) ta.focus(); return; }
+        try {
+            const data = await postRating(messageId, 'down', comment);
+            setRatingCard(messageId, `<div style="font-size:13px;opacity:.85;">🙏 ${escapeHtml(data.thanks || 'Gracias por contarnos. Un supervisor va a revisar lo que pasó.')}</div>`);
+        } catch (e) {
+            if (VIP.ui && VIP.ui.showToast) VIP.ui.showToast(e.message || 'No se pudo enviar', 'error');
+        }
+    }
+
     // ---- Message rendering ----
 
     function createMessageElement(message) {
@@ -76,6 +145,10 @@ VIP.chat = (function () {
             content = content.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer" class="chat-link">$1</a>');
             content = content.replace(/\n/g, '<br>');
             contentHtml = `<div style="white-space: pre-wrap;">${content}</div>`;
+            // #132: encuesta 👍👎 (mensaje de sistema con metadata.kind = 'rating_request')
+            if (message.metadata && message.metadata.kind === 'rating_request') {
+                contentHtml += buildRatingCardHtml(message);
+            }
         }
 
         msgDiv.innerHTML = `${contentHtml}<span class="message-time">${time}</span>`;
@@ -654,7 +727,9 @@ VIP.chat = (function () {
         handleFileSelect,
         handlePaste,
         sendSystemMessage,
-        loadCanalInformativoUrl
+        loadCanalInformativoUrl,
+        rateChat,
+        submitRatingComment
     };
 
 })();

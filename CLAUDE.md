@@ -82,6 +82,10 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   prioridad panel > env/SSM > default; SMS Masivo usa esa misma clave). Para una
   config nueva que el owner quiera editar sin SSM, sumarla AHÍ (endpoints
   `/api/admin/private-config/*`).
+- **Auditoría de atención (#132):** cada mensaje del cliente pasa por reglas
+  (`_auditRulesOnUserMessage`) y cada conversación quieta por la IA (`_auditConversation`);
+  resultados en `ChatAudit`, panel 🕵️ Auditoría y Telegram. Un hook nuevo de "mensaje del
+  cliente" o de "carga/pago acreditado" tiene que respetar esos puntos de enganche.
 - **Mensajes automáticos al usuario** son editables desde la sección COMANDOS
   (comandos `/sys_*`). Usar el helper `renderSystemCommand(name, fallback, vars)` para
   cualquier mensaje automático nuevo.

@@ -87,6 +87,12 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   no al crear la cuenta. Lleva el reloj SLA (`pendingSince/Preview/Type`).
 - **ChatDelay** — snapshot permanente de demoras de atención que superaron el umbral
   (sobrevive al TTL de Message). Umbrales: cargas 2min / pagos 30min (configurables).
+- **ChatAudit** (#132) — auditoría PERMANENTE de atención por conversación: `source`
+  'ai' (puntaje 1-10 + banderas + resumen + agente responsable) o 'rules' (insulto/queja
+  del cliente, mensaje repetido, sin respuesta, cerrado sin responder). `agents[]` para el
+  ranking; `alerted` (Telegram), `reviewed`. **ChatRating** (#132) — 👍👎 del cliente tras
+  una carga/pago (+ motivo si 👎). ChatStatus lleva `lastAuditMsgAt`/`auditLockAt`/
+  `lastRuleAlertAt`/`ratingRequestedAt`.
 
 ### Plata / banco automático (hgcash)
 - **BankMovement** — cada movimiento que hgcash notifica por webhook. `matchStatus`:
@@ -346,6 +352,14 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `POST /api/admin/users/:id/install-bonus-100/apply` (update atómico con guard).
   Mensaje `/sys_install_bonus_100`. Reporte: sección "Bono App (100%)" del panel
   (`/api/admin/central/welcome-bonus` distingue legacy $5.000 vs cupón).
+- **Auditoría de atención** (#132): capa 1 reglas en vivo sobre cada mensaje del cliente
+  (`_auditRulesOnUserMessage`, hook junto a `delayClockOnUserMessage`) y al cerrar con
+  espera en curso; capa 2 IA por conversación quieta (`_auditConversation`, cron 5 min,
+  `chatAuditAiService`); capa 3 panel 🕵️ Auditoría + Telegram (`telegramAlertService`,
+  `_auditAlert`, link `?chat=<userId>&u=` que el panel abre solo). 👍👎 al cliente
+  (`_scheduleRatingRequest` desde `recordUserActivity('deposit')` y `notifyPayoutPaid`;
+  Message `metadata.kind:'rating_request'`; `POST /api/chat/rating`). Config en
+  🔐 Config privada (`Config['auditconfig']`).
 - **SLA demoras**: reloj en ChatStatus (`delayClockOnUserMessage`/`delayClockResolve`);
   responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
   ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).
@@ -445,6 +459,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 | `_runFcmPrune` | 24 h | activo | flag anti-overlap en memoria |
 | `fbAdsWebhook.startWorker` | 5 min | activo | nextRetryAt |
 | Limpieza mensajes >3d | 6 h | activo (red de seguridad del TTL) | deleteMany |
+| `_runChatAuditTick` (auditoría IA de chats quietos, #132) | 5 min | activo si `auditconfig.enabled` | claim `ChatStatus.auditLockAt` + `lastAuditMsgAt` |
 
 Migraciones one-shot: patrón flag en Config (`migration_*_done`) en `initializeData()`.
 El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea

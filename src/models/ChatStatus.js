@@ -72,7 +72,13 @@ const chatStatusSchema = new mongoose.Schema({
   pendingType: {
     type: String,
     default: null
-  }
+  },
+  // ===== Auditoría de atención (#132) =====
+  auditLockAt: { type: Date, default: null },      // claim entre instancias mientras la IA audita
+  lastAuditAt: { type: Date, default: null },
+  lastAuditMsgAt: { type: Date, default: null },   // hasta qué mensaje se auditó (el próximo tramo arranca ahí)
+  lastRuleAlertAt: { type: Date, default: null },  // throttle de alertas de reglas (30 min)
+  ratingRequestedAt: { type: Date, default: null } // última encuesta 👍👎 enviada (tope 6 h)
 }, {
   timestamps: true
 });

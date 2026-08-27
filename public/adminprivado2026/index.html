@@ -166,6 +166,11 @@
                     <span>🔐</span>
                     <span>Config privada</span>
                 </a>
+                <a href="#" class="nav-item nav-item-audit" data-section="audit" style="display:none">
+                    <span>🕵️</span>
+                    <span>Auditoría</span>
+                    <span id="auditBadge" style="display:none;background:#ff5050;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
+                </a>
                 <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#888;text-transform:uppercase;opacity:.6;">No se usa (limpiar)</div>
                 <a href="#" class="nav-item" data-section="automations" style="opacity:.6;">
                     <span>🤖</span>
@@ -2116,6 +2121,58 @@
             </div>
 
             <!-- SMS Masivo Section -->
+            <!-- AUDITORÍA DE ATENCIÓN (#132): reglas + IA + 👍👎 + Telegram -->
+            <section id="auditSection" class="section">
+                <div class="panel-header">
+                    <h2>🕵️ AUDITORÍA DE ATENCIÓN</h2>
+                </div>
+                <div style="padding:16px;display:grid;gap:16px;">
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                        <select id="auditDays" onchange="loadAudit()" style="padding:6px 10px;">
+                            <option value="1">Hoy (24 h)</option>
+                            <option value="7" selected>7 días</option>
+                            <option value="30">30 días</option>
+                        </select>
+                        <select id="auditFilter" onchange="loadAuditList(1)" style="padding:6px 10px;">
+                            <option value="unreviewed" selected>Pendientes de revisar</option>
+                            <option value="alerts">Todo lo marcado (puntaje ≤5 o bandera)</option>
+                            <option value="all">Todas las auditorías</option>
+                            <option value="good">Solo buenas (≥8)</option>
+                        </select>
+                        <select id="auditFlag" onchange="loadAuditList(1)" style="padding:6px 10px;">
+                            <option value="">Cualquier bandera</option>
+                        </select>
+                        <input type="text" id="auditAgent" placeholder="Agente" style="padding:6px 10px;width:130px;" onkeydown="if(event.key==='Enter')loadAuditList(1)">
+                        <input type="text" id="auditUser" placeholder="Cliente" style="padding:6px 10px;width:130px;" onkeydown="if(event.key==='Enter')loadAuditList(1)">
+                        <button class="btn-secondary" onclick="loadAudit()">Actualizar</button>
+                        <span id="auditStatusLine" style="font-size:12px;color:#888;"></span>
+                    </div>
+
+                    <div id="auditSummary" style="display:flex;gap:12px;flex-wrap:wrap;"></div>
+
+                    <div style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1rem;">
+                        <h3 style="font-size:1rem;color:var(--text-secondary,#aaa);margin-bottom:.6rem;">👥 Ranking de agentes (auditorías IA + calificaciones 👍👎)</h3>
+                        <div style="overflow-x:auto;">
+                            <table class="data-table" style="width:100%;font-size:12.5px;">
+                                <thead><tr><th>Agente</th><th>Chats auditados</th><th>Puntaje prom.</th><th>Malos (≤4)</th><th>Con bandera</th><th>Mal trato</th><th>Sin solución</th><th>👍</th><th>👎</th></tr></thead>
+                                <tbody id="auditAgentsBody"><tr><td colspan="9" style="color:#888;text-align:center;">Cargando…</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1rem;">
+                        <h3 style="font-size:1rem;color:var(--text-secondary,#aaa);margin-bottom:.6rem;">👎 Calificaciones negativas de clientes</h3>
+                        <div id="auditRatingsBody" style="display:grid;gap:8px;"></div>
+                    </div>
+
+                    <div style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1rem;">
+                        <h3 style="font-size:1rem;color:var(--text-secondary,#aaa);margin-bottom:.6rem;">📋 Auditorías</h3>
+                        <div id="auditListBody" style="display:grid;gap:8px;"></div>
+                        <div id="auditPagination" style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;"></div>
+                    </div>
+                </div>
+            </section>
+
             <!-- CONFIG PRIVADA (#128): clave propia (hash en DB) + config de la IA de comprobantes -->
             <section id="privateConfigSection" class="section">
                 <div class="panel-header">
@@ -2196,6 +2253,58 @@
                         </div>
                         <button class="btn-primary" onclick="savePrivateAiConfig()">💾 Guardar config de IA</button>
                         <p style="font-size:11px;color:#777;margin-top:10px;">Prioridad: panel &gt; variables de entorno (SSM) &gt; default del código. Los cambios aplican al instante en esta instancia y en ≤60 s en las demás. Si olvidás la clave: borrar el doc <code>privateconfigpass</code> de la colección Config en Atlas.</p>
+                    </div>
+
+                    <!-- Auditoría de atención + Telegram (#132) -->
+                    <div id="pcAuditCard" class="hidden" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;">
+                        <h3 style="margin-bottom:.5rem;font-size:1rem;color:var(--text-secondary,#aaa);">🕵️ Auditoría de atención + alertas Telegram</h3>
+                        <div id="pcAuditStatus" style="font-size:12px;color:#aaa;margin-bottom:14px;line-height:1.6;"></div>
+                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-bottom:8px;">
+                            <input type="checkbox" id="pcAuditEnabled" style="accent-color:#25d366;width:16px;height:16px;">
+                            <span>Auditoría con IA activa (lee cada conversación cuando queda quieta)</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-bottom:8px;">
+                            <input type="checkbox" id="pcAuditRules" style="accent-color:#25d366;width:16px;height:16px;">
+                            <span>Reglas en vivo (insulto/queja del cliente, mensaje repetido, cerrado sin responder)</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-bottom:12px;">
+                            <input type="checkbox" id="pcAuditRating" style="accent-color:#25d366;width:16px;height:16px;">
+                            <span>Encuesta 👍👎 al cliente después de una carga o un pago</span>
+                        </label>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">
+                            <div class="form-group"><label class="form-label">Modelo de auditoría</label>
+                                <select id="pcAuditModel" style="width:100%;">
+                                    <option value="">Default (claude-sonnet-5)</option>
+                                    <option value="claude-sonnet-5">claude-sonnet-5 (~US$0,004/chat)</option>
+                                    <option value="claude-opus-5">claude-opus-5 (~US$0,015/chat)</option>
+                                    <option value="claude-haiku-4-5">claude-haiku-4-5 (~US$0,002/chat)</option>
+                                </select></div>
+                            <div class="form-group"><label class="form-label">Esfuerzo</label>
+                                <select id="pcAuditEffort" style="width:100%;"><option value="">Default (low)</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div>
+                            <div class="form-group"><label class="form-label">Auditar tras quieto (min)</label><input type="number" id="pcAuditIdle" min="5" max="240" style="width:100%;"></div>
+                            <div class="form-group"><label class="form-label">Alertar si puntaje ≤</label><input type="number" id="pcAuditMinScore" min="0" max="10" style="width:100%;"></div>
+                            <div class="form-group"><label class="form-label">Encuesta: 1 cada (horas)</label><input type="number" id="pcAuditRatingCooldown" min="0" max="168" style="width:100%;"></div>
+                            <div class="form-group"><label class="form-label">Máx. chats por corrida (5 min)</label><input type="number" id="pcAuditMaxPerTick" min="1" max="200" style="width:100%;"></div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Banderas que alertan a Telegram</label>
+                            <div id="pcAuditFlags" style="display:flex;gap:8px 14px;flex-wrap:wrap;font-size:12.5px;"></div>
+                        </div>
+                        <div style="border-top:1px solid rgba(255,255,255,.08);margin:12px 0;"></div>
+                        <div class="form-group">
+                            <label class="form-label">Telegram — token del bot <span id="pcTgTokenHint" style="color:#888;font-weight:normal;"></span></label>
+                            <input type="password" id="pcTgToken" placeholder="123456789:AAH… (vacío = no cambiar)" autocomplete="off" style="width:100%;">
+                            <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-top:6px;font-size:12px;color:#aaa;"><input type="checkbox" id="pcTgTokenClear" style="width:14px;height:14px;"><span>Borrar el token guardado</span></label>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Telegram — chat id del grupo</label>
+                            <input type="text" id="pcTgChatId" placeholder="-1001234567890" style="width:100%;">
+                            <p style="font-size:11px;color:#777;margin-top:4px;">Creá el bot con @BotFather, agregalo al grupo del supervisor, escribí algo en el grupo y abrí <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> → <code>"chat":{"id":-100…}</code>. El MISMO bot y grupo sirven para los 10 proyectos: cada alerta dice de qué dominio viene.</p>
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn-primary" onclick="savePrivateAuditConfig()">💾 Guardar auditoría</button>
+                            <button class="btn-secondary" onclick="testPrivateTelegram()">📨 Probar Telegram</button>
+                        </div>
                     </div>
                 </div>
             </section>

@@ -70,6 +70,10 @@ const InfluencerStory = require('./src/models/InfluencerStory');
 const ChatDelay = require('./src/models/ChatDelay');
 const Comprobante = require('./src/models/Comprobante');
 const comprobanteAi = require('./src/services/comprobanteAiService');
+const chatAuditAi = require('./src/services/chatAuditAiService');   // #132 auditoría de atención (IA)
+const telegramAlert = require('./src/services/telegramAlertService'); // #132 alertas al supervisor
+const ChatAudit = require('./src/models/ChatAudit');
+const ChatRating = require('./src/models/ChatRating');
 const BankMovement = require('./src/models/BankMovement');
 const HgcashCharge = require('./src/models/HgcashCharge');
 const PendingPayout = require('./src/models/PendingPayout');
@@ -1359,6 +1363,8 @@ async function addExternalUser(userData) {
 
 // Registrar actividad de usuario (para fueguito)
 async function recordUserActivity(userId, type, amount) {
+  // #132: una carga acreditada = problema resuelto → encuesta 👍👎 (con tope por cliente).
+  if (type === 'deposit') { try { _scheduleRatingRequest(userId, 'deposit'); } catch (_) {} }
   try {
     const today = new Date().toDateString();
     
@@ -1902,6 +1908,7 @@ async function ensureHgcashAccountIdSaved(accountId) {
 // Avisa al cliente (y a los admins) que su retiro fue pagado. El texto es editable
 // desde COMANDOS (/sys_payout_paid); si se vacía ese comando, no se envía nada.
 async function notifyPayoutPaid(payout) {
+  try { _scheduleRatingRequest(payout.userId, 'payout'); } catch (_) {} // #132 encuesta tras pago
   try {
     const content = await renderSystemCommand(
       '/sys_payout_paid',
@@ -2679,6 +2686,417 @@ async function hgcashMatchFromComprobante(comprobante) {
     logger.warn(`[hgcash] match desde comprobante falló: ${e.message}`);
   }
 }
+
+// ============================================
+// AUDITORÍA DE ATENCIÓN (#132): reglas en vivo + IA por conversación + 👍👎 + Telegram
+// ============================================
+// Capa 1 (reglas, sin IA): insulto/queja del cliente, mensaje repetido, chat sin
+//   respuesta, cerrado con espera en curso → nota interna al chat + ChatAudit(rules) +
+//   Telegram (throttle 30 min por cliente, atómico en ChatStatus.lastRuleAlertAt).
+// Capa 2 (IA): cron cada 5 min audita las conversaciones que quedaron QUIETAS
+//   `idleMinutes` (no al cerrar: el chat se cierra/reabre varias veces por charla).
+//   Tramo = desde el último mensaje auditado (lastAuditMsgAt) hasta el último.
+// Capa 3 (humano): panel → 🕵️ Auditoría + alertas a Telegram con link al chat.
+// 👍👎: se manda DESPUÉS de una carga acreditada o un pago hecho (no al cerrar),
+//   tope 1 cada `ratingCooldownHours` por cliente, y solo si un agente participó.
+
+function _projectLabel() {
+  try { return new URL(String(process.env.PUBLIC_BASE_URL || '')).hostname.replace(/^www\./, ''); } catch (_) { return 'proyecto'; }
+}
+function _panelChatLink(userId, username) {
+  const base = process.env.ADMIN_HOST ? `https://${process.env.ADMIN_HOST}` : String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  return `${base}/adminprivado2026/?chat=${encodeURIComponent(userId)}&u=${encodeURIComponent(username || '')}`;
+}
+const _AUDIT_FLAG_LABEL = {
+  queja: 'queja', mal_trato: 'MAL TRATO', sin_solucion: 'sin solución', cliente_enojado: 'cliente enojado',
+  promesa_incumplida: 'promesa incumplida', error_plata: 'ERROR DE PLATA', respuesta_pobre: 'respuesta pobre',
+  demora: 'demora', posible_fraude: 'posible fraude', insulto_cliente: 'insulto del cliente',
+  mensaje_repetido: 'mensaje repetido', sin_respuesta: 'SIN RESPUESTA', cerrado_sin_responder: 'cerrado sin responder'
+};
+function _flagLabels(flags) { return (flags || []).map(f => _AUDIT_FLAG_LABEL[f] || f).join(', '); }
+
+// Mensajes del tramo (sin adminOnly) + agentes que participaron.
+async function _auditLoadMessages(userId, since, until) {
+  const q = { $or: [{ senderId: userId }, { receiverId: userId }], adminOnly: { $ne: true } };
+  q.timestamp = { $gt: since };
+  if (until) q.timestamp.$lte = until;
+  const msgs = await Message.find(q).sort({ timestamp: 1 }).limit(400).lean();
+  const agents = [...new Set(msgs.filter(m => m.type !== 'system' && m.senderRole !== 'user' && m.senderUsername && m.senderUsername !== 'Sistema').map(m => m.senderUsername))];
+  const userMsgs = msgs.filter(m => m.senderRole === 'user').length;
+  const agentMsgs = msgs.filter(m => m.type !== 'system' && m.senderRole !== 'user' && m.senderUsername !== 'Sistema').length;
+  return { msgs, agents, userMsgs, agentMsgs };
+}
+
+// Alerta a Telegram (si corresponde) y marca el audit como alertado.
+async function _auditAlert(audit, cfg) {
+  try {
+    const c = cfg || (await _getAuditConfig());
+    const byScore = audit.score != null && audit.score <= Number(c.minScoreAlert);
+    const byFlag = (audit.flags || []).some(f => (c.alertFlags || []).includes(f));
+    if (!byScore && !byFlag) return false;
+    if (!telegramAlert.isEnabled()) return false;
+    const e = telegramAlert.esc;
+    const sev = audit.score != null && audit.score <= 2 ? '🔴' : (audit.score != null && audit.score <= 4 ? '🟠' : '🟡');
+    const lines = [
+      `${sev} <b>${e(_projectLabel())}</b> — ${audit.source === 'ai' ? 'auditoría IA' : 'regla'} · @${e(audit.username)}`,
+      (audit.score != null ? `Puntaje <b>${audit.score}/10</b> · ` : '') + `Banderas: <b>${e(_flagLabels(audit.flags)) || '-'}</b>`,
+      audit.agents && audit.agents.length ? `Agente(s): ${e(audit.agents.join(', '))}${audit.responsibleAgent ? ` (responsable: ${e(audit.responsibleAgent)})` : ''}` : 'Agente(s): ninguno respondió',
+      audit.summary ? `📝 ${e(audit.summary)}` : '',
+      audit.quote ? `💬 “${e(audit.quote)}”` : '',
+      `👉 <a href="${_panelChatLink(audit.userId, audit.username)}">Abrir chat en el panel</a>`
+    ].filter(Boolean);
+    const r = await telegramAlert.send(lines.join('\n'));
+    if (r.ok) { await ChatAudit.updateOne({ id: audit.id }, { $set: { alerted: true } }); return true; }
+    return false;
+  } catch (err) {
+    logger.warn(`[audit] alerta falló: ${err.message}`);
+    return false;
+  }
+}
+
+// ── Capa 1: reglas en vivo sobre cada mensaje del cliente ───────────────────
+const _RULE_INSULT = /\b(put[oa]s?|pelotud[oa]s?|boludos?|forr[oa]s?|hij[oa]s? de (puta|re mil)|la concha de|mierda|chor[oa]s?|ladr[oó]n(es|a)?|estafador(es|a)?|garcas?|garc[aá]s|cagad(or|ores)|rata[s]?|mentiros[oa]s?)\b/i;
+const _RULE_COMPLAINT = /\b(estafa|denuncia|defensa del consumidor|reclamo|nadie (me )?(responde|contesta)|no (me )?(responden|contestan|cargan|pagan|acreditan)|hace (una|dos|tres|\d+) horas?|sigo esperando|todav[ií]a no|no me llega|me robaron|se quedaron con|verg[üu]enza|p[eé]simo|malísimo|una porquer[ií]a)\b/i;
+const _repeatMap = new Map(); // userId → { key, count, at } (por instancia; alcanza para la señal)
+async function _auditRulesOnUserMessage(userId, username, content, type) {
+  try {
+    const cfg = await _getAuditConfig();
+    if (cfg.rulesEnabled === false) return;
+    if (type !== 'text' || !content) return;
+    const text = String(content).slice(0, 2000);
+    const flags = [];
+    if (_RULE_INSULT.test(text)) flags.push('insulto_cliente');
+    if (_RULE_COMPLAINT.test(text)) flags.push('queja');
+    // Mensaje repetido: 3 veces el mismo texto en 15 min (nadie le contesta).
+    const key = text.toLowerCase().replace(/\s+/g, ' ').trim();
+    const now = Date.now();
+    const prev = _repeatMap.get(userId);
+    if (prev && prev.key === key && now - prev.at < 15 * 60 * 1000) {
+      prev.count++; prev.at = now;
+      if (prev.count >= 3) flags.push('mensaje_repetido');
+    } else {
+      _repeatMap.set(userId, { key, count: 1, at: now });
+    }
+    if (_repeatMap.size > 5000) { for (const [k, v] of _repeatMap) { if (now - v.at > 30 * 60 * 1000) _repeatMap.delete(k); } }
+    if (!flags.length) return;
+    // Throttle atómico: una alerta de reglas cada 30 min por cliente (multi-instancia).
+    const cs = await ChatStatus.findOneAndUpdate(
+      { userId, $or: [{ lastRuleAlertAt: null }, { lastRuleAlertAt: { $lt: new Date(now - 30 * 60 * 1000) } }] },
+      { $set: { lastRuleAlertAt: new Date(now) } }, { new: true }
+    );
+    if (!cs) return; // ya se alertó hace poco
+    const audit = await ChatAudit.create({
+      id: uuidv4(), userId, username, source: 'rules', reason: flags.includes('mensaje_repetido') ? 'repeat' : 'keyword',
+      periodStart: new Date(now), periodEnd: new Date(now), messageCount: 1, userMessageCount: 1, agentMessageCount: 0,
+      flags, summary: `El cliente escribió: “${text.slice(0, 160)}”`, quote: text.slice(0, 300), customerAngry: true
+    });
+    await _emitAdminOnlyChatNote(userId, username,
+      `⚠️ ALERTA DE ATENCIÓN (${_flagLabels(flags)}) — el cliente está molesto. Leé todo el hilo, respondé con cuidado y resolvé; un supervisor lo va a revisar.`);
+    await _auditAlert(audit.toObject(), cfg);
+  } catch (err) {
+    logger.warn(`[audit-rules] ${err.message}`);
+  }
+}
+
+// Regla al cerrar: se cerró con una espera del cliente en curso (nadie respondió).
+async function _auditRulesOnClose(userId, closedBy, pendingSince) {
+  try {
+    if (!pendingSince) return;
+    const cfg = await _getAuditConfig();
+    if (cfg.rulesEnabled === false) return;
+    const user = await User.findOne({ id: userId }).select('username').lean();
+    const audit = await ChatAudit.create({
+      id: uuidv4(), userId, username: user ? user.username : userId, source: 'rules', reason: 'close',
+      periodStart: new Date(pendingSince), periodEnd: new Date(), flags: ['cerrado_sin_responder'],
+      agents: closedBy ? [closedBy] : [], responsibleAgent: closedBy || null,
+      summary: `${closedBy || 'Alguien'} cerró el chat con el cliente esperando respuesta desde ${new Date(pendingSince).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' })}.`
+    });
+    await _auditAlert(audit.toObject(), cfg);
+  } catch (err) {
+    logger.warn(`[audit-rules] close: ${err.message}`);
+  }
+}
+
+// ── Capa 2: auditoría IA de una conversación quieta ─────────────────────────
+async function _auditConversation(userId, reason) {
+  const now = new Date();
+  // Claim atómico (otra instancia puede estar auditando el mismo chat).
+  const cs = await ChatStatus.findOneAndUpdate(
+    { userId, $or: [{ auditLockAt: null }, { auditLockAt: { $lt: new Date(now.getTime() - 10 * 60 * 1000) } }] },
+    { $set: { auditLockAt: now } }, { new: true }
+  ).lean();
+  if (!cs) return null;
+  const release = (extra) => ChatStatus.updateOne({ userId }, { $set: Object.assign({ auditLockAt: null }, extra || {}) }).catch(() => {});
+  try {
+    const cfg = await _getAuditConfig();
+    const lookback = new Date(now.getTime() - (Number(cfg.lookbackHours) || 24) * 3600 * 1000);
+    const since = cs.lastAuditMsgAt && cs.lastAuditMsgAt > lookback ? cs.lastAuditMsgAt : lookback;
+    const { msgs, agents, userMsgs, agentMsgs } = await _auditLoadMessages(userId, since, null);
+    if (!msgs.length || userMsgs === 0) { await release({ lastAuditMsgAt: cs.lastMessageAt || now }); return null; }
+    const lastTs = msgs[msgs.length - 1].timestamp;
+    const base = {
+      id: uuidv4(), userId, username: cs.username, reason: reason || 'idle',
+      periodStart: msgs[0].timestamp, periodEnd: lastTs, messageCount: msgs.length,
+      userMessageCount: userMsgs, agentMessageCount: agentMsgs, agents
+    };
+    let audit;
+    if (agentMsgs === 0) {
+      // Nadie respondió: no gasta IA. (Los mensajes de sistema no cuentan como agente.)
+      const hasSystemReply = msgs.some(m => m.type === 'system' && m.timestamp > msgs.find(x => x.senderRole === 'user').timestamp);
+      if (hasSystemReply && userMsgs <= 1) { await release({ lastAuditAt: now, lastAuditMsgAt: lastTs }); return null; } // solo bienvenida/confirmación automática
+      audit = await ChatAudit.create(Object.assign(base, {
+        source: 'rules', score: 2, flags: ['sin_respuesta', 'demora'], resolved: false,
+        summary: `El cliente mandó ${userMsgs} mensaje(s) y ningún agente respondió en ${Number(cfg.idleMinutes) || 20}+ min.`,
+        quote: String((msgs.find(m => m.senderRole === 'user' && m.type === 'text') || {}).content || '').slice(0, 300)
+      }));
+    } else {
+      if (!chatAuditAi.isEnabled()) { await release(); return null; }
+      const transcript = chatAuditAi.formatTranscript(msgs, cs.username);
+      const r = await chatAuditAi.auditTranscript({ transcript, username: cs.username, agents });
+      if (!r.ok) { logger.warn(`[audit] IA falló para ${cs.username}: ${r.error}`); await release(); return null; }
+      audit = await ChatAudit.create(Object.assign(base, {
+        source: 'ai', score: r.score, flags: r.flags, summary: r.summary, quote: r.quote,
+        resolved: r.resolved, customerAngry: r.customerAngry, responsibleAgent: r.responsibleAgent, model: r.model
+      }));
+      logger.info(`[audit] ${cs.username}: ${r.score}/10 ${r.flags.join(',') || '-'} (${msgs.length} msgs, ${agents.join('/') || 'sin agente'})`);
+    }
+    await release({ lastAuditAt: now, lastAuditMsgAt: lastTs });
+    await _auditAlert(audit.toObject(), cfg);
+    return audit;
+  } catch (err) {
+    logger.warn(`[audit] ${userId}: ${err.message}`);
+    await release();
+    return null;
+  }
+}
+
+let _auditTickRunning = false;
+async function _runChatAuditTick() {
+  if (_auditTickRunning) return;
+  _auditTickRunning = true;
+  try {
+    const cfg = await _getAuditConfig();
+    if (cfg.enabled === false) return;
+    const now = Date.now();
+    const idleCut = new Date(now - (Number(cfg.idleMinutes) || 20) * 60 * 1000);
+    const lookback = new Date(now - (Number(cfg.lookbackHours) || 24) * 3600 * 1000);
+    // Conversaciones quietas con mensajes nuevos desde la última auditoría.
+    const cands = await ChatStatus.find({
+      lastMessageAt: { $lte: idleCut, $gte: lookback },
+      $expr: { $or: [{ $eq: ['$lastAuditMsgAt', null] }, { $gt: ['$lastMessageAt', '$lastAuditMsgAt'] }] }
+    }).sort({ lastMessageAt: -1 }).limit(Number(cfg.maxPerTick) || 40).select('userId').lean();
+    let done = 0;
+    for (const c of cands) { const a = await _auditConversation(c.userId, 'idle'); if (a) done++; }
+    if (cands.length) logger.info(`[audit] tick: ${cands.length} candidatas, ${done} auditadas`);
+  } catch (err) {
+    logger.warn(`[audit] tick: ${err.message}`);
+  } finally {
+    _auditTickRunning = false;
+  }
+}
+setTimeout(() => { _runChatAuditTick(); }, 3 * 60 * 1000);
+setInterval(() => { _runChatAuditTick(); }, 5 * 60 * 1000);
+
+// ── 👍👎 al terminar de resolver (carga acreditada / pago hecho) ────────────
+function _scheduleRatingRequest(userId, trigger) {
+  // 45 s después, así el cliente ve primero la confirmación de carga/pago.
+  setTimeout(() => { _sendRatingRequest(userId, trigger).catch(() => {}); }, 45 * 1000);
+}
+async function _sendRatingRequest(userId, trigger) {
+  try {
+    const cfg = await _getAuditConfig();
+    if (cfg.ratingEnabled === false) return;
+    const cooldownMs = (Number(cfg.ratingCooldownHours) || 0) * 3600 * 1000;
+    const now = new Date();
+    const cs = await ChatStatus.findOneAndUpdate(
+      { userId, $or: [{ ratingRequestedAt: null }, { ratingRequestedAt: { $lt: new Date(now.getTime() - cooldownMs) } }] },
+      { $set: { ratingRequestedAt: now } }, { new: true }
+    ).lean();
+    if (!cs) return; // ya se preguntó hace poco (o no hay chat)
+    // Solo si un agente humano participó en las últimas 24 h (si no, no hay a quién calificar).
+    const { agents } = await _auditLoadMessages(userId, new Date(now.getTime() - 24 * 3600 * 1000), null);
+    if (!agents.length) { await ChatStatus.updateOne({ userId }, { $set: { ratingRequestedAt: cs.ratingRequestedAt || null } }).catch(() => {}); return; }
+    const content = await renderSystemCommand('/sys_rating_request',
+      '⭐ ¿Cómo te atendieron hoy? Tocá 👍 si todo bien o 👎 si algo falló. Tu opinión la lee un supervisor.', {});
+    if (!content) return;
+    const msg = await Message.create({
+      id: uuidv4(), senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin',
+      receiverId: userId, receiverRole: 'user', content, type: 'system', timestamp: now, read: false,
+      metadata: { kind: 'rating_request', trigger: trigger || null, agents, rated: null }
+    });
+    const data = { id: msg.id, senderId: 'admin', senderUsername: 'Sistema', senderRole: 'admin', receiverId: userId, receiverRole: 'user', content, timestamp: now, type: 'system', metadata: msg.metadata };
+    io.to(`user_${userId}`).emit('new_message', data);
+    io.to(`chat_${userId}`).emit('new_message', data);
+  } catch (err) {
+    logger.warn(`[rating] no se pudo enviar la encuesta a ${userId}: ${err.message}`);
+  }
+}
+
+// El cliente responde 👍/👎 (+ motivo si 👎).
+app.post('/api/chat/rating', authMiddleware, async (req, res) => {
+  try {
+    if (isAdminRole(req.user.role)) return res.status(403).json({ error: 'Solo clientes' });
+    const { messageId, rating, comment } = req.body || {};
+    if (!messageId || !['up', 'down'].includes(rating)) return res.status(400).json({ error: 'Datos inválidos' });
+    const msg = await Message.findOne({ id: String(messageId), receiverId: req.user.userId, type: 'system' }).lean();
+    if (!msg || !msg.metadata || msg.metadata.kind !== 'rating_request') return res.status(404).json({ error: 'Encuesta no encontrada' });
+    const cleanComment = String(comment || '').trim().slice(0, 1000);
+    let doc;
+    try {
+      doc = await ChatRating.create({
+        id: uuidv4(), userId: req.user.userId, username: req.user.username, messageId: msg.id,
+        rating, comment: cleanComment, agents: (msg.metadata.agents || []), closedBy: null
+      });
+    } catch (e) {
+      if (e && e.code === 11000) {
+        // Ya calificó: si ahora manda el motivo del 👎, lo agregamos.
+        if (rating === 'down' && cleanComment) await ChatRating.updateOne({ messageId: msg.id }, { $set: { comment: cleanComment } });
+        doc = await ChatRating.findOne({ messageId: msg.id }).lean();
+      } else throw e;
+    }
+    await Message.updateOne({ id: msg.id }, { $set: { 'metadata.rated': rating, 'metadata.ratedAt': new Date(), 'metadata.comment': cleanComment || null } });
+    if (rating === 'down') {
+      await _emitAdminOnlyChatNote(req.user.userId, req.user.username,
+        `👎 El cliente calificó MAL la atención${cleanComment ? `: “${cleanComment}”` : ' (sin comentario todavía)'}. Un supervisor lo va a revisar.`);
+      // Alerta Telegram cuando llega el motivo (o el 👎 solo si no manda motivo en 3 min).
+      const alertNow = !!cleanComment;
+      const sendAlert = async () => {
+        try {
+          const fresh = await ChatRating.findOne({ messageId: msg.id }).lean();
+          if (!fresh || fresh.alerted) return;
+          if (!telegramAlert.isEnabled()) return;
+          const e = telegramAlert.esc;
+          const r = await telegramAlert.send([
+            `👎 <b>${e(_projectLabel())}</b> — calificación NEGATIVA · @${e(req.user.username)}`,
+            fresh.agents && fresh.agents.length ? `Agente(s): ${e(fresh.agents.join(', '))}` : '',
+            fresh.comment ? `📝 “${e(fresh.comment)}”` : '📝 (sin motivo)',
+            `👉 <a href="${_panelChatLink(req.user.userId, req.user.username)}">Abrir chat en el panel</a>`
+          ].filter(Boolean).join('\n'));
+          if (r.ok) await ChatRating.updateOne({ messageId: msg.id }, { $set: { alerted: true } });
+        } catch (_) {}
+      };
+      if (alertNow) sendAlert(); else setTimeout(sendAlert, 3 * 60 * 1000);
+      // Disparar auditoría IA del tramo ahora mismo (no esperar al idle).
+      setTimeout(() => { _auditConversation(req.user.userId, 'rating_down').catch(() => {}); }, 5000);
+    }
+    const thanks = rating === 'down'
+      ? await renderSystemCommand('/sys_rating_thanks_negative', '🙏 Gracias por contarnos. Un supervisor va a leer tu mensaje y revisar lo que pasó.', {})
+      : await renderSystemCommand('/sys_rating_thanks', '🙏 ¡Gracias! Nos alegra haberte ayudado.', {});
+    res.json({ success: true, rating, thanks: thanks || null, needComment: rating === 'down' && !cleanComment });
+  } catch (error) {
+    logger.error(`[rating] ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ── Endpoints del panel (🕵️ Auditoría) ─────────────────────────────────────
+app.get('/api/admin/audit/list', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const q = { createdAt: { $gte: new Date(Date.now() - days * 86400000) } };
+    const filter = String(req.query.filter || 'alerts');
+    if (filter === 'alerts') q.$or = [{ score: { $lte: 5 } }, { 'flags.0': { $exists: true } }];
+    else if (filter === 'unreviewed') { q.reviewed = false; q.$or = [{ score: { $lte: 5 } }, { 'flags.0': { $exists: true } }]; }
+    else if (filter === 'good') q.score = { $gte: 8 };
+    if (req.query.agent) q.agents = String(req.query.agent);
+    if (req.query.flag && ChatAudit.FLAGS.includes(String(req.query.flag))) q.flags = String(req.query.flag);
+    if (req.query.username) q.username = new RegExp(escapeRegex(String(req.query.username).slice(0, 40)), 'i');
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1), limit = 40;
+    const [items, total] = await Promise.all([
+      ChatAudit.find(q).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ChatAudit.countDocuments(q)
+    ]);
+    res.json({ items, total, page, pages: Math.ceil(total / limit), flags: ChatAudit.FLAGS, labels: _AUDIT_FLAG_LABEL });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/admin/audit/agents', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const since = new Date(Date.now() - days * 86400000);
+    const [byAgent, ratings, totals] = await Promise.all([
+      ChatAudit.aggregate([
+        { $match: { createdAt: { $gte: since }, source: 'ai' } },
+        { $unwind: '$agents' },
+        { $group: { _id: '$agents', chats: { $sum: 1 }, avgScore: { $avg: '$score' },
+          bad: { $sum: { $cond: [{ $lte: ['$score', 4] }, 1, 0] } },
+          flagged: { $sum: { $cond: [{ $gt: [{ $size: '$flags' }, 0] }, 1, 0] } },
+          malTrato: { $sum: { $cond: [{ $in: ['mal_trato', '$flags'] }, 1, 0] } },
+          sinSolucion: { $sum: { $cond: [{ $in: ['sin_solucion', '$flags'] }, 1, 0] } } } },
+        { $sort: { avgScore: 1 } }
+      ]),
+      ChatRating.aggregate([
+        { $match: { createdAt: { $gte: since } } },
+        { $unwind: { path: '$agents', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: '$agents', up: { $sum: { $cond: [{ $eq: ['$rating', 'up'] }, 1, 0] } }, down: { $sum: { $cond: [{ $eq: ['$rating', 'down'] }, 1, 0] } } } }
+      ]),
+      ChatAudit.aggregate([
+        { $match: { createdAt: { $gte: since } } },
+        { $group: { _id: '$source', n: { $sum: 1 }, avgScore: { $avg: '$score' }, alerted: { $sum: { $cond: ['$alerted', 1, 0] } }, unreviewed: { $sum: { $cond: [{ $and: [{ $eq: ['$reviewed', false] }, { $or: [{ $lte: ['$score', 5] }, { $gt: [{ $size: '$flags' }, 0] }] }] }, 1, 0] } } } }
+      ])
+    ]);
+    const rMap = {}; ratings.forEach(r => { rMap[r._id || '(sin agente)'] = { up: r.up, down: r.down }; });
+    const agents = byAgent.map(a => ({ agent: a._id, chats: a.chats, avgScore: Math.round((a.avgScore || 0) * 10) / 10, bad: a.bad, flagged: a.flagged, malTrato: a.malTrato, sinSolucion: a.sinSolucion, up: (rMap[a._id] || {}).up || 0, down: (rMap[a._id] || {}).down || 0 }));
+    const ratingTotals = await ChatRating.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: '$rating', n: { $sum: 1 } } }]);
+    res.json({ days, agents, totals, ratings: Object.fromEntries(ratingTotals.map(r => [r._id, r.n])), ratingsNoAgent: rMap['(sin agente)'] || null, telegram: telegramAlert.isEnabled(), aiEnabled: chatAuditAi.isEnabled() });
+  } catch (error) {
+    logger.error(`[audit] agents: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/audit/:id/review', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const note = String((req.body || {}).note || '').slice(0, 500);
+    const r = await ChatAudit.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date(), reviewNote: note } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/admin/audit/ratings', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 7));
+    const q = { createdAt: { $gte: new Date(Date.now() - days * 86400000) } };
+    if (req.query.rating === 'down') q.rating = 'down';
+    if (req.query.unreviewed === '1') { q.reviewed = false; q.rating = 'down'; }
+    const items = await ChatRating.find(q).sort({ createdAt: -1 }).limit(200).lean();
+    res.json({ items });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/audit/ratings/:id/review', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const r = await ChatRating.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date() } });
+    if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Auditar YA una conversación (botón del panel).
+app.post('/api/admin/audit/run/:userId', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const a = await _auditConversation(String(req.params.userId), 'manual');
+    if (!a) return res.json({ success: true, audit: null, message: 'Nada nuevo para auditar (sin mensajes nuevos, o la IA está apagada)' });
+    res.json({ success: true, audit: a });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
 
 // Webhook de hgcash: movimientos de cuenta (acreditaciones entrantes). SIN
 // authMiddleware (lo llama el banco). Valida firma HMAC sobre el body CRUDO,
@@ -5503,12 +5921,31 @@ const PRIVATE_CONFIG_PASS_KEY = 'privateconfigpass';
 const AI_CONFIG_KEY = 'aiconfig';
 const AI_ALLOWED_MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5'];
 
+const AUDIT_CONFIG_KEY = 'auditconfig';
+const AUDIT_DEFAULTS = {
+  enabled: true, model: '', effort: '', idleMinutes: 20, lookbackHours: 24, maxPerTick: 40,
+  minScoreAlert: 4, alertFlags: ['mal_trato', 'error_plata', 'insulto_cliente', 'sin_respuesta', 'posible_fraude'],
+  rulesEnabled: true, ratingEnabled: true, ratingCooldownHours: 6,
+  telegram: { botToken: '', chatId: '' }
+};
+async function _getAuditConfig() {
+  const c = (await getConfig(AUDIT_CONFIG_KEY, null)) || {};
+  const m = Object.assign({}, AUDIT_DEFAULTS, c);
+  m.telegram = Object.assign({}, AUDIT_DEFAULTS.telegram, c.telegram || {});
+  if (!Array.isArray(m.alertFlags)) m.alertFlags = AUDIT_DEFAULTS.alertFlags;
+  return m;
+}
+
 async function _loadAiConfigIntoService() {
   try {
-    const cfg = await getConfig(AI_CONFIG_KEY, null);
-    comprobanteAi.applyConfig(cfg || {});
+    const cfg = (await getConfig(AI_CONFIG_KEY, null)) || {};
+    comprobanteAi.applyConfig(cfg);
+    // #132: la auditoría usa la MISMA API key (panel o SSM) que los comprobantes.
+    const audit = await _getAuditConfig();
+    chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '' });
+    telegramAlert.applyConfig(audit.telegram);
   } catch (e) {
-    logger.warn(`[ai-config] no se pudo cargar Config['aiconfig']: ${e.message}`);
+    logger.warn(`[ai-config] no se pudo cargar la config de IA/auditoría: ${e.message}`);
   }
 }
 
@@ -5582,7 +6019,7 @@ app.post('/api/admin/private-config/unlock', authMiddleware, adminMiddleware, se
       return res.status(401).json({ error: 'Clave incorrecta' });
     }
     const stored = await getConfig(AI_CONFIG_KEY, null);
-    res.json({ success: true, ai: _aiConfigForPanel(stored) });
+    res.json({ success: true, ai: _aiConfigForPanel(stored), audit: await _auditConfigForPanel() });
   } catch (error) {
     logger.error(`[private-config] unlock: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -5621,6 +6058,79 @@ app.post('/api/admin/private-config/ai', authMiddleware, adminMiddleware, sensit
     res.json({ success: true, ai: _aiConfigForPanel(next) });
   } catch (error) {
     logger.error(`[private-config] ai: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// #132: config de auditoría/alertas para el panel (token de Telegram enmascarado).
+async function _auditConfigForPanel() {
+  const a = await _getAuditConfig();
+  return {
+    enabled: a.enabled !== false, model: a.model || '', effort: a.effort || '',
+    idleMinutes: a.idleMinutes, lookbackHours: a.lookbackHours, maxPerTick: a.maxPerTick,
+    minScoreAlert: a.minScoreAlert, alertFlags: a.alertFlags,
+    rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false, ratingCooldownHours: a.ratingCooldownHours,
+    telegramTokenSet: !!(a.telegram && a.telegram.botToken),
+    telegramTokenHint: a.telegram && a.telegram.botToken ? '••••' + String(a.telegram.botToken).slice(-4) : null,
+    telegramChatId: (a.telegram && a.telegram.chatId) || '',
+    updatedBy: a.updatedBy || null, updatedAt: a.updatedAt || null,
+    effective: { audit: { enabled: chatAuditAi.isEnabled(), model: chatAuditAi.getModel(), effort: chatAuditAi.getEffort() }, telegram: telegramAlert.getEffectiveConfig() },
+    allowedModels: AI_ALLOWED_MODELS, efforts: chatAuditAi.EFFORTS, allFlags: ChatAudit.FLAGS,
+    projectLabel: _projectLabel()
+  };
+}
+
+app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const cur = await _getAuditConfig();
+    const a = b.audit || {};
+    const model = String(a.model || '').trim();
+    if (model && !/^[a-z0-9.-]{5,60}$/i.test(model)) return res.status(400).json({ error: 'Modelo inválido' });
+    const effort = String(a.effort || '').trim();
+    if (effort && !chatAuditAi.EFFORTS.includes(effort)) return res.status(400).json({ error: 'Esfuerzo inválido' });
+    const num = (v, def, min, max) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def; };
+    let botToken = cur.telegram.botToken || '';
+    if (a.telegramBotToken === 'CLEAR') botToken = '';
+    else if (typeof a.telegramBotToken === 'string' && a.telegramBotToken.trim()) {
+      const t = a.telegramBotToken.trim();
+      if (!/^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(t)) return res.status(400).json({ error: 'El token de Telegram no tiene el formato esperado (123456:ABC…)' });
+      botToken = t;
+    }
+    const chatId = a.telegramChatId !== undefined ? String(a.telegramChatId || '').trim() : (cur.telegram.chatId || '');
+    if (chatId && !/^-?\d{5,20}$/.test(chatId)) return res.status(400).json({ error: 'El chat id de Telegram debe ser numérico (ej. -1001234567890)' });
+    const next = {
+      enabled: a.enabled !== false, model, effort,
+      idleMinutes: num(a.idleMinutes, cur.idleMinutes, 5, 240),
+      lookbackHours: num(a.lookbackHours, cur.lookbackHours, 1, 72),
+      maxPerTick: num(a.maxPerTick, cur.maxPerTick, 1, 200),
+      minScoreAlert: num(a.minScoreAlert, cur.minScoreAlert, 0, 10),
+      alertFlags: Array.isArray(a.alertFlags) ? a.alertFlags.filter(f => ChatAudit.FLAGS.includes(f)) : cur.alertFlags,
+      rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false,
+      ratingCooldownHours: num(a.ratingCooldownHours, cur.ratingCooldownHours, 0, 168),
+      telegram: { botToken, chatId },
+      updatedBy: req.user.username, updatedAt: new Date()
+    };
+    await setConfig(AUDIT_CONFIG_KEY, next);
+    await _loadAiConfigIntoService();
+    logger.info(`[private-config] auditoría guardada por ${req.user.username}: enabled=${next.enabled} model=${model || '(default)'} telegram=${botToken && chatId ? 'ok' : 'off'}`);
+    res.json({ success: true, audit: await _auditConfigForPanel() });
+  } catch (error) {
+    logger.error(`[private-config] audit: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/private-config/telegram-test', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    if (!(await _privateConfigCheckPassword((req.body || {}).password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const r = await telegramAlert.sendTest(_projectLabel());
+    if (!r.ok) return res.status(400).json({ error: 'Telegram respondió error: ' + (r.error || '?') });
+    res.json({ success: true });
+  } catch (error) {
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -6450,7 +6960,9 @@ app.post('/api/admin/chats/:userId/close', authMiddleware, adminMiddleware, asyn
     // SLA: si se cierra con una espera en curso, registrarla como "sin responder".
     // Se resuelve ANTES de cerrar para que capture la cola real (cargas/pagos);
     // el cierre pone status:'closed' y pisaría esa info.
+    const _csBefore = await ChatStatus.findOne({ userId }).select('pendingSince').lean();
     await delayClockResolve(userId, { responded: false });
+    if (_csBefore && _csBefore.pendingSince) _auditRulesOnClose(userId, req.user.username, _csBefore.pendingSince).catch(() => {}); // #132
 
     await ChatStatus.findOneAndUpdate(
       { userId },
@@ -6573,7 +7085,7 @@ app.get('/api/messages/:userId', authMiddleware, async (req, res) => {
         $project: {
           _id: 0, id: 1, senderId: 1, senderUsername: 1, senderRole: 1,
           receiverId: 1, receiverRole: 1, content: 1, type: 1, read: 1,
-          adminOnly: 1, timestamp: 1
+          adminOnly: 1, timestamp: 1, metadata: 1
         }
       }
     ]);
@@ -6827,6 +7339,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
     // La confirmación de reembolso no lo arranca: nadie tiene que responderla.
     if (!isAdminRole && !isRefundNotice) {
       delayClockOnUserMessage(req.user.userId, content, type).catch(() => {}); // fire-and-forget
+      _auditRulesOnUserMessage(req.user.userId, req.user.username, content, type).catch(() => {}); // #132 capa 1
     }
 
     // Comprobantes: si el cliente envía una imagen, analizarla con IA en segundo
@@ -9018,6 +9531,7 @@ io.on('connection', (socket) => {
           } else if (!_isRefundClaimNotice(content)) {
             // La confirmación de reembolso no arranca el reloj de demoras.
             delayClockOnUserMessage(targetUserId, content, type).catch(() => {});
+            _auditRulesOnUserMessage(targetUserId, socket.username, content, type).catch(() => {}); // #132 capa 1
           }
         } catch (csErr) {
           logger.error(`[SEND_MESSAGE] ChatStatus update failed: ${csErr.message}`);
@@ -10040,6 +10554,24 @@ async function initializeData() {
 
   // Verificar/crear comandos de sistema (mensajes automáticos editables desde COMANDOS)
   const systemCmds = [
+    {
+      name: '/sys_rating_request',
+      description: 'Encuesta 👍👎 que se manda al cliente después de una carga o un pago (#132). Vaciarlo = no preguntar.',
+      type: 'message',
+      response: '⭐ ¿Cómo te atendieron hoy? Tocá 👍 si todo bien o 👎 si algo falló. Tu opinión la lee un supervisor.'
+    },
+    {
+      name: '/sys_rating_thanks',
+      description: 'Respuesta al cliente cuando califica 👍 (#132).',
+      type: 'message',
+      response: '🙏 ¡Gracias! Nos alegra haberte ayudado.'
+    },
+    {
+      name: '/sys_rating_thanks_negative',
+      description: 'Respuesta al cliente cuando califica 👎 y cuenta qué pasó (#132).',
+      type: 'message',
+      response: '🙏 Gracias por contarnos. Un supervisor va a leer tu mensaje y revisar lo que pasó.'
+    },
     {
       name: '/sys_deposit',
       description: 'Mensaje automático al realizar un depósito sin bonus. Variables disponibles: ${amount}, ${balance}',
@@ -13889,7 +14421,9 @@ app.post('/api/admin/close-chat', authMiddleware, adminMiddleware, async (req, r
     
     // SLA: registrar la espera en curso como "sin responder" ANTES de cerrar
     // (el cierre pone status:'closed' y perdería la cola cargas/pagos real).
+    const _csBefore = await ChatStatus.findOne({ userId }).select('pendingSince').lean();
     await delayClockResolve(userId, { responded: false });
+    if (_csBefore && _csBefore.pendingSince) _auditRulesOnClose(userId, req.user.username, _csBefore.pendingSince).catch(() => {}); // #132
 
     // Actualizar estado del chat
     await ChatStatus.findOneAndUpdate(

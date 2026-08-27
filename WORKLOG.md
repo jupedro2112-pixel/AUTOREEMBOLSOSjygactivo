@@ -8,10 +8,92 @@
 
 ## Sesión 2026-08-27
 
-> **Deploy a EB hecho por el owner el 2026-08-27 (noche)** con #124–#131 incluidos.
+> **Deploy a EB hecho por el owner el 2026-08-27 (noche)** con #124–#131 incluidos. **#132 (auditoría) quedó DESPUÉS de ese deploy → pendiente de deploy.**
 > Verificado desde afuera: `/api/health` ok, `manifest.json` ya dice AUTOREEMBOLSOS,
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
+
+### 132. AUDITORÍA DE ATENCIÓN en 3 capas + encuesta 👍👎 al cliente + alertas a Telegram
+- **Pedido del owner:** con ~10 chats/segundo en 10 proyectos es imposible
+  revisar todo a mano; quiere control del 100% de la atención (mal trato,
+  malas respuestas, sin solución). Un solo empleado supervisa y no llega.
+  Aclaración posterior: la encuesta 👍👎 NO al cerrar el chat (se cierra y
+  reabre varias veces por charla) sino **cuando se resuelve de verdad: tras
+  una carga acreditada o un pago hecho**.
+- **Arquitectura (todo en server.js, bloque "AUDITORÍA DE ATENCIÓN"; modelos
+  `ChatAudit` y `ChatRating` permanentes; servicios `chatAuditAiService.js` y
+  `telegramAlertService.js`; campos nuevos en ChatStatus: `auditLockAt`,
+  `lastAuditAt`, `lastAuditMsgAt`, `lastRuleAlertAt`, `ratingRequestedAt`):**
+  · **Capa 1 — reglas sin IA, en vivo.** `_auditRulesOnUserMessage` (hook junto
+    a `delayClockOnUserMessage` en HTTP y socket): regex de insultos y de
+    quejas ("estafa", "no me cargan", "hace X horas", "denuncia"…) + mensaje
+    repetido 3× en 15 min → nota interna al chat ("⚠️ ALERTA DE ATENCIÓN…
+    cliente molesto"), `ChatAudit(source:'rules')` y Telegram. Throttle 30 min
+    por cliente ATÓMICO (`ChatStatus.lastRuleAlertAt`, multi-instancia).
+    `_auditRulesOnClose` (los 2 cierres manuales): se cerró con `pendingSince`
+    en curso → bandera `cerrado_sin_responder` con el agente que cerró.
+  · **Capa 2 — IA por conversación.** Cron `_runChatAuditTick` cada 5 min:
+    ChatStatus con `lastMessageAt` quieto ≥ `idleMinutes` (20) y mensajes
+    nuevos desde `lastAuditMsgAt` (máx. `maxPerTick`=40 por corrida). Claim
+    atómico `auditLockAt` (10 min). Tramo = desde el último mensaje auditado
+    (o `lookbackHours`=24). Sin mensajes de agente → `sin_respuesta` (puntaje
+    2, sin gastar IA; salvo que solo haya bienvenida/confirmación automática).
+    Con agente → `chatAuditAi.auditTranscript` (default `claude-sonnet-5`,
+    effort low, salida estructurada: puntaje 1-10, banderas, resumen, cita,
+    agente responsable, resuelto, cliente enojado). Rúbrica: trato >
+    comprensión > solución > plata > tiempos. Transcripción con horas ART,
+    `[SISTEMA]` para automáticos, imágenes como `[imagen/comprobante]`.
+    Costo ≈ US$0,003-0,006 por chat. `POST /api/admin/audit/run/:userId`
+    audita ya.
+  · **Capa 3 — humano.** Panel → **🕵️ Auditoría** (solo admin general):
+    tiles (auditados, promedio, alertas de reglas, pendientes, 👍/👎),
+    ranking por agente (prom., malos ≤4, con bandera, mal trato, sin
+    solución, 👍, 👎), calificaciones negativas con motivo, lista de
+    auditorías con filtros (pendientes / marcadas / todas / buenas, bandera,
+    agente, cliente, período) + "Abrir chat" + "Marcar visto" (con nota).
+    Badge rojo en el nav con pendientes (refresh 5 min). **Telegram:**
+    `_auditAlert` manda si puntaje ≤ `minScoreAlert` (4) o bandera en
+    `alertFlags`; mensaje con dominio del proyecto (mismo bot+grupo para los
+    10 proyectos), puntaje, banderas, agentes, resumen, cita y **link al chat**
+    `…/adminprivado2026/?chat=<userId>&u=<username>` (deep-link: admin.js lo
+    consume tras login y abre la conversación).
+  · **👍👎:** `_scheduleRatingRequest` desde `recordUserActivity(type
+    'deposit')` (cubre carga manual, auto hgcash y self-service) y desde
+    `notifyPayoutPaid`. 45 s después manda Message `type:'system'` con
+    `metadata.kind:'rating_request'` (texto editable `/sys_rating_request`),
+    solo si un agente humano habló en las últimas 24 h y con tope atómico
+    `ratingCooldownHours` (6) por cliente. La PWA (chat.js,
+    `buildRatingCardHtml`) pinta 2 botones; 👎 abre textarea "Contanos qué
+    pasó. Lo va a leer un supervisor". `POST /api/chat/rating` → `ChatRating`
+    (1 por mensaje; el motivo puede llegar después), `metadata.rated` en el
+    Message, nota interna, Telegram (al llegar el motivo, o a los 3 min si no
+    lo manda) y auditoría IA inmediata del tramo. Respuestas editables
+    `/sys_rating_thanks` y `/sys_rating_thanks_negative`. **El GET de mensajes
+    ahora proyecta `metadata`** (antes no viajaba a la PWA).
+- **Config (🔐 Config privada → card "Auditoría + Telegram", `Config['auditconfig']`):**
+  enabled, rulesEnabled, ratingEnabled, model, effort, idleMinutes,
+  minScoreAlert, alertFlags, ratingCooldownHours, maxPerTick, lookbackHours,
+  telegram {botToken (enmascarado), chatId} + botón "Probar Telegram". Env
+  fallback: `AUDIT_AI_MODEL`, `TELEGRAM_ALERT_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`.
+  La API key es la misma de comprobantes. Endpoints: `POST
+  /api/admin/private-config/audit`, `/telegram-test`; `GET /api/admin/audit/
+  {list,agents,ratings}`, `POST /api/admin/audit/:id/review`,
+  `/ratings/:id/review`.
+- **Validado:** `node --check` OK en todo (server.js, 2 modelos, 2 servicios,
+  chat.js, admin.js, admin-sw). HTML del panel: 615/615 divs, 26/26
+  sections, ids únicos. **admin-sw v26 → v27.** PWA: solo chat.js (SWR) → sin
+  bump de `?v`. Back necesita redeploy. **PROBAR tras deploy:** (1) Config
+  privada → Auditoría: cargar token+chat id → "Probar Telegram"; (2) hacerle
+  una carga a un cliente con el que un agente habló → a los 45 s le llega la
+  encuesta; tocar 👎 y escribir motivo → nota interna + Telegram + fila en
+  Auditoría; (3) esperar 20 min de una charla quieta → aparece auditada con
+  puntaje; (4) escribir como cliente "no me cargan, estafa" → alerta de regla
+  al instante; (5) abrir el link del Telegram → el panel abre ese chat.
+- **Limitaciones conocidas:** `_repeatMap` (mensaje repetido) es por
+  instancia; la rúbrica va a necesitar 2-3 semanas de ajuste con el
+  supervisor (falsos positivos esperables al inicio: subir `minScoreAlert`
+  o quitar banderas de `alertFlags` desde el panel). Costo: ~10k chats/día
+  ≈ US$30-60/día con sonnet-5 (bajar a haiku-4-5 desde el panel si hace falta).
 
 ### 131. Auto-carga hgcash: el guard "POSIBLE DUPLICADO (<8 min)" ya no frena una SEGUNDA transferencia real
 - **Reporte del owner (captura):** cliente mandó $2.000, comprobante verificado

@@ -1635,7 +1635,12 @@ async function getHgcashConfig() {
   // comprobante que apunta al CBU de OTRO proyecto (#125). El toCBU del
   // movimiento se suma en el momento del match (siempre es nuestro).
   const own = [merged.cbu];
-  try { const c = await getConfig('cbu', null); if (c && c.number) own.push(c.number); } catch (_) {}
+  merged.ownAlias = '';
+  try {
+    const c = await getConfig('cbu', null);
+    if (c && c.number) own.push(c.number);
+    if (c && c.alias) merged.ownAlias = _normAlias(c.alias); // alias propio (los comprobantes muchas veces muestran alias en vez de CBU)
+  } catch (_) {}
   merged.ownCbus = own.map(_digits).filter(d => d.length >= 6);
   return merged;
 }
@@ -1705,20 +1710,36 @@ function _ownCbusFor(cfg, movement) {
   return list.filter(d => d && d.length >= 6);
 }
 
+// Alias normalizado (minúsculas, sin espacios). Devuelve '' si no parece un alias
+// (los alias AR son letras/dígitos/puntos/guiones, 6-20 chars, sin espacios).
+function _normAlias(s) {
+  const a = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+  return /^[a-z0-9.\-_]{6,20}$/.test(a) ? a : '';
+}
+
 // ¿El comprobante muestra un CBU destino que NO es ninguno de los nuestros? (#125)
 // Caso real: varios proyectos usan CBUs distintos con el MISMO titular
 // ("CUATRO P MOVIL S.A."). Un cliente mandó acá el comprobante de una
 // transferencia al CBU del OTRO proyecto; justo había un movimiento pendiente
 // por el mismo monto → se cargó acá plata que entró allá. El titular ya no
 // prueba nada: si el comprobante trae CBU, el CBU manda.
-// Devuelve el CBU ajeno (dígitos) o null si es nuestro / no se puede juzgar.
+// El campo destCbu de la IA puede traer CBU/CVU **o ALIAS**: si es alias, se compara
+// contra el alias propio (Config['cbu'].alias). Devuelve un texto para mostrar
+// ("…1212" o "alias xyz") si es ajeno, o null si es nuestro / no se puede juzgar.
 function _comprobanteForeignCbu(comprobante, cfg, movement) {
-  const dest = _digits(comprobante && comprobante.destCbu);
-  if (dest.length < 6) return null;
-  const own = _ownCbusFor(cfg, movement);
-  if (!own.length) return null; // sin CBU propio configurado → no se puede juzgar
-  for (const o of own) { if (_cbuSameAccount(dest, o) === true) return null; }
-  return dest;
+  const rawDest = comprobante && comprobante.destCbu;
+  const dest = _digits(rawDest);
+  if (dest.length >= 6) {
+    const own = _ownCbusFor(cfg, movement);
+    if (!own.length) return null; // sin CBU propio configurado → no se puede juzgar
+    for (const o of own) { if (_cbuSameAccount(dest, o) === true) return null; }
+    return '…' + dest.slice(-4);
+  }
+  // Sin dígitos suficientes: ¿es un alias?
+  const alias = _normAlias(rawDest);
+  const ownAlias = cfg && cfg.ownAlias;
+  if (!alias || !ownAlias) return null; // no parece alias, o no tenemos alias propio configurado
+  return alias === ownAlias ? null : `alias "${alias}"`;
 }
 
 // ¿El destino del comprobante es consistente con el del movimiento (o no se sabe)?
@@ -2563,11 +2584,11 @@ async function hgcashMatchFromComprobante(comprobante) {
     // transferencia pendiente sigue esperando a SU comprobante real.
     const foreign = _comprobanteForeignCbu(comprobante, cfg, null);
     if (foreign) {
-      const ours = (cfg.ownCbus || []).map(d => '…' + d.slice(-4)).join(' / ') || '?';
+      const ours = [...(cfg.ownCbus || []).map(d => '…' + d.slice(-4)), cfg.ownAlias ? `alias "${cfg.ownAlias}"` : ''].filter(Boolean).join(' / ') || '?';
       try { await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'other_cbu', toApiBank: false } }); } catch (_) {}
       await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
-        `🏦 ⛔ Este comprobante va a OTRO CBU (…${foreign.slice(-4)}), no al de este proyecto (${ours}). NO se auto-carga aunque haya una transferencia por el mismo monto. Verificá con el cliente a dónde transfirió antes de cargar.`);
-      logger.info(`[hgcash] comprobante ${comprobante.id} de ${comprobante.username}: CBU destino ajeno …${foreign.slice(-4)} (propios: ${ours}) — excluido del match`);
+        `🏦 ⛔ Este comprobante va a OTRO CBU/alias (${foreign}), no al de este proyecto (${ours}). NO se auto-carga aunque haya una transferencia por el mismo monto. Verificá con el cliente a dónde transfirió antes de cargar.`);
+      logger.info(`[hgcash] comprobante ${comprobante.id} de ${comprobante.username}: destino ajeno ${foreign} (propios: ${ours}) — excluido del match`);
       return;
     }
 

@@ -256,7 +256,8 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   dentro de una ventana (60min desde comprobante / 10min desde movimiento). Ambigüedad
   → NO carga. ⚠️ **Si el comprobante muestra un CBU destino, ese CBU tiene que ser
   el nuestro** (`ownCbus` = hgcash.cbu + Config.cbu.number + toCBU del movimiento,
-  comparación por sufijo ≥6 dígitos): el titular NO alcanza porque es el mismo en
+  comparación por sufijo ≥6 dígitos; si muestra ALIAS se compara con
+  `Config.cbu.alias`): el titular NO alcanza porque es el mismo en
   todos los proyectos → comprobante a otro CBU queda `bankMatchStatus:'other_cbu'`
   con nota ⛔ al agente y nunca se auto-carga (#125). `hgcashAutoCarga`: claims atómicos de movimiento y comprobante → modo
   sombra o real → **mínimo $1.500** (menor → needs_review + aviso; era $2.000 hasta

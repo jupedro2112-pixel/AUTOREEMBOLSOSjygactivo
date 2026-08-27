@@ -39,9 +39,19 @@
     CBU (…212), no al de este proyecto (…xxxx). NO se auto-carga…". NO toca
     ningún movimiento: la transferencia pendiente sigue esperando a SU
     comprobante real.
-  · Sin CBU propio configurado (`hgcash.cbu` y `Config.cbu.number` vacíos) no
-    se puede juzgar → se comporta como antes. **Verificar en el panel que el
-    CBU de hgcash y el CBU que se muestra al cliente estén cargados.**
+  · **También por ALIAS:** el campo `cbu_destino` de la IA trae "CBU/CVU o
+    alias". Si el comprobante muestra alias en vez de CBU, se compara
+    (normalizado, minúsculas sin espacios) contra `Config['cbu'].alias`
+    (`cfg.ownAlias`); alias distinto → mismo tratamiento `other_cbu`.
+  · **Si el comprobante NO muestra ni CBU ni alias de destino, no hay forma de
+    distinguir el proyecto** (el titular es el mismo): queda el criterio de
+    siempre (monto + nombre de origen + ventana + ambigüedad, o N° de operación
+    == coelsa que es definitivo). Ese caso residual sigue siendo posible pero
+    requiere la triple coincidencia; el owner prefiere eso a frenar cargas.
+  · Sin CBU/alias propio configurado (`hgcash.cbu`, `Config.cbu.number` y
+    `Config.cbu.alias` vacíos) no se puede juzgar → se comporta como antes.
+    **Verificar en el panel que el CBU de hgcash y el CBU + alias que se
+    muestran al cliente estén cargados.**
 - **Validado:** `node --check` OK (server.js, Comprobante.js). Solo backend →
   sin bump de `?v`. Back necesita redeploy. **PROBAR:** mandar un comprobante
   con CBU destino ajeno → nota ⛔ en el chat y sin carga; uno al CBU propio

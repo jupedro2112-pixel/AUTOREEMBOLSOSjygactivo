@@ -77,6 +77,10 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   `PUBLISHER_ADMIN_ALLOWED_PATHS`).
 - **Auth:** JWT por header Authorization O por cookie httpOnly `admin_api_session`
   (el panel admin usa cookie).
+- **Config sensible desde el panel:** sección "🔐 Config privada" (clave propia hasheada
+  en `Config['privateconfigpass']`; hoy: IA de comprobantes en `Config['aiconfig']`,
+  prioridad panel > env/SSM > default). Para una config nueva que el owner quiera
+  editar sin SSM, sumarla AHÍ (endpoints `/api/admin/private-config/*`).
 - **Mensajes automáticos al usuario** son editables desde la sección COMANDOS
   (comandos `/sys_*`). Usar el helper `renderSystemCommand(name, fallback, vars)` para
   cualquier mensaje automático nuevo.

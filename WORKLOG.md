@@ -8,6 +8,47 @@
 
 ## Sesión 2026-08-27
 
+### 128. Panel: sección "🔐 Config privada" con clave propia (hash en DB) → la IA de comprobantes se configura sin código ni SSM
+- **Pedido del owner:** que la IA se configure desde el panel, en un sector
+  privado con clave, "para que no sea todo código o SSM".
+- **Clave del sector:** propia (distinta del login), guardada como **hash
+  bcrypt en `Config['privateconfigpass']`**. La primera vez la define el admin
+  general desde el mismo panel (formulario "Definir clave"); no vive en SSM ni
+  en código (a diferencia de `SMS_MASIVO_PASSWORD`, que sigue en SSM). El
+  server NO guarda "sesión desbloqueada": cada escritura exige la clave en el
+  body; el panel la retiene en memoria solo mientras el sector está
+  desbloqueado (`_pcPassword`; "Bloquear" la borra). Endpoints (solo
+  `role==='admin'` + `sensitiveLimiter` 10/15 min contra fuerza bruta):
+  `GET /api/admin/private-config/status` · `POST …/setup` (solo si no hay
+  clave) · `POST …/unlock` · `POST …/ai` · `POST …/password`. **Si se olvida
+  la clave:** borrar el doc `privateconfigpass` de Config en Atlas → el panel
+  vuelve a pedir definirla.
+- **Config de IA (`Config['aiconfig']`):** `enabled`, `model` (select con
+  opus-5 / sonnet-5 / opus-4-8 / haiku-4-5 + "otro" libre), `effort`
+  (low/medium/high), `apiKey` (opcional, formato `sk-ant-…`; pisa la de SSM;
+  al panel vuelve solo enmascarada `••••1234`; checkbox para borrarla y volver
+  a SSM), `extraRules` (texto libre ≤4000 c. que se agrega al prompt como
+  segundo bloque `system`, después del breakpoint de cache). Prioridad:
+  **panel > env/SSM > default del código**.
+- **Aplicación en runtime:** `comprobanteAiService.applyConfig(cfg)` +
+  `getEffectiveConfig()`; server.js la carga en `initializeData()` y la
+  **refresca cada 60 s** (`_loadAiConfigIntoService`, multi-instancia) y al
+  guardar la aplica al instante en la instancia que atendió el POST.
+  `isEnabled()` ahora también respeta `enabled:false` del panel.
+- **Panel:** nav "🔐 Config privada" (solo admin general, patrón
+  `nav-item-sms-masivo`), `#privateConfigSection` con card de candado
+  (definir / desbloquear / bloquear / cambiar clave) y card de IA con estado
+  "En uso ahora" (modelo, fuente, esfuerzo, key). Funciones `loadPrivateConfig`,
+  `setupPrivateConfigPassword`, `unlockPrivateConfig`, `savePrivateAiConfig`,
+  `changePrivateConfigPassword`, `renderPrivateAiConfig`.
+- **Validado:** `node --check` OK (server.js, comprobanteAiService.js, admin.js,
+  admin-sw.js); 589/589 divs, 25/25 sections, ids únicos. **admin-sw v25 →
+  v26.** Back necesita redeploy. **PROBAR:** entrar como admin general →
+  Config privada → definir clave → desbloquear → cambiar modelo a sonnet-5 y
+  guardar → "En uso ahora" refleja el cambio; mandar un comprobante y ver en
+  el log `[comprobante-ai]` / en la colección Comprobante el campo `model`.
+  Con un depositor la sección no debe aparecer.
+
 ### 127. Paquete de réplica para los repos hermanos (`docs/replicas/`)
 - El owner pidió "toda la implementación para copiar y pegar en los demás
   proyectos". Quedó en el repo (Tails no persiste nada local):

@@ -162,6 +162,10 @@
                     <span>📱</span>
                     <span>SMS Masivo</span>
                 </a>
+                <a href="#" class="nav-item nav-item-private-config" data-section="privateConfig" style="display:none">
+                    <span>🔐</span>
+                    <span>Config privada</span>
+                </a>
                 <div class="nav-group-title" style="padding:13px 16px 5px;font-size:9.5px;font-weight:900;letter-spacing:1.2px;color:#888;text-transform:uppercase;opacity:.6;">No se usa (limpiar)</div>
                 <a href="#" class="nav-item" data-section="automations" style="opacity:.6;">
                     <span>🤖</span>
@@ -2112,6 +2116,90 @@
             </div>
 
             <!-- SMS Masivo Section -->
+            <!-- CONFIG PRIVADA (#128): clave propia (hash en DB) + config de la IA de comprobantes -->
+            <section id="privateConfigSection" class="section">
+                <div class="panel-header">
+                    <h2>🔐 CONFIG PRIVADA</h2>
+                </div>
+                <div style="padding:16px;display:grid;gap:20px;max-width:900px;">
+
+                    <!-- Candado -->
+                    <div id="pcLockCard" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;">
+                        <h3 style="margin-bottom:.5rem;font-size:1rem;color:var(--text-secondary,#aaa);">🔒 Acceso</h3>
+                        <p id="pcLockHint" style="font-size:12px;color:#888;margin-bottom:1rem;">Cargando…</p>
+                        <div id="pcSetupForm" class="hidden">
+                            <div class="form-group">
+                                <label class="form-label">Definí la clave de este sector (mín. 8 caracteres)</label>
+                                <input type="password" id="pcSetupPass1" placeholder="Clave nueva" autocomplete="new-password">
+                            </div>
+                            <div class="form-group">
+                                <input type="password" id="pcSetupPass2" placeholder="Repetir clave" autocomplete="new-password">
+                            </div>
+                            <button class="btn-primary" onclick="setupPrivateConfigPassword()">Definir clave</button>
+                        </div>
+                        <div id="pcUnlockForm" class="hidden" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <input type="password" id="pcUnlockPass" placeholder="Clave del sector" autocomplete="current-password" style="flex:1;min-width:200px;" onkeydown="if(event.key==='Enter')unlockPrivateConfig()">
+                            <button class="btn-primary" onclick="unlockPrivateConfig()">Desbloquear</button>
+                        </div>
+                        <div id="pcUnlockedBar" class="hidden" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <span style="color:#25d366;font-weight:700;">🔓 Desbloqueado</span>
+                            <button class="btn-secondary" onclick="lockPrivateConfig()" style="font-size:12px;">Bloquear</button>
+                            <button class="btn-secondary" onclick="togglePrivateConfigPassForm()" style="font-size:12px;">Cambiar clave</button>
+                        </div>
+                        <div id="pcChangePassForm" class="hidden" style="margin-top:12px;display:grid;gap:8px;max-width:360px;">
+                            <input type="password" id="pcNewPass1" placeholder="Clave nueva (mín. 8)" autocomplete="new-password">
+                            <input type="password" id="pcNewPass2" placeholder="Repetir clave nueva" autocomplete="new-password">
+                            <button class="btn-primary" onclick="changePrivateConfigPassword()">Guardar clave nueva</button>
+                        </div>
+                    </div>
+
+                    <!-- IA de comprobantes -->
+                    <div id="pcAiCard" class="hidden" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;">
+                        <h3 style="margin-bottom:.5rem;font-size:1rem;color:var(--text-secondary,#aaa);">🤖 IA de comprobantes</h3>
+                        <div id="pcAiStatus" style="font-size:12px;color:#aaa;margin-bottom:14px;line-height:1.6;"></div>
+                        <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-bottom:12px;">
+                            <input type="checkbox" id="pcAiEnabled" style="accent-color:#25d366;width:16px;height:16px;">
+                            <span>IA activa (lee comprobantes, detecta duplicados y alimenta la auto-carga hgcash)</span>
+                        </label>
+                        <div class="form-group">
+                            <label class="form-label">Modelo</label>
+                            <select id="pcAiModel" style="width:100%;" onchange="document.getElementById('pcAiModelCustom').style.display=this.value==='__custom__'?'':'none'">
+                                <option value="">Default del código (claude-opus-5)</option>
+                                <option value="claude-opus-5">claude-opus-5 — el más preciso (~US$0,01-0,02 por comprobante)</option>
+                                <option value="claude-sonnet-5">claude-sonnet-5 — intermedio (~US$0,005)</option>
+                                <option value="claude-opus-4-8">claude-opus-4-8</option>
+                                <option value="claude-haiku-4-5">claude-haiku-4-5 — el más barato, se equivoca más (~US$0,003)</option>
+                                <option value="__custom__">Otro (escribir ID)…</option>
+                            </select>
+                            <input type="text" id="pcAiModelCustom" placeholder="ID exacto del modelo, ej. claude-sonnet-5" style="width:100%;margin-top:6px;display:none;">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Esfuerzo de razonamiento</label>
+                            <select id="pcAiEffort" style="width:100%;">
+                                <option value="">Default (medium)</option>
+                                <option value="low">low — más rápido y barato</option>
+                                <option value="medium">medium — recomendado</option>
+                                <option value="high">high — máxima precisión, más lento</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">API key de Anthropic <span id="pcAiKeyHint" style="color:#888;font-weight:normal;"></span></label>
+                            <input type="password" id="pcAiApiKey" placeholder="sk-ant-… (vacío = no cambiar; pisa la de SSM)" autocomplete="off" style="width:100%;">
+                            <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-top:6px;font-size:12px;color:#aaa;">
+                                <input type="checkbox" id="pcAiApiKeyClear" style="width:14px;height:14px;">
+                                <span>Borrar la key guardada en el panel (volver a usar la de SSM)</span>
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Reglas extra para la IA <span style="color:#888;font-weight:normal;">(opcional, texto libre, se agrega al prompt)</span></label>
+                            <textarea id="pcAiExtraRules" rows="5" maxlength="4000" placeholder="Ej: En los comprobantes de Naranja X el número de operación figura como 'Cód. de transacción'." style="width:100%;font-family:inherit;"></textarea>
+                        </div>
+                        <button class="btn-primary" onclick="savePrivateAiConfig()">💾 Guardar config de IA</button>
+                        <p style="font-size:11px;color:#777;margin-top:10px;">Prioridad: panel &gt; variables de entorno (SSM) &gt; default del código. Los cambios aplican al instante en esta instancia y en ≤60 s en las demás. Si olvidás la clave: borrar el doc <code>privateconfigpass</code> de la colección Config en Atlas.</p>
+                    </div>
+                </div>
+            </section>
+
             <section id="smsSection" class="section">
                 <div class="panel-header">
                     <h2>📱 SMS MASIVO</h2>

@@ -647,6 +647,12 @@ function setupRoleBasedUI() {
         smsNavItem.style.display = role === 'admin' ? '' : 'none';
     }
 
+    // Config privada (#128): solo admin general (adentro pide su propia clave)
+    const pcNavItem = document.querySelector('.nav-item-private-config');
+    if (pcNavItem) {
+        pcNavItem.style.display = role === 'admin' ? '' : 'none';
+    }
+
     // Cuentas Publicistas y Dashboard Publicistas: sólo admin general
     const paNavItem = document.querySelector('.nav-item-publisher-admins');
     if (paNavItem) {
@@ -4539,6 +4545,13 @@ function switchSection(section) {
         loadPublishersRanking();
         loadPublishersDashboard();
     }
+    if (section === 'privateConfig') {
+        if (currentAdmin?.role !== 'admin') {
+            showToast('No tienes permiso para acceder a esta sección', 'error');
+            return;
+        }
+        loadPrivateConfig();
+    }
     if (section === 'sms') {
         if (currentAdmin?.role !== 'admin') {
             showToast('No tienes permiso para acceder a esta sección', 'error');
@@ -5083,6 +5096,142 @@ function filterTransactions(type) {
 // ============================================
 // SMS MASIVO SECTION - Password Gate
 // ============================================
+// ============================================
+// CONFIG PRIVADA (#128) — clave propia + config de la IA de comprobantes
+// ============================================
+// La clave se guarda en memoria SOLO mientras el sector está desbloqueado (el
+// server la exige en cada escritura; no hay sesión desbloqueada del lado server).
+let _pcPassword = null;
+
+function _pcShow(id, on) { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !on); }
+
+async function loadPrivateConfig() {
+    _pcPassword = null;
+    _pcShow('pcAiCard', false); _pcShow('pcUnlockedBar', false); _pcShow('pcChangePassForm', false);
+    _pcShow('pcSetupForm', false); _pcShow('pcUnlockForm', false);
+    const hint = document.getElementById('pcLockHint');
+    try {
+        const r = await authFetch('/api/admin/private-config/status');
+        const j = await r.json();
+        if (!r.ok) { if (hint) hint.textContent = j.error || 'Sin acceso'; return; }
+        if (j.hasPassword) {
+            if (hint) hint.textContent = 'Este sector tiene su propia clave (distinta del login). Ingresala para ver y modificar la configuración.';
+            _pcShow('pcUnlockForm', true);
+            const inp = document.getElementById('pcUnlockPass'); if (inp) { inp.value = ''; inp.focus(); }
+        } else {
+            if (hint) hint.textContent = 'Todavía no hay clave definida para este sector. Definila ahora (queda guardada hasheada en la base, no en código ni en SSM).';
+            _pcShow('pcSetupForm', true);
+        }
+    } catch (e) {
+        if (hint) hint.textContent = 'Error de conexión';
+    }
+}
+
+async function setupPrivateConfigPassword() {
+    const p1 = (document.getElementById('pcSetupPass1') || {}).value || '';
+    const p2 = (document.getElementById('pcSetupPass2') || {}).value || '';
+    if (p1.length < 8) { showToast('La clave debe tener al menos 8 caracteres', 'error'); return; }
+    if (p1 !== p2) { showToast('Las claves no coinciden', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/private-config/setup', { method: 'POST', body: JSON.stringify({ password: p1 }) });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Error', 'error'); return; }
+        showToast('Clave definida', 'success');
+        document.getElementById('pcSetupPass1').value = ''; document.getElementById('pcSetupPass2').value = '';
+        await loadPrivateConfig();
+        const inp = document.getElementById('pcUnlockPass'); if (inp) inp.value = p1;
+        unlockPrivateConfig();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+async function unlockPrivateConfig() {
+    const pw = (document.getElementById('pcUnlockPass') || {}).value || '';
+    if (!pw) { showToast('Ingresá la clave', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/private-config/unlock', { method: 'POST', body: JSON.stringify({ password: pw }) });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Clave incorrecta', 'error'); return; }
+        _pcPassword = pw;
+        document.getElementById('pcUnlockPass').value = '';
+        _pcShow('pcUnlockForm', false); _pcShow('pcUnlockedBar', true); _pcShow('pcAiCard', true);
+        const hint = document.getElementById('pcLockHint'); if (hint) hint.textContent = 'Los cambios que guardes acá aplican en producción sin deploy.';
+        renderPrivateAiConfig(j.ai || {});
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function lockPrivateConfig() { loadPrivateConfig(); }
+
+function togglePrivateConfigPassForm() {
+    const el = document.getElementById('pcChangePassForm');
+    if (el) el.classList.toggle('hidden');
+}
+
+async function changePrivateConfigPassword() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    const p1 = (document.getElementById('pcNewPass1') || {}).value || '';
+    const p2 = (document.getElementById('pcNewPass2') || {}).value || '';
+    if (p1.length < 8) { showToast('La clave nueva debe tener al menos 8 caracteres', 'error'); return; }
+    if (p1 !== p2) { showToast('Las claves no coinciden', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/private-config/password', { method: 'POST', body: JSON.stringify({ password: _pcPassword, newPassword: p1 }) });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Error', 'error'); return; }
+        _pcPassword = p1;
+        document.getElementById('pcNewPass1').value = ''; document.getElementById('pcNewPass2').value = '';
+        _pcShow('pcChangePassForm', false);
+        showToast('Clave cambiada', 'success');
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
+function renderPrivateAiConfig(ai) {
+    const en = document.getElementById('pcAiEnabled'); if (en) en.checked = ai.enabled !== false;
+    const sel = document.getElementById('pcAiModel');
+    const custom = document.getElementById('pcAiModelCustom');
+    if (sel) {
+        const known = Array.from(sel.options).some(o => o.value === (ai.model || ''));
+        if (known) { sel.value = ai.model || ''; if (custom) { custom.style.display = 'none'; custom.value = ''; } }
+        else { sel.value = '__custom__'; if (custom) { custom.style.display = ''; custom.value = ai.model || ''; } }
+    }
+    const ef = document.getElementById('pcAiEffort'); if (ef) ef.value = ai.effort || '';
+    const key = document.getElementById('pcAiApiKey'); if (key) key.value = '';
+    const clr = document.getElementById('pcAiApiKeyClear'); if (clr) clr.checked = false;
+    const hint = document.getElementById('pcAiKeyHint');
+    if (hint) hint.textContent = ai.apiKeySet ? `(guardada en el panel: ${ai.apiKeyHint})` : '(no hay key en el panel: se usa la de SSM si existe)';
+    const rules = document.getElementById('pcAiExtraRules'); if (rules) rules.value = ai.extraRules || '';
+    const st = document.getElementById('pcAiStatus');
+    const e = ai.effective || {};
+    if (st) {
+        st.innerHTML =
+            `<b>En uso ahora:</b> ${e.enabled ? '🟢 IA activa' : '⚪ IA apagada o sin key'} · modelo <code>${escapeHtml(e.model || '?')}</code> (${escapeHtml(e.modelSource || '')})` +
+            ` · esfuerzo <code>${escapeHtml(e.effort || '')}</code> · key: ${escapeHtml(e.apiKeySource || '')}${e.apiKeyHint ? ' ' + escapeHtml(e.apiKeyHint) : ''}` +
+            (ai.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(ai.updatedBy)} · ${ai.updatedAt ? new Date(ai.updatedAt).toLocaleString('es-AR') : ''}</span>` : '');
+    }
+}
+
+async function savePrivateAiConfig() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    const sel = document.getElementById('pcAiModel');
+    let model = sel ? sel.value : '';
+    if (model === '__custom__') model = ((document.getElementById('pcAiModelCustom') || {}).value || '').trim();
+    const ai = {
+        enabled: !!(document.getElementById('pcAiEnabled') || {}).checked,
+        model,
+        effort: (document.getElementById('pcAiEffort') || {}).value || '',
+        extraRules: (document.getElementById('pcAiExtraRules') || {}).value || ''
+    };
+    const keyVal = ((document.getElementById('pcAiApiKey') || {}).value || '').trim();
+    if ((document.getElementById('pcAiApiKeyClear') || {}).checked) ai.apiKey = 'CLEAR';
+    else if (keyVal) ai.apiKey = keyVal;
+    if (!ai.enabled && !confirm('Vas a APAGAR la IA de comprobantes: no se detectarán duplicados ni habrá auto-carga hgcash por comprobante. ¿Confirmás?')) return;
+    try {
+        const r = await authFetch('/api/admin/private-config/ai', { method: 'POST', body: JSON.stringify({ password: _pcPassword, ai }) });
+        const j = await r.json();
+        if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); return; }
+        showToast('Config de IA guardada', 'success');
+        renderPrivateAiConfig(j.ai || {});
+    } catch (e) { showToast('Error de conexión', 'error'); }
+}
+
 let smsAccessGranted = false;
 
 function showSmsPasswordModal() {

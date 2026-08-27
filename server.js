@@ -5440,6 +5440,159 @@ app.post('/api/admin/verify-sms-password', authMiddleware, async (req, res) => {
 });
 
 // ============================================
+// CONFIG PRIVADA (panel → "🔐 Config privada", WORKLOG #128)
+// ============================================
+// Sector del panel protegido con una CLAVE PROPIA (distinta del login), guardada
+// como hash bcrypt en Config['privateconfigpass']. La primera vez la define el
+// admin general desde el panel (no hay clave en SSM ni en código). Adentro se
+// configura la IA de comprobantes (Config['aiconfig']): prendida/apagada, modelo,
+// esfuerzo, API key (opcional, pisa la de SSM) y reglas extra del prompt.
+// Cada escritura exige la clave (no hay "sesión desbloqueada" del lado server).
+// Si se olvida la clave: borrar el doc `privateconfigpass` de Config en Atlas.
+const PRIVATE_CONFIG_PASS_KEY = 'privateconfigpass';
+const AI_CONFIG_KEY = 'aiconfig';
+const AI_ALLOWED_MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-haiku-4-5'];
+
+async function _loadAiConfigIntoService() {
+  try {
+    const cfg = await getConfig(AI_CONFIG_KEY, null);
+    comprobanteAi.applyConfig(cfg || {});
+  } catch (e) {
+    logger.warn(`[ai-config] no se pudo cargar Config['aiconfig']: ${e.message}`);
+  }
+}
+
+async function _privateConfigHasPassword() {
+  const h = await getConfig(PRIVATE_CONFIG_PASS_KEY, null);
+  return !!(h && typeof h === 'string' && h.startsWith('$2'));
+}
+
+async function _privateConfigCheckPassword(password) {
+  if (!password || typeof password !== 'string') return false;
+  const h = await getConfig(PRIVATE_CONFIG_PASS_KEY, null);
+  if (!h || typeof h !== 'string') return false;
+  try { return await bcrypt.compare(password, h); } catch (_) { return false; }
+}
+
+function _privateConfigOnlyAdmin(req, res) {
+  if (req.user.role !== 'admin') { res.status(403).json({ error: 'Solo el administrador principal' }); return false; }
+  return true;
+}
+
+// Vista de la config de IA para el panel: la key NUNCA sale completa.
+function _aiConfigForPanel(stored) {
+  const c = stored || {};
+  return {
+    enabled: c.enabled !== false,
+    model: c.model || '',
+    effort: c.effort || '',
+    apiKeySet: !!c.apiKey,
+    apiKeyHint: c.apiKey ? '••••' + String(c.apiKey).slice(-4) : null,
+    extraRules: c.extraRules || '',
+    updatedBy: c.updatedBy || null,
+    updatedAt: c.updatedAt || null,
+    effective: comprobanteAi.getEffectiveConfig(),
+    allowedModels: AI_ALLOWED_MODELS,
+    efforts: comprobanteAi.EFFORTS
+  };
+}
+
+app.get('/api/admin/private-config/status', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    res.json({ hasPassword: await _privateConfigHasPassword() });
+  } catch (error) {
+    logger.error(`[private-config] status: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Primera vez: definir la clave (solo si todavía no hay ninguna).
+app.post('/api/admin/private-config/setup', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    if (await _privateConfigHasPassword()) return res.status(409).json({ error: 'La clave ya está definida. Usá "cambiar clave".' });
+    const pw = String((req.body || {}).password || '');
+    if (pw.length < 8) return res.status(400).json({ error: 'La clave debe tener al menos 8 caracteres' });
+    await setConfig(PRIVATE_CONFIG_PASS_KEY, await bcrypt.hash(pw, 10));
+    logger.info(`[private-config] clave DEFINIDA por ${req.user.username}`);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error(`[private-config] setup: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Desbloquear: verifica la clave y devuelve la config (key enmascarada).
+app.post('/api/admin/private-config/unlock', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    if (!(await _privateConfigCheckPassword((req.body || {}).password))) {
+      logger.warn(`[private-config] clave INCORRECTA (${req.user.username})`);
+      return res.status(401).json({ error: 'Clave incorrecta' });
+    }
+    const stored = await getConfig(AI_CONFIG_KEY, null);
+    res.json({ success: true, ai: _aiConfigForPanel(stored) });
+  } catch (error) {
+    logger.error(`[private-config] unlock: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Guardar config de IA (exige la clave en cada escritura).
+app.post('/api/admin/private-config/ai', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const cur = (await getConfig(AI_CONFIG_KEY, null)) || {};
+    const ai = b.ai || {};
+    const model = String(ai.model || '').trim();
+    if (model && !/^[a-z0-9.-]{5,60}$/i.test(model)) return res.status(400).json({ error: 'Modelo inválido' });
+    const effort = String(ai.effort || '').trim();
+    if (effort && !comprobanteAi.EFFORTS.includes(effort)) return res.status(400).json({ error: 'Esfuerzo inválido' });
+    // apiKey: undefined/'' = no tocar; 'CLEAR' = borrar (vuelve a la de SSM); otro = nueva.
+    let apiKey = cur.apiKey || '';
+    if (ai.apiKey === 'CLEAR') apiKey = '';
+    else if (typeof ai.apiKey === 'string' && ai.apiKey.trim()) {
+      const k = ai.apiKey.trim();
+      if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(k)) return res.status(400).json({ error: 'La API key no tiene el formato esperado (sk-ant-…)' });
+      apiKey = k;
+    }
+    const next = {
+      enabled: ai.enabled !== false,
+      model, effort, apiKey,
+      extraRules: String(ai.extraRules || '').slice(0, 4000),
+      updatedBy: req.user.username, updatedAt: new Date()
+    };
+    await setConfig(AI_CONFIG_KEY, next);
+    comprobanteAi.applyConfig(next); // esta instancia al instante; las demás en ≤60 s
+    logger.info(`[private-config] IA guardada por ${req.user.username}: enabled=${next.enabled} model=${model || '(default)'} effort=${effort || '(default)'} apiKey=${apiKey ? 'panel' : 'env'} extraRules=${next.extraRules.length}c`);
+    res.json({ success: true, ai: _aiConfigForPanel(next) });
+  } catch (error) {
+    logger.error(`[private-config] ai: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Cambiar la clave (exige la actual).
+app.post('/api/admin/private-config/password', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave actual incorrecta' });
+    const pw = String(b.newPassword || '');
+    if (pw.length < 8) return res.status(400).json({ error: 'La clave nueva debe tener al menos 8 caracteres' });
+    await setConfig(PRIVATE_CONFIG_PASS_KEY, await bcrypt.hash(pw, 10));
+    logger.info(`[private-config] clave CAMBIADA por ${req.user.username}`);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error(`[private-config] password: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ============================================
 // ADMIN - Resetear contraseña de usuario
 // ============================================
 
@@ -9164,6 +9317,11 @@ async function initializeData() {
     console.error('❌ No se pudo conectar a MongoDB');
     return;
   }
+
+  // Config de la IA de comprobantes desde el panel (#128): al arrancar y cada
+  // 60 s (multi-instancia: un cambio guardado en otra instancia llega acá solo).
+  await _loadAiConfigIntoService();
+  setInterval(_loadAiConfigIntoService, 60 * 1000).unref();
 
   // One-shot migration: clear stale mustChangePassword flag from admin accounts.
   // This fixes admins that were marked before the role-isolation fix (PR #286)

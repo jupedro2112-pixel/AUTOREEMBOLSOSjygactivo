@@ -93,7 +93,8 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   pending→claiming→shadow_matched|auto_charged|manual_charged|needs_review|duplicate|
   error|ignored. Dedupe por `movementId` único.
 - **Comprobante** — cada imagen que la IA (Claude vision, `claude-opus-5` con salida
-  estructurada json_schema desde #126; env `COMPROBANTE_AI_MODEL`) clasificó como
+  estructurada json_schema desde #126; configurable desde el panel → "🔐 Config
+  privada" = `Config['aiconfig']`, prioridad panel > env > default, #128) clasificó como
   comprobante. `dedupeKey` (N° operación normalizado, descartando CBU/CUIT/alias/pedazos
   de CBU/etiqueta sospechosa → `operationNumberRejected`; fallback
   `monto|origen|cbu|fecha|hora` que EXIGE fecha) + `imageHash` (SHA-256) para detectar
@@ -419,6 +420,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - `admin-sw.js` (v24, scope /adminprivado2026/): network-first no-store para el shell.
 - Servido por handlers propios con cache en memoria (`readFileCached`) + ADMIN_HOST
   check opcional; el catch-all bloquea todo otro path bajo /adminprivado2026/.
+- **"🔐 Config privada"** (#128): sector solo admin general con clave PROPIA (hash bcrypt
+  en `Config['privateconfigpass']`, definida desde el panel la primera vez; olvido =
+  borrar ese doc en Atlas). Cada escritura manda la clave (`/api/admin/private-config/*`,
+  `sensitiveLimiter`). Hoy contiene la config de la IA de comprobantes; es el lugar para
+  futuras configs sensibles sin pasar por SSM.
 - Secciones "Automatización" y "Estrategia de bonos" están marcadas "No se usa" en el
   sidebar pero siguen funcionales (candidatas a limpieza con el owner).
 - La sección "Base de Datos" fue ELIMINADA por completo (2026-07-09): era inalcanzable.

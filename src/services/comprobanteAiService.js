@@ -32,17 +32,48 @@ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 
+const DEFAULT_MODEL = 'claude-opus-5';
+const EFFORTS = ['low', 'medium', 'high'];
+
+// Config en runtime desde el panel (sección "Config privada", WORKLOG #128).
+// server.js la carga de Config['aiconfig'] al arrancar, cada 60 s y al guardar,
+// y la inyecta con applyConfig(). Prioridad: panel > env/SSM > default.
+let _cfg = {};
+function applyConfig(cfg) {
+  _cfg = (cfg && typeof cfg === 'object') ? cfg : {};
+}
+
 function getApiKey() {
-  return process.env.ANTHROPIC_API_KEY || null;
+  return (_cfg.apiKey && String(_cfg.apiKey).trim()) || process.env.ANTHROPIC_API_KEY || null;
 }
 
 function getModel() {
-  return process.env.COMPROBANTE_AI_MODEL || 'claude-opus-5';
+  return (_cfg.model && String(_cfg.model).trim()) || process.env.COMPROBANTE_AI_MODEL || DEFAULT_MODEL;
 }
 
-/** true si hay API key configurada (la detección está activa). */
+function getEffort() {
+  return EFFORTS.includes(_cfg.effort) ? _cfg.effort : 'medium';
+}
+
+/** true si hay API key configurada y el panel no la apagó (la detección está activa). */
 function isEnabled() {
+  if (_cfg.enabled === false) return false;
   return !!getApiKey();
+}
+
+/** Resumen para el panel (sin exponer la key completa). */
+function getEffectiveConfig() {
+  const key = getApiKey();
+  return {
+    enabled: isEnabled(),
+    model: getModel(),
+    effort: getEffort(),
+    apiKeySource: _cfg.apiKey ? 'panel' : (process.env.ANTHROPIC_API_KEY ? 'env' : 'ninguna'),
+    apiKeyHint: key ? '••••' + String(key).slice(-4) : null,
+    modelSource: _cfg.model ? 'panel' : (process.env.COMPROBANTE_AI_MODEL ? 'env' : 'default'),
+    defaultModel: DEFAULT_MODEL,
+    extraRules: _cfg.extraRules || ''
+  };
 }
 
 // Construye el bloque de imagen para la API a partir del content del mensaje,
@@ -204,10 +235,15 @@ async function analyzeComprobante(content) {
     // cuentan contra max_tokens → dejar aire; la salida útil son ~150 tokens.
     max_tokens: 4096,
     output_config: {
-      effort: 'medium',
+      effort: getEffort(),
       format: { type: 'json_schema', schema: OUTPUT_SCHEMA }
     },
-    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
+    // Bloque 1 estable (cacheable); bloque 2 = reglas extra editables desde el
+    // panel (van DESPUÉS del breakpoint de cache para no invalidarlo).
+    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }]
+      .concat(_cfg.extraRules && String(_cfg.extraRules).trim()
+        ? [{ type: 'text', text: 'REGLAS ADICIONALES DEL OPERADOR (prioritarias):\n' + String(_cfg.extraRules).trim().slice(0, 4000) }]
+        : []),
     messages: [{
       role: 'user',
       content: [imageBlock, { type: 'text', text: USER_TEXT }]
@@ -274,4 +310,4 @@ async function analyzeComprobante(content) {
   }
 }
 
-module.exports = { isEnabled, analyzeComprobante, getModel };
+module.exports = { isEnabled, analyzeComprobante, getModel, getEffort, applyConfig, getEffectiveConfig, DEFAULT_MODEL, EFFORTS };

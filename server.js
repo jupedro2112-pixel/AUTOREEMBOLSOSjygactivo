@@ -2899,8 +2899,9 @@ setInterval(() => { _runChatAuditTick(); }, 5 * 60 * 1000);
 
 // ── 👍👎 al terminar de resolver (carga acreditada / pago hecho) ────────────
 function _scheduleRatingRequest(userId, trigger) {
-  // 45 s después, así el cliente ve primero la confirmación de carga/pago.
-  setTimeout(() => { _sendRatingRequest(userId, trigger).catch(() => {}); }, 45 * 1000);
+  // 2 s después: lo justo para que la confirmación de carga/pago salga PRIMERO y la
+  // encuesta aparezca debajo, con el cliente todavía en el chat (owner: a los 45 s ya se fue).
+  setTimeout(() => { _sendRatingRequest(userId, trigger).catch(() => {}); }, 2000);
 }
 async function _sendRatingRequest(userId, trigger) {
   try {

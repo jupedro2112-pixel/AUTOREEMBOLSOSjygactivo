@@ -59,7 +59,7 @@
     consume tras login y abre la conversación).
   · **👍👎:** `_scheduleRatingRequest` desde `recordUserActivity(type
     'deposit')` (cubre carga manual, auto hgcash y self-service) y desde
-    `notifyPayoutPaid`. 45 s después manda Message `type:'system'` con
+    `notifyPayoutPaid`. **2 s** después (owner: a los 45 s el cliente ya se fue) manda Message `type:'system'` con
     `metadata.kind:'rating_request'` (texto editable `/sys_rating_request`),
     solo si un agente humano habló en las últimas 24 h y con tope atómico
     `ratingCooldownHours` (6) por cliente. La PWA (chat.js,
@@ -84,7 +84,7 @@
   sections, ids únicos. **admin-sw v26 → v27.** PWA: solo chat.js (SWR) → sin
   bump de `?v`. Back necesita redeploy. **PROBAR tras deploy:** (1) Config
   privada → Auditoría: cargar token+chat id → "Probar Telegram"; (2) hacerle
-  una carga a un cliente con el que un agente habló → a los 45 s le llega la
+  una carga a un cliente con el que un agente habló → a los 2 s le llega la
   encuesta; tocar 👎 y escribir motivo → nota interna + Telegram + fila en
   Auditoría; (3) esperar 20 min de una charla quieta → aparece auditada con
   puntaje; (4) escribir como cliente "no me cargan, estafa" → alerta de regla

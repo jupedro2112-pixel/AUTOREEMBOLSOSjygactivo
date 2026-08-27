@@ -5263,7 +5263,9 @@ async function verifySmsAccessFromModal() {
             document.getElementById('smsSectionContent').classList.remove('hidden');
             showToast('Acceso concedido', 'success');
         } else {
-            showToast('Contraseña incorrecta', 'error');
+            let msg = 'Clave incorrecta';
+            try { const j = await response.json(); if (j && j.error) msg = j.error; } catch (_) {}
+            showToast(msg, 'error');
         }
     } catch (error) {
         console.error('Error verifying SMS access:', error);

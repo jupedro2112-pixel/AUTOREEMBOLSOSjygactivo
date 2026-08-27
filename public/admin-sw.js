@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v26'; // v26: sección Config privada (clave propia + IA de comprobantes) — #128
+const CACHE_VERSION = 'v26'; // v26: sección Config privada (clave propia + IA de comprobantes) — #128/#129 (SMS usa la misma clave)
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).

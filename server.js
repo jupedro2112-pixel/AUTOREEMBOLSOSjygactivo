@@ -5411,7 +5411,7 @@ app.post('/api/admin/bulk-sms', authMiddleware, bulkSmsIpLimiter, async (req, re
 // ADMIN - Verificar contraseña del panel SMS MASIVO
 // ============================================
 
-app.post('/api/admin/verify-sms-password', authMiddleware, async (req, res) => {
+app.post('/api/admin/verify-sms-password', authMiddleware, sensitiveLimiter, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ success: false, error: 'Acceso denegado.' });
@@ -5422,17 +5422,27 @@ app.post('/api/admin/verify-sms-password', authMiddleware, async (req, res) => {
       return res.status(400).json({ success: false, error: 'Contraseña requerida.' });
     }
 
+    // #129: SMS Masivo usa la MISMA clave del sector "🔐 Config privada" (hash
+    // bcrypt en Config['privateconfigpass'], definida desde el panel). La env
+    // SMS_MASIVO_PASSWORD (SSM) queda SOLO como fallback mientras no se haya
+    // definido la clave del sector — así nada se rompe en el medio.
+    if (await _privateConfigHasPassword()) {
+      if (!(await _privateConfigCheckPassword(password))) {
+        logger.warn(`[sms] clave INCORRECTA (${req.user.username})`);
+        return res.status(401).json({ success: false, error: 'Clave incorrecta' });
+      }
+      return res.json({ success: true, source: 'private-config' });
+    }
+
     const SMS_MASIVO_PASSWORD = process.env.SMS_MASIVO_PASSWORD;
     if (!SMS_MASIVO_PASSWORD) {
-      logger.error('⛔ SMS_MASIVO_PASSWORD no configurado en el entorno.');
-      return res.status(500).json({ success: false, error: 'Configuración del servidor incompleta.' });
+      logger.error('⛔ Sin clave de Config privada ni SMS_MASIVO_PASSWORD en el entorno.');
+      return res.status(500).json({ success: false, error: 'Definí primero la clave en 🔐 Config privada.' });
     }
-
     if (!safeCompare(password, SMS_MASIVO_PASSWORD)) {
-      return res.status(401).json({ success: false });
+      return res.status(401).json({ success: false, error: 'Clave incorrecta' });
     }
-
-    res.json({ success: true });
+    res.json({ success: true, source: 'env' });
   } catch (error) {
     logger.error(`Error en verify-sms-password: ${error.message}`);
     res.status(500).json({ success: false, error: 'Error del servidor.' });

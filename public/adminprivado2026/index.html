@@ -2687,8 +2687,9 @@
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label for="smsPasswordInput">Contraseña:</label>
-                    <input type="password" id="smsPasswordInput" placeholder="Ingresa la contraseña de SMS Masivo">
+                    <label for="smsPasswordInput">Clave del sector privado:</label>
+                    <input type="password" id="smsPasswordInput" placeholder="La misma clave de 🔐 Config privada" onkeydown="if(event.key==='Enter')verifySmsAccessFromModal()">
+                    <p style="font-size:11px;color:#888;margin-top:6px;">Es la clave que se define en <b>🔐 Config privada</b> (no la del login). Si todavía no la definiste, hacelo ahí primero.</p>
                 </div>
             </div>
             <div class="modal-footer">

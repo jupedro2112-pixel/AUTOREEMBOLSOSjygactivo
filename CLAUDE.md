@@ -79,8 +79,9 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   (el panel admin usa cookie).
 - **Config sensible desde el panel:** sección "🔐 Config privada" (clave propia hasheada
   en `Config['privateconfigpass']`; hoy: IA de comprobantes en `Config['aiconfig']`,
-  prioridad panel > env/SSM > default). Para una config nueva que el owner quiera
-  editar sin SSM, sumarla AHÍ (endpoints `/api/admin/private-config/*`).
+  prioridad panel > env/SSM > default; SMS Masivo usa esa misma clave). Para una
+  config nueva que el owner quiera editar sin SSM, sumarla AHÍ (endpoints
+  `/api/admin/private-config/*`).
 - **Mensajes automáticos al usuario** son editables desde la sección COMANDOS
   (comandos `/sys_*`). Usar el helper `renderSystemCommand(name, fallback, vars)` para
   cualquier mensaje automático nuevo.

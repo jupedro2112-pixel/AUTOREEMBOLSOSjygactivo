@@ -8,6 +8,26 @@
 
 ## Sesión 2026-08-27
 
+### 129. SMS Masivo usa la misma clave de "🔐 Config privada" (adiós SMS_MASIVO_PASSWORD en SSM)
+- **Pedido del owner:** mover la clave de SMS Masivo al esquema nuevo.
+- **Cambio (`POST /api/admin/verify-sms-password`):** si ya hay clave del
+  sector privado (hash en `Config['privateconfigpass']`) se verifica contra ESA
+  (bcrypt) y la env se ignora. Fallback a `SMS_MASIVO_PASSWORD` (SSM) SOLO
+  mientras no se haya definido la clave del sector — sin ventana rota. Sin
+  ninguna de las dos → error claro "Definí primero la clave en 🔐 Config
+  privada". Se le sumó `sensitiveLimiter` (antes no tenía rate limit).
+- **Panel:** el modal de SMS dice "Clave del sector privado (la misma de 🔐
+  Config privada)", Enter envía, y muestra el error real del server.
+- **Una vez definida la clave desde el panel, `SMS_MASIVO_PASSWORD` se puede
+  borrar de SSM.**
+- ⚠️ **Nota preexistente (no tocada):** `POST /api/admin/bulk-sms` y
+  `/bulk-sms/preview` NO exigen la clave del lado server — el candado es
+  solo del panel (`smsAccessGranted`). Cualquier token con rol admin puede
+  llamarlos directo. Si se quiere cerrar de verdad, exigir `password` en el
+  body de esos dos endpoints (mismo patrón que `/private-config/ai`).
+- **Validado:** `node --check` OK (server.js, admin.js). Mismo deploy que #128
+  (admin-sw sigue en v26).
+
 ### 128. Panel: sección "🔐 Config privada" con clave propia (hash en DB) → la IA de comprobantes se configura sin código ni SSM
 - **Pedido del owner:** que la IA se configure desde el panel, en un sector
   privado con clave, "para que no sea todo código o SSM".

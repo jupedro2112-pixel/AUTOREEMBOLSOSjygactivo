@@ -4,7 +4,48 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-25**
+> **Última actualización: 2026-08-27**
+
+## Sesión 2026-08-27
+
+### 124. Retiros: "No se pudo leer el saldo del cliente para descontar" = JUGAYGANA/proxy, pero el código NO reintentaba + la app instalada pasa a llamarse AUTOREEMBOLSOS
+- **Reporte del owner (captura de un agente, días previos):** al confirmar un
+  retiro de $15.000 el panel mostraba la nota interna "⚠️ No se pudo leer el
+  saldo del cliente para descontar $15.000. Reintentá en unos minutos" y no
+  descontaba de JUGAYGANA. "Ahora se solucionó" — ¿código o JUGAYGANA?
+- **Diagnóstico: las dos cosas.** El origen del fallo es JUGAYGANA/el proxy
+  (timeout, HTML de Cloudflare o el proxy saturado de #122 — justamente esos
+  días); por eso "se arregló solo" al bajar el tráfico a JUGAYGANA. PERO el
+  código lo amplificaba: el paso 1 de `_deductChipsAtConfirm` (server.js) leía
+  el saldo con `jugayganaMovements.getUserBalance` = **UNA sola llamada** sin
+  retry (encima vía `getUserInfoByName`, que colapsa "falló la API" con "no
+  existe"), mientras que TODAS las demás lecturas de saldo del server usan
+  `getUserBalanceWithRetry`. Un solo timeout tumbaba la confirmación entera.
+  Que "no descuente" es lo CORRECTO: el flujo aborta ANTES de tocar plata y
+  deja el payout en `failed`, que el agente puede volver a pagar (el endpoint
+  `/pay` acepta `pending_review` y `failed`).
+- **Fix:** paso 1 pasa a `getUserBalanceWithRetry` (3 intentos, 500/1000 ms
+  entre medio, igual que el resto). Si aun así falla, la nota interna y el
+  error del payout ahora dicen la CAUSA real (`errToString` del error de
+  JUGAYGANA), aclaran "No se descontó nada" y que hay que reintentar el pago.
+  El paso 4 (verificación anti-fantasma post-descuento) ya usaba retry.
+- **(2) Nombre de la app instalada → AUTOREEMBOLSOS.** El ícono de la PWA se
+  llamaba "VIPCARGAS" porque este repo es el gemelo de vipcargas. Cambiado en
+  `public/manifest.json` (`name`, `short_name`, `description`, label de
+  screenshot) y en `public/index.html` (`<title>`, `apple-mobile-web-app-title`
+  —el que usa iOS—, `application-name`). NO se tocaron `id`/`scope`/`start_url`
+  (cambiarlos haría que el navegador lo tome como OTRA app). Los textos de
+  marketing dentro de la app ("Bienvenido a VIPCARGAS", logo `<h1>`, etc.)
+  siguen diciendo VIPCARGAS — cambiarlos si el owner lo pide.
+  ⚠️ **Instalaciones existentes:** Android/Chrome actualiza el nombre solo
+  cuando re-verifica el manifest (puede tardar días o pedir confirmación);
+  en iOS el nombre queda fijo al instalar → hay que borrar y reinstalar.
+  Las instalaciones NUEVAS salen con el nombre nuevo desde el deploy.
+- **Validado:** `node --check server.js` OK; manifest.json parsea. Cambio de
+  HTML sin JS nuevo → sin bump de `?v` (index.html es navigate/network, el
+  manifest es network-first en el SW). Back necesita redeploy (la nota del
+  panel viene del backend; index.html/manifest se sirven cacheados por proceso
+  → el redeploy los refresca).
 
 ## Sesión 2026-08-25
 

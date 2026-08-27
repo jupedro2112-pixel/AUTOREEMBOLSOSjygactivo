@@ -1,7 +1,7 @@
 {
-  "name": "VIPCARGAS",
-  "short_name": "VIPCARGAS",
-  "description": "VIPCARGAS - Chat y reembolsos con notificaciones push",
+  "name": "AUTOREEMBOLSOS",
+  "short_name": "AUTOREEMBOLSOS",
+  "description": "AUTOREEMBOLSOS - Chat y reembolsos con notificaciones push",
   "id": "/",
   "start_url": "/?source=pwa",
   "display": "standalone",
@@ -78,7 +78,7 @@
       "sizes": "512x512",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "VIPCARGAS - Chat"
+      "label": "AUTOREEMBOLSOS - Chat"
     }
   ],
   "categories": ["games", "social", "entertainment"],

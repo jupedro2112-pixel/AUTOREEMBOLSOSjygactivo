@@ -14216,13 +14216,19 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   const user = await User.findOne({ id: payout.userId });
   const jgId = (user && user.jugayganaUserId) || null;
 
-  // 1) Saldo actual del cliente.
-  const balRes = await jugayganaMovements.getUserBalance(payout.username);
+  // 1) Saldo actual del cliente. CON RETRY (#124): antes era una sola llamada a
+  //    JUGAYGANA (getUserBalance) y cualquier timeout/HTML de Cloudflare o el
+  //    proxy saturado (#122) tumbaba la confirmación entera con "No se pudo leer
+  //    el saldo" aunque el cliente y su saldo existieran. 3 intentos (500/1000ms),
+  //    igual que el resto de lecturas de saldo del server. Si aun así falla, el
+  //    payout queda 'failed' (re-pagable desde el panel) y NO se descontó nada.
+  const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
   const avail = (balRes && balRes.success) ? (Number(balRes.balance) || 0) : null;
   if (avail === null) {
-    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar' } });
-    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente para descontar $${amt.toLocaleString('es-AR')}. Reintentá en unos minutos.`);
-    return { ok: false, error: 'No se pudo verificar el saldo del cliente. Reintentá.' };
+    const why = jugaygana.errToString((balRes && balRes.error) || 'sin detalle');
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar: ' + why } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente en JUGAYGANA para descontar $${amt.toLocaleString('es-AR')} (3 intentos: ${why}). No se descontó nada. Reintentá el pago en unos minutos.`);
+    return { ok: false, error: 'JUGAYGANA no respondió al leer el saldo del cliente (3 intentos). No se descontó nada. Reintentá en unos minutos.' };
   }
   // 2) ¿Tiene saldo? Si se jugó las fichas → avisar al cliente, cerrar chat, cancelar.
   if (avail < amt) {

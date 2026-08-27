@@ -41,7 +41,10 @@ El sistema VIPCARGAS:
 - El "saldo real" del jugador vive en JUGAYGANA; VIPCARGAS guarda atribución, bonos,
   reclamos y el registro permanente de transacciones.
 
-UX del cliente: PWA (`public/`) con chat en vivo (Socket.IO) + push (FCM). Los
+UX del cliente: PWA (`public/`) con chat en vivo (Socket.IO) + push (FCM). En este
+repo (gemelo de vipcargas, dominio autoreembolsos.com) la app instalada se llama
+**AUTOREEMBOLSOS** (manifest + `apple-mobile-web-app-title`, #124); los textos de
+marketing internos siguen diciendo VIPCARGAS. Los
 agentes operan desde `public/adminprivado2026/`. Deploy: AWS Elastic Beanstalk
 (posible multi-instancia → Redis para socket.io adapter, rate-limits y locks).
 Secrets desde AWS SSM cargados async en el bootstrap (final de server.js).
@@ -273,8 +276,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - **Retiro self-service**: `POST /api/withdrawal/request` — exige phoneVerified, lock
   anti-doble, chequeo de saldo (UX), dedup 10min → crea PendingPayout
   (`deductAtPay:true`, SIN descontar) → mueve el chat a Pagos. El AGENTE confirma:
-  `POST /api/admin/payouts/:id/pay` → `_deductChipsAtConfirm` (saldo → withdraw →
-  verificación anti-fantasma de que bajó) → cash-out hgcash (externalID=payout.id =
+  `POST /api/admin/payouts/:id/pay` → `_deductChipsAtConfirm` (saldo CON retry
+  3× —#124; si JUGAYGANA no responde el payout queda `failed` sin descontar y se
+  re-paga desde el panel— → withdraw → verificación anti-fantasma de que bajó) → cash-out hgcash (externalID=payout.id =
   idempotencia; retry con accountId fresco ante 403) → webhook/poller confirma DONE →
   aviso `/sys_payout_paid` + comprobante PDF (foto vía mupdf + link permanente
   `/api/payout-receipt/:id`). Rechazo (`/cancel`): si NO se descontó → nada que

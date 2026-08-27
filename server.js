@@ -1630,6 +1630,13 @@ async function getHgcashConfig() {
   const cfg = await getConfig('hgcash', null);
   const merged = Object.assign({}, HGCASH_DEFAULTS, cfg || {});
   if (!Array.isArray(merged.acceptStatuses) || merged.acceptStatuses.length === 0) merged.acceptStatuses = ['done'];
+  // CBUs PROPIOS de este proyecto (solo dígitos): el de la config hgcash + el que
+  // se le muestra a los clientes (Config['cbu'].number). Sirven para detectar un
+  // comprobante que apunta al CBU de OTRO proyecto (#125). El toCBU del
+  // movimiento se suma en el momento del match (siempre es nuestro).
+  const own = [merged.cbu];
+  try { const c = await getConfig('cbu', null); if (c && c.number) own.push(c.number); } catch (_) {}
+  merged.ownCbus = own.map(_digits).filter(d => d.length >= 6);
   return merged;
 }
 
@@ -1680,15 +1687,52 @@ function _destOkOrUnknown(comprobante, cfg) {
   return !comprobante.destHolder && !comprobante.destCbu;
 }
 
+// ¿Dos CBUs son la misma cuenta? Compara por SUFIJO porque muchos comprobantes
+// muestran el CBU recortado ("...321212") — con ≥6 dígitos en común alcanza.
+// Devuelve null si alguno tiene menos de 6 dígitos (no se puede juzgar).
+function _cbuSameAccount(a, b) {
+  const da = _digits(a), db = _digits(b);
+  const n = Math.min(da.length, db.length);
+  if (n < 6) return null;
+  return da.slice(-n) === db.slice(-n);
+}
+
+// CBUs propios conocidos para este match: los de la config + el toCBU del
+// movimiento (los webhooks de hgcash SIEMPRE son de nuestro propio CBU).
+function _ownCbusFor(cfg, movement) {
+  const list = [...((cfg && cfg.ownCbus) || [])];
+  if (movement && movement.toCBU) list.push(_digits(movement.toCBU));
+  return list.filter(d => d && d.length >= 6);
+}
+
+// ¿El comprobante muestra un CBU destino que NO es ninguno de los nuestros? (#125)
+// Caso real: varios proyectos usan CBUs distintos con el MISMO titular
+// ("CUATRO P MOVIL S.A."). Un cliente mandó acá el comprobante de una
+// transferencia al CBU del OTRO proyecto; justo había un movimiento pendiente
+// por el mismo monto → se cargó acá plata que entró allá. El titular ya no
+// prueba nada: si el comprobante trae CBU, el CBU manda.
+// Devuelve el CBU ajeno (dígitos) o null si es nuestro / no se puede juzgar.
+function _comprobanteForeignCbu(comprobante, cfg, movement) {
+  const dest = _digits(comprobante && comprobante.destCbu);
+  if (dest.length < 6) return null;
+  const own = _ownCbusFor(cfg, movement);
+  if (!own.length) return null; // sin CBU propio configurado → no se puede juzgar
+  for (const o of own) { if (_cbuSameAccount(dest, o) === true) return null; }
+  return dest;
+}
+
 // ¿El destino del comprobante es consistente con el del movimiento (o no se sabe)?
 // Usa el destino REAL del movimiento (toName/toCBU de la cuenta hgcash que recibió),
 // así funciona para CUALQUIER cuenta hgcash sin depender de la config. Si el
 // comprobante no muestra destino, se acepta (el movimiento ya prueba que entró a
 // nuestra cuenta).
+// ⚠️ Si el comprobante MUESTRA un CBU, ese CBU es la única prueba válida (#125):
+// el nombre del titular NO alcanza (es el mismo en todos los proyectos).
 function _destConsistentOk(comprobante, movement, cfg) {
   if (!comprobante.destHolder && !comprobante.destCbu) return true;
+  if (_comprobanteForeignCbu(comprobante, cfg, movement)) return false;
   if (movement) {
-    if (comprobante.destCbu && movement.toCBU && _digits(comprobante.destCbu) === _digits(movement.toCBU)) return true;
+    if (comprobante.destCbu && movement.toCBU && _cbuSameAccount(comprobante.destCbu, movement.toCBU) === true) return true;
     if (comprobante.destHolder && movement.toName && _nameMatch(comprobante.destHolder, movement.toName)) return true;
   }
   if (_comprobanteToOurBank(comprobante, cfg)) return true;
@@ -2512,6 +2556,20 @@ async function hgcashMatchFromComprobante(comprobante) {
     const cfg = await getHgcashConfig();
     if (!cfg.enabled) return;
     if (!comprobante || !comprobante.isComprobante || comprobante.autoCharged) return;
+
+    // #125: comprobante a un CBU que NO es el nuestro (otro proyecto, mismo titular)
+    // → se marca other_cbu (queda fuera de TODO match futuro, incluido el que
+    // dispara el webhook) y se avisa al agente. NO se toca ningún movimiento: la
+    // transferencia pendiente sigue esperando a SU comprobante real.
+    const foreign = _comprobanteForeignCbu(comprobante, cfg, null);
+    if (foreign) {
+      const ours = (cfg.ownCbus || []).map(d => '…' + d.slice(-4)).join(' / ') || '?';
+      try { await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'other_cbu', toApiBank: false } }); } catch (_) {}
+      await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
+        `🏦 ⛔ Este comprobante va a OTRO CBU (…${foreign.slice(-4)}), no al de este proyecto (${ours}). NO se auto-carga aunque haya una transferencia por el mismo monto. Verificá con el cliente a dónde transfirió antes de cargar.`);
+      logger.info(`[hgcash] comprobante ${comprobante.id} de ${comprobante.username}: CBU destino ajeno …${foreign.slice(-4)} (propios: ${ours}) — excluido del match`);
+      return;
+    }
 
     // Buscamos un movimiento entrante que corresponda (por N° de transacción/coelsa,
     // o por nombre de origen + destino). NO dependemos de la config de cuenta: el

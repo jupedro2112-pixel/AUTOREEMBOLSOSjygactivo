@@ -254,7 +254,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   fail-closed en prod): guarda BankMovement → matching contra Comprobantes por
   monto + (N° operación==coelsa/externalID, o nombre de origen + destino consistente)
   dentro de una ventana (60min desde comprobante / 10min desde movimiento). Ambigüedad
-  → NO carga. `hgcashAutoCarga`: claims atómicos de movimiento y comprobante → modo
+  → NO carga. ⚠️ **Si el comprobante muestra un CBU destino, ese CBU tiene que ser
+  el nuestro** (`ownCbus` = hgcash.cbu + Config.cbu.number + toCBU del movimiento,
+  comparación por sufijo ≥6 dígitos): el titular NO alcanza porque es el mismo en
+  todos los proyectos → comprobante a otro CBU queda `bankMatchStatus:'other_cbu'`
+  con nota ⛔ al agente y nunca se auto-carga (#125). `hgcashAutoCarga`: claims atómicos de movimiento y comprobante → modo
   sombra o real → **mínimo $1.500** (menor → needs_review + aviso; era $2.000 hasta
   2026-08-19) → candado
   HgcashCharge por coelsa → guard anti-duplicado (misma carga <8min → needs_review) →

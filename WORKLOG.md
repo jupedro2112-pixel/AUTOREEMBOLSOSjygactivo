@@ -8,6 +8,45 @@
 
 ## Sesión 2026-08-27
 
+### 125. Auto-carga hgcash: comprobante a un CBU de OTRO proyecto (mismo titular) ya NO conecta
+- **Reporte del owner (Telegram de los agentes):** a un cliente se le cargó
+  automático un comprobante cuya transferencia había ido al CBU `…212` del
+  equipo de Nardo (OTRO proyecto). Los proyectos usan CBUs distintos con el
+  MISMO titular ("CUATRO P MOVIL S.A."). Justo había acá un movimiento
+  pendiente por el mismo monto (alguien había enviado ese monto a nuestro CBU)
+  y coincidió. **Aclaración del owner:** los webhooks de hgcash son SIEMPRE
+  del CBU propio — nunca llega un evento de otro CBU; el problema es del lado
+  del comprobante.
+- **Causa en el código:** la regla (2) del match (`_comprobanteMatchesMovement`,
+  monto + nombre de origen + "destino consistente") aceptaba el destino por
+  **nombre del titular** (`_destConsistentOk` → `movement.toName` o
+  `cfg.accountName`), y el titular es idéntico en todos los proyectos → un
+  comprobante con CBU destino `…212` pasaba como "consistente" y se cargaba
+  acá plata que había entrado allá.
+- **Fix (server.js, sin fricción para el caso normal):**
+  · `getHgcashConfig()` agrega `ownCbus` = `hgcash.cbu` + `Config['cbu'].number`
+    (solo dígitos, ≥6). En el match se suma el `toCBU` del movimiento (siempre
+    propio). Helpers `_cbuSameAccount` (compara por SUFIJO ≥6 dígitos porque
+    muchos comprobantes muestran el CBU recortado) y `_comprobanteForeignCbu`.
+  · **Si el comprobante MUESTRA un CBU destino, ese CBU manda:** si no coincide
+    con ninguno propio, `_destConsistentOk` devuelve false (el titular ya no
+    cuenta como prueba). Si el comprobante no trae CBU (solo titular o nada),
+    TODO sigue igual que antes → las cargas normales conectan igual.
+  · `hgcashMatchFromComprobante` lo detecta ANTES de buscar candidatos: marca
+    el comprobante `bankMatchStatus:'other_cbu'` (enum nuevo en el modelo
+    Comprobante; queda fuera de todo match futuro, también del que dispara el
+    webhook) y avisa al agente con nota interna "⛔ Este comprobante va a OTRO
+    CBU (…212), no al de este proyecto (…xxxx). NO se auto-carga…". NO toca
+    ningún movimiento: la transferencia pendiente sigue esperando a SU
+    comprobante real.
+  · Sin CBU propio configurado (`hgcash.cbu` y `Config.cbu.number` vacíos) no
+    se puede juzgar → se comporta como antes. **Verificar en el panel que el
+    CBU de hgcash y el CBU que se muestra al cliente estén cargados.**
+- **Validado:** `node --check` OK (server.js, Comprobante.js). Solo backend →
+  sin bump de `?v`. Back necesita redeploy. **PROBAR:** mandar un comprobante
+  con CBU destino ajeno → nota ⛔ en el chat y sin carga; uno al CBU propio
+  → carga como siempre. Lección para el repo hermano (mismo código).
+
 ### 124. Retiros: "No se pudo leer el saldo del cliente para descontar" = JUGAYGANA/proxy, pero el código NO reintentaba + la app instalada pasa a llamarse AUTOREEMBOLSOS
 - **Reporte del owner (captura de un agente, días previos):** al confirmar un
   retiro de $15.000 el panel mostraba la nota interna "⚠️ No se pudo leer el

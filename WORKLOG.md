@@ -8,6 +8,16 @@
 
 ## Sesión 2026-08-27
 
+### 127. Paquete de réplica para los repos hermanos (`docs/replicas/`)
+- El owner pidió "toda la implementación para copiar y pegar en los demás
+  proyectos". Quedó en el repo (Tails no persiste nada local):
+  `docs/replicas/2026-08-27-comprobantes-hgcash-retiros.patch` (diff exacto de
+  #124 + #125 + #126 sobre server.js, comprobanteAiService.js y Comprobante.js;
+  verificado con `git apply --check`) y `docs/replicas/README-2026-08-27.md`
+  (opción A `git apply`, opción B a mano con los bloques a pegar y un prompt
+  para el asistente del otro repo, checklist post-deploy). NO incluye el
+  rename de la PWA (específico de cada proyecto).
+
 ### 126. IA de comprobantes: modelo Opus 5 + salida estructurada + prompt que distingue CBU/CUIT de N° de operación + duplicados "posibles" en vez de "YA UTILIZADO"
 - **Queja del owner:** "la IA es muy inútil a veces": (a) hay N° de comprobante Y
   CBU en la imagen y devuelve el CBU como N° de operación; (b) marca

@@ -1,0 +1,571 @@
+diff --git a/server.js b/server.js
+index caca84a..fa55567 100644
+--- a/server.js
++++ b/server.js
+@@ -1495,38 +1495,59 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
+     const _destDig = _digits(result.destCbu);
+     const _origDig = _digits(result.originCbu);
+     const _rawOp = String(result.operationNumber || '').replace(/\s/g, '');
++    const _opDig = _digits(_rawOp);
+     // CUIT/CUIL = 11 dígitos con prefijo válido (20/23/24/27/30/33/34), con o sin guiones.
+     const _looksLikeCuit = /^(20|23|24|27|30|33|34)-?\d{8}-?\d$/.test(_rawOp) || /^(20|23|24|27|30|33|34)\d{9}$/.test(opKey);
++    // #126: la etiqueta impresa junto al número delata cuando la IA agarró otra cosa
++    // ("CBU", "CVU", "CUIT", "Alias", "Cuenta", "Tarjeta"…).
++    const _badLabel = /\b(cbu|cvu|cuit|cuil|alias|cuenta|tarjeta|cliente|dni)\b/i.test(String(result.operationLabel || ''));
++    // #126: N° que es un PEDAZO del CBU (la IA a veces devuelve 8-20 dígitos del CBU
++    // recortado) → también se descarta.
++    const _partOfCbu = _opDig.length >= 8 && ((_destDig && _destDig.includes(_opDig)) || (_origDig && _origDig.includes(_opDig)));
++    let opRejected = null;
+     if (opKey && (
+       (_destDig && opKey === _destDig) ||
+       (_origDig && opKey === _origDig) ||
+       /^\d{18,}$/.test(opKey) ||
+-      _looksLikeCuit
++      _looksLikeCuit || _badLabel || _partOfCbu
+     )) {
++      opRejected = _rawOp;
+       opKey = '';
+     }
+     // N° de operación demasiado corto: los números cortos se repiten entre bancos
+     // y entre días → falso "ya utilizado por otro usuario". Sin al menos 6
+     // caracteres no sirve como huella (los reales tienen 6+).
+-    if (opKey && opKey.length < 6) opKey = '';
++    if (opKey && opKey.length < 6) { opRejected = opRejected || _rawOp; opKey = ''; }
++    // El N° descartado NO se guarda como operationNumber (antes quedaba y el agente
++    // veía "op. N°<CBU>" en el chat; y el match hgcash lo usaba tal cual). Queda en
++    // operationNumberRejected para auditoría.
++    if (opRejected) {
++      logger.info(`[comprobante] N° de operación descartado (${_badLabel ? 'etiqueta ' + result.operationLabel : _partOfCbu ? 'parte del CBU' : _looksLikeCuit ? 'CUIT' : 'CBU/largo/corto'}): ${opRejected}`);
++      result.operationNumber = null;
++    }
+     let dedupeKey = opKey || null;
+     // Fallback: combo que incluye el NOMBRE de origen (más único que el CBU repetido).
+-    // ⚠️ Exige originHolder u originCbu de verdad: monto+fecha SOLOS colisionan
+-    // masivamente (dos clientes que transfirieron $5.000 el mismo día quedaban
+-    // marcados como "el mismo comprobante" — falso positivo visto en producción).
+-    if (!dedupeKey && result.amount && (result.originHolder || result.originCbu)) {
+-      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate || ''}`);
++    // ⚠️ Exige originHolder u originCbu de verdad Y una fecha: monto+origen SIN fecha
++    // colisionaba con cualquier transferencia anterior de la misma persona por el
++    // mismo monto (falso "ya utilizado" — #126). Si hay hora, va también: dos
++    // transferencias iguales del mismo día son legítimas y se distinguen por hora.
++    const _comboByData = !dedupeKey && result.amount && (result.originHolder || result.originCbu) && result.paymentDate;
++    if (_comboByData) {
++      dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate}|${result.paymentTime || ''}`);
+     }
+ 
+     const base = {
+       id: uuidv4(), userId, username, messageId,
+       isComprobante: true, aiConfidence: result.confidence || 0,
+       operationNumber: result.operationNumber || null,
++      operationLabel: result.operationLabel || null,
++      operationNumberRejected: opRejected || null,
+       amount: result.amount, originHolder: result.originHolder || null,
+       originCbu: result.originCbu || null,
+       destHolder: result.destHolder || null, destCbu: result.destCbu || null,
+       bank: result.bank || null,
+-      paymentDate: result.paymentDate || null, rawText: result.rawText || null,
++      paymentDate: result.paymentDate || null, paymentTime: result.paymentTime || null,
++      rawText: result.rawText || null,
+       dedupeKey, imageHash, model: result.model, createdAt: new Date()
+     };
+ 
+@@ -1577,12 +1598,23 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
+       } else {
+         // Cómo matcheó importa para el nivel de alarma: imagen idéntica = certeza;
+         // huella de datos = puede ser colisión de lectura de la IA.
++        // #126: tres niveles. Imagen idéntica = certeza. Mismo N° de operación = casi
++        // certeza. Combo monto+origen+fecha (sin N°) = POSIBLE: puede ser una segunda
++        // transferencia legítima de la misma persona o un error de lectura → el aviso
++        // ya no dice "YA UTILIZADO" a secas.
+         const _byImage = !!(imageHash && original.imageHash && original.imageHash === imageHash);
+-        const _matchDesc = _byImage
+-          ? 'La IMAGEN es idéntica (misma captura).'
+-          : 'Coinciden los DATOS leídos por la IA (N°/origen) — puede ser un error de lectura: comparalos a ojo.';
+-        await _emitAdminOnlyChatNote(userId, username,
+-          `🚨 COMPROBANTE YA UTILIZADO POR: @${original.username || original.userId}\n${dataDesc}\n${_matchDesc}\n⚠️ NO cargar sin verificar.`);
++        const _byOpNumber = !_byImage && !!opKey && original.dedupeKey === dedupeKey;
++        const _who = `@${original.username || original.userId}`;
++        if (_byImage) {
++          await _emitAdminOnlyChatNote(userId, username,
++            `🚨 COMPROBANTE YA UTILIZADO POR: ${_who}\n${dataDesc}\nLa IMAGEN es idéntica (misma captura).\n⚠️ NO cargar sin verificar.`);
++        } else if (_byOpNumber) {
++          await _emitAdminOnlyChatNote(userId, username,
++            `🚨 COMPROBANTE YA UTILIZADO POR: ${_who}\n${dataDesc}\nMismo N° de operación${original.operationNumber ? ' (' + original.operationNumber + ')' : ''} que el que envió ${_who}.\n⚠️ NO cargar sin verificar a ojo que el N° coincide.`);
++        } else {
++          await _emitAdminOnlyChatNote(userId, username,
++            `⚠️ POSIBLE comprobante repetido — ${_who} ya envió uno con el MISMO monto, origen y fecha${original.paymentTime ? ' (' + original.paymentTime + ')' : ''}.\n${dataDesc}\nNo hay N° de operación para confirmarlo: puede ser otra transferencia legítima o un error de lectura. Compará las dos imágenes a ojo antes de cargar.`);
++        }
+       }
+       return;
+     }
+@@ -1630,6 +1662,18 @@ async function getHgcashConfig() {
+   const cfg = await getConfig('hgcash', null);
+   const merged = Object.assign({}, HGCASH_DEFAULTS, cfg || {});
+   if (!Array.isArray(merged.acceptStatuses) || merged.acceptStatuses.length === 0) merged.acceptStatuses = ['done'];
++  // CBUs PROPIOS de este proyecto (solo dígitos): el de la config hgcash + el que
++  // se le muestra a los clientes (Config['cbu'].number). Sirven para detectar un
++  // comprobante que apunta al CBU de OTRO proyecto (#125). El toCBU del
++  // movimiento se suma en el momento del match (siempre es nuestro).
++  const own = [merged.cbu];
++  merged.ownAlias = '';
++  try {
++    const c = await getConfig('cbu', null);
++    if (c && c.number) own.push(c.number);
++    if (c && c.alias) merged.ownAlias = _normAlias(c.alias); // alias propio (los comprobantes muchas veces muestran alias en vez de CBU)
++  } catch (_) {}
++  merged.ownCbus = own.map(_digits).filter(d => d.length >= 6);
+   return merged;
+ }
+ 
+@@ -1680,15 +1724,68 @@ function _destOkOrUnknown(comprobante, cfg) {
+   return !comprobante.destHolder && !comprobante.destCbu;
+ }
+ 
++// ¿Dos CBUs son la misma cuenta? Compara por SUFIJO porque muchos comprobantes
++// muestran el CBU recortado ("...321212") — con ≥6 dígitos en común alcanza.
++// Devuelve null si alguno tiene menos de 6 dígitos (no se puede juzgar).
++function _cbuSameAccount(a, b) {
++  const da = _digits(a), db = _digits(b);
++  const n = Math.min(da.length, db.length);
++  if (n < 6) return null;
++  return da.slice(-n) === db.slice(-n);
++}
++
++// CBUs propios conocidos para este match: los de la config + el toCBU del
++// movimiento (los webhooks de hgcash SIEMPRE son de nuestro propio CBU).
++function _ownCbusFor(cfg, movement) {
++  const list = [...((cfg && cfg.ownCbus) || [])];
++  if (movement && movement.toCBU) list.push(_digits(movement.toCBU));
++  return list.filter(d => d && d.length >= 6);
++}
++
++// Alias normalizado (minúsculas, sin espacios). Devuelve '' si no parece un alias
++// (los alias AR son letras/dígitos/puntos/guiones, 6-20 chars, sin espacios).
++function _normAlias(s) {
++  const a = String(s || '').trim().toLowerCase().replace(/\s+/g, '');
++  return /^[a-z0-9.\-_]{6,20}$/.test(a) ? a : '';
++}
++
++// ¿El comprobante muestra un CBU destino que NO es ninguno de los nuestros? (#125)
++// Caso real: varios proyectos usan CBUs distintos con el MISMO titular
++// ("CUATRO P MOVIL S.A."). Un cliente mandó acá el comprobante de una
++// transferencia al CBU del OTRO proyecto; justo había un movimiento pendiente
++// por el mismo monto → se cargó acá plata que entró allá. El titular ya no
++// prueba nada: si el comprobante trae CBU, el CBU manda.
++// El campo destCbu de la IA puede traer CBU/CVU **o ALIAS**: si es alias, se compara
++// contra el alias propio (Config['cbu'].alias). Devuelve un texto para mostrar
++// ("…1212" o "alias xyz") si es ajeno, o null si es nuestro / no se puede juzgar.
++function _comprobanteForeignCbu(comprobante, cfg, movement) {
++  const rawDest = comprobante && comprobante.destCbu;
++  const dest = _digits(rawDest);
++  if (dest.length >= 6) {
++    const own = _ownCbusFor(cfg, movement);
++    if (!own.length) return null; // sin CBU propio configurado → no se puede juzgar
++    for (const o of own) { if (_cbuSameAccount(dest, o) === true) return null; }
++    return '…' + dest.slice(-4);
++  }
++  // Sin dígitos suficientes: ¿es un alias?
++  const alias = _normAlias(rawDest);
++  const ownAlias = cfg && cfg.ownAlias;
++  if (!alias || !ownAlias) return null; // no parece alias, o no tenemos alias propio configurado
++  return alias === ownAlias ? null : `alias "${alias}"`;
++}
++
+ // ¿El destino del comprobante es consistente con el del movimiento (o no se sabe)?
+ // Usa el destino REAL del movimiento (toName/toCBU de la cuenta hgcash que recibió),
+ // así funciona para CUALQUIER cuenta hgcash sin depender de la config. Si el
+ // comprobante no muestra destino, se acepta (el movimiento ya prueba que entró a
+ // nuestra cuenta).
++// ⚠️ Si el comprobante MUESTRA un CBU, ese CBU es la única prueba válida (#125):
++// el nombre del titular NO alcanza (es el mismo en todos los proyectos).
+ function _destConsistentOk(comprobante, movement, cfg) {
+   if (!comprobante.destHolder && !comprobante.destCbu) return true;
++  if (_comprobanteForeignCbu(comprobante, cfg, movement)) return false;
+   if (movement) {
+-    if (comprobante.destCbu && movement.toCBU && _digits(comprobante.destCbu) === _digits(movement.toCBU)) return true;
++    if (comprobante.destCbu && movement.toCBU && _cbuSameAccount(comprobante.destCbu, movement.toCBU) === true) return true;
+     if (comprobante.destHolder && movement.toName && _nameMatch(comprobante.destHolder, movement.toName)) return true;
+   }
+   if (_comprobanteToOurBank(comprobante, cfg)) return true;
+@@ -2513,6 +2610,20 @@ async function hgcashMatchFromComprobante(comprobante) {
+     if (!cfg.enabled) return;
+     if (!comprobante || !comprobante.isComprobante || comprobante.autoCharged) return;
+ 
++    // #125: comprobante a un CBU que NO es el nuestro (otro proyecto, mismo titular)
++    // → se marca other_cbu (queda fuera de TODO match futuro, incluido el que
++    // dispara el webhook) y se avisa al agente. NO se toca ningún movimiento: la
++    // transferencia pendiente sigue esperando a SU comprobante real.
++    const foreign = _comprobanteForeignCbu(comprobante, cfg, null);
++    if (foreign) {
++      const ours = [...(cfg.ownCbus || []).map(d => '…' + d.slice(-4)), cfg.ownAlias ? `alias "${cfg.ownAlias}"` : ''].filter(Boolean).join(' / ') || '?';
++      try { await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'other_cbu', toApiBank: false } }); } catch (_) {}
++      await _emitAdminOnlyChatNote(comprobante.userId, comprobante.username,
++        `🏦 ⛔ Este comprobante va a OTRO CBU/alias (${foreign}), no al de este proyecto (${ours}). NO se auto-carga aunque haya una transferencia por el mismo monto. Verificá con el cliente a dónde transfirió antes de cargar.`);
++      logger.info(`[hgcash] comprobante ${comprobante.id} de ${comprobante.username}: destino ajeno ${foreign} (propios: ${ours}) — excluido del match`);
++      return;
++    }
++
+     // Buscamos un movimiento entrante que corresponda (por N° de transacción/coelsa,
+     // o por nombre de origen + destino). NO dependemos de la config de cuenta: el
+     // match se valida contra el movimiento real (sirve para cualquier banco/cuenta).
+@@ -14216,13 +14327,19 @@ async function _deductChipsAtConfirm(payout, agentUser) {
+   const user = await User.findOne({ id: payout.userId });
+   const jgId = (user && user.jugayganaUserId) || null;
+ 
+-  // 1) Saldo actual del cliente.
+-  const balRes = await jugayganaMovements.getUserBalance(payout.username);
++  // 1) Saldo actual del cliente. CON RETRY (#124): antes era una sola llamada a
++  //    JUGAYGANA (getUserBalance) y cualquier timeout/HTML de Cloudflare o el
++  //    proxy saturado (#122) tumbaba la confirmación entera con "No se pudo leer
++  //    el saldo" aunque el cliente y su saldo existieran. 3 intentos (500/1000ms),
++  //    igual que el resto de lecturas de saldo del server. Si aun así falla, el
++  //    payout queda 'failed' (re-pagable desde el panel) y NO se descontó nada.
++  const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
+   const avail = (balRes && balRes.success) ? (Number(balRes.balance) || 0) : null;
+   if (avail === null) {
+-    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar' } });
+-    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente para descontar $${amt.toLocaleString('es-AR')}. Reintentá en unos minutos.`);
+-    return { ok: false, error: 'No se pudo verificar el saldo del cliente. Reintentá.' };
++    const why = jugaygana.errToString((balRes && balRes.error) || 'sin detalle');
++    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar: ' + why } });
++    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente en JUGAYGANA para descontar $${amt.toLocaleString('es-AR')} (3 intentos: ${why}). No se descontó nada. Reintentá el pago en unos minutos.`);
++    return { ok: false, error: 'JUGAYGANA no respondió al leer el saldo del cliente (3 intentos). No se descontó nada. Reintentá en unos minutos.' };
+   }
+   // 2) ¿Tiene saldo? Si se jugó las fichas → avisar al cliente, cerrar chat, cancelar.
+   if (avail < amt) {
+diff --git a/src/models/Comprobante.js b/src/models/Comprobante.js
+index d96d97d..163650d 100644
+--- a/src/models/Comprobante.js
++++ b/src/models/Comprobante.js
+@@ -26,13 +26,18 @@ const comprobanteSchema = new mongoose.Schema({
+ 
+   // Datos extraídos del comprobante (los que la IA pudo leer)
+   operationNumber: { type: String, default: null, trim: true },
++  // Etiqueta impresa junto al N° de operación ("Referencia", "ID de transacción"…) — #126
++  operationLabel: { type: String, default: null, trim: true },
++  // N° de operación que la IA devolvió pero se DESCARTÓ por parecer CBU/CUIT/alias (#126, auditoría)
++  operationNumberRejected: { type: String, default: null, trim: true },
+   amount: { type: Number, default: null },
+   originHolder: { type: String, default: null, trim: true }, // titular / origen
+   originCbu: { type: String, default: null, trim: true },    // CBU/CVU/alias origen
+   destHolder: { type: String, default: null, trim: true },   // titular / destino (quién recibe)
+   destCbu: { type: String, default: null, trim: true },      // CBU/CVU/alias destino (a quién se envió)
+   bank: { type: String, default: null, trim: true },
+-  paymentDate: { type: String, default: null, trim: true },  // fecha/hora tal como figura
++  paymentDate: { type: String, default: null, trim: true },  // fecha tal como figura
++  paymentTime: { type: String, default: null, trim: true },  // hora tal como figura (#126; separa 2 transferencias iguales del mismo día)
+   rawText: { type: String, default: null },                  // texto crudo leído (debug)
+ 
+   // Huella para detectar duplicados. Se arma con el N° de operación normalizado;
+@@ -60,7 +65,9 @@ const comprobanteSchema = new mongoose.Schema({
+   toApiBank: { type: Boolean, default: false }, // el destino es el CBU del banco con API
+   bankMatchStatus: {
+     type: String,
+-    enum: ['none', 'pending', 'claiming', 'shadow_matched', 'auto_charged', 'manual_charged', 'matched', 'duplicate', 'needs_review'],
++    // other_cbu: el comprobante muestra un CBU destino que NO es el nuestro (otro
++    // proyecto con el mismo titular) → NUNCA se auto-carga contra un movimiento (#125).
++    enum: ['none', 'pending', 'claiming', 'shadow_matched', 'auto_charged', 'manual_charged', 'matched', 'duplicate', 'needs_review', 'other_cbu'],
+     default: 'none',
+     index: true
+   },
+diff --git a/src/services/comprobanteAiService.js b/src/services/comprobanteAiService.js
+index 04b17a7..28ec026 100644
+--- a/src/services/comprobanteAiService.js
++++ b/src/services/comprobanteAiService.js
+@@ -3,12 +3,21 @@
+  *
+  * Lee una imagen de comprobante con Claude (vision) y devuelve los datos
+  * estructurados: si es un comprobante, monto, N° de operación, CBU/alias origen,
+- * banco y fecha. Lo usa el flujo de chat para detectar comprobantes reutilizados.
++ * banco y fecha. Lo usa el flujo de chat para detectar comprobantes reutilizados
++ * y la auto-carga hgcash (matcheo contra el movimiento bancario).
+  *
+- * - Modelo por defecto: claude-haiku-4-5 (barato y suficiente para OCR de
+- *   comprobantes). Configurable con la env COMPROBANTE_AI_MODEL.
++ * - Modelo por defecto: claude-opus-5 (desde 2026-08-27, WORKLOG #126; antes
++ *   claude-haiku-4-5, que confundía CBU/CUIT con N° de operación y leía mal
++ *   montos). Configurable con la env COMPROBANTE_AI_MODEL (ej. claude-sonnet-5
++ *   si se quiere abaratar).
+  * - Usa axios directo contra la API de Anthropic (mismo patrón que los clientes
+  *   de JUGAYGANA) para no sumar dependencias nuevas.
++ * - Salida ESTRUCTURADA (output_config.format = json_schema): la API garantiza
++ *   un JSON válido con exactamente las claves pedidas — se acabó el "respuesta
++ *   sin JSON parseable". parseJsonLoose queda como red de seguridad.
++ * - Refusal fallback (beta server-side-fallback): si el modelo declinara la
++ *   imagen, la API la reintenta sola en otro modelo. Si la org no tuviera la
++ *   beta (HTTP 400), se reintenta UNA vez sin ella.
+  * - Si NO está la ANTHROPIC_API_KEY (en process.env, cargada desde SSM en el
+  *   bootstrap), isEnabled() devuelve false y el flujo de chat no hace nada
+  *   (queda "dormido" sin romper).
+@@ -21,13 +30,14 @@ const logger = require('../utils/logger');
+ 
+ const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+ const ANTHROPIC_VERSION = '2023-06-01';
++const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+ 
+ function getApiKey() {
+   return process.env.ANTHROPIC_API_KEY || null;
+ }
+ 
+ function getModel() {
+-  return process.env.COMPROBANTE_AI_MODEL || 'claude-haiku-4-5';
++  return process.env.COMPROBANTE_AI_MODEL || 'claude-opus-5';
+ }
+ 
+ /** true si hay API key configurada (la detección está activa). */
+@@ -54,40 +64,91 @@ function buildImageBlock(content) {
+   return null;
+ }
+ 
+-const PROMPT = [
+-  'Sos un verificador de comprobantes de pago/transferencia bancaria de Argentina.',
+-  'Mirá la imagen y decidí si es un COMPROBANTE de pago o transferencia (de un banco,',
+-  'billetera virtual como Mercado Pago/Ualá/Brubank, o app bancaria). Las capturas de',
+-  'error de la página, fotos de personas, memes, fotos de pantallas de juego, etc. NO son',
+-  'comprobantes.',
++// Rol + reglas de lectura. Va en `system` (estable → cacheable por prefijo).
++const SYSTEM = [
++  'Sos un verificador experto de comprobantes de pago/transferencia de Argentina (bancos,',
++  'Mercado Pago, Ualá, Brubank, Naranja X, Personal Pay, Cuenta DNI, Lemon, Prex, etc.).',
++  'Tu lectura se usa para detectar comprobantes reutilizados y para acreditar cargas',
++  'automáticas, así que cada campo tiene que salir EXACTAMENTE como está impreso o null.',
++  'Nunca inventes ni completes un dato que no se lea con claridad: null es mejor que un',
++  'valor dudoso.',
+   '',
+-  'Si ES un comprobante, extraé estos datos (lo que puedas leer; si algo no está, poné null):',
+-  '- numero_operacion: el número de operación / comprobante / referencia de la transacción',
+-  '  (string). MUY IMPORTANTE: NO uses el CBU, CVU, alias, número de cuenta NI el CUIT/CUIL',
+-  '  (formato XX-XXXXXXXX-X, ej: 30-71876498-6) como número de operación — el CUIT identifica a',
+-  '  una persona/empresa y se REPITE entre transferencias distintas. Si el comprobante NO muestra',
+-  '  un número de operación/referencia claro y distinto del CUIT/CBU, poné null.',
+-  '- monto: el importe transferido, sólo el número sin símbolos ni puntos de miles (number).',
+-  '- titular_origen: nombre del que envió el dinero (string).',
+-  '- cbu_origen: CBU/CVU o alias de la cuenta de ORIGEN (string).',
+-  '- titular_destino: nombre del que RECIBE el dinero (string).',
+-  '- cbu_destino: CBU/CVU o alias de la cuenta de DESTINO (a quién se le transfirió) (string).',
+-  '- banco: banco o billetera (string).',
+-  '- fecha: fecha y hora que figura en el comprobante, tal cual (string).',
++  'CÓMO DISTINGUIR LOS NÚMEROS (esto es lo más importante):',
++  '- CBU/CVU: SIEMPRE 22 dígitos seguidos (a veces separados en 2 bloques). NUNCA es el',
++  '  número de operación.',
++  '- CUIT/CUIL: 11 dígitos, formato XX-XXXXXXXX-X (ej. 30-71876498-6). Identifica a una',
++  '  persona/empresa y se repite en muchas transferencias. NUNCA es el número de operación.',
++  '- Alias: palabras separadas por puntos (ej. "campeon.13.mp"). NUNCA es el número de operación.',
++  '- Número de cuenta / N° de tarjeta / N° de cliente: identifican una cuenta, NO una operación.',
++  '- NÚMERO DE OPERACIÓN: identifica ESA transferencia puntual. Aparece con etiquetas como',
++  '  "Número de operación", "N° de operación", "Nro. de comprobante", "N° de transacción",',
++  '  "ID de transacción", "Referencia", "Código de operación", "N° de control", "Código de',
++  '  transferencia", "Identificador". Suele tener entre 6 y 20 caracteres, puede mezclar letras',
++  '  y números. Si el único número "de referencia" que ves es un CBU, CUIT o alias, o no hay',
++  '  etiqueta clara, devolvé null (NO reemplaces con otro número).',
+   '',
+-  'Respondé ÚNICAMENTE con un objeto JSON válido, sin texto adicional, sin markdown, con',
+-  'exactamente estas claves:',
+-  '{"es_comprobante": true|false, "confianza": 0..1, "numero_operacion": string|null,',
+-  ' "monto": number|null, "titular_origen": string|null, "cbu_origen": string|null,',
+-  ' "titular_destino": string|null, "cbu_destino": string|null,',
+-  ' "banco": string|null, "fecha": string|null}'
++  'ORIGEN vs DESTINO: el ORIGEN es quien ENVÍA/PAGA ("De:", "Cuenta origen", "Desde",',
++  '"Pagador", "Ordenante"); el DESTINO es quien RECIBE ("Para:", "Destinatario",',
++  '"Beneficiario", "A:", "Cuenta destino"). No los intercambies. En comprobantes de',
++  'Mercado Pago/Ualá el que envía suele figurar arriba y el destinatario abajo.',
++  '',
++  'MONTO: el importe transferido como número (12500.50), sin símbolo, sin puntos de miles;',
++  'la coma decimal argentina pasa a punto. Si hay varios importes (comisión, total), usá',
++  'el importe transferido al destinatario.',
++  '',
++  'FECHA y HORA: tal cual están impresas, en campos separados ("fecha": "27/08/2026",',
++  '"hora": "14:32:10"). Si la hora no aparece, hora = null.',
++  '',
++  'NO son comprobantes: capturas de errores, fotos de personas, memes, pantallas de juego,',
++  'saldos de cuenta, listados de movimientos sin una transferencia puntual, fotos borrosas',
++  'donde no se distingue una transferencia. En esos casos es_comprobante = false.'
++].join('\n');
++
++const USER_TEXT = [
++  'Analizá esta imagen y completá el JSON con los datos del comprobante.',
++  'Campos:',
++  '- es_comprobante: true si es un comprobante de pago/transferencia puntual.',
++  '- confianza: 0..1 de que la lectura general es correcta.',
++  '- numero_operacion: el número de operación según las reglas (o null).',
++  '- numero_operacion_etiqueta: el texto EXACTO de la etiqueta que acompaña a ese número en',
++  '  la imagen (ej. "Número de operación", "Referencia", "ID de transacción"); null si no hay.',
++  '- monto: número, o null.',
++  '- titular_origen: nombre de quien ENVÍA el dinero, o null.',
++  '- cbu_origen: CBU/CVU o alias de la cuenta ORIGEN, o null.',
++  '- titular_destino: nombre de quien RECIBE el dinero, o null.',
++  '- cbu_destino: CBU/CVU o alias de la cuenta DESTINO, o null.',
++  '- banco: banco o billetera desde la que se hizo el envío, o null.',
++  '- fecha: fecha impresa, o null.',
++  '- hora: hora impresa, o null.'
+ ].join('\n');
+ 
++const nullable = (t) => ({ anyOf: [{ type: t }, { type: 'null' }] });
++const OUTPUT_SCHEMA = {
++  type: 'object',
++  properties: {
++    es_comprobante: { type: 'boolean' },
++    confianza: { type: 'number' },
++    numero_operacion: nullable('string'),
++    numero_operacion_etiqueta: nullable('string'),
++    monto: nullable('number'),
++    titular_origen: nullable('string'),
++    cbu_origen: nullable('string'),
++    titular_destino: nullable('string'),
++    cbu_destino: nullable('string'),
++    banco: nullable('string'),
++    fecha: nullable('string'),
++    hora: nullable('string')
++  },
++  required: ['es_comprobante', 'confianza', 'numero_operacion', 'numero_operacion_etiqueta',
++    'monto', 'titular_origen', 'cbu_origen', 'titular_destino', 'cbu_destino', 'banco', 'fecha', 'hora'],
++  additionalProperties: false
++};
++
+ // Extrae el primer objeto JSON de un texto (tolera fences ```json ... ``` o texto suelto).
++// Con salida estructurada casi nunca hace falta; queda como red de seguridad.
+ function parseJsonLoose(text) {
+   if (!text || typeof text !== 'string') return null;
+   let t = text.trim();
+-  // Quitar fences de markdown si vinieran
+   t = t.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+   try { return JSON.parse(t); } catch (_) { /* seguir */ }
+   const start = t.indexOf('{');
+@@ -98,11 +159,36 @@ function parseJsonLoose(text) {
+   return null;
+ }
+ 
++function _str(v) { return (v === null || v === undefined || v === '') ? null : String(v).trim() || null; }
++
++// Monto: acepta number o string con formato argentino ("12.500,50") por si el modelo
++// devolviera texto en un fallback.
++function _parseAmount(v) {
++  if (v === null || v === undefined || v === '') return null;
++  if (typeof v === 'number') return isFinite(v) && v > 0 ? v : null;
++  const n = Number(String(v).replace(/[^\d.,-]/g, '').replace(/\.(?=\d{3}\b)/g, '').replace(',', '.'));
++  return isFinite(n) && n > 0 ? n : null;
++}
++
++async function _post(body, { withFallback }) {
++  const headers = {
++    'x-api-key': getApiKey(),
++    'anthropic-version': ANTHROPIC_VERSION,
++    'content-type': 'application/json'
++  };
++  const b = Object.assign({}, body);
++  if (withFallback) {
++    headers['anthropic-beta'] = FALLBACK_BETA;
++    b.fallbacks = 'default';
++  }
++  return axios.post(ANTHROPIC_URL, b, { headers, timeout: 90000 });
++}
++
+ /**
+  * Analiza el content de un mensaje de imagen.
+  * @returns {Promise<object>} { ok, isComprobante, confidence, operationNumber,
+- *   amount, originHolder, originCbu, bank, paymentDate, rawText, model } o
+- *   { ok:false, error } si no se pudo analizar.
++ *   operationLabel, amount, originHolder, originCbu, destHolder, destCbu, bank,
++ *   paymentDate, paymentTime, rawText, model } o { ok:false, error } si no se pudo analizar.
+  */
+ async function analyzeComprobante(content) {
+   const apiKey = getApiKey();
+@@ -114,26 +200,47 @@ async function analyzeComprobante(content) {
+   const model = getModel();
+   const body = {
+     model,
+-    max_tokens: 600,
++    // Con thinking adaptativo (default en Opus 5) los tokens de razonamiento
++    // cuentan contra max_tokens → dejar aire; la salida útil son ~150 tokens.
++    max_tokens: 4096,
++    output_config: {
++      effort: 'medium',
++      format: { type: 'json_schema', schema: OUTPUT_SCHEMA }
++    },
++    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
+     messages: [{
+       role: 'user',
+-      content: [imageBlock, { type: 'text', text: PROMPT }]
++      content: [imageBlock, { type: 'text', text: USER_TEXT }]
+     }]
+   };
+ 
+   try {
+-    const resp = await axios.post(ANTHROPIC_URL, body, {
+-      headers: {
+-        'x-api-key': apiKey,
+-        'anthropic-version': ANTHROPIC_VERSION,
+-        'content-type': 'application/json'
+-      },
+-      timeout: 30000
+-    });
+-
+-    // La respuesta trae content: [{type:'text', text:'...'}]
+-    const blocks = resp.data && resp.data.content;
+-    const textBlock = Array.isArray(blocks) ? blocks.find(b => b && b.type === 'text') : null;
++    let resp;
++    try {
++      resp = await _post(body, { withFallback: true });
++    } catch (err) {
++      // 400 = la org no tiene la beta de fallback (o el modelo no la acepta):
++      // reintentar sin ella. Cualquier otro error sube al catch de afuera.
++      if (err.response && err.response.status === 400) {
++        logger.warn(`[comprobante-ai] 400 con fallback beta (${JSON.stringify(err.response.data).slice(0, 160)}) — reintento sin fallback`);
++        resp = await _post(body, { withFallback: false });
++      } else {
++        throw err;
++      }
++    }
++
++    const data = resp.data || {};
++    if (data.stop_reason === 'refusal') {
++      const why = data.stop_details && data.stop_details.explanation;
++      return { ok: false, error: `La IA declinó analizar la imagen${why ? ': ' + String(why).slice(0, 120) : ''}` };
++    }
++    if (data.stop_reason === 'max_tokens') {
++      logger.warn('[comprobante-ai] respuesta cortada por max_tokens');
++    }
++
++    // La respuesta trae content: [{type:'text', text:'...'}] (+ bloques thinking vacíos).
++    const blocks = Array.isArray(data.content) ? data.content : [];
++    const textBlock = blocks.find(b => b && b.type === 'text');
+     const raw = textBlock ? textBlock.text : '';
+     const parsed = parseJsonLoose(raw);
+     if (!parsed) {
+@@ -141,24 +248,22 @@ async function analyzeComprobante(content) {
+       return { ok: false, error: 'Respuesta de IA sin JSON válido', rawText: raw };
+     }
+ 
+-    const amountNum = (parsed.monto === null || parsed.monto === undefined)
+-      ? null
+-      : (Number(String(parsed.monto).replace(/[^\d.,-]/g, '').replace(/\.(?=\d{3}\b)/g, '').replace(',', '.')) || null);
+-
+     return {
+       ok: true,
+       isComprobante: !!parsed.es_comprobante,
+       confidence: typeof parsed.confianza === 'number' ? parsed.confianza : 0,
+-      operationNumber: parsed.numero_operacion ? String(parsed.numero_operacion).trim() : null,
+-      amount: amountNum,
+-      originHolder: parsed.titular_origen ? String(parsed.titular_origen).trim() : null,
+-      originCbu: parsed.cbu_origen ? String(parsed.cbu_origen).trim() : null,
+-      destHolder: parsed.titular_destino ? String(parsed.titular_destino).trim() : null,
+-      destCbu: parsed.cbu_destino ? String(parsed.cbu_destino).trim() : null,
+-      bank: parsed.banco ? String(parsed.banco).trim() : null,
+-      paymentDate: parsed.fecha ? String(parsed.fecha).trim() : null,
++      operationNumber: _str(parsed.numero_operacion),
++      operationLabel: _str(parsed.numero_operacion_etiqueta),
++      amount: _parseAmount(parsed.monto),
++      originHolder: _str(parsed.titular_origen),
++      originCbu: _str(parsed.cbu_origen),
++      destHolder: _str(parsed.titular_destino),
++      destCbu: _str(parsed.cbu_destino),
++      bank: _str(parsed.banco),
++      paymentDate: _str(parsed.fecha),
++      paymentTime: _str(parsed.hora),
+       rawText: raw,
+-      model
++      model: data.model || model
+     };
+   } catch (err) {
+     const detail = err.response

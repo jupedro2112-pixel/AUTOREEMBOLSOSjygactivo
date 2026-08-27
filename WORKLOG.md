@@ -8,6 +8,11 @@
 
 ## Sesión 2026-08-27
 
+> **Deploy a EB hecho por el owner el 2026-08-27 (noche)** con #124–#131 incluidos.
+> Verificado desde afuera: `/api/health` ok, `manifest.json` ya dice AUTOREEMBOLSOS,
+> `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
+> marcado como **PROBAR** en cada entrada.
+
 ### 131. Auto-carga hgcash: el guard "POSIBLE DUPLICADO (<8 min)" ya no frena una SEGUNDA transferencia real
 - **Reporte del owner (captura):** cliente mandó $2.000, comprobante verificado
   único (op. distinta), y la auto-carga igual frenó con "⚠️ POSIBLE DUPLICADO —

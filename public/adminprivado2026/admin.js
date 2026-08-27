@@ -5233,6 +5233,15 @@ async function savePrivateAiConfig() {
 }
 
 let smsAccessGranted = false;
+// #130: la clave verificada se retiene en memoria y viaja en cada preview/envío
+// (el server la exige). Si el server la rechaza, se vuelve a pedir.
+let _smsPassword = null;
+function _smsRelock(msg) {
+    smsAccessGranted = false; _smsPassword = null;
+    const c = document.getElementById('smsSectionContent'); if (c) c.classList.add('hidden');
+    showToast(msg || 'Volvé a ingresar la clave del sector', 'error');
+    showSmsPasswordModal();
+}
 
 function showSmsPasswordModal() {
     showModal('smsPasswordModal');
@@ -5258,6 +5267,7 @@ async function verifySmsAccessFromModal() {
 
         if (response.ok) {
             smsAccessGranted = true;
+            _smsPassword = password;
             hideModal('smsPasswordModal');
             document.getElementById('smsPasswordInput').value = '';
             document.getElementById('smsSectionContent').classList.remove('hidden');
@@ -8243,9 +8253,10 @@ async function previewSmsMasivo() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({ filters, onlyVerified })
+            body: JSON.stringify({ filters, onlyVerified, password: _smsPassword })
         });
         const data = await res.json();
+        if (!res.ok && data.code === 'SMS_PASSWORD') { _smsRelock(data.error); return; }
         if (!res.ok) throw new Error(data.error || 'Error al cargar destinatarios');
 
         renderSmsPreview(data);
@@ -8369,9 +8380,10 @@ async function enviarSmsMasivo(mensaje) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({ message: mensaje, filters, onlyVerified })
+            body: JSON.stringify({ message: mensaje, filters, onlyVerified, password: _smsPassword })
         });
         const data = await res.json();
+        if (!res.ok && data.code === 'SMS_PASSWORD') { _smsRelock(data.error); return; }
         if (!res.ok) throw new Error(data.error || 'Error al enviar SMS masivo');
 
         if (progreso) progreso.style.display = 'none';

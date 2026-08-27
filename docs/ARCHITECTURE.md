@@ -425,7 +425,8 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   borrar ese doc en Atlas). Cada escritura manda la clave (`/api/admin/private-config/*`,
   `sensitiveLimiter`). Hoy contiene la config de la IA de comprobantes; es el lugar para
   futuras configs sensibles sin pasar por SSM. **SMS Masivo usa esta misma clave** (#129;
-  `SMS_MASIVO_PASSWORD` de SSM solo es fallback mientras no haya clave definida).
+  `SMS_MASIVO_PASSWORD` de SSM solo es fallback mientras no haya clave definida) y la
+  exige del lado server en `bulk-sms` y `bulk-sms/preview` (#130).
 - Secciones "Automatización" y "Estrategia de bonos" están marcadas "No se usa" en el
   sidebar pero siguen funcionales (candidatas a limpieza con el owner).
 - La sección "Base de Datos" fue ELIMINADA por completo (2026-07-09): era inalcanzable.

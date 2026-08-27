@@ -8,6 +8,17 @@
 
 ## Sesión 2026-08-27
 
+### 130. SMS Masivo: la clave se exige del lado SERVER en preview y envío
+- Cierra la nota de #129: `POST /api/admin/bulk-sms` y `/bulk-sms/preview`
+  ahora reciben `password` en el body y lo verifican con `_smsPasswordCheck`
+  (helper compartido con `verify-sms-password`: hash de Config privada, env
+  solo fallback). Sin clave válida → 401 `{code:'SMS_PASSWORD'}` (500 si no
+  hay clave definida en ningún lado). `preview` suma `sensitiveLimiter`.
+- **Panel:** la clave verificada en el modal se retiene en `_smsPassword` y
+  viaja en cada preview/envío; ante `SMS_PASSWORD` el panel re-bloquea la
+  sección y vuelve a pedirla (`_smsRelock`).
+- **Validado:** `node --check` OK (server.js, admin.js). Mismo deploy (v26).
+
 ### 129. SMS Masivo usa la misma clave de "🔐 Config privada" (adiós SMS_MASIVO_PASSWORD en SSM)
 - **Pedido del owner:** mover la clave de SMS Masivo al esquema nuevo.
 - **Cambio (`POST /api/admin/verify-sms-password`):** si ya hay clave del
@@ -20,11 +31,7 @@
   Config privada)", Enter envía, y muestra el error real del server.
 - **Una vez definida la clave desde el panel, `SMS_MASIVO_PASSWORD` se puede
   borrar de SSM.**
-- ⚠️ **Nota preexistente (no tocada):** `POST /api/admin/bulk-sms` y
-  `/bulk-sms/preview` NO exigen la clave del lado server — el candado es
-  solo del panel (`smsAccessGranted`). Cualquier token con rol admin puede
-  llamarlos directo. Si se quiere cerrar de verdad, exigir `password` en el
-  body de esos dos endpoints (mismo patrón que `/private-config/ai`).
+- ~~Nota: bulk-sms no exigía la clave del lado server~~ → cerrado en #130.
 - **Validado:** `node --check` OK (server.js, admin.js). Mismo deploy que #128
   (admin-sw sigue en v26).
 

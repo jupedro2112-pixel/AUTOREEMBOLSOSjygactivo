@@ -5307,11 +5307,15 @@ function buildBulkSmsQuery(filters, onlyVerified = false) {
 }
 
 // Preview: devuelve la lista de destinatarios con validación de números SIN enviar SMS
-app.post('/api/admin/bulk-sms/preview', authMiddleware, async (req, res) => {
+app.post('/api/admin/bulk-sms/preview', authMiddleware, sensitiveLimiter, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Acceso denegado. Solo el administrador general puede usar esta función.' });
     }
+
+    // #130: la clave del sector se exige del lado SERVER (antes el candado era solo del panel).
+    const gate = await _smsPasswordCheck((req.body || {}).password);
+    if (!gate.ok) return res.status(gate.status).json({ error: gate.error, code: gate.code });
 
     const { filters, onlyVerified } = req.body;
     const query = buildBulkSmsQuery(filters, onlyVerified === true);
@@ -5342,6 +5346,13 @@ app.post('/api/admin/bulk-sms', authMiddleware, bulkSmsIpLimiter, async (req, re
     // Solo el administrador general puede enviar SMS masivos
     if (req.user.role !== 'admin') {
       return res.status(403).json({ error: 'Acceso denegado. Solo el administrador general puede enviar SMS masivos.' });
+    }
+
+    // #130: la clave del sector se exige del lado SERVER en cada envío.
+    const gate = await _smsPasswordCheck((req.body || {}).password);
+    if (!gate.ok) {
+      logger.warn(`[sms] envío masivo RECHAZADO sin clave válida (${req.user.username})`);
+      return res.status(gate.status).json({ error: gate.error, code: gate.code });
     }
 
     const { message, filters, onlyVerified } = req.body;
@@ -5411,6 +5422,21 @@ app.post('/api/admin/bulk-sms', authMiddleware, bulkSmsIpLimiter, async (req, re
 // ADMIN - Verificar contraseña del panel SMS MASIVO
 // ============================================
 
+// #130: chequeo de la clave de SMS Masivo compartido por verify + preview + envío.
+// Misma clave que "🔐 Config privada" (hash en DB); env SMS_MASIVO_PASSWORD solo
+// como fallback mientras no haya clave definida. Devuelve { ok, status, error }.
+async function _smsPasswordCheck(password) {
+  if (!password || typeof password !== 'string') return { ok: false, status: 401, error: 'Clave del sector privado requerida', code: 'SMS_PASSWORD' };
+  if (await _privateConfigHasPassword()) {
+    if (!(await _privateConfigCheckPassword(password))) return { ok: false, status: 401, error: 'Clave incorrecta', code: 'SMS_PASSWORD' };
+    return { ok: true, source: 'private-config' };
+  }
+  const envPw = process.env.SMS_MASIVO_PASSWORD;
+  if (!envPw) return { ok: false, status: 500, error: 'Definí primero la clave en 🔐 Config privada.', code: 'SMS_PASSWORD' };
+  if (!safeCompare(password, envPw)) return { ok: false, status: 401, error: 'Clave incorrecta', code: 'SMS_PASSWORD' };
+  return { ok: true, source: 'env' };
+}
+
 app.post('/api/admin/verify-sms-password', authMiddleware, sensitiveLimiter, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {
@@ -5422,27 +5448,13 @@ app.post('/api/admin/verify-sms-password', authMiddleware, sensitiveLimiter, asy
       return res.status(400).json({ success: false, error: 'Contraseña requerida.' });
     }
 
-    // #129: SMS Masivo usa la MISMA clave del sector "🔐 Config privada" (hash
-    // bcrypt en Config['privateconfigpass'], definida desde el panel). La env
-    // SMS_MASIVO_PASSWORD (SSM) queda SOLO como fallback mientras no se haya
-    // definido la clave del sector — así nada se rompe en el medio.
-    if (await _privateConfigHasPassword()) {
-      if (!(await _privateConfigCheckPassword(password))) {
-        logger.warn(`[sms] clave INCORRECTA (${req.user.username})`);
-        return res.status(401).json({ success: false, error: 'Clave incorrecta' });
-      }
-      return res.json({ success: true, source: 'private-config' });
+    // #129: misma clave que "🔐 Config privada" (hash en DB); env solo fallback.
+    const chk = await _smsPasswordCheck(password);
+    if (!chk.ok) {
+      if (chk.status === 401) logger.warn(`[sms] clave INCORRECTA (${req.user.username})`);
+      return res.status(chk.status).json({ success: false, error: chk.error });
     }
-
-    const SMS_MASIVO_PASSWORD = process.env.SMS_MASIVO_PASSWORD;
-    if (!SMS_MASIVO_PASSWORD) {
-      logger.error('⛔ Sin clave de Config privada ni SMS_MASIVO_PASSWORD en el entorno.');
-      return res.status(500).json({ success: false, error: 'Definí primero la clave en 🔐 Config privada.' });
-    }
-    if (!safeCompare(password, SMS_MASIVO_PASSWORD)) {
-      return res.status(401).json({ success: false, error: 'Clave incorrecta' });
-    }
-    res.json({ success: true, source: 'env' });
+    res.json({ success: true, source: chk.source });
   } catch (error) {
     logger.error(`Error en verify-sms-password: ${error.message}`);
     res.status(500).json({ success: false, error: 'Error del servidor.' });

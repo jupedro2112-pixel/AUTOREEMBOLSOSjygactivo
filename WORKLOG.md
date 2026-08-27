@@ -13,6 +13,31 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 135. Auditoría: los mensajes AUTOMÁTICOS del cliente (reembolso reclamado, pedido de CBU) ya no cuentan como "sin respuesta"; el reclamo de reembolso no abre el chat
+- **Primeras alertas reales en Telegram (owner, 23:40):** tres falsos
+  positivos del mismo tipo: (a) IA 5/10 "el reclamo de reembolso daily quedó
+  sin respuesta"; (b) regla SIN RESPUESTA por "💳 Solicito los datos para
+  transferir (CBU)"; (c) regla SIN RESPUESTA por "🎁 Reembolso daily
+  reclamado". Los tres son mensajes que genera la app al tocar un botón y que
+  el sistema responde solo: ningún agente tiene que contestarlos.
+- **Fix:** `_isAutoClientMessage(content)` (reembolso reclamado —reusa
+  `_isRefundClaimNotice`— o "💳 Solicito los datos para transferir").
+  `_auditLoadMessages` ahora devuelve `userMsgs` = mensajes REALES del
+  cliente y `unanswered` = reales sin NINGÚN mensaje posterior (agente o
+  sistema). `_auditConversation`: sin mensajes reales, o sin agente pero todo
+  respondido → no audita (marca el tramo como visto, no gasta IA); la regla
+  `sin_respuesta` usa `unanswered`. La transcripción etiqueta esos mensajes
+  como `[CLIENTE-AUTOMÁTICO]` y el prompt le dice a la IA que NUNCA los cuente
+  como sin respuesta/demora.
+- **Pedido extra del owner:** "cuando reclaman un reembolso debería aparecer
+  cerrado, no abrirse el chat". Ya no reabría uno cerrado (excepción vieja),
+  pero si el cliente NO tenía ChatStatus, el upsert lo CREABA con status
+  'open' por default → aparecía en Abiertos. Ahora en ambos caminos (HTTP y
+  socket) el aviso de reembolso hace `$setOnInsert: {status:'closed',
+  closedBy:'system'}`.
+- **Validado:** `node --check` OK. Las auditorías falsas ya creadas quedan en
+  el panel (marcar visto). Redeploy.
+
 ### 134. Encuesta 👍👎: ahora sale DESPUÉS del mensaje de carga/pago (salía antes) + nota interna también con 👍
 - **Captura del owner (Render/EB, 08:36):** la encuesta llegó a las 08:36:58 y
   "¡Carga acreditada!" a las 08:37:00 → orden invertido. Causa: el hook estaba

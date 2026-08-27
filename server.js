@@ -2714,16 +2714,36 @@ const _AUDIT_FLAG_LABEL = {
 };
 function _flagLabels(flags) { return (flags || []).map(f => _AUDIT_FLAG_LABEL[f] || f).join(', '); }
 
-// Mensajes del tramo (sin adminOnly) + agentes que participaron.
+// Mensajes AUTOMÁTICOS del cliente (los genera la app al tocar un botón, el
+// sistema los responde solo y NINGÚN agente tiene que contestarlos): reclamo de
+// reembolso y pedido de CBU. No cuentan como "el cliente escribió" (#135).
+function _isAutoClientMessage(content) {
+  if (typeof content !== 'string') return false;
+  const t = content.trim();
+  return _isRefundClaimNotice(t) || /^💳 Solicito los datos para transferir/i.test(t);
+}
+function _isAgentMsg(m) { return m.type !== 'system' && m.senderRole !== 'user' && m.senderUsername !== 'Sistema'; }
+
+// Mensajes del tramo (sin adminOnly) + agentes que participaron + conteos.
+//  userMsgs     = mensajes REALES del cliente (sin los automáticos)
+//  unanswered   = mensajes reales del cliente sin NINGÚN mensaje posterior (agente o sistema)
 async function _auditLoadMessages(userId, since, until) {
   const q = { $or: [{ senderId: userId }, { receiverId: userId }], adminOnly: { $ne: true } };
   q.timestamp = { $gt: since };
   if (until) q.timestamp.$lte = until;
   const msgs = await Message.find(q).sort({ timestamp: 1 }).limit(400).lean();
-  const agents = [...new Set(msgs.filter(m => m.type !== 'system' && m.senderRole !== 'user' && m.senderUsername && m.senderUsername !== 'Sistema').map(m => m.senderUsername))];
-  const userMsgs = msgs.filter(m => m.senderRole === 'user').length;
-  const agentMsgs = msgs.filter(m => m.type !== 'system' && m.senderRole !== 'user' && m.senderUsername !== 'Sistema').length;
-  return { msgs, agents, userMsgs, agentMsgs };
+  msgs.forEach(m => { if (m.senderRole === 'user' && _isAutoClientMessage(m.content)) m._auto = true; });
+  const agents = [...new Set(msgs.filter(m => _isAgentMsg(m) && m.senderUsername).map(m => m.senderUsername))];
+  const realUser = msgs.filter(m => m.senderRole === 'user' && !m._auto);
+  const agentMsgs = msgs.filter(_isAgentMsg).length;
+  let unanswered = 0;
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.senderRole !== 'user' || m._auto) continue;
+    const answered = msgs.slice(i + 1).some(x => x.senderRole !== 'user');
+    if (!answered) unanswered++;
+  }
+  return { msgs, agents, userMsgs: realUser.length, agentMsgs, unanswered, autoMsgs: msgs.length - realUser.length - msgs.filter(m => m.senderRole !== 'user').length };
 }
 
 // Alerta a Telegram (si corresponde) y marca el audit como alertado.
@@ -2830,9 +2850,13 @@ async function _auditConversation(userId, reason) {
     const cfg = await _getAuditConfig();
     const lookback = new Date(now.getTime() - (Number(cfg.lookbackHours) || 24) * 3600 * 1000);
     const since = cs.lastAuditMsgAt && cs.lastAuditMsgAt > lookback ? cs.lastAuditMsgAt : lookback;
-    const { msgs, agents, userMsgs, agentMsgs } = await _auditLoadMessages(userId, since, null);
-    if (!msgs.length || userMsgs === 0) { await release({ lastAuditMsgAt: cs.lastMessageAt || now }); return null; }
-    const lastTs = msgs[msgs.length - 1].timestamp;
+    const { msgs, agents, userMsgs, agentMsgs, unanswered } = await _auditLoadMessages(userId, since, null);
+    const lastTs = msgs.length ? msgs[msgs.length - 1].timestamp : (cs.lastMessageAt || now);
+    // Nada que evaluar: sin mensajes REALES del cliente (solo automáticos / sistema),
+    // o el cliente escribió y ya le respondió el sistema/agente y no hay agente que juzgar.
+    if (!msgs.length || userMsgs === 0 || (agentMsgs === 0 && unanswered === 0)) {
+      await release({ lastAuditAt: now, lastAuditMsgAt: lastTs }); return null;
+    }
     const base = {
       id: uuidv4(), userId, username: cs.username, reason: reason || 'idle',
       periodStart: msgs[0].timestamp, periodEnd: lastTs, messageCount: msgs.length,
@@ -2840,13 +2864,12 @@ async function _auditConversation(userId, reason) {
     };
     let audit;
     if (agentMsgs === 0) {
-      // Nadie respondió: no gasta IA. (Los mensajes de sistema no cuentan como agente.)
-      const hasSystemReply = msgs.some(m => m.type === 'system' && m.timestamp > msgs.find(x => x.senderRole === 'user').timestamp);
-      if (hasSystemReply && userMsgs <= 1) { await release({ lastAuditAt: now, lastAuditMsgAt: lastTs }); return null; } // solo bienvenida/confirmación automática
+      // Nadie respondió mensajes REALES del cliente: no gasta IA. (Los automáticos
+      // —reembolso, CBU— y los que ya contestó el sistema no cuentan, #135.)
       audit = await ChatAudit.create(Object.assign(base, {
         source: 'rules', score: 2, flags: ['sin_respuesta', 'demora'], resolved: false,
-        summary: `El cliente mandó ${userMsgs} mensaje(s) y ningún agente respondió en ${Number(cfg.idleMinutes) || 20}+ min.`,
-        quote: String((msgs.find(m => m.senderRole === 'user' && m.type === 'text') || {}).content || '').slice(0, 300)
+        summary: `El cliente mandó ${unanswered} mensaje(s) sin respuesta de ningún agente en ${Number(cfg.idleMinutes) || 20}+ min.`,
+        quote: String((msgs.filter(m => m.senderRole === 'user' && !m._auto && m.type === 'text').pop() || {}).content || '').slice(0, 300)
       }));
     } else {
       if (!chatAuditAi.isEnabled()) { await release(); return null; }
@@ -7320,13 +7343,15 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
     const targetUserId = req.user.role === 'admin' ? req.body.receiverId : req.user.userId;
     if (targetUserId) {
       const user = await User.findOne({ id: targetUserId });
+      // #135: la confirmación automática de reembolso no debe CREAR el chat como
+      // abierto (si el cliente no tenía ChatStatus, el upsert lo creaba 'open' por
+      // default y aparecía en Abiertos sin que nadie tuviera que responder nada).
+      const _autoNotice = req.user.role === 'user' && _isRefundClaimNotice(content);
       await ChatStatus.findOneAndUpdate(
         { userId: targetUserId },
-        { 
-          userId: targetUserId,
-          username: user ? user.username : req.user.username,
-          lastMessageAt: new Date()
-        },
+        Object.assign({
+          $set: { userId: targetUserId, username: user ? user.username : req.user.username, lastMessageAt: new Date() }
+        }, _autoNotice ? { $setOnInsert: { status: 'closed', closedAt: new Date(), closedBy: 'system' } } : {}),
         { upsert: true }
       );
     }
@@ -9519,7 +9544,11 @@ io.on('connection', (socket) => {
           }
           await ChatStatus.findOneAndUpdate(
             { userId: targetUserId },
-            { userId: targetUserId, username: chatUsername, lastMessageAt: new Date() },
+            Object.assign(
+              { $set: { userId: targetUserId, username: chatUsername, lastMessageAt: new Date() } },
+              // #135: el aviso automático de reembolso no crea el chat como abierto
+              (!isAdminRole && _isRefundClaimNotice(content)) ? { $setOnInsert: { status: 'closed', closedAt: new Date(), closedBy: 'system' } } : {}
+            ),
             { upsert: true, setDefaultsOnInsert: true }
           );
           // Solo los mensajes del usuario reabren el chat si estaba cerrado.

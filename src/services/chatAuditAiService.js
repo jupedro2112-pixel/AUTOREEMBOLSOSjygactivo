@@ -56,6 +56,9 @@ const SYSTEM = [
   '',
   'Los mensajes [SISTEMA] son automáticos (confirmaciones de carga, bienvenida): no son del',
   'agente, pero cuentan como respuesta al cliente cuando resuelven lo que pidió.',
+  'Los mensajes [CLIENTE-AUTOMÁTICO] los genera la app cuando el cliente toca un botón',
+  '(reclamo de reembolso, pedido de CBU): el sistema ya los procesó solo y NO requieren',
+  'respuesta de ningún agente. NUNCA los cuentes como "sin respuesta" ni como demora.',
   'Los insultos del CLIENTE no bajan el puntaje del agente por sí solos; lo que importa es cómo',
   'reaccionó el agente. Marcá posible_fraude si el cliente intenta engañar (comprobante ajeno,',
   'reclamo falso), sin bajar el puntaje del agente por eso.',
@@ -110,6 +113,7 @@ function formatTranscript(messages, username) {
     if (dd !== lastDay) { lines.push(`--- ${dd} ---`); lastDay = dd; }
     let who;
     if (m.type === 'system' || m.senderUsername === 'Sistema') who = '[SISTEMA]';
+    else if (m.senderRole === 'user' && m._auto) who = '[CLIENTE-AUTOMÁTICO]';
     else if (m.senderRole === 'user') who = `CLIENTE(${username})`;
     else who = `AGENTE(${m.senderUsername || m.senderRole})`;
     let text = m.type === 'image' ? '[imagen/comprobante]' : m.type === 'video' ? '[video]' : String(m.content || '');

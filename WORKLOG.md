@@ -13,6 +13,26 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 145. "🧠 Enseñarle a la IA": reporte + corrección → regla general integrada en la base (con vista previa)
+- **Pedido del owner:** poder pegar el aviso que mandó la IA a Telegram, escribir
+  la corrección con ese mensaje como referencia, y que eso se sume a la base de
+  la IA "como contexto bien, no literal", sin que quede un choclo random.
+- **Cómo funciona:** card en Config privada → Auditoría. (1) pega el reporte,
+  (2) escribe la corrección en sus palabras, (3) "Generar regla" →
+  `POST /api/admin/private-config/audit/teach` → `chatAuditAi.distillRule`
+  (IA editora, effort medium, salida estructurada): devuelve UNA regla general
+  ("Cuando X, lo correcto es Y / NO es Z", sin nombres ni puntajes) y la
+  acción: `agregar`, `reemplazar` (índice de la regla equivalente, versión
+  combinada) o `sin_cambio`. El panel muestra explicación + regla editable +
+  qué reemplaza. (4) "Agregar a la base" → `…/teach/apply` guarda
+  `extraRules` completo (una regla por línea "- …"), recarga la config en
+  runtime y anota en `Config['auditteachlog']` (últimas 200: fecha, quién,
+  reporte, corrección, regla) para saber de dónde salió cada regla.
+- Helpers `parseRules`/`joinRules` normalizan la base (guiones, numeración).
+  La base sigue siendo el mismo cuadro "Reglas del negocio" (editable a mano).
+- **Validado:** `node --check` OK; HTML balanceado, ids únicos. **admin-sw
+  v30 → v31.** Redeploy.
+
 ### 144. Config privada: "Guardar auditoría no hace nada" → rate limit compartido (10/15 min) + toast de 3 s; ahora limiter propio (60/15 min) y estado visible
 - **Reporte del owner:** escribe reglas del negocio, toca "Guardar auditoría"
   y "no hace nada, no guarda". Descartado: JS viejo (prod sirve admin-sw v29,

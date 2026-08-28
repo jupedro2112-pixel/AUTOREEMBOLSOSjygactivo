@@ -236,4 +236,101 @@ async function auditTranscript({ transcript, username, agents, hint }) {
   }
 }
 
-module.exports = { applyConfig, isEnabled, getModel, getEffort, auditTranscript, formatTranscript, DEFAULT_MODEL, EFFORTS, AI_FLAGS };
+// ── Destilador de reglas (#145): convierte "reporte de la IA + corrección del dueño"
+// en UNA regla general y la integra en la base existente sin duplicar ni degradarla.
+const DISTILL_SYSTEM = [
+  'Sos el EDITOR de la base de reglas con la que un supervisor de calidad (otra IA) evalúa',
+  'chats de atención al cliente de una sala de juegos argentina. El dueño te trae: (a) un',
+  'reporte que esa IA emitió sobre un chat, y (b) su corrección en lenguaje coloquial de por',
+  'qué el reporte está mal o qué criterio faltaba. Tu trabajo: convertir eso en UNA regla',
+  'GENERAL, clara y corta, y decidir cómo integrarla en la base actual.',
+  '',
+  'Cómo tiene que ser la regla:',
+  '- General: describe la SITUACIÓN y el criterio ("Cuando X, lo correcto es Y / NO es Z").',
+  '  NUNCA nombres de clientes ni de agentes, ni puntajes, ni fechas, ni "en este caso".',
+  '- Una sola idea por regla, 1-3 oraciones, en español rioplatense, tono de instrucción.',
+  '- Concreta: qué banderas NO corresponden y qué SÍ sería un problema en esa situación.',
+  '- Si la corrección del dueño trae una regla de negocio (tiempos, condiciones, políticas),',
+  '  incluí el dato exacto (ej. "30 minutos", "duplicar la carga").',
+  '',
+  'Cómo integrarla:',
+  '- Si la base actual NO tiene nada equivalente → accion "agregar".',
+  '- Si hay una regla que trata la MISMA situación → accion "reemplazar" con una versión',
+  '  mejorada que combine ambas (indicá el índice 1-based de la regla a reemplazar).',
+  '- Si la base ya cubre exactamente esto → accion "sin_cambio" y explicá por qué.',
+  '- No toques reglas que no tengan que ver. No inventes reglas que el dueño no pidió.',
+  '',
+  'Devolvé también una explicación de 1 oración para el dueño de qué entendiste.'
+].join('\n');
+
+const DISTILL_SCHEMA = {
+  type: 'object',
+  properties: {
+    accion: { type: 'string', enum: ['agregar', 'reemplazar', 'sin_cambio'] },
+    regla: nullable('string'),
+    indice_a_reemplazar: nullable('integer'),
+    explicacion: { type: 'string' }
+  },
+  required: ['accion', 'regla', 'indice_a_reemplazar', 'explicacion'],
+  additionalProperties: false
+};
+
+/** Base de reglas → lista (una por línea que empiece con "- "). */
+function parseRules(text) {
+  return String(text || '').split('\n').map(l => l.trim()).filter(Boolean)
+    .map(l => l.replace(/^[-•*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim()).filter(Boolean);
+}
+function joinRules(list) { return list.map(r => '- ' + r).join('\n'); }
+
+/**
+ * @returns {Promise<{ok, accion, regla, indice, explicacion, nuevasReglas:string[], model} | {ok:false,error}>}
+ */
+async function distillRule({ report, correction, currentRules }) {
+  if (!getApiKey()) return { ok: false, error: 'ANTHROPIC_API_KEY no configurada' };
+  const rules = parseRules(currentRules);
+  const userText = [
+    'BASE DE REGLAS ACTUAL:',
+    rules.length ? rules.map((r, i) => `${i + 1}. ${r}`).join('\n') : '(vacía)',
+    '',
+    'REPORTE QUE EMITIÓ LA IA SUPERVISORA:',
+    '<<<', String(report || '').slice(0, 4000), '>>>',
+    '',
+    'CORRECCIÓN DEL DUEÑO:',
+    '<<<', String(correction || '').slice(0, 4000), '>>>',
+    '',
+    'Generá la regla y la acción, y completá el JSON.'
+  ].join('\n');
+  const body = {
+    model: getModel(),
+    max_tokens: 2048,
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: DISTILL_SCHEMA } },
+    system: [{ type: 'text', text: DISTILL_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: userText }]
+  };
+  try {
+    let resp;
+    try { resp = await _post(body, true); }
+    catch (err) { if (err.response && err.response.status === 400) resp = await _post(body, false); else throw err; }
+    const data = resp.data || {};
+    if (data.stop_reason === 'refusal') return { ok: false, error: 'La IA declinó procesar la corrección' };
+    const tb = (Array.isArray(data.content) ? data.content : []).find(b => b && b.type === 'text');
+    const parsed = parseJsonLoose(tb ? tb.text : '');
+    if (!parsed) return { ok: false, error: 'Respuesta de IA sin JSON válido' };
+    const accion = ['agregar', 'reemplazar', 'sin_cambio'].includes(parsed.accion) ? parsed.accion : 'agregar';
+    const regla = parsed.regla ? String(parsed.regla).trim().replace(/\s+/g, ' ') : null;
+    let indice = Number.isInteger(parsed.indice_a_reemplazar) ? parsed.indice_a_reemplazar : null;
+    const next = rules.slice();
+    if (accion === 'agregar' && regla) next.push(regla);
+    else if (accion === 'reemplazar' && regla) {
+      if (indice && indice >= 1 && indice <= next.length) next[indice - 1] = regla;
+      else { next.push(regla); indice = null; }
+    }
+    return { ok: true, accion, regla, indice, explicacion: String(parsed.explicacion || '').slice(0, 500), nuevasReglas: next, model: data.model || getModel() };
+  } catch (err) {
+    const detail = err.response ? `HTTP ${err.response.status} ${JSON.stringify(err.response.data).slice(0, 200)}` : err.message;
+    logger.error(`[audit-ai] distillRule: ${detail}`);
+    return { ok: false, error: detail };
+  }
+}
+
+module.exports = { applyConfig, isEnabled, getModel, getEffort, auditTranscript, formatTranscript, distillRule, parseRules, joinRules, DEFAULT_MODEL, EFFORTS, AI_FLAGS };

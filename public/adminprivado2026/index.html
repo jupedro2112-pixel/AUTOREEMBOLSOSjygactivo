@@ -2293,7 +2293,33 @@
 - Si el cliente tiene bono, para retirar tiene que duplicar/triplicar. Que el agente le explique eso y no le pague es CORRECTO.
 - Los pagos se hacen por fuera del chat: que no aparezca la confirmación no es un problema.
 - 'Derivar a comunidad' es una respuesta válida para consultas de promociones." style="width:100%;font-family:inherit;font-size:12.5px;"></textarea>
-                            <p style="font-size:11px;color:#777;margin-top:4px;">Cada vez que marques una auditoría como <b>❌ Falso positivo</b>, mirá qué regla faltaba y sumala acá. Aplica a las próximas auditorías al instante.</p>
+                            <p style="font-size:11px;color:#777;margin-top:4px;">Una regla por línea, empezando con "- ". Para no escribirlas a mano, usá <b>🧠 Enseñarle a la IA</b> acá abajo: pegás el reporte y tu corrección, y la IA redacta la regla general e integra la base.</p>
+                        </div>
+                        <!-- #145 Enseñarle a la IA -->
+                        <div style="background:rgba(212,175,55,.06);border:1px solid rgba(212,175,55,.3);border-radius:10px;padding:12px;margin-bottom:14px;">
+                            <div style="font-weight:700;color:#d4af37;margin-bottom:6px;">🧠 Enseñarle a la IA (con vista previa)</div>
+                            <div class="form-group">
+                                <label class="form-label">1. Pegá el reporte que mandó la IA <span style="color:#888;font-weight:normal;">(la alerta de Telegram o el resumen de Auditoría)</span></label>
+                                <textarea id="pcTeachReport" rows="4" maxlength="4000" placeholder="🟡 autoreembolsos.com — auditoría IA · @cliente… Puntaje 6/10 · Banderas: sin solución… 📝 …" style="width:100%;font-family:inherit;font-size:12.5px;"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">2. Tu corrección <span style="color:#888;font-weight:normal;">(en tus palabras: qué está mal y cómo debería juzgarlo)</span></label>
+                                <textarea id="pcTeachCorrection" rows="3" maxlength="4000" placeholder="Ej: esto está bien, el agente pidió captura y el cliente no respondió más; si el cliente deja de responder después de que lo atendieron, no es sin solución." style="width:100%;font-family:inherit;font-size:12.5px;"></textarea>
+                            </div>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                <button class="btn-secondary" onclick="teachAuditRule()">🧠 Generar regla</button>
+                                <span id="pcTeachStatus" style="font-size:12px;color:#aaa;"></span>
+                            </div>
+                            <div id="pcTeachPreview" class="hidden" style="margin-top:10px;border-top:1px solid rgba(255,255,255,.1);padding-top:10px;">
+                                <div id="pcTeachExplain" style="font-size:12.5px;color:#aaa;margin-bottom:6px;"></div>
+                                <div style="font-size:11px;color:#888;margin-bottom:4px;">Regla propuesta (podés retocarla antes de guardar):</div>
+                                <textarea id="pcTeachRule" rows="3" maxlength="1000" style="width:100%;font-family:inherit;font-size:12.5px;border-color:#25d366;"></textarea>
+                                <div id="pcTeachAction" style="font-size:11.5px;color:#aaa;margin:6px 0;"></div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                    <button class="btn-primary" onclick="applyTeachRule()">✅ Agregar a la base</button>
+                                    <button class="btn-secondary" onclick="document.getElementById('pcTeachPreview').classList.add('hidden')">Descartar</button>
+                                </div>
+                            </div>
                         </div>
                         <div class="form-group">
                             <label class="form-label">Banderas que alertan a Telegram</label>

@@ -6025,6 +6025,52 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, pri
   }
 });
 
+// #145 "Enseñarle a la IA": reporte + corrección → la IA editora propone la regla
+// general y cómo integrarla (agregar / reemplazar / sin cambio). NO guarda: devuelve
+// vista previa. El apply guarda la base completa + log de enseñanzas.
+app.post('/api/admin/private-config/audit/teach', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const correction = String(b.correction || '').trim();
+    if (correction.length < 5) return res.status(400).json({ error: 'Escribí la corrección (qué estuvo mal o qué criterio falta)' });
+    if (!chatAuditAi.isEnabled()) return res.status(400).json({ error: 'La IA de auditoría está apagada o sin API key' });
+    const cur = await _getAuditConfig();
+    const r = await chatAuditAi.distillRule({ report: String(b.report || ''), correction, currentRules: cur.extraRules || '' });
+    if (!r.ok) return res.status(502).json({ error: 'La IA no pudo procesar la corrección: ' + (r.error || '?') });
+    res.json({ success: true, accion: r.accion, regla: r.regla, indice: r.indice, explicacion: r.explicacion,
+      reglasActuales: chatAuditAi.parseRules(cur.extraRules || ''), nuevasReglas: r.nuevasReglas, nuevoTexto: chatAuditAi.joinRules(r.nuevasReglas) });
+  } catch (error) {
+    logger.error(`[private-config] teach: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.post('/api/admin/private-config/audit/teach/apply', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const rules = chatAuditAi.parseRules(String(b.nuevoTexto || ''));
+    const cur = await _getAuditConfig();
+    const next = Object.assign({}, cur, { extraRules: chatAuditAi.joinRules(rules).slice(0, 8000), updatedBy: req.user.username, updatedAt: new Date() });
+    await setConfig(AUDIT_CONFIG_KEY, next);
+    await _loadAiConfigIntoService();
+    // Log de enseñanzas (últimas 200) para saber de dónde salió cada regla.
+    try {
+      const log = (await getConfig('auditteachlog', null)) || [];
+      log.unshift({ at: new Date(), by: req.user.username, accion: b.accion || null, regla: b.regla || null, report: String(b.report || '').slice(0, 1000), correction: String(b.correction || '').slice(0, 1000) });
+      await setConfig('auditteachlog', log.slice(0, 200));
+    } catch (_) {}
+    logger.info(`[private-config] regla enseñada por ${req.user.username}: ${b.accion || '?'} → "${String(b.regla || '').slice(0, 120)}" (base: ${rules.length} reglas)`);
+    res.json({ success: true, audit: await _auditConfigForPanel() });
+  } catch (error) {
+    logger.error(`[private-config] teach/apply: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 app.post('/api/admin/private-config/telegram-test', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;

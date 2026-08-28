@@ -5316,6 +5316,53 @@ async function savePrivateAuditConfig() {
         renderPrivateAuditConfig(j.audit || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
+// #145 Enseñarle a la IA: reporte + corrección → regla general (vista previa) → base.
+let _pcTeach = null;
+async function teachAuditRule() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    const report = ((document.getElementById('pcTeachReport') || {}).value || '').trim();
+    const correction = ((document.getElementById('pcTeachCorrection') || {}).value || '').trim();
+    if (correction.length < 5) { showToast('Escribí tu corrección', 'error'); return; }
+    _pcStatus('pcTeachStatus', 'Pensando la regla…', true);
+    document.getElementById('pcTeachPreview').classList.add('hidden');
+    try {
+        const r = await authFetch('/api/admin/private-config/audit/teach', { method: 'POST', body: JSON.stringify({ password: _pcPassword, report, correction }) });
+        const j = await _pcReadJson(r);
+        if (!r.ok) { _pcStatus('pcTeachStatus', '❌ ' + (j.error || 'Error'), false); return; }
+        _pcTeach = Object.assign({ report, correction }, j);
+        document.getElementById('pcTeachExplain').textContent = '💬 ' + (j.explicacion || '');
+        document.getElementById('pcTeachRule').value = j.regla || '';
+        const act = document.getElementById('pcTeachAction');
+        if (j.accion === 'sin_cambio') act.textContent = 'ℹ️ La base ya cubre este caso; no hace falta agregar nada (podés guardar igual si querés forzar la regla).';
+        else if (j.accion === 'reemplazar' && j.indice) act.textContent = `🔁 Reemplaza a la regla #${j.indice}: “${(j.reglasActuales || [])[j.indice - 1] || ''}”`;
+        else act.textContent = `➕ Se agrega como regla #${(j.nuevasReglas || []).length} (la base queda con ${(j.nuevasReglas || []).length} reglas).`;
+        document.getElementById('pcTeachPreview').classList.remove('hidden');
+        _pcStatus('pcTeachStatus', '', true);
+    } catch (e) { _pcStatus('pcTeachStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
+}
+async function applyTeachRule() {
+    if (!_pcPassword || !_pcTeach) return;
+    const regla = ((document.getElementById('pcTeachRule') || {}).value || '').trim().replace(/\s+/g, ' ');
+    if (!regla) { showToast('La regla quedó vacía', 'error'); return; }
+    // Reconstruir la base con la regla (posiblemente retocada) en el lugar que propuso la IA.
+    const base = (_pcTeach.reglasActuales || []).slice();
+    if (_pcTeach.accion === 'reemplazar' && _pcTeach.indice && _pcTeach.indice <= base.length) base[_pcTeach.indice - 1] = regla;
+    else base.push(regla);
+    const nuevoTexto = base.map(x => '- ' + x).join('\n');
+    _pcStatus('pcTeachStatus', 'Guardando…', true);
+    try {
+        const r = await authFetch('/api/admin/private-config/audit/teach/apply', { method: 'POST', body: JSON.stringify({ password: _pcPassword, nuevoTexto, accion: _pcTeach.accion, regla, report: _pcTeach.report, correction: _pcTeach.correction }) });
+        const j = await _pcReadJson(r);
+        if (!r.ok) { _pcStatus('pcTeachStatus', '❌ ' + (j.error || 'Error'), false); return; }
+        showToast('Regla agregada a la base', 'success');
+        _pcStatus('pcTeachStatus', '✅ Base actualizada (' + base.length + ' reglas)', true);
+        document.getElementById('pcTeachPreview').classList.add('hidden');
+        document.getElementById('pcTeachReport').value = ''; document.getElementById('pcTeachCorrection').value = '';
+        _pcTeach = null;
+        renderPrivateAuditConfig(j.audit || {});
+    } catch (e) { _pcStatus('pcTeachStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
+}
+
 async function testPrivateTelegram() {
     if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
     try {

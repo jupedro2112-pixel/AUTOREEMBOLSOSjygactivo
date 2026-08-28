@@ -13,6 +13,21 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 139. Regla antifraude "30 minutos para validar comprobantes" en el prompt base
+- El owner pegó en "Reglas del negocio" del panel un reporte de Telegram
+  (royalmirtha947, 3/10, ERROR DE PLATA) + la explicación: los comprobantes
+  enviados después de 30 min de la transferencia NO se cargan (estafa
+  típica: A reclama al instante, B reclama el mismo pago a los 45 min → se
+  cargaría 2 veces). El mensaje estándar del agente es "No podremos validar
+  ya que excedió el tiempo límite…, solicite la reversión a su banco".
+- **Fix (prompt base):** regla explícita: aplicar el límite y repetirlo es
+  atención CORRECTA (no error_plata / sin_solucion / "no investigó"); solo es
+  problema si hubo grosería, contradicción, o el comprobante claramente entró
+  dentro de los 30 min y lo rechazaron igual.
+- Recordatorio al owner: en el cuadro del panel van REGLAS ("cuando X, lo
+  correcto es Y"), no reportes pegados con nombres y puntajes.
+- **Validado:** `node --check` OK. Redeploy.
+
 ### 138. Criterio "la pelota del lado del cliente" en el prompt de auditoría (3 falsos positivos del owner)
 - Casos reportados (Telegram 00:54-01:02, todos 6/10 con sin_solucion /
   respuesta_pobre): (a) cliente escribe "Disculpe?" sin contexto y el agente

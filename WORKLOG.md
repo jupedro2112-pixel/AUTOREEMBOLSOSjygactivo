@@ -13,6 +13,18 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 147. Aprendizaje diario: a las 00:01 ART procesa el DÍA ANTERIOR COMPLETO, sin tope chico
+- **Owner:** "¿por qué una hora y 24 h hacia atrás? que a las 00:01 pase lo del
+  día anterior, con la misma info de las auditorías". Cambios en
+  `_runAuditLearn`: rango = día ART completo (`_artDayRange`, UTC-3 fijo);
+  daily → ayer, manual → hoy hasta ahora (si no hay nada, ayer); default
+  `learnHourART` 0 (tick cada 5 min → corre entre 00:00 y 00:05), tope
+  `learnMaxChats` 300 (antes 20); se procesa en **tandas de 15 chats por
+  llamada** acumulando propuestas/dudas con dedupe (entre tandas, contra
+  pendientes y contra el doc); cada propuesta lleva `dayKey`. Telegram y log
+  dicen de qué día es. admin-sw v32 → v33. Redeploy.
+- Costo estimado: 100-200 chats buenos/día × ~5k tokens ≈ US$2-4/día con sonnet-5.
+
 ### 146. "📚 Contexto aprendido": la IA aprende sola CÓMO ES el negocio de los chats bien evaluados, propone al final del día, pregunta si duda, y vos confirmás
 - **Pedido del owner:** que la IA vaya armando sola la base de "cómo funciona
   el negocio en general" viendo los chats con mejor puntaje; al final del día

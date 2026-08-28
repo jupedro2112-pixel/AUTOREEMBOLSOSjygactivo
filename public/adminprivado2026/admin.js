@@ -5334,7 +5334,7 @@ async function loadLearnedContext() {
         const doc = document.getElementById('pcLearnedDoc'); if (doc) doc.value = j.doc || '';
         const facts = document.getElementById('pcLearnFacts'); if (facts) facts.textContent = j.facts || '(sin datos)';
         const last = (j.lastRuns || [])[0];
-        _pcStatus('pcLearnStatus', last ? `Último análisis: ${new Date(last.at).toLocaleString('es-AR')} · ${last.sampled} chats · ${last.proposals} propuestas · ${last.questions} dudas — ${last.summary || ''}` : 'Todavía no corrió ningún análisis.', true);
+        _pcStatus('pcLearnStatus', last ? `Último análisis (${last.dayKey || ''}): ${new Date(last.at).toLocaleString('es-AR')} · ${last.sampled} chats · ${last.proposals} propuestas · ${last.questions} dudas — ${last.summary || ''}` : 'Todavía no corrió ningún análisis.', true);
         const pending = j.pending || [];
         if (!box) return;
         if (!pending.length) { box.innerHTML = '<div style="font-size:12.5px;color:#888;">Nada pendiente de confirmar. 🎉</div>'; return; }
@@ -5371,7 +5371,7 @@ async function resolveLearned(id, action) {
 }
 async function runLearnNow() {
     if (!_pcPassword) return;
-    _pcStatus('pcLearnStatus', 'Analizando los chats bien evaluados de las últimas 24 h… (puede tardar un minuto)', true);
+    _pcStatus('pcLearnStatus', 'Analizando los chats bien evaluados de hoy… (puede tardar unos minutos si hubo muchos)', true);
     try {
         const j = await _pcPost('/api/admin/private-config/audit/learned/run');
         showToast(j.hasNews ? `${(j.proposals || []).length} propuesta(s) y ${(j.questions || []).length} duda(s)` : 'No hay nada nuevo para agregar', 'success');

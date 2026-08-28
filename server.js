@@ -5825,7 +5825,7 @@ const AUDIT_DEFAULTS = {
   minScoreAlert: 4, alertFlags: ['mal_trato', 'error_plata', 'insulto_cliente', 'sin_respuesta', 'posible_fraude'],
   rulesEnabled: true, ratingEnabled: true, ratingCooldownHours: 6,
   extraRules: '',
-  learnEnabled: true, learnHourART: 5, learnMinScore: 8, learnMaxChats: 20, // #146 aprendizaje diario
+  learnEnabled: true, learnHourART: 0, learnMinScore: 8, learnMaxChats: 300, // #146/#147: a las 00:01 ART, el día anterior completo
   telegram: { botToken: '', chatId: '' }
 };
 async function _getAuditConfig() {
@@ -6019,7 +6019,7 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, pri
       ratingCooldownHours: num(a.ratingCooldownHours, cur.ratingCooldownHours, 0, 168),
       extraRules: a.extraRules !== undefined ? String(a.extraRules || '').slice(0, 8000) : (cur.extraRules || ''),
       learnEnabled: a.learnEnabled !== undefined ? a.learnEnabled !== false : cur.learnEnabled !== false,
-      learnHourART: num(a.learnHourART, cur.learnHourART, 0, 23), learnMinScore: num(a.learnMinScore, cur.learnMinScore, 5, 10), learnMaxChats: num(a.learnMaxChats, cur.learnMaxChats, 3, 60),
+      learnHourART: num(a.learnHourART, cur.learnHourART, 0, 23), learnMinScore: num(a.learnMinScore, cur.learnMinScore, 5, 10), learnMaxChats: num(a.learnMaxChats, cur.learnMaxChats, 3, 1000),
       telegram: { botToken, chatId },
       updatedBy: req.user.username, updatedAt: new Date()
     };
@@ -6073,14 +6073,31 @@ async function _systemFactsForAi() {
 function _artDateKey(d) { return new Date(d || Date.now()).toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); }
 function _artHour(d) { return Number(new Date(d || Date.now()).toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' })) % 24; }
 
+// Rango de un día ART [00:00, 24:00) → Dates UTC. dayKey 'YYYY-MM-DD'.
+function _artDayRange(dayKey) {
+  // ART = UTC-3 fijo (sin DST): 00:00 ART = 03:00 UTC del mismo día.
+  const start = new Date(`${dayKey}T03:00:00.000Z`);
+  return { start, end: new Date(start.getTime() + 24 * 3600 * 1000) };
+}
+
+// #147: analiza UN DÍA COMPLETO (ART) con las MISMAS auditorías que ya se hicieron ese
+// día. daily → el día anterior; manual → hoy hasta ahora (si hoy no hay nada, ayer).
+// Sin tope chico: se procesa en tandas de 15 chats por llamada y se acumulan las
+// propuestas/dudas (dedupe entre tandas, contra pendientes y contra el doc).
 async function _runAuditLearn(trigger) {
   const cfg = await _getAuditConfig();
   if (cfg.learnEnabled === false && trigger !== 'manual') return { skipped: 'apagado' };
   if (!chatAuditAi.isEnabled()) return { skipped: 'IA apagada' };
-  const since = new Date(Date.now() - 24 * 3600 * 1000);
-  const audits = await ChatAudit.find({ source: 'ai', score: { $gte: Number(cfg.learnMinScore) || 8 }, falsePositive: { $ne: true }, createdAt: { $gte: since }, agentMessageCount: { $gte: 1 } })
-    .sort({ score: -1, messageCount: -1 }).limit(Number(cfg.learnMaxChats) || 20).lean();
-  if (!audits.length) return { ok: true, hasNews: false, summary: 'No hubo chats bien evaluados en las últimas 24 h para aprender.', proposals: [], questions: [], sampled: 0 };
+  const today = _artDateKey();
+  const yesterday = _artDateKey(Date.now() - 24 * 3600 * 1000);
+  let dayKey = trigger === 'manual' ? today : yesterday;
+  const baseQuery = (r) => ({ source: 'ai', score: { $gte: Number(cfg.learnMinScore) || 8 }, falsePositive: { $ne: true }, createdAt: { $gte: r.start, $lt: r.end }, agentMessageCount: { $gte: 1 } });
+  let range = _artDayRange(dayKey);
+  let audits = await ChatAudit.find(baseQuery(range)).sort({ createdAt: 1 }).limit(Number(cfg.learnMaxChats) || 300).lean();
+  if (!audits.length && trigger === 'manual') { dayKey = yesterday; range = _artDayRange(dayKey); audits = await ChatAudit.find(baseQuery(range)).sort({ createdAt: 1 }).limit(Number(cfg.learnMaxChats) || 300).lean(); }
+  const empty = (summary) => ({ ok: true, hasNews: false, dayKey, summary, proposals: [], questions: [], sampled: 0 });
+  if (!audits.length) return empty(`No hubo chats bien evaluados el ${dayKey} para aprender.`);
+  // Reconstruir cada charla (misma ventana que auditó la IA).
   const samples = [];
   for (const a of audits) {
     try {
@@ -6090,31 +6107,37 @@ async function _runAuditLearn(trigger) {
       samples.push({ username: a.username, score: a.score, transcript: chatAuditAi.formatTranscript(msgs, a.username) });
     } catch (_) {}
   }
-  if (!samples.length) return { ok: true, hasNews: false, summary: 'Los chats bien evaluados ya no tienen mensajes disponibles (TTL).', proposals: [], questions: [], sampled: 0 };
+  if (!samples.length) return empty(`Los chats bien evaluados del ${dayKey} ya no tienen mensajes disponibles (TTL).`);
   const learned = (await getConfig('auditlearned', null)) || {};
   const facts = await _systemFactsForAi();
-  const r = await chatAuditAi.learnFromChats({ samples, learnedDoc: learned.doc || '', rules: cfg.extraRules || '', systemFacts: facts });
-  if (!r.ok) return { error: r.error };
-  // Guardar propuestas pendientes (dedupe por texto contra pendientes y contra el doc).
   const store = (await getConfig('auditproposals', null)) || [];
   const docLower = String(learned.doc || '').toLowerCase();
-  const exists = (t) => store.some(p => p.status === 'pending' && p.text.toLowerCase() === t.toLowerCase()) || (t && docLower.includes(t.toLowerCase().slice(0, 60)));
-  const added = [];
-  for (const pr of r.proposals) { if (!exists(pr.text)) { const item = { id: uuidv4(), kind: 'context', text: pr.text, why: pr.why, status: 'pending', at: new Date() }; store.unshift(item); added.push(item); } }
-  for (const q of r.questions) { if (!exists(q.question)) { const item = { id: uuidv4(), kind: 'question', text: q.question, why: q.context, status: 'pending', at: new Date() }; store.unshift(item); added.push(item); } }
+  const seen = new Set(store.filter(p => p.status === 'pending').map(p => p.text.toLowerCase()));
+  const exists = (t) => { const k = String(t || '').toLowerCase(); return !k || seen.has(k) || docLower.includes(k.slice(0, 60)); };
+  const added = []; const summaries = []; let model = null; let calls = 0;
+  let docSoFar = learned.doc || '';
+  for (let i = 0; i < samples.length; i += 15) {
+    const chunk = samples.slice(i, i + 15);
+    const r = await chatAuditAi.learnFromChats({ samples: chunk, learnedDoc: docSoFar, rules: cfg.extraRules || '', systemFacts: facts });
+    calls++;
+    if (!r.ok) { logger.warn(`[audit-learn] tanda ${calls} falló: ${r.error}`); if (!added.length && calls === 1) return { error: r.error }; continue; }
+    model = r.model; if (r.summary) summaries.push(r.summary);
+    for (const pr of r.proposals) { if (!exists(pr.text)) { const item = { id: uuidv4(), kind: 'context', text: pr.text, why: pr.why, status: 'pending', at: new Date(), dayKey }; store.unshift(item); added.push(item); seen.add(pr.text.toLowerCase()); docSoFar += '\n- (propuesto) ' + pr.text; } }
+    for (const q of r.questions) { if (!exists(q.question)) { const item = { id: uuidv4(), kind: 'question', text: q.question, why: q.context, status: 'pending', at: new Date(), dayKey }; store.unshift(item); added.push(item); seen.add(q.question.toLowerCase()); } }
+  }
   await setConfig('auditproposals', store.slice(0, 300));
-  const res = { ok: true, hasNews: r.hasNews && added.length > 0, summary: r.summary, proposals: added.filter(x => x.kind === 'context'), questions: added.filter(x => x.kind === 'question'), sampled: samples.length, model: r.model };
+  const res = { ok: true, hasNews: added.length > 0, dayKey, summary: summaries.slice(0, 3).join(' · ').slice(0, 600), proposals: added.filter(x => x.kind === 'context'), questions: added.filter(x => x.kind === 'question'), sampled: samples.length, calls, model };
   try {
-    await setConfig('auditlearnlog', [{ at: new Date(), trigger, sampled: samples.length, proposals: res.proposals.length, questions: res.questions.length, summary: r.summary }].concat((await getConfig('auditlearnlog', null)) || []).slice(0, 60));
+    await setConfig('auditlearnlog', [{ at: new Date(), trigger, dayKey, sampled: samples.length, calls, proposals: res.proposals.length, questions: res.questions.length, summary: res.summary }].concat((await getConfig('auditlearnlog', null)) || []).slice(0, 60));
   } catch (_) {}
   if (telegramAlert.isEnabled()) {
     const e = telegramAlert.esc;
     const text = res.hasNews
-      ? `📚 <b>${e(_projectLabel())}</b> — aprendizaje diario: leí ${samples.length} chats bien evaluados. <b>${res.proposals.length} propuesta(s)</b> de contexto y <b>${res.questions.length} duda(s)</b> para que confirmes en el panel (🔐 Config privada → Auditoría → Contexto aprendido).\n${e(r.summary)}`
-      : `📚 <b>${e(_projectLabel())}</b> — aprendizaje diario: leí ${samples.length} chats bien evaluados y no hay nada nuevo para agregar. ${e(r.summary)}`;
+      ? `📚 <b>${e(_projectLabel())}</b> — aprendizaje del ${e(dayKey)}: leí ${samples.length} chats bien evaluados. <b>${res.proposals.length} propuesta(s)</b> de contexto y <b>${res.questions.length} duda(s)</b> para confirmar en el panel (🔐 Config privada → Auditoría → 📚 Contexto aprendido).\n${e(res.summary)}`
+      : `📚 <b>${e(_projectLabel())}</b> — aprendizaje del ${e(dayKey)}: leí ${samples.length} chats bien evaluados y no hay nada nuevo para agregar. ${e(res.summary)}`;
     telegramAlert.send(text).catch(() => {});
   }
-  logger.info(`[audit-learn] ${trigger}: ${samples.length} chats, ${res.proposals.length} propuestas, ${res.questions.length} dudas`);
+  logger.info(`[audit-learn] ${trigger} ${dayKey}: ${samples.length} chats en ${calls} tanda(s), ${res.proposals.length} propuestas, ${res.questions.length} dudas`);
   return res;
 }
 
@@ -6135,7 +6158,7 @@ async function _runAuditLearnTick() {
     logger.warn(`[audit-learn] tick: ${err.message}`);
   } finally { _learnTickRunning = false; }
 }
-setInterval(() => { _runAuditLearnTick(); }, 10 * 60 * 1000);
+setInterval(() => { _runAuditLearnTick(); }, 5 * 60 * 1000);
 
 // #145 "Enseñarle a la IA": reporte + corrección → la IA editora propone la regla
 // general y cómo integrarla (agregar / reemplazar / sin cambio). NO guarda: devuelve

@@ -5280,6 +5280,8 @@ function renderPrivateAuditConfig(a) {
     set('pcAuditSessionGap', a.sessionGapMinutes);
     set('pcTgToken', ''); chk('pcTgTokenClear', false); set('pcTgChatId', a.telegramChatId || '');
     set('pcAuditExtraRules', a.extraRules || '');
+    chk('pcLearnEnabled', a.learnEnabled !== false); set('pcLearnHour', a.learnHourART); set('pcLearnMinScore', a.learnMinScore); set('pcLearnMaxChats', a.learnMaxChats);
+    loadLearnedContext();
     const th = document.getElementById('pcTgTokenHint'); if (th) th.textContent = a.telegramTokenSet ? `(guardado: ${a.telegramTokenHint})` : '(sin token en el panel)';
     const flags = document.getElementById('pcAuditFlags');
     if (flags) {
@@ -5302,6 +5304,7 @@ async function savePrivateAuditConfig() {
         sessionGapMinutes: v('pcAuditSessionGap'),
         alertFlags: Array.from(document.querySelectorAll('.pcAuditFlag:checked')).map(x => x.value),
         extraRules: v('pcAuditExtraRules') || '',
+        learnEnabled: c('pcLearnEnabled'), learnHourART: v('pcLearnHour'), learnMinScore: v('pcLearnMinScore'), learnMaxChats: v('pcLearnMaxChats'),
         telegramChatId: (v('pcTgChatId') || '').trim()
     };
     const tok = (v('pcTgToken') || '').trim();
@@ -5316,6 +5319,73 @@ async function savePrivateAuditConfig() {
         renderPrivateAuditConfig(j.audit || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
+// #146 Contexto aprendido: propuestas/dudas pendientes + doc + hechos.
+async function _pcPost(path, body) {
+    const r = await authFetch(path, { method: 'POST', body: JSON.stringify(Object.assign({ password: _pcPassword }, body || {})) });
+    const j = await _pcReadJson(r);
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+}
+async function loadLearnedContext() {
+    if (!_pcPassword) return;
+    const box = document.getElementById('pcLearnPending');
+    try {
+        const j = await _pcPost('/api/admin/private-config/audit/learned');
+        const doc = document.getElementById('pcLearnedDoc'); if (doc) doc.value = j.doc || '';
+        const facts = document.getElementById('pcLearnFacts'); if (facts) facts.textContent = j.facts || '(sin datos)';
+        const last = (j.lastRuns || [])[0];
+        _pcStatus('pcLearnStatus', last ? `Último análisis: ${new Date(last.at).toLocaleString('es-AR')} · ${last.sampled} chats · ${last.proposals} propuestas · ${last.questions} dudas — ${last.summary || ''}` : 'Todavía no corrió ningún análisis.', true);
+        const pending = j.pending || [];
+        if (!box) return;
+        if (!pending.length) { box.innerHTML = '<div style="font-size:12.5px;color:#888;">Nada pendiente de confirmar. 🎉</div>'; return; }
+        box.innerHTML = pending.map(p => p.kind === 'question'
+            ? `<div style="border:1px solid rgba(212,175,55,.4);border-radius:8px;padding:8px;background:rgba(212,175,55,.06);">
+                <div style="font-size:12.5px;"><b>❓ La IA pregunta:</b> ${escapeHtml(p.text)}</div>
+                ${p.why ? `<div style="font-size:11px;color:#888;margin-top:2px;">Lo vio en: ${escapeHtml(p.why)}</div>` : ''}
+                <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+                    <input type="text" id="pcAns-${p.id}" placeholder="Tu respuesta (ej: sí, es normal / no, eso no se hace porque…)" style="flex:1;min-width:220px;font-size:12px;">
+                    <button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="resolveLearned('${p.id}','answer')">Responder</button>
+                    <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="resolveLearned('${p.id}','reject')">Ignorar</button>
+                </div></div>`
+            : `<div style="border:1px solid rgba(0,255,136,.3);border-radius:8px;padding:8px;background:rgba(0,255,136,.04);">
+                <div style="font-size:11px;color:#888;">💡 Propuesta de contexto${p.why ? ' · ' + escapeHtml(p.why) : ''}</div>
+                <textarea id="pcProp-${p.id}" rows="2" style="width:100%;font-size:12.5px;font-family:inherit;margin-top:4px;">${escapeHtml(p.text)}</textarea>
+                <div style="display:flex;gap:6px;margin-top:4px;">
+                    <button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="resolveLearned('${p.id}','accept')">✅ Confirmar</button>
+                    <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="resolveLearned('${p.id}','reject')">❌ No</button>
+                </div></div>`).join('');
+    } catch (e) { _pcStatus('pcLearnStatus', '❌ ' + e.message, false); }
+}
+async function resolveLearned(id, action) {
+    if (!_pcPassword) return;
+    const body = { action };
+    if (action === 'accept') body.text = ((document.getElementById('pcProp-' + id) || {}).value || '').trim();
+    if (action === 'answer') { body.answer = ((document.getElementById('pcAns-' + id) || {}).value || '').trim(); if (body.answer.length < 2) { showToast('Escribí la respuesta', 'error'); return; } }
+    try {
+        const j = await _pcPost('/api/admin/private-config/audit/learned/' + encodeURIComponent(id), body);
+        if (action === 'answer') showToast(j.savedAs === 'regla' ? 'Guardado como REGLA: ' + (j.text || '') : 'Guardado como contexto', 'success');
+        else showToast(action === 'accept' ? 'Agregado al contexto' : 'Descartado', 'success');
+        loadLearnedContext();
+        if (j.savedAs === 'regla') { try { const r = await _pcPost('/api/admin/private-config/unlock', { password: _pcPassword }); renderPrivateAuditConfig(r.audit || {}); } catch (_) {} }
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function runLearnNow() {
+    if (!_pcPassword) return;
+    _pcStatus('pcLearnStatus', 'Analizando los chats bien evaluados de las últimas 24 h… (puede tardar un minuto)', true);
+    try {
+        const j = await _pcPost('/api/admin/private-config/audit/learned/run');
+        showToast(j.hasNews ? `${(j.proposals || []).length} propuesta(s) y ${(j.questions || []).length} duda(s)` : 'No hay nada nuevo para agregar', 'success');
+        loadLearnedContext();
+    } catch (e) { _pcStatus('pcLearnStatus', '❌ ' + e.message, false); }
+}
+async function saveLearnedDoc() {
+    if (!_pcPassword) return;
+    try {
+        await _pcPost('/api/admin/private-config/audit/learned/doc', { doc: (document.getElementById('pcLearnedDoc') || {}).value || '' });
+        _pcStatus('pcLearnDocStatus', '✅ Guardado', true);
+    } catch (e) { _pcStatus('pcLearnDocStatus', '❌ ' + e.message, false); }
+}
+
 // #145 Enseñarle a la IA: reporte + corrección → regla general (vista previa) → base.
 let _pcTeach = null;
 async function teachAuditRule() {

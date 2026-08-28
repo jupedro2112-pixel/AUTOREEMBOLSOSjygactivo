@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v31'; // v31: 'Enseñarle a la IA' (reporte + corrección → regla) — #145
+const CACHE_VERSION = 'v32'; // v32: Contexto aprendido (aprendizaje diario con confirmación) — #146
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).

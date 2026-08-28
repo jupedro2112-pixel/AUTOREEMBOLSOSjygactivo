@@ -5825,6 +5825,7 @@ const AUDIT_DEFAULTS = {
   minScoreAlert: 4, alertFlags: ['mal_trato', 'error_plata', 'insulto_cliente', 'sin_respuesta', 'posible_fraude'],
   rulesEnabled: true, ratingEnabled: true, ratingCooldownHours: 6,
   extraRules: '',
+  learnEnabled: true, learnHourART: 5, learnMinScore: 8, learnMaxChats: 20, // #146 aprendizaje diario
   telegram: { botToken: '', chatId: '' }
 };
 async function _getAuditConfig() {
@@ -5841,7 +5842,11 @@ async function _loadAiConfigIntoService() {
     comprobanteAi.applyConfig(cfg);
     // #132: la auditoría usa la MISMA API key (panel o SSM) que los comprobantes.
     const audit = await _getAuditConfig();
-    chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '', extraRules: audit.extraRules || '' });
+    const learned = (await getConfig('auditlearned', null)) || {};
+    let facts = '';
+    try { facts = await _systemFactsForAi(); } catch (e) { logger.warn(`[ai-config] systemFacts: ${e.message}`); }
+    chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '', extraRules: audit.extraRules || '',
+      learnedDoc: audit.learnEnabled === false ? '' : (learned.doc || ''), systemFacts: facts });
     telegramAlert.applyConfig(audit.telegram);
   } catch (e) {
     logger.warn(`[ai-config] no se pudo cargar la config de IA/auditoría: ${e.message}`);
@@ -5970,6 +5975,7 @@ async function _auditConfigForPanel() {
     minScoreAlert: a.minScoreAlert, alertFlags: a.alertFlags,
     rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false, ratingCooldownHours: a.ratingCooldownHours,
     extraRules: a.extraRules || '',
+    learnEnabled: a.learnEnabled !== false, learnHourART: a.learnHourART, learnMinScore: a.learnMinScore, learnMaxChats: a.learnMaxChats,
     telegramTokenSet: !!(a.telegram && a.telegram.botToken),
     telegramTokenHint: a.telegram && a.telegram.botToken ? '••••' + String(a.telegram.botToken).slice(-4) : null,
     telegramChatId: (a.telegram && a.telegram.chatId) || '',
@@ -6012,6 +6018,8 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, pri
       rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false,
       ratingCooldownHours: num(a.ratingCooldownHours, cur.ratingCooldownHours, 0, 168),
       extraRules: a.extraRules !== undefined ? String(a.extraRules || '').slice(0, 8000) : (cur.extraRules || ''),
+      learnEnabled: a.learnEnabled !== undefined ? a.learnEnabled !== false : cur.learnEnabled !== false,
+      learnHourART: num(a.learnHourART, cur.learnHourART, 0, 23), learnMinScore: num(a.learnMinScore, cur.learnMinScore, 5, 10), learnMaxChats: num(a.learnMaxChats, cur.learnMaxChats, 3, 60),
       telegram: { botToken, chatId },
       updatedBy: req.user.username, updatedAt: new Date()
     };
@@ -6024,6 +6032,110 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, pri
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
+
+// ── #146 Hechos del sistema para la IA (leídos de la config; siempre verdad) ──
+let _factsCache = { at: 0, text: '' };
+async function _systemFactsForAi() {
+  if (Date.now() - _factsCache.at < 10 * 60 * 1000 && _factsCache.text) return _factsCache.text;
+  const L = [];
+  try {
+    const cbu = (await getConfig('cbu', null)) || {};
+    if (cbu.number || cbu.alias) L.push(`- Cuenta para cargar (lo que se le manda al cliente con el botón CBU): ${cbu.bank || ''} · titular ${cbu.titular || ''} · CBU ${cbu.number || ''} · alias ${cbu.alias || ''}.`);
+    const hg = await getHgcashConfig();
+    L.push(`- Cargas por transferencia: ${hg.enabled && hg.mode === 'auto' ? 'se acreditan AUTOMÁTICAMENTE cuando el banco confirma y el comprobante coincide' : 'las acredita un agente a mano'}; mínimo de carga $${Number(hg.minChargeARS) > 0 ? hg.minChargeARS : 1500}. Un comprobante repetido o de otro CBU no se carga.`);
+    L.push('- Retiros: el cliente los pide desde la app (mínimo $4.999, teléfono verificado por SMS); un agente los confirma y el pago sale por transferencia automática; el aviso "Recibimos tu solicitud… un agente la está procesando" es el paso normal. El pago se hace FUERA del chat.');
+    const tiers = await getConfig('refundTiers', null);
+    if (tiers && Array.isArray(tiers.tiers || tiers)) {
+      const arr = tiers.tiers || tiers;
+      L.push('- Reembolsos sobre la pérdida: diario (todos los días), semanal (lunes y martes) y mensual (desde el día 7), con % según rango: ' + arr.map(t => `${t.name || t.label || ''} ${t.percent != null ? t.percent + '%' : ''}`).join(', ') + '. Se reclaman con un botón en la app; el mensaje "🎁 Reembolso … reclamado" es automático y no requiere respuesta.');
+    } else {
+      L.push('- Reembolsos sobre la pérdida: diario, semanal (lunes y martes) y mensual (desde el día 7), % según rango 🥉🥈🥇. Se reclaman con un botón en la app; el mensaje "🎁 Reembolso … reclamado" es automático y no requiere respuesta.');
+    }
+    L.push('- Fueguito: racha diaria que el cliente reclama en la app; los mensajes "🔥 Día N de racha Fueguito" son automáticos y no requieren respuesta. Ruleta diaria en la app para quienes tienen la app instalada.');
+    L.push('- Bono automático por tener la app instalada con notificaciones: se suma solo al acreditar la carga (el mensaje de carga lo indica).');
+    const cmds = await Command.find({ isSystem: true, isActive: true }).select('name response description').limit(60).lean();
+    const keep = cmds.filter(c => c.response && String(c.response).trim()).slice(0, 25);
+    if (keep.length) {
+      L.push('- Mensajes AUTOMÁTICOS del sistema (el cliente los recibe sin que un agente escriba):');
+      keep.forEach(c => L.push(`  · ${c.name}: "${String(c.response).replace(/\s+/g, ' ').slice(0, 160)}"`));
+    }
+    const quick = await Command.find({ isSystem: { $ne: true }, isActive: true }).select('name response').limit(40).lean();
+    if (quick.length) {
+      L.push('- Respuestas prearmadas que usan los agentes (comandos):');
+      quick.slice(0, 20).forEach(c => L.push(`  · ${c.name}: "${String(c.response || '').replace(/\s+/g, ' ').slice(0, 120)}"`));
+    }
+  } catch (e) { logger.warn(`[ai-facts] ${e.message}`); }
+  _factsCache = { at: Date.now(), text: L.join('\n').slice(0, 6000) };
+  return _factsCache.text;
+}
+
+// ── #146 Aprendizaje diario: chats bien evaluados → propuestas de contexto + dudas ──
+function _artDateKey(d) { return new Date(d || Date.now()).toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); }
+function _artHour(d) { return Number(new Date(d || Date.now()).toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' })) % 24; }
+
+async function _runAuditLearn(trigger) {
+  const cfg = await _getAuditConfig();
+  if (cfg.learnEnabled === false && trigger !== 'manual') return { skipped: 'apagado' };
+  if (!chatAuditAi.isEnabled()) return { skipped: 'IA apagada' };
+  const since = new Date(Date.now() - 24 * 3600 * 1000);
+  const audits = await ChatAudit.find({ source: 'ai', score: { $gte: Number(cfg.learnMinScore) || 8 }, falsePositive: { $ne: true }, createdAt: { $gte: since }, agentMessageCount: { $gte: 1 } })
+    .sort({ score: -1, messageCount: -1 }).limit(Number(cfg.learnMaxChats) || 20).lean();
+  if (!audits.length) return { ok: true, hasNews: false, summary: 'No hubo chats bien evaluados en las últimas 24 h para aprender.', proposals: [], questions: [], sampled: 0 };
+  const samples = [];
+  for (const a of audits) {
+    try {
+      const msgs = await Message.find({ $or: [{ senderId: a.userId }, { receiverId: a.userId }], adminOnly: { $ne: true }, timestamp: { $gte: a.periodStart, $lte: a.periodEnd } }).sort({ timestamp: 1 }).limit(200).lean();
+      if (msgs.length < 3) continue;
+      msgs.forEach(m => { if (m.senderRole === 'user' && _isAutoClientMessage(m.content)) m._auto = true; });
+      samples.push({ username: a.username, score: a.score, transcript: chatAuditAi.formatTranscript(msgs, a.username) });
+    } catch (_) {}
+  }
+  if (!samples.length) return { ok: true, hasNews: false, summary: 'Los chats bien evaluados ya no tienen mensajes disponibles (TTL).', proposals: [], questions: [], sampled: 0 };
+  const learned = (await getConfig('auditlearned', null)) || {};
+  const facts = await _systemFactsForAi();
+  const r = await chatAuditAi.learnFromChats({ samples, learnedDoc: learned.doc || '', rules: cfg.extraRules || '', systemFacts: facts });
+  if (!r.ok) return { error: r.error };
+  // Guardar propuestas pendientes (dedupe por texto contra pendientes y contra el doc).
+  const store = (await getConfig('auditproposals', null)) || [];
+  const docLower = String(learned.doc || '').toLowerCase();
+  const exists = (t) => store.some(p => p.status === 'pending' && p.text.toLowerCase() === t.toLowerCase()) || (t && docLower.includes(t.toLowerCase().slice(0, 60)));
+  const added = [];
+  for (const pr of r.proposals) { if (!exists(pr.text)) { const item = { id: uuidv4(), kind: 'context', text: pr.text, why: pr.why, status: 'pending', at: new Date() }; store.unshift(item); added.push(item); } }
+  for (const q of r.questions) { if (!exists(q.question)) { const item = { id: uuidv4(), kind: 'question', text: q.question, why: q.context, status: 'pending', at: new Date() }; store.unshift(item); added.push(item); } }
+  await setConfig('auditproposals', store.slice(0, 300));
+  const res = { ok: true, hasNews: r.hasNews && added.length > 0, summary: r.summary, proposals: added.filter(x => x.kind === 'context'), questions: added.filter(x => x.kind === 'question'), sampled: samples.length, model: r.model };
+  try {
+    await setConfig('auditlearnlog', [{ at: new Date(), trigger, sampled: samples.length, proposals: res.proposals.length, questions: res.questions.length, summary: r.summary }].concat((await getConfig('auditlearnlog', null)) || []).slice(0, 60));
+  } catch (_) {}
+  if (telegramAlert.isEnabled()) {
+    const e = telegramAlert.esc;
+    const text = res.hasNews
+      ? `📚 <b>${e(_projectLabel())}</b> — aprendizaje diario: leí ${samples.length} chats bien evaluados. <b>${res.proposals.length} propuesta(s)</b> de contexto y <b>${res.questions.length} duda(s)</b> para que confirmes en el panel (🔐 Config privada → Auditoría → Contexto aprendido).\n${e(r.summary)}`
+      : `📚 <b>${e(_projectLabel())}</b> — aprendizaje diario: leí ${samples.length} chats bien evaluados y no hay nada nuevo para agregar. ${e(r.summary)}`;
+    telegramAlert.send(text).catch(() => {});
+  }
+  logger.info(`[audit-learn] ${trigger}: ${samples.length} chats, ${res.proposals.length} propuestas, ${res.questions.length} dudas`);
+  return res;
+}
+
+let _learnTickRunning = false;
+async function _runAuditLearnTick() {
+  if (_learnTickRunning) return;
+  _learnTickRunning = true;
+  try {
+    const cfg = await _getAuditConfig();
+    if (cfg.learnEnabled === false) return;
+    if (_artHour() !== (Number(cfg.learnHourART) || 5)) return;
+    const key = _artDateKey();
+    const last = await getConfig('auditlearnlast', null);
+    if (last === key) return;
+    await setConfig('auditlearnlast', key); // claim (multi-instancia: ventana de carrera mínima, aceptable)
+    await _runAuditLearn('daily');
+  } catch (err) {
+    logger.warn(`[audit-learn] tick: ${err.message}`);
+  } finally { _learnTickRunning = false; }
+}
+setInterval(() => { _runAuditLearnTick(); }, 10 * 60 * 1000);
 
 // #145 "Enseñarle a la IA": reporte + corrección → la IA editora propone la regla
 // general y cómo integrarla (agregar / reemplazar / sin cambio). NO guarda: devuelve
@@ -6067,6 +6179,88 @@ app.post('/api/admin/private-config/audit/teach/apply', authMiddleware, adminMid
     res.json({ success: true, audit: await _auditConfigForPanel() });
   } catch (error) {
     logger.error(`[private-config] teach/apply: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// #146 Contexto aprendido: doc + propuestas/dudas pendientes.
+app.post('/api/admin/private-config/audit/learned', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const learned = (await getConfig('auditlearned', null)) || {};
+    const store = (await getConfig('auditproposals', null)) || [];
+    const log = (await getConfig('auditlearnlog', null)) || [];
+    res.json({ success: true, doc: learned.doc || '', updatedAt: learned.updatedAt || null, pending: store.filter(p => p.status === 'pending'), lastRuns: log.slice(0, 5), facts: await _systemFactsForAi() });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Editar el doc a mano.
+app.post('/api/admin/private-config/audit/learned/doc', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    await setConfig('auditlearned', { doc: String(b.doc || '').slice(0, 8000), updatedAt: new Date(), updatedBy: req.user.username });
+    await _loadAiConfigIntoService();
+    res.json({ success: true });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Correr el análisis ahora.
+app.post('/api/admin/private-config/audit/learned/run', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const r = await _runAuditLearn('manual');
+    if (r && r.error) return res.status(502).json({ error: 'La IA no pudo analizar: ' + r.error });
+    res.json(Object.assign({ success: true }, r));
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Resolver una propuesta o duda: accept (contexto → doc), reject, o answer (duda → destilador → regla o contexto).
+app.post('/api/admin/private-config/audit/learned/:id', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const store = (await getConfig('auditproposals', null)) || [];
+    const item = store.find(p => p.id === String(req.params.id));
+    if (!item) return res.status(404).json({ error: 'No encontrado' });
+    const action = String(b.action || '');
+    const learned = (await getConfig('auditlearned', null)) || {};
+    let result = { };
+    if (action === 'reject') {
+      item.status = 'rejected';
+    } else if (action === 'accept' && item.kind === 'context') {
+      const text = String(b.text || item.text).trim().replace(/\s+/g, ' ');
+      const doc = ((learned.doc || '').trim() + '\n- ' + text).trim().slice(0, 8000);
+      await setConfig('auditlearned', { doc, updatedAt: new Date(), updatedBy: req.user.username });
+      item.status = 'accepted'; item.finalText = text;
+    } else if (action === 'answer' && item.kind === 'question') {
+      const answer = String(b.answer || '').trim();
+      if (answer.length < 2) return res.status(400).json({ error: 'Escribí la respuesta' });
+      const cfg = await _getAuditConfig();
+      const d = await chatAuditAi.distillRule({ report: `La IA supervisora preguntó: "${item.text}" (contexto: ${item.why || ''})`, correction: answer, currentRules: cfg.extraRules || '' });
+      if (!d.ok) return res.status(502).json({ error: 'La IA no pudo procesar la respuesta: ' + d.error });
+      if (d.tipo === 'regla' && d.regla && d.accion !== 'sin_cambio') {
+        await setConfig(AUDIT_CONFIG_KEY, Object.assign({}, cfg, { extraRules: chatAuditAi.joinRules(d.nuevasReglas).slice(0, 8000), updatedBy: req.user.username, updatedAt: new Date() }));
+        result = { savedAs: 'regla', text: d.regla, accion: d.accion };
+      } else {
+        const text = (d.regla || answer).trim().replace(/\s+/g, ' ');
+        const doc = ((learned.doc || '').trim() + '\n- ' + text).trim().slice(0, 8000);
+        await setConfig('auditlearned', { doc, updatedAt: new Date(), updatedBy: req.user.username });
+        result = { savedAs: 'contexto', text };
+      }
+      item.status = 'answered'; item.answer = answer; item.finalText = result.text;
+    } else {
+      return res.status(400).json({ error: 'Acción inválida' });
+    }
+    item.resolvedAt = new Date(); item.resolvedBy = req.user.username;
+    await setConfig('auditproposals', store);
+    await _loadAiConfigIntoService();
+    res.json(Object.assign({ success: true }, result));
+  } catch (error) {
+    logger.error(`[private-config] learned/${req.params.id}: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });

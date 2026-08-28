@@ -194,6 +194,12 @@ async function auditTranscript({ transcript, username, agents, hint }) {
     // en el panel (🔐 Config privada → Auditoría → "Reglas del negocio"): van DESPUÉS
     // del breakpoint de cache y con prioridad explícita sobre lo anterior.
     system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }]
+      .concat(_cfg.systemFacts && String(_cfg.systemFacts).trim()
+        ? [{ type: 'text', text: 'ASÍ FUNCIONA ESTA SALA HOY (datos reales de la configuración; son hechos, no opiniones):\n' + String(_cfg.systemFacts).trim().slice(0, 6000) }]
+        : [])
+      .concat(_cfg.learnedDoc && String(_cfg.learnedDoc).trim()
+        ? [{ type: 'text', text: 'CONTEXTO DEL NEGOCIO aprendido de chats bien evaluados (describe cómo ES la operación —flujos, preguntas típicas, respuestas habituales que funcionan, tiempos normales—; usalo para entender la conversación, NO como reglas de juicio):\n' + String(_cfg.learnedDoc).trim().slice(0, 8000) }]
+        : [])
       .concat(_cfg.extraRules && String(_cfg.extraRules).trim()
         ? [{ type: 'text', text: 'REGLAS ADICIONALES DEL DUEÑO (tienen PRIORIDAD sobre todo lo anterior; aplicalas al pie de la letra):\n' + String(_cfg.extraRules).trim().slice(0, 8000) }]
         : []),
@@ -260,6 +266,12 @@ const DISTILL_SYSTEM = [
   '- Si la base ya cubre exactamente esto → accion "sin_cambio" y explicá por qué.',
   '- No toques reglas que no tengan que ver. No inventes reglas que el dueño no pidió.',
   '',
+  '',
+  'TIPO: "regla" si es un criterio de cómo JUZGAR la atención o una política del negocio',
+  '(qué está bien/mal, condiciones, límites). "contexto" si el dueño solo está explicando',
+  'cómo ES la operación (un flujo, qué significa algo, qué es normal) sin decir cómo juzgar:',
+  'en ese caso "regla" lleva la descripción en 1-2 oraciones y "accion" = "agregar".',
+  '',
   'Devolvé también una explicación de 1 oración para el dueño de qué entendiste.'
 ].join('\n');
 
@@ -267,11 +279,12 @@ const DISTILL_SCHEMA = {
   type: 'object',
   properties: {
     accion: { type: 'string', enum: ['agregar', 'reemplazar', 'sin_cambio'] },
+    tipo: { type: 'string', enum: ['regla', 'contexto'] },
     regla: nullable('string'),
     indice_a_reemplazar: nullable('integer'),
     explicacion: { type: 'string' }
   },
-  required: ['accion', 'regla', 'indice_a_reemplazar', 'explicacion'],
+  required: ['accion', 'tipo', 'regla', 'indice_a_reemplazar', 'explicacion'],
   additionalProperties: false
 };
 
@@ -325,7 +338,7 @@ async function distillRule({ report, correction, currentRules }) {
       if (indice && indice >= 1 && indice <= next.length) next[indice - 1] = regla;
       else { next.push(regla); indice = null; }
     }
-    return { ok: true, accion, regla, indice, explicacion: String(parsed.explicacion || '').slice(0, 500), nuevasReglas: next, model: data.model || getModel() };
+    return { ok: true, accion, tipo: parsed.tipo === 'contexto' ? 'contexto' : 'regla', regla, indice, explicacion: String(parsed.explicacion || '').slice(0, 500), nuevasReglas: next, model: data.model || getModel() };
   } catch (err) {
     const detail = err.response ? `HTTP ${err.response.status} ${JSON.stringify(err.response.data).slice(0, 200)}` : err.message;
     logger.error(`[audit-ai] distillRule: ${detail}`);
@@ -333,4 +346,82 @@ async function distillRule({ report, correction, currentRules }) {
   }
 }
 
-module.exports = { applyConfig, isEnabled, getModel, getEffort, auditTranscript, formatTranscript, distillRule, parseRules, joinRules, DEFAULT_MODEL, EFFORTS, AI_FLAGS };
+// ── Aprendizaje diario (#146): lee chats BIEN evaluados y propone contexto descriptivo
+// o hace preguntas. Nunca escribe reglas de juicio por su cuenta.
+const LEARN_SYSTEM = [
+  'Sos el analista que arma la "base de conocimiento" de una sala de juegos online argentina',
+  'para que otra IA (supervisora de calidad) entienda el negocio al leer chats. Te doy: los',
+  'HECHOS del sistema, el CONTEXTO ya aprendido, las REGLAS del dueño y una muestra de chats',
+  'que fueron BIEN evaluados (puntaje alto). Tu trabajo es DESCRIBIR cómo es la operación, no',
+  'juzgarla: flujos típicos (qué pasa después de cada paso), preguntas frecuentes de los',
+  'clientes y cómo las resuelven bien los agentes, tiempos normales, vocabulario, qué resuelve',
+  'el sistema solo y qué necesita agente.',
+  '',
+  'Reglas estrictas:',
+  '- Proponé SOLO cosas NUEVAS que no estén ya en el contexto aprendido ni en los hechos.',
+  '- Cada propuesta: 1-2 oraciones, general (sin nombres de clientes/agentes, sin montos de',
+  '  un caso puntual), descriptiva ("Cuando el cliente manda un comprobante, el sistema lo',
+  '  verifica y acredita solo; el agente solo interviene si…").',
+  '- NUNCA propongas criterios de juicio ni políticas (qué está bien/mal, condiciones para',
+  '  retirar, límites, antifraude): eso lo define el dueño. Si ves algo que PARECE una regla',
+  '  o una práctica que no sabés si es correcta o normal (ej. "piden DNI para retiros',
+  '  grandes", "cobran comisión en X"), hacé una PREGUNTA corta al dueño en "dudas" en vez',
+  '  de asumir. Preguntar antes que aprender mal.',
+  '- Máximo 6 propuestas y 4 dudas por análisis. Si no hay nada nuevo, hay_novedades=false',
+  '  y listas vacías: es una respuesta válida y esperable cuando la base ya está completa.',
+  '- Español rioplatense, concreto.'
+].join('\n');
+const LEARN_SCHEMA = {
+  type: 'object',
+  properties: {
+    hay_novedades: { type: 'boolean' },
+    resumen: { type: 'string' },
+    propuestas: { type: 'array', items: { type: 'object', properties: { texto: { type: 'string' }, motivo: { type: 'string' } }, required: ['texto', 'motivo'], additionalProperties: false } },
+    dudas: { type: 'array', items: { type: 'object', properties: { pregunta: { type: 'string' }, contexto: { type: 'string' } }, required: ['pregunta', 'contexto'], additionalProperties: false } }
+  },
+  required: ['hay_novedades', 'resumen', 'propuestas', 'dudas'],
+  additionalProperties: false
+};
+async function learnFromChats({ samples, learnedDoc, rules, systemFacts }) {
+  if (!getApiKey()) return { ok: false, error: 'ANTHROPIC_API_KEY no configurada' };
+  const userText = [
+    'HECHOS DEL SISTEMA:', String(systemFacts || '(sin datos)').slice(0, 6000), '',
+    'CONTEXTO YA APRENDIDO:', String(learnedDoc || '(vacío)').slice(0, 8000), '',
+    'REGLAS DEL DUEÑO (no las repitas ni las cuestiones; son para tu referencia):', String(rules || '(ninguna)').slice(0, 6000), '',
+    `MUESTRA DE ${samples.length} CHATS BIEN EVALUADOS:`,
+    ...samples.map((sm, i) => `--- CHAT ${i + 1} (puntaje ${sm.score}/10, cliente ${sm.username}) ---\n${String(sm.transcript || '').slice(0, 5000)}`),
+    '', 'Analizá y completá el JSON.'
+  ].join('\n');
+  const body = {
+    model: getModel(),
+    max_tokens: 4096,
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: LEARN_SCHEMA } },
+    system: [{ type: 'text', text: LEARN_SYSTEM, cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: userText.slice(0, 150000) }]
+  };
+  try {
+    let resp;
+    try { resp = await _post(body, true); }
+    catch (err) { if (err.response && err.response.status === 400) resp = await _post(body, false); else throw err; }
+    const data = resp.data || {};
+    if (data.stop_reason === 'refusal') return { ok: false, error: 'La IA declinó el análisis' };
+    const tb = (Array.isArray(data.content) ? data.content : []).find(b => b && b.type === 'text');
+    const parsed = parseJsonLoose(tb ? tb.text : '');
+    if (!parsed) return { ok: false, error: 'Respuesta de IA sin JSON válido' };
+    const clean = (t) => String(t || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+    return {
+      ok: true,
+      hasNews: !!parsed.hay_novedades,
+      summary: clean(parsed.resumen),
+      proposals: (Array.isArray(parsed.propuestas) ? parsed.propuestas : []).slice(0, 6).map(p => ({ text: clean(p.texto), why: clean(p.motivo) })).filter(p => p.text),
+      questions: (Array.isArray(parsed.dudas) ? parsed.dudas : []).slice(0, 4).map(q => ({ question: clean(q.pregunta), context: clean(q.contexto) })).filter(q => q.question),
+      model: data.model || getModel(), usage: data.usage || null
+    };
+  } catch (err) {
+    const detail = err.response ? `HTTP ${err.response.status} ${JSON.stringify(err.response.data).slice(0, 200)}` : err.message;
+    logger.error(`[audit-ai] learnFromChats: ${detail}`);
+    return { ok: false, error: detail };
+  }
+}
+
+module.exports = { applyConfig, isEnabled, getModel, getEffort, auditTranscript, formatTranscript, distillRule, learnFromChats, parseRules, joinRules, DEFAULT_MODEL, EFFORTS, AI_FLAGS };

@@ -1,0 +1,92 @@
+commit 77303c6a8bc31dfba6ffdf24242a16693bdc05bb
+Author: jupedro2112-pixel <ju.pedro2112@gmail.com>
+Date:   Tue Aug 25 19:51:25 2026 +0000
+
+    feat(panel): mensajes de sistema internos (adminOnly) en verde con etiqueta INTERNO
+    
+    Los adminOnly (el cliente nunca los recibio) van en verde con badge
+    'INTERNO - el cliente NO lo ve'; los automaticos que el cliente si vio
+    quedan naranjas con robot (antes candado, enganoso). Solo panel, cero
+    backend. admin-sw v24 -> v25.
+    
+    Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+diff --git a/public/admin-sw.js b/public/admin-sw.js
+index 0cbc5a4..d5a1c4f 100644
+--- a/public/admin-sw.js
++++ b/public/admin-sw.js
+@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
+ const messaging = firebase.messaging();
+ 
+ // Bump this version with every deploy so the admin PWA always loads fresh code.
+-const CACHE_VERSION = 'v24';
++const CACHE_VERSION = 'v25'; // v25: mensajes de sistema internos (adminOnly) en verde con etiqueta INTERNO
+ const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
+ 
+ // Only pre-cache stable assets (icons rarely change).
+diff --git a/public/adminprivado2026/admin.css b/public/adminprivado2026/admin.css
+index df8bd1a..d61ea0e 100644
+--- a/public/adminprivado2026/admin.css
++++ b/public/adminprivado2026/admin.css
+@@ -63,6 +63,7 @@ body {
+ .icon-gamepad::before { content: "🎮"; }
+ .icon-user::before { content: "👤"; }
+ .icon-lock::before { content: "🔒"; }
++.icon-robot::before { content: "🤖"; }
+ .icon-sign-in::before { content: "➡️"; }
+ .icon-comments::before { content: "💬"; }
+ .icon-users::before { content: "👥"; }
+@@ -848,6 +849,21 @@ body {
+     font-size: 10.5px;
+ }
+ 
++/* Mensaje de sistema INTERNO (adminOnly): el cliente NO lo recibe. VERDE para
++   distinguirlo al toque de los automáticos (naranja), con etiqueta explícita. */
++.message.system.internal {
++    background: rgba(37, 211, 102, 0.14);
++    border-color: #25d366;
++    color: #9ff5c0;
++}
++.message.system.internal .internal-badge {
++    color: #2ee06f;
++    font-size: 10.5px;
++    font-weight: 800;
++    letter-spacing: 0.5px;
++    margin-bottom: 4px;
++}
++
+ .message-header {
+     display: flex;
+     align-items: center;
+diff --git a/public/adminprivado2026/admin.js b/public/adminprivado2026/admin.js
+index cbc32c5..4cb7a0e 100644
+--- a/public/adminprivado2026/admin.js
++++ b/public/adminprivado2026/admin.js
+@@ -6243,15 +6243,23 @@ async function sendPushNotification(userId, message) {
+ 
+ // Crear elemento de mensaje optimizado
+ function createMessageElement(message) {
+-    // Fix #3: Mensajes de sistema (ej. cierre de chat) con estilo propio
++    // Fix #3: Mensajes de sistema (ej. cierre de chat) con estilo propio.
++    // Los INTERNOS (adminOnly: el cliente NUNCA los recibió — cierre de chat,
++    // alertas de bonus, comprobante repetido, etc.) van en VERDE con etiqueta
++    // "🔒 INTERNO"; los automáticos que el cliente SÍ recibió quedan naranjas
++    // con 🤖 (antes llevaban 🔒, engañoso: parecían internos y el cliente los
++    // había visto).
+     if (message.type === 'system') {
++        const isInternal = message.adminOnly === true;
+         const div = document.createElement('div');
+-        div.className = 'message system';
++        div.className = 'message system' + (isInternal ? ' internal' : '');
+         div.dataset.messageid = message.id || '';
+-        // Mostrar la hora de envío también en los mensajes automáticos (naranja),
++        // Mostrar la hora de envío también en los mensajes automáticos,
+         // para poder corroborar a qué horario se enviaron y controlar demoras.
+         const time = formatChatTime(message.timestamp || new Date());
+-        div.innerHTML = `<div class="message-content"><span class="icon icon-lock"></span> <span>${escapeHtml(message.content)}</span></div><div class="message-time system-time">${time}</div>`;
++        const badge = isInternal ? '<div class="internal-badge">🔒 INTERNO — el cliente NO lo ve</div>' : '';
++        const icon = isInternal ? '' : '<span class="icon icon-robot"></span> ';
++        div.innerHTML = `${badge}<div class="message-content">${icon}<span>${escapeHtml(message.content)}</span></div><div class="message-time system-time">${time}</div>`;
+         return div;
+     }
+     

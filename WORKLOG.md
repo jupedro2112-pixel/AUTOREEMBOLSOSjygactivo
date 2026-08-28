@@ -13,6 +13,27 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 138. Criterio "la pelota del lado del cliente" en el prompt de auditoría (3 falsos positivos del owner)
+- Casos reportados (Telegram 00:54-01:02, todos 6/10 con sin_solucion /
+  respuesta_pobre): (a) cliente escribe "Disculpe?" sin contexto y el agente
+  responde "hola, ¿cómo puedo ayudarte?"; (b) agente resetea clave, cliente
+  dice "sigo sin poder entrar", agente pide captura, cliente no vuelve;
+  (c) ídem con "no puedo entrar". El owner: si el cliente deja de responder
+  después de que el agente se ocupó, es porque resolvió; lo que cuenta es la
+  intención de nuestro lado.
+- **Fix (prompt base, `chatAuditAiService.SYSTEM`):** sección "CUÁNDO ALGO NO
+  ES SIN SOLUCIÓN NI RESPUESTA POBRE": último mensaje relevante del agente +
+  cliente en silencio = resuelto; mensajes ambiguos ("Disculpe?", "hola") →
+  "¿en qué te ayudo?" es la respuesta correcta; "no puedo entrar" + reset/
+  pedido de captura sin respuesta = pudo entrar; no exigir cierre formal.
+- **Convención acordada con el owner:** criterios GENERALES de evaluación →
+  se los pasa al asistente y van al prompt base (versionado, replicable);
+  reglas operativas/puntuales del proyecto → cuadro "Reglas del negocio" del
+  panel.
+- Nota: esos 3 llegaron a Telegram con 6/10 → el umbral "Alertar si puntaje ≤"
+  está por encima del default (4). Cuando las reglas estén afinadas, bajarlo.
+- **Validado:** `node --check` OK. Solo backend → redeploy.
+
 ### 137. Auditoría IA: analiza SOLO la ÚLTIMA charla (no todo el día)
 - **Pedido del owner:** si el cliente habló a las 14, 18, 20 y 22 hs, que se
   audite y reporte únicamente la charla de las 22 hs (la completa), no un

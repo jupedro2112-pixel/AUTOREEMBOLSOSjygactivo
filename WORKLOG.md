@@ -13,6 +13,15 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 142. Registro: el campo Usuario arranca vacío (antes precargaba "VIP")
+- Pedido del owner: "cambiar el VIP por default y dejarlo vacío, para que sean
+  libres en elegir". `index.html` (`value=""`, placeholder "Elegí tu
+  usuario") + `auth.js` (se quitó el prefill). No hay validación de prefijo
+  en el server (los equipos se resuelven por prefijo pero no es obligatorio).
+- HTML + JS juntos → **`?v=57` + `CACHE_VERSION='v57'`** (regla #97).
+  Solo estáticos → deploy y listo (el server los sirve cacheados por proceso,
+  así que igual hace falta el redeploy).
+
 ### 141. 👎 sin motivo → la IA lee la última charla y explica el porqué (o dice que no hay motivo)
 - **Pedido del owner:** si el cliente pone 👎 y no escribe motivo, que se
   investigue la charla y se dé el contexto; si no hay motivo, que lo diga.

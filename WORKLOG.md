@@ -13,6 +13,19 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 137. Auditoría IA: analiza SOLO la ÚLTIMA charla (no todo el día)
+- **Pedido del owner:** si el cliente habló a las 14, 18, 20 y 22 hs, que se
+  audite y reporte únicamente la charla de las 22 hs (la completa), no un
+  tramo que mezcle todo el día ni una conversación vieja.
+- **Fix (`_auditConversation`):** los mensajes cargados desde `lastAuditMsgAt`
+  (o 24 h) se cortan en "charlas" por pausas ≥ `sessionGapMinutes` (default
+  60, editable en Config privada → "Pausa que separa charlas"); se audita SOLO
+  la última. Las anteriores quedan cubiertas por `lastAuditMsgAt` (no se
+  auditan después). `periodStart/End` reflejan esa charla y el Telegram
+  agrega "🕒 Charla de HH:MM a HH:MM (N msjs)". Helper `_auditCountMessages`
+  extraído de `_auditLoadMessages`.
+- **Validado:** `node --check` OK. admin-sw v28 → v29. Redeploy.
+
 ### 136. Auditoría IA: REGLAS DEL NEGOCIO (default + editables desde el panel) + botón "❌ Falso positivo"
 - **Reporte del owner (Telegram 00:23):** la IA marcó "sin solución" retiros
   donde el agente explicó que con bono hay que duplicar/triplicar antes de

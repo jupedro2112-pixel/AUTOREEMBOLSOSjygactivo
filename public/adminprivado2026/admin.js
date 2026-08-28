@@ -5264,6 +5264,7 @@ function renderPrivateAuditConfig(a) {
     chk('pcAuditEnabled', a.enabled !== false); chk('pcAuditRules', a.rulesEnabled !== false); chk('pcAuditRating', a.ratingEnabled !== false);
     set('pcAuditModel', a.model || ''); set('pcAuditEffort', a.effort || '');
     set('pcAuditIdle', a.idleMinutes); set('pcAuditMinScore', a.minScoreAlert); set('pcAuditRatingCooldown', a.ratingCooldownHours); set('pcAuditMaxPerTick', a.maxPerTick);
+    set('pcAuditSessionGap', a.sessionGapMinutes);
     set('pcTgToken', ''); chk('pcTgTokenClear', false); set('pcTgChatId', a.telegramChatId || '');
     set('pcAuditExtraRules', a.extraRules || '');
     const th = document.getElementById('pcTgTokenHint'); if (th) th.textContent = a.telegramTokenSet ? `(guardado: ${a.telegramTokenHint})` : '(sin token en el panel)';
@@ -5285,6 +5286,7 @@ async function savePrivateAuditConfig() {
         enabled: c('pcAuditEnabled'), rulesEnabled: c('pcAuditRules'), ratingEnabled: c('pcAuditRating'),
         model: v('pcAuditModel') || '', effort: v('pcAuditEffort') || '',
         idleMinutes: v('pcAuditIdle'), minScoreAlert: v('pcAuditMinScore'), ratingCooldownHours: v('pcAuditRatingCooldown'), maxPerTick: v('pcAuditMaxPerTick'),
+        sessionGapMinutes: v('pcAuditSessionGap'),
         alertFlags: Array.from(document.querySelectorAll('.pcAuditFlag:checked')).map(x => x.value),
         extraRules: v('pcAuditExtraRules') || '',
         telegramChatId: (v('pcTgChatId') || '').trim()

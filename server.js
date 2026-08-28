@@ -2713,6 +2713,7 @@ const _AUDIT_FLAG_LABEL = {
   mensaje_repetido: 'mensaje repetido', sin_respuesta: 'SIN RESPUESTA', cerrado_sin_responder: 'cerrado sin responder'
 };
 function _flagLabels(flags) { return (flags || []).map(f => _AUDIT_FLAG_LABEL[f] || f).join(', '); }
+function _artHM(d) { return new Date(d).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }); }
 
 // Mensajes AUTOMÁTICOS del cliente (los genera la app al tocar un botón, el
 // sistema los responde solo y NINGÚN agente tiene que contestarlos): reclamo de
@@ -2733,6 +2734,9 @@ async function _auditLoadMessages(userId, since, until) {
   if (until) q.timestamp.$lte = until;
   const msgs = await Message.find(q).sort({ timestamp: 1 }).limit(400).lean();
   msgs.forEach(m => { if (m.senderRole === 'user' && _isAutoClientMessage(m.content)) m._auto = true; });
+  return Object.assign({ msgs }, _auditCountMessages(msgs));
+}
+function _auditCountMessages(msgs) {
   const agents = [...new Set(msgs.filter(m => _isAgentMsg(m) && m.senderUsername).map(m => m.senderUsername))];
   const realUser = msgs.filter(m => m.senderRole === 'user' && !m._auto);
   const agentMsgs = msgs.filter(_isAgentMsg).length;
@@ -2743,7 +2747,7 @@ async function _auditLoadMessages(userId, since, until) {
     const answered = msgs.slice(i + 1).some(x => x.senderRole !== 'user');
     if (!answered) unanswered++;
   }
-  return { msgs, agents, userMsgs: realUser.length, agentMsgs, unanswered, autoMsgs: msgs.length - realUser.length - msgs.filter(m => m.senderRole !== 'user').length };
+  return { agents, userMsgs: realUser.length, agentMsgs, unanswered };
 }
 
 // Alerta a Telegram (si corresponde) y marca el audit como alertado.
@@ -2759,6 +2763,7 @@ async function _auditAlert(audit, cfg) {
     const lines = [
       `${sev} <b>${e(_projectLabel())}</b> — ${audit.source === 'ai' ? 'auditoría IA' : 'regla'} · @${e(audit.username)}`,
       (audit.score != null ? `Puntaje <b>${audit.score}/10</b> · ` : '') + `Banderas: <b>${e(_flagLabels(audit.flags)) || '-'}</b>`,
+      audit.periodStart && audit.periodEnd ? `🕒 Charla de ${_artHM(audit.periodStart)} a ${_artHM(audit.periodEnd)} (${audit.messageCount || 0} msjs)` : '',
       audit.agents && audit.agents.length ? `Agente(s): ${e(audit.agents.join(', '))}${audit.responsibleAgent ? ` (responsable: ${e(audit.responsibleAgent)})` : ''}` : 'Agente(s): ninguno respondió',
       audit.summary ? `📝 ${e(audit.summary)}` : '',
       audit.quote ? `💬 “${e(audit.quote)}”` : '',
@@ -2850,7 +2855,19 @@ async function _auditConversation(userId, reason) {
     const cfg = await _getAuditConfig();
     const lookback = new Date(now.getTime() - (Number(cfg.lookbackHours) || 24) * 3600 * 1000);
     const since = cs.lastAuditMsgAt && cs.lastAuditMsgAt > lookback ? cs.lastAuditMsgAt : lookback;
-    const { msgs, agents, userMsgs, agentMsgs, unanswered } = await _auditLoadMessages(userId, since, null);
+    const loaded = await _auditLoadMessages(userId, since, null);
+    // #137: quedarse SOLO con la ÚLTIMA charla. Si el cliente habló a las 14, 18, 20 y
+    // 22 hs, una pausa ≥ sessionGapMinutes entre mensajes separa cada charla y se
+    // audita/reporta únicamente la de las 22 hs (las anteriores quedan marcadas como
+    // vistas vía lastAuditMsgAt, no se auditan después).
+    const gapMs = (Number(cfg.sessionGapMinutes) || 60) * 60 * 1000;
+    let cut = 0;
+    for (let i = 1; i < loaded.msgs.length; i++) {
+      if (new Date(loaded.msgs[i].timestamp) - new Date(loaded.msgs[i - 1].timestamp) >= gapMs) cut = i;
+    }
+    const sessionMsgs = loaded.msgs.slice(cut);
+    const { agents, userMsgs, agentMsgs, unanswered } = _auditCountMessages(sessionMsgs);
+    const msgs = sessionMsgs;
     const lastTs = msgs.length ? msgs[msgs.length - 1].timestamp : (cs.lastMessageAt || now);
     // Nada que evaluar: sin mensajes REALES del cliente (solo automáticos / sistema),
     // o el cliente escribió y ya le respondió el sistema/agente y no hay agente que juzgar.
@@ -5781,6 +5798,7 @@ const AI_ALLOWED_MODELS = ['claude-opus-5', 'claude-sonnet-5', 'claude-opus-4-8'
 const AUDIT_CONFIG_KEY = 'auditconfig';
 const AUDIT_DEFAULTS = {
   enabled: true, model: '', effort: '', idleMinutes: 20, lookbackHours: 24, maxPerTick: 40,
+  sessionGapMinutes: 60, // #137: una pausa ≥ esto separa dos "charlas"; se audita SOLO la última
   minScoreAlert: 4, alertFlags: ['mal_trato', 'error_plata', 'insulto_cliente', 'sin_respuesta', 'posible_fraude'],
   rulesEnabled: true, ratingEnabled: true, ratingCooldownHours: 6,
   extraRules: '',
@@ -5925,7 +5943,7 @@ async function _auditConfigForPanel() {
   const a = await _getAuditConfig();
   return {
     enabled: a.enabled !== false, model: a.model || '', effort: a.effort || '',
-    idleMinutes: a.idleMinutes, lookbackHours: a.lookbackHours, maxPerTick: a.maxPerTick,
+    idleMinutes: a.idleMinutes, lookbackHours: a.lookbackHours, maxPerTick: a.maxPerTick, sessionGapMinutes: a.sessionGapMinutes,
     minScoreAlert: a.minScoreAlert, alertFlags: a.alertFlags,
     rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false, ratingCooldownHours: a.ratingCooldownHours,
     extraRules: a.extraRules || '',
@@ -5965,6 +5983,7 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, sen
       idleMinutes: num(a.idleMinutes, cur.idleMinutes, 5, 240),
       lookbackHours: num(a.lookbackHours, cur.lookbackHours, 1, 72),
       maxPerTick: num(a.maxPerTick, cur.maxPerTick, 1, 200),
+      sessionGapMinutes: num(a.sessionGapMinutes, cur.sessionGapMinutes, 10, 720),
       minScoreAlert: num(a.minScoreAlert, cur.minScoreAlert, 0, 10),
       alertFlags: Array.isArray(a.alertFlags) ? a.alertFlags.filter(f => ChatAudit.FLAGS.includes(f)) : cur.alertFlags,
       rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false,

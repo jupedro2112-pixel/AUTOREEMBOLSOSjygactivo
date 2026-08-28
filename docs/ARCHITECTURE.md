@@ -359,7 +359,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `_auditAlert`, link `?chat=<userId>&u=` que el panel abre solo). 👍👎 al cliente
   (`_scheduleRatingRequest` desde `recordUserActivity('deposit')` y `notifyPayoutPaid`;
   Message `metadata.kind:'rating_request'`; `POST /api/chat/rating`). Config en
-  🔐 Config privada (`Config['auditconfig']`).
+  🔐 Config privada (`Config['auditconfig']`). El prompt de auditoría recibe 4 bloques:
+  criterio base (código) + hechos del sistema (`_systemFactsForAi`, de la config) +
+  contexto aprendido (`Config['auditlearned']`, propuesto por la IA desde chats ≥8 y
+  confirmado por el owner, #146) + reglas del dueño (`auditconfig.extraRules`, a mano o
+  vía "🧠 Enseñarle a la IA" #145).
 - **SLA demoras**: reloj en ChatStatus (`delayClockOnUserMessage`/`delayClockResolve`);
   responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
   ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).
@@ -460,6 +464,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 | `fbAdsWebhook.startWorker` | 5 min | activo | nextRetryAt |
 | Limpieza mensajes >3d | 6 h | activo (red de seguridad del TTL) | deleteMany |
 | `_runChatAuditTick` (auditoría IA de chats quietos, #132) | 5 min | activo si `auditconfig.enabled` | claim `ChatStatus.auditLockAt` + `lastAuditMsgAt` |
+| `_runAuditLearnTick` (aprendizaje diario de chats bien evaluados, #146) | 10 min (dispara 1×/día a `learnHourART`) | activo si `auditconfig.learnEnabled` | `Config['auditlearnlast']` = fecha ART |
 
 Migraciones one-shot: patrón flag en Config (`migration_*_done`) en `initializeData()`.
 El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea

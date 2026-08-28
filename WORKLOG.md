@@ -13,6 +13,45 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 146. "📚 Contexto aprendido": la IA aprende sola CÓMO ES el negocio de los chats bien evaluados, propone al final del día, pregunta si duda, y vos confirmás
+- **Pedido del owner:** que la IA vaya armando sola la base de "cómo funciona
+  el negocio en general" viendo los chats con mejor puntaje; al final del día
+  un análisis con lo que va a cargar, a confirmar; si ya sabe todo que diga
+  que no hay nada; y si ve algo nuevo que dude, **que pregunte antes** ("ya
+  veo que empieza a aprender de cosas que no están bien"). Las reglas de
+  juicio/antifraude (rollover, 30 min) las sigue enseñando el owner.
+- **Dos fuentes nuevas de conocimiento, separadas de las reglas:**
+  1. **Hechos del sistema** (`_systemFactsForAi`, cache 10 min, leído de la
+     config: CBU/alias, hgcash auto/mínimo, retiros mín. $4.999 y flujo,
+     rangos de reembolso, fueguito/ruleta/bono app, mensajes `/sys_*` activos
+     y comandos de agentes). Bloque "ASÍ FUNCIONA ESTA SALA HOY" en cada
+     auditoría. Cero carga del owner, siempre verdad.
+  2. **Contexto aprendido** (`Config['auditlearned'].doc`): bloque "CONTEXTO
+     DEL NEGOCIO… usalo para entender, NO como reglas". Lo alimenta el
+     aprendizaje diario, solo con confirmación.
+- **Aprendizaje diario (`_runAuditLearn`; cron cada 10 min que dispara a
+  `learnHourART` (5) una vez por día ART, marca `auditlearnlast`):** toma
+  hasta `learnMaxChats` (20) auditorías IA con puntaje ≥ `learnMinScore` (8),
+  no falsos positivos, últimas 24 h; reconstruye cada charla; llama
+  `chatAuditAi.learnFromChats` (prompt: DESCRIBIR, nunca juzgar; si parece
+  política/práctica dudosa → pregunta; máx 6 propuestas + 4 dudas; "nada
+  nuevo" es válido). Guarda en `Config['auditproposals']` (dedupe vs
+  pendientes y vs doc) y avisa por Telegram ("N propuestas y M dudas" o "no
+  hay nada nuevo"). Log en `auditlearnlog`.
+- **Panel (Config privada → Auditoría → card 📚):** toggle/hora/umbral/máx;
+  "Analizar ahora"; pendientes: propuestas (editables) con ✅ Confirmar → se
+  agrega al doc / ❌ No; dudas con campo de respuesta → pasa por el
+  destilador (#145, ahora con `tipo` regla|contexto): si es criterio → va a
+  **Reglas del negocio**; si es descripción → al doc. Doc editable a mano;
+  vista de los hechos del sistema. Endpoints
+  `POST /api/admin/private-config/audit/learned[/doc|/run|/:id]`.
+- **Guardas:** solo chats ≥8 (los malos no entran), descriptivo (no
+  normativo), nada entra sin confirmación, dudas antes que suposiciones.
+- **Validado:** `node --check` OK en todo; HTML balanceado; rutas después de
+  `authMiddleware` (scan 0). **admin-sw v31 → v32.** Redeploy.
+- **Futuro (owner):** IA que responda el 70% y humanos el 30%. Esta base
+  (hechos + contexto + reglas + auditoría) es el cimiento de eso.
+
 ### 145. "🧠 Enseñarle a la IA": reporte + corrección → regla general integrada en la base (con vista previa)
 - **Pedido del owner:** poder pegar el aviso que mandó la IA a Telegram, escribir
   la corrección con ese mensaje como referencia, y que eso se sume a la base de

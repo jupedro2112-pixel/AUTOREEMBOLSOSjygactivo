@@ -62,6 +62,7 @@ const chatAuditSchema = new mongoose.Schema({
   reviewedBy: { type: String, default: null },
   reviewedAt: { type: Date, default: null },
   reviewNote: { type: String, default: '' },
+  falsePositive: { type: Boolean, default: false, index: true }, // el supervisor dijo "esto estaba bien" (#136) → fuera del ranking
 
   createdAt: { type: Date, default: Date.now, index: true }
 }, { timestamps: true });

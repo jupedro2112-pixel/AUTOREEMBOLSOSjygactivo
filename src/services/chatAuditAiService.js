@@ -59,6 +59,23 @@ const SYSTEM = [
   'Los mensajes [CLIENTE-AUTOMÁTICO] los genera la app cuando el cliente toca un botón',
   '(reclamo de reembolso, pedido de CBU): el sistema ya los procesó solo y NO requieren',
   'respuesta de ningún agente. NUNCA los cuentes como "sin respuesta" ni como demora.',
+  '',
+  'REGLAS DEL NEGOCIO (cómo funciona esta sala; si el agente las aplica y las explica, está BIEN):',
+  '- RETIROS CON BONO: si el cliente recibió un bono (bono de carga, fueguito, promo, 20%,',
+  '  100%, etc.), para poder retirar tiene que cumplir una condición de juego (rollover:',
+  '  "duplicar"/"triplicar" la carga o el bono, llegar a cierto saldo). Que el agente le',
+  '  diga que NO puede retirar todavía y le explique la condición es la atención CORRECTA:',
+  '  NO es sin_solucion, NO es error_plata, NO es promesa_incumplida. Solo marcá problema',
+  '  si el agente NO explicó la condición, la explicó mal/contradictoriamente, o trató mal',
+  '  al cliente. Que el cliente no esté contento con la regla no es culpa del agente.',
+  '- Los RETIROS y las CARGAS los ejecutan sistemas fuera del chat (banco automático,',
+  '  confirmación del agente en otro panel). Que en la conversación NO aparezca la',
+  '  confirmación de pago o de carga NO significa que no se hizo: NO lo marques como',
+  '  sin_solucion ni como demora por sí solo. Solo es problema si el cliente vuelve a',
+  '  reclamar que no le llegó y nadie le responde.',
+  '- El mensaje "Recibimos tu solicitud de retiro… un agente la está procesando" es la',
+  '  respuesta correcta a un pedido de retiro; el pago puede tardar y se hace por fuera.',
+  '- Los mensajes de sistema que confirman cargas/bonos/reembolsos SON la solución.',
   'Los insultos del CLIENTE no bajan el puntaje del agente por sí solos; lo que importa es cómo',
   'reaccionó el agente. Marcá posible_fraude si el cliente intenta engañar (comprobante ajeno,',
   'reclamo falso), sin bajar el puntaje del agente por eso.',
@@ -142,7 +159,13 @@ async function auditTranscript({ transcript, username, agents }) {
     model,
     max_tokens: 2048,
     output_config: { effort: getEffort(), format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
-    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
+    // Bloque 1 estable (cacheable). Bloque 2 = reglas del negocio que el owner escribe
+    // en el panel (🔐 Config privada → Auditoría → "Reglas del negocio"): van DESPUÉS
+    // del breakpoint de cache y con prioridad explícita sobre lo anterior.
+    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }]
+      .concat(_cfg.extraRules && String(_cfg.extraRules).trim()
+        ? [{ type: 'text', text: 'REGLAS ADICIONALES DEL DUEÑO (tienen PRIORIDAD sobre todo lo anterior; aplicalas al pie de la letra):\n' + String(_cfg.extraRules).trim().slice(0, 8000) }]
+        : []),
     messages: [{ role: 'user', content: userText }]
   };
   try {

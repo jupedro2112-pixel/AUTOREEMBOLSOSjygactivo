@@ -13,6 +13,30 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 136. Auditoría IA: REGLAS DEL NEGOCIO (default + editables desde el panel) + botón "❌ Falso positivo"
+- **Reporte del owner (Telegram 00:23):** la IA marcó "sin solución" retiros
+  donde el agente explicó que con bono hay que duplicar/triplicar antes de
+  retirar. Eso es atención CORRECTA. Pregunta: "¿cómo se arma la IA a
+  precisión para que funcione tal cual quiero?".
+- **Respuesta implementada = reglas del negocio en dos niveles:**
+  1. **Default en el prompt** (`chatAuditAiService.SYSTEM`, sección "REGLAS DEL
+     NEGOCIO"): retiros con bono ⇒ rollover explicado = correcto (no
+     sin_solucion / error_plata / promesa_incumplida); cargas y pagos se
+     ejecutan FUERA del chat → la falta de confirmación en la charla no es
+     problema; "Recibimos tu solicitud de retiro…" es la respuesta correcta.
+  2. **Editables por el owner**: `auditconfig.extraRules` (≤8000 c.) →
+     textarea "📜 Reglas del negocio para la IA" en 🔐 Config privada →
+     Auditoría; van como 2º bloque `system` DESPUÉS del breakpoint de cache,
+     con "PRIORIDAD sobre todo lo anterior". Aplica a la próxima auditoría.
+- **Bucle de afinado:** en la lista de Auditoría, botón **❌ Falso positivo**
+  (además de "Marcar visto"): pide el motivo, marca `falsePositive:true`
+  (campo nuevo en ChatAudit) y esa auditoría sale del ranking de agentes.
+  `GET /api/admin/audit/false-positives` lista los últimos 100 con motivo
+  para convertirlos en reglas. Método: cada falso positivo → una línea nueva
+  en "Reglas del negocio".
+- **Validado:** `node --check` OK en todo; HTML 616/616, ids únicos.
+  **admin-sw v27 → v28.** Redeploy.
+
 ### 135. Auditoría: los mensajes AUTOMÁTICOS del cliente (reembolso reclamado, pedido de CBU) ya no cuentan como "sin respuesta"; el reclamo de reembolso no abre el chat
 - **Primeras alertas reales en Telegram (owner, 23:40):** tres falsos
   positivos del mismo tipo: (a) IA 5/10 "el reclamo de reembolso daily quedó

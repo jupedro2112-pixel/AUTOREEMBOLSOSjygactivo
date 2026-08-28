@@ -5783,6 +5783,7 @@ const AUDIT_DEFAULTS = {
   enabled: true, model: '', effort: '', idleMinutes: 20, lookbackHours: 24, maxPerTick: 40,
   minScoreAlert: 4, alertFlags: ['mal_trato', 'error_plata', 'insulto_cliente', 'sin_respuesta', 'posible_fraude'],
   rulesEnabled: true, ratingEnabled: true, ratingCooldownHours: 6,
+  extraRules: '',
   telegram: { botToken: '', chatId: '' }
 };
 async function _getAuditConfig() {
@@ -5799,7 +5800,7 @@ async function _loadAiConfigIntoService() {
     comprobanteAi.applyConfig(cfg);
     // #132: la auditoría usa la MISMA API key (panel o SSM) que los comprobantes.
     const audit = await _getAuditConfig();
-    chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '' });
+    chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '', extraRules: audit.extraRules || '' });
     telegramAlert.applyConfig(audit.telegram);
   } catch (e) {
     logger.warn(`[ai-config] no se pudo cargar la config de IA/auditoría: ${e.message}`);
@@ -5927,6 +5928,7 @@ async function _auditConfigForPanel() {
     idleMinutes: a.idleMinutes, lookbackHours: a.lookbackHours, maxPerTick: a.maxPerTick,
     minScoreAlert: a.minScoreAlert, alertFlags: a.alertFlags,
     rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false, ratingCooldownHours: a.ratingCooldownHours,
+    extraRules: a.extraRules || '',
     telegramTokenSet: !!(a.telegram && a.telegram.botToken),
     telegramTokenHint: a.telegram && a.telegram.botToken ? '••••' + String(a.telegram.botToken).slice(-4) : null,
     telegramChatId: (a.telegram && a.telegram.chatId) || '',
@@ -5967,6 +5969,7 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, sen
       alertFlags: Array.isArray(a.alertFlags) ? a.alertFlags.filter(f => ChatAudit.FLAGS.includes(f)) : cur.alertFlags,
       rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false,
       ratingCooldownHours: num(a.ratingCooldownHours, cur.ratingCooldownHours, 0, 168),
+      extraRules: a.extraRules !== undefined ? String(a.extraRules || '').slice(0, 8000) : (cur.extraRules || ''),
       telegram: { botToken, chatId },
       updatedBy: req.user.username, updatedAt: new Date()
     };
@@ -6088,7 +6091,7 @@ app.get('/api/admin/audit/agents', authMiddleware, adminMiddleware, async (req, 
     const since = new Date(Date.now() - days * 86400000);
     const [byAgent, ratings, totals] = await Promise.all([
       ChatAudit.aggregate([
-        { $match: { createdAt: { $gte: since }, source: 'ai' } },
+        { $match: { createdAt: { $gte: since }, source: 'ai', falsePositive: { $ne: true } } },
         { $unwind: '$agents' },
         { $group: { _id: '$agents', chats: { $sum: 1 }, avgScore: { $avg: '$score' },
           bad: { $sum: { $cond: [{ $lte: ['$score', 4] }, 1, 0] } },
@@ -6121,7 +6124,8 @@ app.post('/api/admin/audit/:id/review', authMiddleware, adminMiddleware, async (
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
     const note = String((req.body || {}).note || '').slice(0, 500);
-    const r = await ChatAudit.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date(), reviewNote: note } });
+    const falsePositive = (req.body || {}).falsePositive === true;
+    const r = await ChatAudit.updateOne({ id: String(req.params.id) }, { $set: { reviewed: true, reviewedBy: req.user.username, reviewedAt: new Date(), reviewNote: note, falsePositive } });
     if (!r.matchedCount) return res.status(404).json({ error: 'No encontrado' });
     res.json({ success: true });
   } catch (error) {
@@ -6152,6 +6156,15 @@ app.post('/api/admin/audit/ratings/:id/review', authMiddleware, adminMiddleware,
   } catch (error) {
     res.status(500).json({ error: 'Error del servidor' });
   }
+});
+
+// Falsos positivos marcados (para afinar las reglas del negocio desde el panel).
+app.get('/api/admin/audit/false-positives', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const items = await ChatAudit.find({ falsePositive: true }).sort({ reviewedAt: -1 }).limit(100).select('username agents score flags summary quote reviewNote reviewedBy reviewedAt').lean();
+    res.json({ items });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 
 // Auditar YA una conversación (botón del panel).

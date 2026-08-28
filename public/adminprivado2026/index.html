@@ -2287,6 +2287,14 @@
                             <div class="form-group"><label class="form-label">Máx. chats por corrida (5 min)</label><input type="number" id="pcAuditMaxPerTick" min="1" max="200" style="width:100%;"></div>
                         </div>
                         <div class="form-group">
+                            <label class="form-label">📜 Reglas del negocio para la IA <span style="color:#888;font-weight:normal;">(en tus palabras; tienen prioridad sobre el criterio general)</span></label>
+                            <textarea id="pcAuditExtraRules" rows="8" maxlength="8000" placeholder="Ej:
+- Si el cliente tiene bono, para retirar tiene que duplicar/triplicar. Que el agente le explique eso y no le pague es CORRECTO.
+- Los pagos se hacen por fuera del chat: que no aparezca la confirmación no es un problema.
+- 'Derivar a comunidad' es una respuesta válida para consultas de promociones." style="width:100%;font-family:inherit;font-size:12.5px;"></textarea>
+                            <p style="font-size:11px;color:#777;margin-top:4px;">Cada vez que marques una auditoría como <b>❌ Falso positivo</b>, mirá qué regla faltaba y sumala acá. Aplica a las próximas auditorías al instante.</p>
+                        </div>
+                        <div class="form-group">
                             <label class="form-label">Banderas que alertan a Telegram</label>
                             <div id="pcAuditFlags" style="display:flex;gap:8px 14px;flex-wrap:wrap;font-size:12.5px;"></div>
                         </div>

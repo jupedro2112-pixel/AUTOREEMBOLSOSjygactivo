@@ -5265,6 +5265,7 @@ function renderPrivateAuditConfig(a) {
     set('pcAuditModel', a.model || ''); set('pcAuditEffort', a.effort || '');
     set('pcAuditIdle', a.idleMinutes); set('pcAuditMinScore', a.minScoreAlert); set('pcAuditRatingCooldown', a.ratingCooldownHours); set('pcAuditMaxPerTick', a.maxPerTick);
     set('pcTgToken', ''); chk('pcTgTokenClear', false); set('pcTgChatId', a.telegramChatId || '');
+    set('pcAuditExtraRules', a.extraRules || '');
     const th = document.getElementById('pcTgTokenHint'); if (th) th.textContent = a.telegramTokenSet ? `(guardado: ${a.telegramTokenHint})` : '(sin token en el panel)';
     const flags = document.getElementById('pcAuditFlags');
     if (flags) {
@@ -5285,6 +5286,7 @@ async function savePrivateAuditConfig() {
         model: v('pcAuditModel') || '', effort: v('pcAuditEffort') || '',
         idleMinutes: v('pcAuditIdle'), minScoreAlert: v('pcAuditMinScore'), ratingCooldownHours: v('pcAuditRatingCooldown'), maxPerTick: v('pcAuditMaxPerTick'),
         alertFlags: Array.from(document.querySelectorAll('.pcAuditFlag:checked')).map(x => x.value),
+        extraRules: v('pcAuditExtraRules') || '',
         telegramChatId: (v('pcTgChatId') || '').trim()
     };
     const tok = (v('pcTgToken') || '').trim();
@@ -5401,7 +5403,7 @@ async function loadAuditList(page) {
                     ${it.agents && it.agents.length ? `<span style="font-size:11px;color:#aaa;">· ${escapeHtml(it.agents.join(', '))}${it.responsibleAgent ? ' (resp: ' + escapeHtml(it.responsibleAgent) + ')' : ''}</span>` : '<span style="font-size:11px;color:#ff5050;">· sin agente</span>'}</div>
                 <div style="display:flex;gap:6px;">
                     <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="selectConversation('${escapeHtml(it.userId)}','${escapeHtml(it.username || '')}');switchSection('chats')">Abrir chat</button>
-                    ${it.reviewed ? `<span style="font-size:11px;color:#25d366;">✓ ${escapeHtml(it.reviewedBy || '')}${it.reviewNote ? ': ' + escapeHtml(it.reviewNote) : ''}</span>` : `<button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="reviewAudit('${escapeHtml(it.id)}')">Marcar visto</button>`}
+                    ${it.reviewed ? `<span style="font-size:11px;color:${it.falsePositive ? '#aaa' : '#25d366'};">${it.falsePositive ? '❌ falso positivo' : '✓'} ${escapeHtml(it.reviewedBy || '')}${it.reviewNote ? ': ' + escapeHtml(it.reviewNote) : ''}</span>` : `<button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="reviewAudit('${escapeHtml(it.id)}')">Marcar visto</button><button class="btn-secondary" style="font-size:11px;padding:3px 8px;" title="La IA se equivocó: la atención estaba bien. Sale del ranking." onclick="reviewAudit('${escapeHtml(it.id)}', true)">❌ Falso positivo</button>`}
                 </div>
             </div>
             <div style="margin-top:6px;">${_flagChips(it.flags)}</div>
@@ -5415,11 +5417,11 @@ async function loadAuditList(page) {
         }
     } catch (e) { box.innerHTML = '<div style="color:#888;">Error de conexión</div>'; }
 }
-async function reviewAudit(id) {
-    const note = prompt('Nota (opcional): qué se hizo / a quién se le habló', '') ;
+async function reviewAudit(id, falsePositive) {
+    const note = prompt(falsePositive ? '¿Por qué estaba bien? (ej: "retiro con bono, se explicó el rollover"). Sumá esa regla en Config privada → Reglas del negocio.' : 'Nota (opcional): qué se hizo / a quién se le habló', '');
     if (note === null) return;
     try {
-        const r = await authFetch('/api/admin/audit/' + encodeURIComponent(id) + '/review', { method: 'POST', body: JSON.stringify({ note }) });
+        const r = await authFetch('/api/admin/audit/' + encodeURIComponent(id) + '/review', { method: 'POST', body: JSON.stringify({ note, falsePositive: !!falsePositive }) });
         if (!r.ok) { showToast('No se pudo marcar', 'error'); return; }
         loadAuditList(window._auditPage || 1); refreshAuditBadge();
     } catch (_) { showToast('Error de conexión', 'error'); }

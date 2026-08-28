@@ -17,6 +17,10 @@ const chatRatingSchema = new mongoose.Schema({
   messageId: { type: String, required: true, unique: true }, // el Message rating_request
   rating: { type: String, enum: ['up', 'down'], required: true, index: true },
   comment: { type: String, default: '', maxlength: 1000 },
+  // #141: si fue 👎 SIN motivo, la IA lee la última charla y explica qué pudo pasar
+  // (o dice explícitamente que no encuentra motivo). Puntaje de esa auditoría.
+  aiContext: { type: String, default: '' },
+  aiScore: { type: Number, default: null },
   // Contexto del cierre (quién cerró y quiénes atendieron en las últimas horas)
   closedBy: { type: String, default: null },
   agents: { type: [String], default: [], index: true },

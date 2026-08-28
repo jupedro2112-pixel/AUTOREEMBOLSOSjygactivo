@@ -2842,7 +2842,8 @@ async function _auditRulesOnClose(userId, closedBy, pendingSince) {
 }
 
 // ── Capa 2: auditoría IA de una conversación quieta ─────────────────────────
-async function _auditConversation(userId, reason) {
+async function _auditConversation(userId, reason, opts) {
+  opts = opts || {};
   const now = new Date();
   // Claim atómico (otra instancia puede estar auditando el mismo chat).
   const cs = await ChatStatus.findOneAndUpdate(
@@ -2854,7 +2855,8 @@ async function _auditConversation(userId, reason) {
   try {
     const cfg = await _getAuditConfig();
     const lookback = new Date(now.getTime() - (Number(cfg.lookbackHours) || 24) * 3600 * 1000);
-    const since = cs.lastAuditMsgAt && cs.lastAuditMsgAt > lookback ? cs.lastAuditMsgAt : lookback;
+    // opts.force (👎 sin motivo, #141): re-leer la última charla aunque ya haya sido auditada.
+    const since = (!opts.force && cs.lastAuditMsgAt && cs.lastAuditMsgAt > lookback) ? cs.lastAuditMsgAt : lookback;
     const loaded = await _auditLoadMessages(userId, since, null);
     // #137: quedarse SOLO con la ÚLTIMA charla. Si el cliente habló a las 14, 18, 20 y
     // 22 hs, una pausa ≥ sessionGapMinutes entre mensajes separa cada charla y se
@@ -2891,7 +2893,7 @@ async function _auditConversation(userId, reason) {
     } else {
       if (!chatAuditAi.isEnabled()) { await release(); return null; }
       const transcript = chatAuditAi.formatTranscript(msgs, cs.username);
-      const r = await chatAuditAi.auditTranscript({ transcript, username: cs.username, agents });
+      const r = await chatAuditAi.auditTranscript({ transcript, username: cs.username, agents, hint: opts.hint || null });
       if (!r.ok) { logger.warn(`[audit] IA falló para ${cs.username}: ${r.error}`); await release(); return null; }
       audit = await ChatAudit.create(Object.assign(base, {
         source: 'ai', score: r.score, flags: r.flags, summary: r.summary, quote: r.quote,
@@ -2900,7 +2902,7 @@ async function _auditConversation(userId, reason) {
       logger.info(`[audit] ${cs.username}: ${r.score}/10 ${r.flags.join(',') || '-'} (${msgs.length} msgs, ${agents.join('/') || 'sin agente'})`);
     }
     await release({ lastAuditAt: now, lastAuditMsgAt: lastTs });
-    await _auditAlert(audit.toObject(), cfg);
+    if (!opts.noAlert) await _auditAlert(audit.toObject(), cfg); // noAlert: el Telegram del 👎 ya lo incluye (#141)
     return audit;
   } catch (err) {
     logger.warn(`[audit] ${userId}: ${err.message}`);
@@ -6048,26 +6050,42 @@ app.post('/api/chat/rating', authMiddleware, async (req, res) => {
     if (rating === 'down') {
       await _emitAdminOnlyChatNote(req.user.userId, req.user.username,
         `👎 El cliente calificó MAL la atención${cleanComment ? `: “${cleanComment}”` : ' (sin comentario todavía)'}. Un supervisor lo va a revisar.`);
-      // Alerta Telegram cuando llega el motivo (o el 👎 solo si no manda motivo en 3 min).
-      const alertNow = !!cleanComment;
-      const sendAlert = async () => {
+      // #141: con motivo → alerta ya. Sin motivo → esperar 3 min por si lo escribe; si no
+      // llega, la IA lee la ÚLTIMA charla y explica qué pudo molestarle (o dice que no
+      // encuentra motivo) y eso va en el Telegram y en el panel.
+      const uid = req.user.userId, uname = req.user.username;
+      const finish = async () => {
         try {
           const fresh = await ChatRating.findOne({ messageId: msg.id }).lean();
           if (!fresh || fresh.alerted) return;
+          let aiLine = '';
+          if (!fresh.comment) {
+            const audit = await _auditConversation(uid, 'rating_down', {
+              force: true, noAlert: true,
+              hint: 'El cliente acaba de calificar la atención con 👎 (pulgar abajo) SIN escribir un motivo. Además de evaluar, en el "resumen" explicá qué pudo haberle molestado según la charla (demora, respuesta, plata, trato). Si NO encontrás en la charla ningún motivo razonable para una mala calificación, decilo textualmente: "No encuentro en la charla un motivo claro para la mala calificación" y puntuá la atención por lo que ves.'
+            }).catch(() => null);
+            if (audit) {
+              await ChatRating.updateOne({ messageId: msg.id }, { $set: { aiContext: audit.summary || '', aiScore: audit.score != null ? audit.score : null } });
+              aiLine = `🤖 Sin motivo del cliente — lo que vio la IA (${audit.score != null ? audit.score + '/10' : 'regla'}${audit.flags && audit.flags.length ? ', ' + _flagLabels(audit.flags) : ''}): ${audit.summary || ''}`;
+              await _emitAdminOnlyChatNote(uid, uname, `🤖 Contexto del 👎 (el cliente no dio motivo): ${audit.summary || 's/d'}`);
+            } else {
+              aiLine = '🤖 Sin motivo del cliente y sin charla reciente para analizar.';
+            }
+          } else {
+            _auditConversation(uid, 'rating_down', { force: true }).catch(() => {});
+          }
           if (!telegramAlert.isEnabled()) return;
           const e = telegramAlert.esc;
           const r = await telegramAlert.send([
-            `👎 <b>${e(_projectLabel())}</b> — calificación NEGATIVA · @${e(req.user.username)}`,
+            `👎 <b>${e(_projectLabel())}</b> — calificación NEGATIVA · @${e(uname)}`,
             fresh.agents && fresh.agents.length ? `Agente(s): ${e(fresh.agents.join(', '))}` : '',
-            fresh.comment ? `📝 “${e(fresh.comment)}”` : '📝 (sin motivo)',
-            `👉 <a href="${_panelChatLink(req.user.userId, req.user.username)}">Abrir chat en el panel</a>`
+            fresh.comment ? `📝 “${e(fresh.comment)}”` : e(aiLine),
+            `👉 <a href="${_panelChatLink(uid, uname)}">Abrir chat en el panel</a>`
           ].filter(Boolean).join('\n'));
           if (r.ok) await ChatRating.updateOne({ messageId: msg.id }, { $set: { alerted: true } });
-        } catch (_) {}
+        } catch (err) { logger.warn(`[rating] finish: ${err.message}`); }
       };
-      if (alertNow) sendAlert(); else setTimeout(sendAlert, 3 * 60 * 1000);
-      // Disparar auditoría IA del tramo ahora mismo (no esperar al idle).
-      setTimeout(() => { _auditConversation(req.user.userId, 'rating_down').catch(() => {}); }, 5000);
+      if (cleanComment) finish(); else setTimeout(finish, 3 * 60 * 1000);
     }
     const thanks = rating === 'down'
       ? await renderSystemCommand('/sys_rating_thanks_negative', '🙏 Gracias por contarnos. Un supervisor va a leer tu mensaje y revisar lo que pasó.', {})

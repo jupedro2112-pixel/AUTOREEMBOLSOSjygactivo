@@ -5378,7 +5378,7 @@ async function loadAuditRatings() {
                     ${it.reviewed ? `<span style="font-size:11px;color:#25d366;">✓ visto por ${escapeHtml(it.reviewedBy || '')}</span>` : `<button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="reviewAuditRating('${escapeHtml(it.id)}')">Marcar visto</button>`}
                 </div>
             </div>
-            <div style="margin-top:6px;font-size:13px;">${it.comment ? '📝 “' + escapeHtml(it.comment) + '”' : '<span style="color:#888;">(sin motivo)</span>'}</div>
+            <div style="margin-top:6px;font-size:13px;">${it.comment ? '📝 “' + escapeHtml(it.comment) + '”' : (it.aiContext ? '<span style="color:#aaa;">🤖 Sin motivo del cliente — lo que vio la IA' + (it.aiScore != null ? ' (' + it.aiScore + '/10)' : '') + ':</span> ' + escapeHtml(it.aiContext) : '<span style="color:#888;">(sin motivo; la IA lo analiza a los 3 min)</span>')}</div>
         </div>`).join('');
     } catch (e) { box.innerHTML = '<div style="color:#888;">Error de conexión</div>'; }
 }

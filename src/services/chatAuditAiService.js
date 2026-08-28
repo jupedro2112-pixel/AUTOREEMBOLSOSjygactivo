@@ -174,17 +174,18 @@ function formatTranscript(messages, username) {
  * Audita una transcripción. Devuelve { ok, score, flags, summary, quote,
  * responsibleAgent, resolved, customerAngry, model } o { ok:false, error }.
  */
-async function auditTranscript({ transcript, username, agents }) {
+async function auditTranscript({ transcript, username, agents, hint }) {
   if (!getApiKey()) return { ok: false, error: 'ANTHROPIC_API_KEY no configurada' };
   const model = getModel();
   const userText = [
     `Cliente: ${username}. Agentes que participaron: ${agents && agents.length ? agents.join(', ') : 'ninguno'}.`,
+    hint ? `CONTEXTO ESPECIAL: ${hint}` : '',
     'Conversación (hora argentina):',
     '<<<',
     transcript.slice(0, 60000),
     '>>>',
     'Evaluá la atención del/los agente(s) y completá el JSON.'
-  ].join('\n');
+  ].filter(Boolean).join('\n');
   const body = {
     model,
     max_tokens: 2048,

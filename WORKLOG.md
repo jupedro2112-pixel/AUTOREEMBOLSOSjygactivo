@@ -13,6 +13,21 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 141. 👎 sin motivo → la IA lee la última charla y explica el porqué (o dice que no hay motivo)
+- **Pedido del owner:** si el cliente pone 👎 y no escribe motivo, que se
+  investigue la charla y se dé el contexto; si no hay motivo, que lo diga.
+- **Fix (`POST /api/chat/rating`):** con motivo → Telegram al instante (igual
+  que antes). Sin motivo → a los 3 min, si sigue sin motivo,
+  `_auditConversation(userId,'rating_down',{force,noAlert,hint})` relee la
+  ÚLTIMA charla (aunque ya estuviera auditada) con la instrucción de explicar
+  qué pudo molestar o decir textualmente "No encuentro en la charla un motivo
+  claro para la mala calificación". El resumen va al Telegram ("🤖 Sin motivo
+  del cliente — lo que vio la IA (N/10, banderas): …"), a una nota interna en
+  el chat y a `ChatRating.aiContext/aiScore` (se muestra en Auditoría →
+  Calificaciones negativas). `noAlert` evita un segundo Telegram por la
+  auditoría en sí. `auditTranscript` acepta `hint`.
+- **Validado:** `node --check` OK. Redeploy.
+
 ### 140. Fueguito = igual que reembolso: no abre el chat, no arranca demora, no se audita
 - **Telegram 03:05 (owner):** dos alertas SIN RESPUESTA por "🔥 Día 1 de racha
   Fueguito!" — mensaje que la app manda sola en nombre del cliente.

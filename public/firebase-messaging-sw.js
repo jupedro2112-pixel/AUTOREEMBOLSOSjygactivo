@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v57'; // v57: usuario de registro sin prefijo VIP precargado (#142)
+const CACHE_VERSION = 'v58'; // v58: modal Mis Referidos con 'cómo funciona' en 3 pasos (#143)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

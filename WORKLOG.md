@@ -13,6 +13,26 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 143. Regla "mensaje repetido" no salta con "Gracias" + modal Mis Referidos con "¿Cómo funciona?" en 3 pasos
+- **(1) Falso positivo (captura del owner):** "Gracias" tras una carga disparó
+  "ALERTA DE ATENCIÓN (mensaje repetido)". Causa: el contador por cliente
+  sumaba repeticiones dentro de 15 min sin importar si entre medio ya le
+  habían respondido (ej. "Gracias" después de cada carga), y no filtraba
+  cortesías. Fix en `_auditRulesOnUserMessage`: no cuentan mensajes < 8
+  caracteres ni cortesías (gracias/ok/dale/listo/hola/…); y si hubo un
+  mensaje no-usuario (agente o sistema) desde la repetición anterior, el
+  contador arranca de nuevo (`Message.exists`, solo cuando hay match).
+- **(2) Referidos:** el owner quiere el copy del otro proyecto (1girox).
+  `index.html`: subtítulo "Invitá amigos y cobrá todos los meses el 7%…",
+  bloque "💡 ¿Cómo funciona? Así de simple" con 3 pasos + nota 📌 con
+  ejemplo ($100.000 → $7.000), ARRIBA del código; se quitó el microcopy
+  viejo. El % es dinámico: `/api/referrals/me` devuelve `referralRate`
+  (`getReferralRateForUser`, default 0.07, respeta override) y `ui.js` lo
+  pinta en `.referralRatePct` / `.referralRateExample`. En este proyecto es
+  **7%** (en 1girox 8%: viene de `DEFAULT_REFERRAL_RATE`).
+- HTML + JS juntos → **`?v=58` + `CACHE_VERSION='v58'`**. Back necesita
+  redeploy (controller + regla).
+
 ### 142. Registro: el campo Usuario arranca vacío (antes precargaba "VIP")
 - Pedido del owner: "cambiar el VIP por default y dejarlo vacío, para que sean
   libres en elegir". `index.html` (`value=""`, placeholder "Elegí tu

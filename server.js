@@ -2791,15 +2791,22 @@ async function _auditRulesOnUserMessage(userId, username, content, type) {
     const flags = [];
     if (_RULE_INSULT.test(text)) flags.push('insulto_cliente');
     if (_RULE_COMPLAINT.test(text)) flags.push('queja');
-    // Mensaje repetido: 3 veces el mismo texto en 15 min (nadie le contesta).
+    // Mensaje repetido: 3 veces el mismo texto en 15 min SIN que nadie le conteste
+    // entre medio. #143: cortesías/cortos ("gracias", "ok", "hola") no cuentan, y si
+    // hubo respuesta (agente o sistema) desde la vez anterior, el contador arranca
+    // de nuevo (un "Gracias" después de cada carga no es un cliente ignorado).
     const key = text.toLowerCase().replace(/\s+/g, ' ').trim();
     const now = Date.now();
-    const prev = _repeatMap.get(userId);
-    if (prev && prev.key === key && now - prev.at < 15 * 60 * 1000) {
-      prev.count++; prev.at = now;
-      if (prev.count >= 3) flags.push('mensaje_repetido');
-    } else {
-      _repeatMap.set(userId, { key, count: 1, at: now });
+    const _courtesy = /^(gracias|muchas gracias|ok|oka|okey|dale|listo|hola|buenas|buen d[ií]a|buenas tardes|buenas noches|si|s[ií]|no|genial|perfecto|joya|bien|de nada|👍|🙏|❤️|👌)[.!\s]*$/i.test(key);
+    if (key.length >= 8 && !_courtesy) {
+      const prev = _repeatMap.get(userId);
+      if (prev && prev.key === key && now - prev.at < 15 * 60 * 1000) {
+        const replied = await Message.exists({ receiverId: userId, senderRole: { $ne: 'user' }, adminOnly: { $ne: true }, timestamp: { $gt: new Date(prev.at) } });
+        if (replied) { _repeatMap.set(userId, { key, count: 1, at: now }); }
+        else { prev.count++; prev.at = now; if (prev.count >= 3) flags.push('mensaje_repetido'); }
+      } else {
+        _repeatMap.set(userId, { key, count: 1, at: now });
+      }
     }
     if (_repeatMap.size > 5000) { for (const [k, v] of _repeatMap) { if (now - v.at > 30 * 60 * 1000) _repeatMap.delete(k); } }
     if (!flags.length) return;

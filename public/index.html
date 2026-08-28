@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=57">
-    <link rel="stylesheet" href="/css/login.css?v=57">
-    <link rel="stylesheet" href="/css/header.css?v=57">
-    <link rel="stylesheet" href="/css/chat.css?v=57">
-    <link rel="stylesheet" href="/css/modals.css?v=57">
-    <link rel="stylesheet" href="/css/responsive.css?v=57">
+    <link rel="stylesheet" href="/css/base.css?v=58">
+    <link rel="stylesheet" href="/css/login.css?v=58">
+    <link rel="stylesheet" href="/css/header.css?v=58">
+    <link rel="stylesheet" href="/css/chat.css?v=58">
+    <link rel="stylesheet" href="/css/modals.css?v=58">
+    <link rel="stylesheet" href="/css/responsive.css?v=58">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -1928,25 +1928,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=57"></script>
-    <script src="/js/campaign.js?v=57"></script>
-    <script src="/js/meta-pixel.js?v=57"></script>
-    <script src="/js/auth.js?v=57"></script>
-    <script src="/js/socket.js?v=57"></script>
-    <script src="/js/chat.js?v=57"></script>
-    <script src="/js/refunds.js?v=57"></script>
-    <script src="/js/fire.js?v=57"></script>
-    <script src="/js/roulette.js?v=57"></script>
-    <script src="/js/reviews.js?v=57"></script>
-    <script src="/js/promobonus.js?v=57"></script>
-    <script src="/js/notifications.js?v=57"></script>
-    <script src="/js/ui.js?v=57"></script>
-    <script src="/js/withdraw.js?v=57"></script>
-    <script src="/js/installbonus.js?v=57"></script>
-    <script src="/js/notifsurvey.js?v=57"></script>
-    <script src="/js/publisherwelcome.js?v=57"></script>
-    <script src="/js/apptest.js?v=57"></script>
-    <script src="/js/app.js?v=57"></script>
+    <script src="/js/config.js?v=58"></script>
+    <script src="/js/campaign.js?v=58"></script>
+    <script src="/js/meta-pixel.js?v=58"></script>
+    <script src="/js/auth.js?v=58"></script>
+    <script src="/js/socket.js?v=58"></script>
+    <script src="/js/chat.js?v=58"></script>
+    <script src="/js/refunds.js?v=58"></script>
+    <script src="/js/fire.js?v=58"></script>
+    <script src="/js/roulette.js?v=58"></script>
+    <script src="/js/reviews.js?v=58"></script>
+    <script src="/js/promobonus.js?v=58"></script>
+    <script src="/js/notifications.js?v=58"></script>
+    <script src="/js/ui.js?v=58"></script>
+    <script src="/js/withdraw.js?v=58"></script>
+    <script src="/js/installbonus.js?v=58"></script>
+    <script src="/js/notifsurvey.js?v=58"></script>
+    <script src="/js/publisherwelcome.js?v=58"></script>
+    <script src="/js/apptest.js?v=58"></script>
+    <script src="/js/app.js?v=58"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA
@@ -3795,9 +3795,28 @@
             <button onclick="hideModal('referralModal')" style="position:absolute;top:15px;right:15px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>
             <div class="modal-header">
                 <h2>🤝 Mis Referidos</h2>
-                <p>Compartí tu código y ganá una comisión mensual sobre la actividad de tus referidos</p>
+                <p>Invitá amigos y cobrá <strong style="color:#d4af37;">todos los meses el <span class="referralRatePct">7%</span></strong> de su actividad — sin límite de referidos</p>
             </div>
             <div id="referralContent">
+                <!-- #143: cómo funciona (3 pasos), arriba del código -->
+                <div style="background:rgba(212,175,55,0.05);border:1px solid rgba(212,175,55,0.25);border-radius:12px;padding:14px 16px;margin-bottom:16px;">
+                    <p style="color:#d4af37;font-weight:700;font-size:14px;margin:0 0 10px 0;">💡 ¿Cómo funciona? Así de simple:</p>
+                    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;">
+                        <span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:#d4af37;color:#1a0b2e;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center;">1</span>
+                        <p style="margin:0;font-size:13px;line-height:1.5;color:#e8e8e8;"><strong>Compartí tu código o tu link</strong> (los tenés acá abajo) con tus amigos por WhatsApp, Telegram o donde quieras.</p>
+                    </div>
+                    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;">
+                        <span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:#d4af37;color:#1a0b2e;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center;">2</span>
+                        <p style="margin:0;font-size:13px;line-height:1.5;color:#e8e8e8;"><strong>Tu amigo se registra con tu código</strong> (o entrando por tu link) y juega normalmente en la sala. Queda vinculado a vos para siempre.</p>
+                    </div>
+                    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;">
+                        <span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:#d4af37;color:#1a0b2e;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center;">3</span>
+                        <p style="margin:0;font-size:13px;line-height:1.5;color:#e8e8e8;"><strong style="color:#00ff88;">Cobrás el <span class="referralRatePct">7%</span> de lo que tus referidos dejan en la sala</strong> (su pérdida neta jugando), todos los meses, en fichas directo a tu cuenta. Mientras sigan jugando, vos seguís cobrando — <strong>de por vida</strong>.</p>
+                    </div>
+                    <div style="border-top:1px solid rgba(212,175,55,0.2);padding-top:10px;">
+                        <p style="margin:0;font-size:11.5px;line-height:1.55;color:#b0b0b0;">📌 La comisión se calcula al inicio de cada mes sobre la actividad del mes anterior y se acredita sola. Ejemplo: si tus referidos pierden $100.000 en el mes, vos cobrás <strong style="color:#d4af37;">$<span class="referralRateExample">7.000</span></strong>. No hay límite de referidos ni de ganancia.</p>
+                    </div>
+                </div>
                 <!-- Código y link -->
                 <div style="background:rgba(255,255,255,0.05);border:1px solid #d4af37;border-radius:12px;padding:16px;margin-bottom:16px;">
                     <div style="margin-bottom:12px;">
@@ -3844,12 +3863,6 @@
                         <span style="color:#b0b0b0;font-size:12px;">Próxima acreditación:</span>
                         <span id="referralCreditDate" style="color:#888;font-size:11px;">—</span>
                     </div>
-                </div>
-                <!-- Microcopy: cómo funcionan los referidos -->
-                <div style="background:rgba(212,175,55,0.04);border:1px solid rgba(212,175,55,0.15);border-radius:10px;padding:12px;margin-bottom:16px;">
-                    <p style="color:#b0b0b0;font-size:11px;margin:0;line-height:1.6;">
-                        💡 <strong style="color:#d4af37;">¿Cómo funciona?</strong> Las ganancias se calculan y acreditan al inicio de cada mes en base a la actividad del período anterior. Si un referido sigue generando movimiento después de un pago, el nuevo saldo se acredita en el siguiente corte.
-                    </p>
                 </div>
                 <!-- Historial agrupado por período -->
                 <div>

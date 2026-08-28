@@ -310,6 +310,12 @@ VIP.ui = (function () {
             const me = meData.data;
 
             document.getElementById('myReferralCode').textContent = me.referralCode || '—';
+            // #143: el % real del referidor (default 7%; puede tener override) en el copy del modal
+            if (typeof me.referralRate === 'number' && me.referralRate > 0) {
+                const pct = Math.round(me.referralRate * 1000) / 10;
+                document.querySelectorAll('.referralRatePct').forEach(el => { el.textContent = pct + '%'; });
+                document.querySelectorAll('.referralRateExample').forEach(el => { el.textContent = new Intl.NumberFormat('es-AR').format(Math.round(100000 * me.referralRate)); });
+            }
             document.getElementById('myReferralLink').textContent = me.referralLink || '—';
             const activeCountEl = document.getElementById('referralActiveCount');
             if (activeCountEl) activeCountEl.textContent = me.activeReferred != null ? me.activeReferred : (me.totalReferred || 0);

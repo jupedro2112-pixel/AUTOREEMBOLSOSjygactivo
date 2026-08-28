@@ -9,6 +9,7 @@ const referralCalculationService = require('../services/referralCalculationServi
 const referralPayoutService = require('../services/referralPayoutService');
 const { getCurrentPeriodKey, getPreviousPeriodKey, getPeriodLabel, getPeriodRange, getNextPeriodLabel } = require('../utils/periodKey');
 const { generateReferralCode } = require('../utils/referralCode');
+const { getReferralRateForUser } = require('../utils/referralRate');
 const logger = require('../utils/logger');
 
 // Validate period key format (YYYY-MM)
@@ -110,6 +111,7 @@ const getMyReferralInfo = asyncHandler(async (req, res) => {
     data: {
       referralCode: user.referralCode,
       referralLink,
+      referralRate: getReferralRateForUser(user), // #143: el % real que se le paga (para el copy del modal)
       totalReferred,
       activeReferred,
       currentPeriod,

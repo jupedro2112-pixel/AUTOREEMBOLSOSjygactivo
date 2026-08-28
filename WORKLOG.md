@@ -13,6 +13,22 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 144. Config privada: "Guardar auditoría no hace nada" → rate limit compartido (10/15 min) + toast de 3 s; ahora limiter propio (60/15 min) y estado visible
+- **Reporte del owner:** escribe reglas del negocio, toca "Guardar auditoría"
+  y "no hace nada, no guarda". Descartado: JS viejo (prod sirve admin-sw v29,
+  actual) y toast fuera de pantalla (es `position:fixed` abajo-derecha).
+  Causa más probable: los 6 endpoints de `/api/admin/private-config/*` usaban
+  `sensitiveLimiter` (10 requests / 15 min por IP, pensado para OTP);
+  desbloquear + guardar IA + guardar auditoría + probar Telegram + reintentos
+  lo agotan en minutos → 429 "Demasiados intentos" en un toast de 3 s que
+  pasa desapercibido.
+- **Fix:** `privateConfigLimiter` (60/15 min, store Redis `private-config`,
+  mensaje explícito) en los 6 endpoints. Panel: `_pcStatus` pinta un estado
+  PERSISTENTE al lado del botón ("✅ Guardado 21:17" / "❌ <error>"), en IA y
+  en Auditoría; `_pcReadJson` tolera respuestas no-JSON (429/502) y muestra
+  el HTTP; errores de JS también se muestran. **admin-sw v29 → v30.**
+- Redeploy (back + panel).
+
 ### 143. Regla "mensaje repetido" no salta con "Gracias" + modal Mis Referidos con "¿Cómo funciona?" en 3 pasos
 - **(1) Falso positivo (captura del owner):** "Gracias" tras una carga disparó
   "ALERTA DE ATENCIÓN (mensaje repetido)". Causa: el contador por cliente

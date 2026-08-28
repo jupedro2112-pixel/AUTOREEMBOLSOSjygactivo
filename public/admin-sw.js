@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v29'; // v29: campo 'pausa que separa charlas' — #137
+const CACHE_VERSION = 'v30'; // v30: estado persistente al guardar en Config privada + limiter propio — #144
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).

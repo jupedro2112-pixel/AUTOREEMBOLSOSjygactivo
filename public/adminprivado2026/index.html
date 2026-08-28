@@ -2251,7 +2251,7 @@
                             <label class="form-label">Reglas extra para la IA <span style="color:#888;font-weight:normal;">(opcional, texto libre, se agrega al prompt)</span></label>
                             <textarea id="pcAiExtraRules" rows="5" maxlength="4000" placeholder="Ej: En los comprobantes de Naranja X el número de operación figura como 'Cód. de transacción'." style="width:100%;font-family:inherit;"></textarea>
                         </div>
-                        <button class="btn-primary" onclick="savePrivateAiConfig()">💾 Guardar config de IA</button>
+                        <button class="btn-primary" onclick="savePrivateAiConfig()">💾 Guardar config de IA</button> <span id="pcAiSaveStatus" style="font-size:12px;color:#aaa;"></span>
                         <p style="font-size:11px;color:#777;margin-top:10px;">Prioridad: panel &gt; variables de entorno (SSM) &gt; default del código. Los cambios aplican al instante en esta instancia y en ≤60 s en las demás. Si olvidás la clave: borrar el doc <code>privateconfigpass</code> de la colección Config en Atlas.</p>
                     </div>
 
@@ -2310,9 +2310,10 @@
                             <input type="text" id="pcTgChatId" placeholder="-1001234567890" style="width:100%;">
                             <p style="font-size:11px;color:#777;margin-top:4px;">Creá el bot con @BotFather, agregalo al grupo del supervisor, escribí algo en el grupo y abrí <code>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> → <code>"chat":{"id":-100…}</code>. El MISMO bot y grupo sirven para los 10 proyectos: cada alerta dice de qué dominio viene.</p>
                         </div>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                             <button class="btn-primary" onclick="savePrivateAuditConfig()">💾 Guardar auditoría</button>
                             <button class="btn-secondary" onclick="testPrivateTelegram()">📨 Probar Telegram</button>
+                            <span id="pcAuditSaveStatus" style="font-size:12px;color:#aaa;"></span>
                         </div>
                     </div>
                 </div>

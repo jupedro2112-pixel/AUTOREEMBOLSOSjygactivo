@@ -184,6 +184,20 @@ const sensitiveLimiter = rateLimit({
   message: { error: 'Demasiados intentos. Intenta más tarde.' }
 });
 
+// #144: limiter propio de "🔐 Config privada". Antes usaba sensitiveLimiter (10/15 min,
+// pensado para OTP): desbloquear + guardar IA + guardar auditoría + probar Telegram
+// lo agotaba en minutos y el panel parecía "no hacer nada" (429 en un toast de 3 s).
+// Las escrituras ya exigen sesión admin + clave del sector; 60/15 min alcanza para
+// operar y sigue frenando fuerza bruta.
+const privateConfigLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: makeRateStore('private-config'),
+  message: { error: 'Demasiados intentos en Config privada (máx. 60 cada 15 min). Esperá unos minutos.' }
+});
+
 // ============================================
 // IP-BASED SMS RATE LIMITING (in-memory Map)
 // ============================================
@@ -5880,7 +5894,7 @@ app.get('/api/admin/private-config/status', authMiddleware, adminMiddleware, asy
 });
 
 // Primera vez: definir la clave (solo si todavía no hay ninguna).
-app.post('/api/admin/private-config/setup', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+app.post('/api/admin/private-config/setup', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;
     if (await _privateConfigHasPassword()) return res.status(409).json({ error: 'La clave ya está definida. Usá "cambiar clave".' });
@@ -5896,7 +5910,7 @@ app.post('/api/admin/private-config/setup', authMiddleware, adminMiddleware, sen
 });
 
 // Desbloquear: verifica la clave y devuelve la config (key enmascarada).
-app.post('/api/admin/private-config/unlock', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+app.post('/api/admin/private-config/unlock', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;
     if (!(await _privateConfigCheckPassword((req.body || {}).password))) {
@@ -5912,7 +5926,7 @@ app.post('/api/admin/private-config/unlock', authMiddleware, adminMiddleware, se
 });
 
 // Guardar config de IA (exige la clave en cada escritura).
-app.post('/api/admin/private-config/ai', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+app.post('/api/admin/private-config/ai', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;
     const b = req.body || {};
@@ -5966,7 +5980,7 @@ async function _auditConfigForPanel() {
   };
 }
 
-app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;
     const b = req.body || {};
@@ -6011,7 +6025,7 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, sen
   }
 });
 
-app.post('/api/admin/private-config/telegram-test', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+app.post('/api/admin/private-config/telegram-test', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;
     if (!(await _privateConfigCheckPassword((req.body || {}).password))) return res.status(401).json({ error: 'Clave incorrecta' });
@@ -6224,7 +6238,7 @@ app.post('/api/admin/audit/run/:userId', authMiddleware, adminMiddleware, async 
 });
 
 // Cambiar la clave (exige la actual).
-app.post('/api/admin/private-config/password', authMiddleware, adminMiddleware, sensitiveLimiter, async (req, res) => {
+app.post('/api/admin/private-config/password', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
   try {
     if (!_privateConfigOnlyAdmin(req, res)) return;
     const b = req.body || {};

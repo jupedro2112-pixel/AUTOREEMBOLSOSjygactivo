@@ -5127,6 +5127,17 @@ function filterTransactions(type) {
 let _pcPassword = null;
 
 function _pcShow(id, on) { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !on); }
+// #144: estado persistente al lado del botón (el toast dura 3 s y se pierde fácil).
+function _pcStatus(id, text, ok) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#25d366' : '#ff5050';
+}
+// Lee la respuesta aunque no sea JSON (429 del limiter, 502, etc.).
+async function _pcReadJson(r) {
+    try { return await r.json(); } catch (_) { return { error: `HTTP ${r.status} ${r.statusText || ''}`.trim() }; }
+}
 
 async function loadPrivateConfig() {
     _pcPassword = null;
@@ -5172,7 +5183,7 @@ async function unlockPrivateConfig() {
     if (!pw) { showToast('Ingresá la clave', 'error'); return; }
     try {
         const r = await authFetch('/api/admin/private-config/unlock', { method: 'POST', body: JSON.stringify({ password: pw }) });
-        const j = await r.json();
+        const j = await _pcReadJson(r);
         if (!r.ok) { showToast(j.error || 'Clave incorrecta', 'error'); return; }
         _pcPassword = pw;
         document.getElementById('pcUnlockPass').value = '';
@@ -5248,13 +5259,15 @@ async function savePrivateAiConfig() {
     if ((document.getElementById('pcAiApiKeyClear') || {}).checked) ai.apiKey = 'CLEAR';
     else if (keyVal) ai.apiKey = keyVal;
     if (!ai.enabled && !confirm('Vas a APAGAR la IA de comprobantes: no se detectarán duplicados ni habrá auto-carga hgcash por comprobante. ¿Confirmás?')) return;
+    _pcStatus('pcAiSaveStatus', 'Guardando…', true);
     try {
         const r = await authFetch('/api/admin/private-config/ai', { method: 'POST', body: JSON.stringify({ password: _pcPassword, ai }) });
-        const j = await r.json();
-        if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); return; }
+        const j = await _pcReadJson(r);
+        if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); _pcStatus('pcAiSaveStatus', '❌ ' + (j.error || 'Error al guardar'), false); return; }
         showToast('Config de IA guardada', 'success');
+        _pcStatus('pcAiSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), true);
         renderPrivateAiConfig(j.ai || {});
-    } catch (e) { showToast('Error de conexión', 'error'); }
+    } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAiSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
 
 // ---- Config privada → Auditoría + Telegram (#132) ----
@@ -5293,21 +5306,24 @@ async function savePrivateAuditConfig() {
     };
     const tok = (v('pcTgToken') || '').trim();
     if (c('pcTgTokenClear')) audit.telegramBotToken = 'CLEAR'; else if (tok) audit.telegramBotToken = tok;
+    _pcStatus('pcAuditSaveStatus', 'Guardando…', true);
     try {
         const r = await authFetch('/api/admin/private-config/audit', { method: 'POST', body: JSON.stringify({ password: _pcPassword, audit }) });
-        const j = await r.json();
-        if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); return; }
+        const j = await _pcReadJson(r);
+        if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (j.error || 'Error al guardar'), false); return; }
         showToast('Auditoría guardada', 'success');
+        _pcStatus('pcAuditSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), true);
         renderPrivateAuditConfig(j.audit || {});
-    } catch (e) { showToast('Error de conexión', 'error'); }
+    } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
 async function testPrivateTelegram() {
     if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
     try {
         const r = await authFetch('/api/admin/private-config/telegram-test', { method: 'POST', body: JSON.stringify({ password: _pcPassword }) });
-        const j = await r.json();
-        if (!r.ok) { showToast(j.error || 'Falló', 'error'); return; }
+        const j = await _pcReadJson(r);
+        if (!r.ok) { showToast(j.error || 'Falló', 'error'); _pcStatus('pcAuditSaveStatus', '❌ Telegram: ' + (j.error || 'falló'), false); return; }
         showToast('Mensaje de prueba enviado a Telegram', 'success');
+        _pcStatus('pcAuditSaveStatus', '✅ Prueba enviada a Telegram', true);
     } catch (e) { showToast('Error de conexión', 'error'); }
 }
 

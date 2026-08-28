@@ -2721,7 +2721,7 @@ function _artHM(d) { return new Date(d).toLocaleTimeString('es-AR', { hour: '2-d
 function _isAutoClientMessage(content) {
   if (typeof content !== 'string') return false;
   const t = content.trim();
-  return _isRefundClaimNotice(t) || /^💳 Solicito los datos para transferir/i.test(t);
+  return _isAutoClientNotice(t) || /^💳 Solicito los datos para transferir/i.test(t);
 }
 function _isAgentMsg(m) { return m.type !== 'system' && m.senderRole !== 'user' && m.senderUsername !== 'Sistema'; }
 
@@ -7260,6 +7260,17 @@ function _isRefundClaimNotice(content) {
     /^🎁 Reembolso (daily|weekly|monthly|diario|semanal|mensual) reclamado:/i.test(content.trim());
 }
 
+// #140: TODOS los avisos automáticos que la app manda en nombre del cliente (reembolso
+// reclamado, fueguito). Nadie tiene que responderlos: NO abren/reabren el chat, NO
+// arrancan el reloj de demora, NO cuentan para la auditoría. Sumar acá cualquier
+// mensaje nuevo que la PWA genere con VIP.chat.sendSystemMessage.
+function _isAutoClientNotice(content) {
+  if (typeof content !== 'string') return false;
+  const t = content.trim();
+  return _isRefundClaimNotice(t) ||
+    /^(🔥 Día \d+ de racha Fueguito|🏆 ¡Fueguito día|🎉 ¡Recompensa Fueguito|🎉 ¡Fueguito!)/i.test(t);
+}
+
 app.post('/api/messages/send', authMiddleware, async (req, res) => {
   try {
     const { content, type = 'text', receiverId } = req.body;
@@ -7378,7 +7389,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
       // #135: la confirmación automática de reembolso no debe CREAR el chat como
       // abierto (si el cliente no tenía ChatStatus, el upsert lo creaba 'open' por
       // default y aparecía en Abiertos sin que nadie tuviera que responder nada).
-      const _autoNotice = req.user.role === 'user' && _isRefundClaimNotice(content);
+      const _autoNotice = req.user.role === 'user' && _isAutoClientNotice(content);
       await ChatStatus.findOneAndUpdate(
         { userId: targetUserId },
         Object.assign({
@@ -7391,7 +7402,7 @@ app.post('/api/messages/send', authMiddleware, async (req, res) => {
     // Si es usuario enviando mensaje, reabrir chat solo si estaba cerrado (no si
     // está en pagos). EXCEPCIÓN: la confirmación automática de reembolso NO
     // reabre — el mensaje queda en el chat pero el chat sigue cerrado.
-    const isRefundNotice = req.user.role === 'user' && _isRefundClaimNotice(content);
+    const isRefundNotice = req.user.role === 'user' && _isAutoClientNotice(content);
     if (req.user.role === 'user' && !isRefundNotice) {
       await ChatStatus.findOneAndUpdate(
         { userId: req.user.userId, status: 'closed' },
@@ -9579,14 +9590,14 @@ io.on('connection', (socket) => {
             Object.assign(
               { $set: { userId: targetUserId, username: chatUsername, lastMessageAt: new Date() } },
               // #135: el aviso automático de reembolso no crea el chat como abierto
-              (!isAdminRole && _isRefundClaimNotice(content)) ? { $setOnInsert: { status: 'closed', closedAt: new Date(), closedBy: 'system' } } : {}
+              (!isAdminRole && _isAutoClientNotice(content)) ? { $setOnInsert: { status: 'closed', closedAt: new Date(), closedBy: 'system' } } : {}
             ),
             { upsert: true, setDefaultsOnInsert: true }
           );
           // Solo los mensajes del usuario reabren el chat si estaba cerrado.
           // EXCEPCIÓN: la confirmación automática de reembolso no reabre (igual
           // que en /api/messages/send) — queda en el chat, el chat sigue cerrado.
-          if (!isAdminRole && !_isRefundClaimNotice(content)) {
+          if (!isAdminRole && !_isAutoClientNotice(content)) {
             await ChatStatus.findOneAndUpdate(
               { userId: targetUserId, status: 'closed' },
               { status: 'open', closedAt: null, closedBy: null }
@@ -9598,7 +9609,7 @@ io.on('connection', (socket) => {
           // frena la entrega del mensaje (los helpers ya capturan sus errores).
           if (isAdminRole) {
             delayClockResolve(targetUserId, { responded: true, agentId: socket.userId, agentUsername: socket.username, via: 'message', queueHint: roleQueueHint(socket.role) }).catch(() => {});
-          } else if (!_isRefundClaimNotice(content)) {
+          } else if (!_isAutoClientNotice(content)) {
             // La confirmación de reembolso no arranca el reloj de demoras.
             delayClockOnUserMessage(targetUserId, content, type).catch(() => {});
             _auditRulesOnUserMessage(targetUserId, socket.username, content, type).catch(() => {}); // #132 capa 1

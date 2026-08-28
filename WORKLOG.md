@@ -13,6 +13,18 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 140. Fueguito = igual que reembolso: no abre el chat, no arranca demora, no se audita
+- **Telegram 03:05 (owner):** dos alertas SIN RESPUESTA por "🔥 Día 1 de racha
+  Fueguito!" — mensaje que la app manda sola en nombre del cliente.
+- **Fix:** `_isAutoClientNotice(content)` = reembolso reclamado + los 4
+  formatos de fueguito de `fire.js` ("🔥 Día N de racha Fueguito!", "🏆
+  ¡Fueguito día N!…", "🎉 ¡Recompensa Fueguito día 15!…", "🎉 ¡Fueguito! …").
+  Reemplaza a `_isRefundClaimNotice` en los 5 puntos del server: creación del
+  ChatStatus como cerrado (HTTP y socket), no-reabrir (HTTP y socket), reloj
+  SLA, y `_isAutoClientMessage` de la auditoría. Nuevo mensaje automático de
+  la PWA ⇒ sumarlo a esa regex.
+- **Validado:** `node --check` OK. Redeploy.
+
 ### 139. Regla antifraude "30 minutos para validar comprobantes" en el prompt base
 - El owner pegó en "Reglas del negocio" del panel un reporte de Telegram
   (royalmirtha947, 3/10, ERROR DE PLATA) + la explicación: los comprobantes

@@ -24,7 +24,9 @@
 - **Fix (prompt base, `chatAuditAiService.SYSTEM`):** sección "CUÁNDO ALGO NO
   ES SIN SOLUCIÓN NI RESPUESTA POBRE": último mensaje relevante del agente +
   cliente en silencio = resuelto; mensajes ambiguos ("Disculpe?", "hola") →
-  "¿en qué te ayudo?" es la respuesta correcta; "no puedo entrar" + reset/
+  "¿en qué te ayudo?" es la respuesta correcta EN CONTENIDO, pero **la demora se
+  juzga aparte, siempre** (corrección del owner: "si hay demora hay demora y
+  punto"); "no puedo entrar" + reset/
   pedido de captura sin respuesta = pudo entrar; no exigir cierre formal.
 - **Convención acordada con el owner:** criterios GENERALES de evaluación →
   se los pasa al asistente y van al prompt base (versionado, replicable);

@@ -5845,6 +5845,8 @@ async function _loadAiConfigIntoService() {
     const learned = (await getConfig('auditlearned', null)) || {};
     let facts = '';
     try { facts = await _systemFactsForAi(); } catch (e) { logger.warn(`[ai-config] systemFacts: ${e.message}`); }
+    // #148: formato de fecha para royalty-statistics (reembolsos/referidos) desde el panel.
+    try { const rc = (await getConfig('refundsconfig', null)) || {}; referralRevenueService.setDateFormat(rc.revenueDateFormat || null); } catch (_) {}
     chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '', extraRules: audit.extraRules || '',
       learnedDoc: audit.learnEnabled === false ? '' : (learned.doc || ''), systemFacts: facts });
     telegramAlert.applyConfig(audit.telegram);
@@ -5923,7 +5925,9 @@ app.post('/api/admin/private-config/unlock', authMiddleware, adminMiddleware, pr
       return res.status(401).json({ error: 'Clave incorrecta' });
     }
     const stored = await getConfig(AI_CONFIG_KEY, null);
-    res.json({ success: true, ai: _aiConfigForPanel(stored), audit: await _auditConfigForPanel() });
+    const rc = (await getConfig('refundsconfig', null)) || {};
+    res.json({ success: true, ai: _aiConfigForPanel(stored), audit: await _auditConfigForPanel(),
+      refunds: { revenueDateFormat: rc.revenueDateFormat || '', active: referralRevenueService.getDateFormat(), env: process.env.JUGAYGANA_REVENUE_DATE_FORMAT || '', allowed: referralRevenueService.ALLOWED_DATE_FORMATS, updatedBy: rc.updatedBy || null, updatedAt: rc.updatedAt || null } });
   } catch (error) {
     logger.error(`[private-config] unlock: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -6284,6 +6288,45 @@ app.post('/api/admin/private-config/audit/learned/:id', authMiddleware, adminMid
     res.json(Object.assign({ success: true }, result));
   } catch (error) {
     logger.error(`[private-config] learned/${req.params.id}: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// #148 Reembolsos: formato de fecha que se manda a JUGAYGANA (royalty-statistics).
+app.post('/api/admin/private-config/refunds', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const fmt = String(b.revenueDateFormat || '').trim();
+    if (fmt && !referralRevenueService.ALLOWED_DATE_FORMATS.includes(fmt)) return res.status(400).json({ error: 'Formato inválido' });
+    const cur = (await getConfig('refundsconfig', null)) || {};
+    await setConfig('refundsconfig', Object.assign({}, cur, { revenueDateFormat: fmt, updatedBy: req.user.username, updatedAt: new Date() }));
+    referralRevenueService.setDateFormat(fmt || null);
+    _invalidateAllRefundsStatus();
+    logger.info(`[private-config] formato de fecha royalty-statistics = "${fmt || '(env/default)'}" por ${req.user.username}`);
+    res.json({ success: true, active: referralRevenueService.getDateFormat() });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// Diagnóstico: mismo día, todos los formatos, lado a lado (solo lectura).
+app.post('/api/admin/private-config/refunds/diagnose', authMiddleware, adminMiddleware, privateConfigLimiter, async (req, res) => {
+  try {
+    if (!_privateConfigOnlyAdmin(req, res)) return;
+    const b = req.body || {};
+    if (!(await _privateConfigCheckPassword(b.password))) return res.status(401).json({ error: 'Clave incorrecta' });
+    const username = String(b.username || '').trim();
+    const date = String(b.date || '').trim();
+    if (!username || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Usuario y fecha (YYYY-MM-DD) requeridos' });
+    const user = await findUserByUsernameCI(username);
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const jgId = user.jugayganaUserId || (await resolveJugayganaUserId(user.id, user.username).catch(() => null));
+    if (!jgId) return res.status(400).json({ error: 'El usuario no tiene jugayganaUserId' });
+    const from = new Date(`${date}T00:00:00-03:00`), to = new Date(`${date}T23:59:59-03:00`);
+    const r = await referralRevenueService.diagnoseDateFormats(user.username, jgId, from, to);
+    if (!r.ok) return res.status(502).json({ error: r.error });
+    res.json({ success: true, username: user.username, jugayganaUserId: jgId, dayART: date, results: r.results, activeFormat: r.activeFormat });
+  } catch (error) {
+    logger.error(`[private-config] refunds/diagnose: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
@@ -7966,6 +8009,8 @@ setInterval(() => {
   const cutoff = Date.now() - REFUNDS_STATUS_CACHE_MS;
   for (const [k, v] of _refundsStatusCache) { if (v.ts < cutoff) _refundsStatusCache.delete(k); }
 }, 10 * 60 * 1000).unref();
+// #148: vaciar TODO el cache de status (cambió el formato de fecha → los NETWIN cacheados son viejos).
+function _invalidateAllRefundsStatus() { try { _refundsStatusCache.clear(); } catch (_) {} }
 function _invalidateRefundsStatus(req, res) {
   try { _refundsStatusCache.delete(req.user.userId); } catch (_) {}
   // También al TERMINAR el claim (el estado cambió recién ahí; sin esto, un

@@ -182,7 +182,11 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
 
 Además `src/services/referralRevenueService.js` consulta `royalty-statistics`
 (**header `X-Token`**, no Bearer) con **`child_user_id` OBLIGATORIO** (sin él devuelve
-el agregado GLOBAL del agente → números inflados). Es la fuente del NETWIN de
+el agregado GLOBAL del agente → números inflados). ⚠️ **Formato de fecha (#148):** con
+"iso" (YYYY-MM-DD en UTC, el histórico) JUGAYGANA corta el día a medianoche UTC =
+21:00 ART → el reembolso diario tomaba el día corrido. Formato configurable en runtime
+desde 🔐 Config privada (`Config['refundsconfig'].revenueDateFormat`; `datetime_art`,
+`epoch_s`, …) con diagnóstico lado a lado para elegir el que coincide con el panel. Es la fuente del NETWIN de
 reembolsos Y del revenue de referidos. `jugayganaUserLinkService.resolveJugayganaUserId`
 hace backfill al vuelo del id faltante.
 

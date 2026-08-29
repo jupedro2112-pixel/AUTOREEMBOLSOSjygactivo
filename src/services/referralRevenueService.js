@@ -74,10 +74,18 @@ const REVENUE_CHILD_USER_ID_FIELD = process.env.JUGAYGANA_REVENUE_CHILD_USER_ID_
 // Esta constante se mantiene solo para no romper configuraciones existentes, pero no se aplica al revenue.
 const REVENUE_LOGIN_FIELD = process.env.JUGAYGANA_REVENUE_LOGIN_FIELD || 'login';
 
-// Formato de fechas para el body ("iso" = "YYYY-MM-DD", "epoch_ms" = milisegundos, "epoch_s" = segundos)
-const ALLOWED_DATE_FORMATS = ['iso', 'epoch_ms', 'epoch_s'];
+// Formato de fechas para el body del endpoint de revenue (#148):
+//   "iso"          = "YYYY-MM-DD" en UTC (comportamiento histórico). ⚠️ JUGAYGANA lo
+//                    interpreta como medianoche UTC (fin EXCLUSIVO) → el "día" queda corrido
+//                    3 h: [21:00 ART de ayer, 21:00 ART de hoy). Probado con logs (WORKLOG #148).
+//   "iso_art"      = "YYYY-MM-DD" en hora Argentina (mismo problema de granularidad).
+//   "datetime_utc" = "YYYY-MM-DD HH:mm:ss" en UTC.
+//   "datetime_art" = "YYYY-MM-DD HH:mm:ss" en hora Argentina.
+//   "epoch_s" / "epoch_ms" = timestamps.
+// Prioridad: override en runtime (Config privada → setDateFormat) > env > "iso".
+const ALLOWED_DATE_FORMATS = ['iso', 'iso_art', 'datetime_utc', 'datetime_art', 'epoch_ms', 'epoch_s'];
 const REVENUE_DATE_FORMAT_RAW = process.env.JUGAYGANA_REVENUE_DATE_FORMAT || 'iso';
-const REVENUE_DATE_FORMAT = ALLOWED_DATE_FORMATS.includes(REVENUE_DATE_FORMAT_RAW)
+const REVENUE_DATE_FORMAT_ENV = ALLOWED_DATE_FORMATS.includes(REVENUE_DATE_FORMAT_RAW)
   ? REVENUE_DATE_FORMAT_RAW
   : (() => {
       logger.warn(
@@ -86,6 +94,9 @@ const REVENUE_DATE_FORMAT = ALLOWED_DATE_FORMATS.includes(REVENUE_DATE_FORMAT_RA
       );
       return 'iso';
     })();
+let _dateFormatOverride = null;
+function setDateFormat(fmt) { _dateFormatOverride = ALLOWED_DATE_FORMATS.includes(fmt) ? fmt : null; }
+function getDateFormat() { return _dateFormatOverride || REVENUE_DATE_FORMAT_ENV; }
 
 // Nombres de los campos de fecha inicio/fin en el body del endpoint de revenue
 const REVENUE_DATE_FROM_FIELD = process.env.JUGAYGANA_REVENUE_DATE_FROM_FIELD || 'date_from';
@@ -287,14 +298,19 @@ function buildAuthHeaders(token) {
 /**
  * Formatear fechas para el body según REVENUE_DATE_FORMAT
  */
-function formatRevenueDate(date, epochSecs) {
-  if (REVENUE_DATE_FORMAT === 'epoch_s') {
-    return epochSecs;
-  }
-  if (REVENUE_DATE_FORMAT === 'epoch_ms') {
-    return date.getTime();
-  }
-  // default: "iso" → "YYYY-MM-DD"
+function _artParts(date) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).formatToParts(date);
+  const g = (t) => (p.find(x => x.type === t) || {}).value;
+  return { ymd: `${g('year')}-${g('month')}-${g('day')}`, hms: `${g('hour') === '24' ? '00' : g('hour')}:${g('minute')}:${g('second')}` };
+}
+function formatRevenueDate(date, epochSecs, fmtOverride) {
+  const fmt = fmtOverride || getDateFormat();
+  if (fmt === 'epoch_s') return epochSecs;
+  if (fmt === 'epoch_ms') return date.getTime();
+  if (fmt === 'datetime_utc') return date.toISOString().slice(0, 19).replace('T', ' ');
+  if (fmt === 'datetime_art') { const a = _artParts(date); return `${a.ymd} ${a.hms}`; }
+  if (fmt === 'iso_art') return _artParts(date).ymd;
+  // default: "iso" → "YYYY-MM-DD" (UTC)
   return date.toISOString().split('T')[0];
 }
 
@@ -334,7 +350,7 @@ async function callRevenueEndpoint(username, fromFormatted, toFormatted, authInf
     `revenueScope=perUser commissionCalculationMode=individual_revenue ` +
     `authModeTested=X-Token authorizationBearerUsed=false xTokenPresent=${xTokenPresent} ` +
     `childUserIdField=${REVENUE_CHILD_USER_ID_FIELD} ${REVENUE_DATE_FROM_FIELD}=${fromFormatted} ${REVENUE_DATE_TO_FIELD}=${toFormatted} ` +
-    `dateFormat=${REVENUE_DATE_FORMAT} tokenSource=${authInfo.source} ` +
+    `dateFormat=${getDateFormat()} tokenSource=${authInfo.source} ` +
     `tokenEnBody=${REPORTS_TOKEN_IN_BODY} endpoint=${ADMIN_API_URL}`
   );
   // Ocultar token en body antes de loguear para no exponer credenciales
@@ -697,7 +713,40 @@ async function getUserNetwinForDateRange(username, jugayganaUserId, fromDate, to
   }
 }
 
+/**
+ * #148 Diagnóstico: consulta el NETWIN del mismo rango con CADA formato de fecha y
+ * devuelve los resultados lado a lado, para elegir el que coincide con el panel
+ * de JUGAYGANA. Solo lectura (no toca reembolsos).
+ */
+async function diagnoseDateFormats(username, jugayganaUserId, fromDate, toDate) {
+  const authInfo = await getActiveToken();
+  if (!authInfo.token) return { ok: false, error: 'No hay sesión válida en JUGAYGANA.' };
+  const out = [];
+  for (const fmt of ALLOWED_DATE_FORMATS) {
+    const fromF = formatRevenueDate(fromDate, Math.floor(fromDate.getTime() / 1000), fmt);
+    const toF = formatRevenueDate(toDate, Math.floor(toDate.getTime() / 1000), fmt);
+    const row = { format: fmt, active: fmt === getDateFormat(), sent: { [REVENUE_DATE_FROM_FIELD]: fromF, [REVENUE_DATE_TO_FIELD]: toF } };
+    try {
+      const resp = await callRevenueEndpoint(username, fromF, toF, authInfo, jugayganaUserId);
+      row.status = resp.status;
+      const hasData = resp.data && typeof resp.data === 'object' && !Array.isArray(resp.data);
+      if (resp.status === 200 && hasData && !('success' in resp.data && !resp.data.success)) {
+        const parsed = parseRoyaltyResponse(resp.data, username, 'diagnostic-' + fmt);
+        row.ok = !!parsed.success; row.netwin = parsed.totalGgr; row.bets = parsed.totalBets; row.wins = parsed.totalWins;
+      } else {
+        row.ok = false; row.error = typeof resp.data === 'string' ? resp.data.slice(0, 160) : JSON.stringify(resp.data || '').slice(0, 160);
+      }
+    } catch (e) { row.ok = false; row.error = e.message; }
+    out.push(row);
+  }
+  return { ok: true, results: out, activeFormat: getDateFormat() };
+}
+
 module.exports = {
+  setDateFormat,
+  getDateFormat,
+  diagnoseDateFormats,
+  ALLOWED_DATE_FORMATS,
   getUserRevenueForPeriod,
   getUserNetwinForDateRange
 };

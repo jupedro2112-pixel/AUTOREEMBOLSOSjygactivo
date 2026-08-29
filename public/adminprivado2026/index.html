@@ -2255,6 +2255,34 @@
                         <p style="font-size:11px;color:#777;margin-top:10px;">Prioridad: panel &gt; variables de entorno (SSM) &gt; default del código. Los cambios aplican al instante en esta instancia y en ≤60 s en las demás. Si olvidás la clave: borrar el doc <code>privateconfigpass</code> de la colección Config en Atlas.</p>
                     </div>
 
+                    <!-- #148 Reembolsos: fechas a JUGAYGANA -->
+                    <div id="pcRefundsCard" class="hidden" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;">
+                        <h3 style="margin-bottom:.5rem;font-size:1rem;color:var(--text-secondary,#aaa);">📅 Reembolsos — formato de fecha a JUGAYGANA</h3>
+                        <div id="pcRefundsStatus" style="font-size:12px;color:#aaa;margin-bottom:10px;line-height:1.6;"></div>
+                        <p style="font-size:11.5px;color:#888;margin:0 0 10px 0;">El NETWIN de los reembolsos se pide a JUGAYGANA con un rango de fechas. Con el formato histórico ("iso", fecha sin hora) JUGAYGANA corta el día a las 21:00 hora Argentina, y a los clientes que juegan de noche les toma mal el reembolso diario. Usá el diagnóstico con un usuario y un día, compará con el reporte "AYER" del panel de JUGAYGANA, y elegí el formato cuyo NETWIN coincida.</p>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">
+                            <div class="form-group" style="margin:0;"><label class="form-label">Formato activo</label>
+                                <select id="pcRefundsFormat" style="width:100%;">
+                                    <option value="">(el de SSM o default "iso")</option>
+                                    <option value="iso">iso — YYYY-MM-DD en UTC (histórico, corre el día 3 h)</option>
+                                    <option value="datetime_art">datetime_art — "YYYY-MM-DD HH:mm:ss" hora Argentina</option>
+                                    <option value="datetime_utc">datetime_utc — "YYYY-MM-DD HH:mm:ss" UTC</option>
+                                    <option value="epoch_s">epoch_s — segundos</option>
+                                    <option value="epoch_ms">epoch_ms — milisegundos</option>
+                                    <option value="iso_art">iso_art — YYYY-MM-DD hora Argentina</option>
+                                </select></div>
+                            <button class="btn-primary" onclick="savePrivateRefundsConfig()">💾 Guardar formato</button>
+                            <span id="pcRefundsSaveStatus" style="font-size:12px;color:#aaa;"></span>
+                        </div>
+                        <div style="border-top:1px solid rgba(255,255,255,.08);margin:12px 0;"></div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:end;">
+                            <div class="form-group" style="margin:0;"><label class="form-label">Diagnóstico — usuario</label><input type="text" id="pcRefDiagUser" placeholder="argenCesar1691" style="width:100%;"></div>
+                            <div class="form-group" style="margin:0;"><label class="form-label">Día (hora Argentina)</label><input type="date" id="pcRefDiagDate" style="width:100%;"></div>
+                            <button class="btn-secondary" onclick="runRefundsDiagnostic()">🔎 Probar todos los formatos</button>
+                        </div>
+                        <div id="pcRefDiagOut" style="margin-top:10px;overflow-x:auto;"></div>
+                    </div>
+
                     <!-- Auditoría de atención + Telegram (#132) -->
                     <div id="pcAuditCard" class="hidden" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;">
                         <h3 style="margin-bottom:.5rem;font-size:1rem;color:var(--text-secondary,#aaa);">🕵️ Auditoría de atención + alertas Telegram</h3>

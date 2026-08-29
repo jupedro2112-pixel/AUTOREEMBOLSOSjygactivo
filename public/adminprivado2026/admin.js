@@ -5141,7 +5141,7 @@ async function _pcReadJson(r) {
 
 async function loadPrivateConfig() {
     _pcPassword = null;
-    _pcShow('pcAiCard', false); _pcShow('pcAuditCard', false); _pcShow('pcUnlockedBar', false); _pcShow('pcChangePassForm', false);
+    _pcShow('pcAiCard', false); _pcShow('pcAuditCard', false); _pcShow('pcRefundsCard', false); _pcShow('pcUnlockedBar', false); _pcShow('pcChangePassForm', false);
     _pcShow('pcSetupForm', false); _pcShow('pcUnlockForm', false);
     const hint = document.getElementById('pcLockHint');
     try {
@@ -5192,6 +5192,8 @@ async function unlockPrivateConfig() {
         renderPrivateAiConfig(j.ai || {});
         _pcShow('pcAuditCard', true);
         renderPrivateAuditConfig(j.audit || {});
+        _pcShow('pcRefundsCard', true);
+        renderPrivateRefundsConfig(j.refunds || {});
     } catch (e) { showToast('Error de conexión', 'error'); }
 }
 
@@ -5319,6 +5321,41 @@ async function savePrivateAuditConfig() {
         renderPrivateAuditConfig(j.audit || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
+// #148 Reembolsos: formato de fecha a JUGAYGANA + diagnóstico.
+function renderPrivateRefundsConfig(r) {
+    const sel = document.getElementById('pcRefundsFormat'); if (sel) sel.value = r.revenueDateFormat || '';
+    const st = document.getElementById('pcRefundsStatus');
+    if (st) st.innerHTML = `<b>En uso ahora:</b> <code>${escapeHtml(r.active || 'iso')}</code> (panel: ${escapeHtml(r.revenueDateFormat || '—')} · SSM: ${escapeHtml(r.env || '—')})` + (r.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(r.updatedBy)} · ${r.updatedAt ? new Date(r.updatedAt).toLocaleString('es-AR') : ''}</span>` : '');
+    const d = document.getElementById('pcRefDiagDate');
+    if (d && !d.value) { const y = new Date(Date.now() - 86400000); d.value = y.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); }
+}
+async function savePrivateRefundsConfig() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    const fmt = (document.getElementById('pcRefundsFormat') || {}).value || '';
+    if (!confirm(`Vas a cambiar el formato de fecha con el que se calculan TODOS los reembolsos (diario/semanal/mensual y rango) a "${fmt || 'default'}". ¿Probaste con el diagnóstico que coincide con el panel de JUGAYGANA?`)) return;
+    _pcStatus('pcRefundsSaveStatus', 'Guardando…', true);
+    try {
+        const j = await _pcPost('/api/admin/private-config/refunds', { revenueDateFormat: fmt });
+        _pcStatus('pcRefundsSaveStatus', '✅ Guardado — activo: ' + (j.active || ''), true);
+        showToast('Formato guardado', 'success');
+    } catch (e) { _pcStatus('pcRefundsSaveStatus', '❌ ' + e.message, false); }
+}
+async function runRefundsDiagnostic() {
+    if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
+    const username = ((document.getElementById('pcRefDiagUser') || {}).value || '').trim();
+    const date = (document.getElementById('pcRefDiagDate') || {}).value || '';
+    const out = document.getElementById('pcRefDiagOut');
+    if (!username || !date) { showToast('Usuario y día requeridos', 'error'); return; }
+    out.innerHTML = '<div style="color:#aaa;font-size:12px;">Consultando JUGAYGANA con cada formato… (6 llamadas, puede tardar)</div>';
+    try {
+        const j = await _pcPost('/api/admin/private-config/refunds/diagnose', { username, date });
+        const fmtMoney = (v) => v == null ? '—' : '$' + Number(v).toLocaleString('es-AR', { maximumFractionDigits: 2 });
+        out.innerHTML = `<div style="font-size:12px;color:#aaa;margin-bottom:6px;">${escapeHtml(j.username)} (id JUGAYGANA ${escapeHtml(String(j.jugayganaUserId))}) · día ${escapeHtml(j.dayART)} hora Argentina (00:00–23:59). Compará la columna NETWIN con "Reportes globales → ese día" en el panel de JUGAYGANA.</div>
+        <table class="data-table" style="width:100%;font-size:12px;"><thead><tr><th>Formato</th><th>Lo que se manda</th><th>HTTP</th><th>NETWIN</th><th>Apuestas</th><th>Ganancias</th></tr></thead><tbody>` +
+        (j.results || []).map(r => `<tr style="${r.active ? 'background:rgba(212,175,55,.08);' : ''}"><td><code>${escapeHtml(r.format)}</code>${r.active ? ' <span style="color:#d4af37;">(activo)</span>' : ''}</td><td style="font-size:11px;color:#aaa;">${escapeHtml(JSON.stringify(r.sent))}</td><td>${escapeHtml(String(r.status || '—'))}</td><td style="font-weight:700;color:${r.ok ? '#25d366' : '#ff5050'};">${r.ok ? fmtMoney(r.netwin) : escapeHtml(r.error || 'error')}</td><td>${r.ok ? fmtMoney(r.bets) : '—'}</td><td>${r.ok ? fmtMoney(r.wins) : '—'}</td></tr>`).join('') + '</tbody></table>';
+    } catch (e) { out.innerHTML = `<div style="color:#ff5050;font-size:12px;">❌ ${escapeHtml(e.message)}</div>`; }
+}
+
 // #146 Contexto aprendido: propuestas/dudas pendientes + doc + hechos.
 async function _pcPost(path, body) {
     const r = await authFetch(path, { method: 'POST', body: JSON.stringify(Object.assign({ password: _pcPassword }, body || {})) });

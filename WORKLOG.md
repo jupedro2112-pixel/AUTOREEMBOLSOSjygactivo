@@ -13,6 +13,42 @@
 > `<title>` nuevo servido. Lo que falta probar (en el panel, con datos reales) está
 > marcado como **PROBAR** en cada entrada.
 
+### 148. 🔴 REEMBOLSO DIARIO calculado sobre el día equivocado: JUGAYGANA corta a las 21:00 ART — diagnóstico con logs + formato de fecha configurable desde el panel
+- **Reporte del owner:** argenCesar1691, reembolso diario del 28/08: la app
+  tomó NETWIN $4.145,85 (10% = $415) y el panel de JUGAYGANA ("Reportes
+  globales → AYER, solo saldo real") muestra NETWIN $24.513 (10% = $2.451).
+- **Causa (probada con los logs log8/log9, 20→29/08, 92.611 líneas
+  `[REFUND] status`):** la app arma bien el día argentino (00:00–23:59 ART)
+  pero `formatRevenueDate` (formato "iso") manda `YYYY-MM-DD` **en UTC**:
+  `date_from=2026-08-28`, `date_to=2026-08-29`. JUGAYGANA interpreta esas
+  fechas como **medianoche UTC con fin exclusivo** → ventana real =
+  [27/08 21:00, 28/08 21:00 ART): **deja afuera 21:00–24:00 ART** (el pico
+  nocturno) y mete las 21–24 del día anterior. **Evidencia:** en 1.151
+  cambios de día (00:00 ART) el "mes en curso" salta ≥$500 en el 54% de los
+  usuarios en el mismo minuto (suma $11,3M) — no es juego, es la ventana que
+  se corre 24 h cuando cambia el string de `date_to`; argenCesar1691: mes en
+  curso 275.513 a las 23:32 ART → 292.312 a las 00:01 ART (+16.800 en un
+  minuto = su juego de 21–24 hs, justo lo que faltó en el diario). Afecta
+  también semanal/mensual/rango (3 h corridas en cada borde).
+- **Por qué no se toca a ciegas:** no sé qué formatos con hora acepta la API
+  (si mando algo que no entiende, TODOS los reembolsos dan $0). Fix en 2 pasos:
+  1. `referralRevenueService`: formato dinámico (`setDateFormat/getDateFormat`,
+     override en runtime > env > "iso"); formatos nuevos `datetime_art`
+     ("YYYY-MM-DD HH:mm:ss" ART), `datetime_utc`, `iso_art` además de
+     `epoch_s/ms`; `diagnoseDateFormats()` consulta el MISMO día con los 6
+     formatos y devuelve NETWIN/apuestas/ganancias lado a lado.
+  2. Panel → 🔐 Config privada → card "📅 Reembolsos — formato de fecha":
+     diagnóstico (usuario + día ART → tabla por formato; comparar con el panel
+     de JUGAYGANA) y selector "Formato activo" guardado en
+     `Config['refundsconfig'].revenueDateFormat` (aplica al instante, vacía el
+     cache de status; sin SSM). Endpoints `POST /api/admin/private-config/
+     refunds` y `…/refunds/diagnose`.
+- **Cómo cerrar el tema (owner):** correr el diagnóstico con argenCesar1691 y
+  2026-08-28 → el formato cuyo NETWIN dé ≈ $24.513 es el correcto →
+  guardarlo. Después, los diarios ya reclamados con el día corrido quedaron
+  pagados de menos (o de más) — decisión del owner si se compensan a mano.
+- **Validado:** `node --check` OK. admin-sw v33 → v34. Redeploy.
+
 ### 147. Aprendizaje diario: a las 00:01 ART procesa el DÍA ANTERIOR COMPLETO, sin tope chico
 - **Owner:** "¿por qué una hora y 24 h hacia atrás? que a las 00:01 pase lo del
   día anterior, con la misma info de las auditorías". Cambios en

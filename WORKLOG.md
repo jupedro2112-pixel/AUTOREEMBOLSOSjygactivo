@@ -47,6 +47,13 @@
   2026-08-28 → el formato cuyo NETWIN dé ≈ $24.513 es el correcto →
   guardarlo. Después, los diarios ya reclamados con el día corrido quedaron
   pagados de menos (o de más) — decisión del owner si se compensan a mano.
+- **RESULTADO DEL DIAGNÓSTICO (owner, 29/08 14:00, argenCesar1691 / 2026-08-28):**
+  `datetime_utc`, `epoch_ms` y `epoch_s` → NETWIN **$24.513,6**, apuestas
+  $103.103, ganancias $78.589 = EXACTO al panel de JUGAYGANA. `iso` y
+  `datetime_art` → $4.145,85 (día corrido; JUGAYGANA toma horas sin zona como
+  UTC). `iso_art` → $0 (from=to). **Default del código cambiado a `epoch_s`**
+  (env `JUGAYGANA_REVENUE_DATE_FORMAT` sigue pudiendo pisarlo; el panel también).
+  Con esto los 3 reembolsos y el rango usan el día argentino exacto.
 - **Validado:** `node --check` OK. admin-sw v33 → v34. Redeploy.
 
 ### 147. Aprendizaje diario: a las 00:01 ART procesa el DÍA ANTERIOR COMPLETO, sin tope chico

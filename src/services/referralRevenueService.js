@@ -84,7 +84,11 @@ const REVENUE_LOGIN_FIELD = process.env.JUGAYGANA_REVENUE_LOGIN_FIELD || 'login'
 //   "epoch_s" / "epoch_ms" = timestamps.
 // Prioridad: override en runtime (Config privada → setDateFormat) > env > "iso".
 const ALLOWED_DATE_FORMATS = ['iso', 'iso_art', 'datetime_utc', 'datetime_art', 'epoch_ms', 'epoch_s'];
-const REVENUE_DATE_FORMAT_RAW = process.env.JUGAYGANA_REVENUE_DATE_FORMAT || 'iso';
+// Default "epoch_s" desde 2026-08-29 (#148): probado con el diagnóstico que epoch_s /
+// epoch_ms / datetime_utc devuelven EXACTAMENTE lo que muestra el panel de JUGAYGANA
+// para el día argentino; "iso" (histórico) y "datetime_art" devuelven el día corrido
+// 3 h (JUGAYGANA interpreta fechas/horas sin zona como UTC).
+const REVENUE_DATE_FORMAT_RAW = process.env.JUGAYGANA_REVENUE_DATE_FORMAT || 'epoch_s';
 const REVENUE_DATE_FORMAT_ENV = ALLOWED_DATE_FORMATS.includes(REVENUE_DATE_FORMAT_RAW)
   ? REVENUE_DATE_FORMAT_RAW
   : (() => {
@@ -92,7 +96,7 @@ const REVENUE_DATE_FORMAT_ENV = ALLOWED_DATE_FORMATS.includes(REVENUE_DATE_FORMA
         `[ReferralRevenue] JUGAYGANA_REVENUE_DATE_FORMAT="${REVENUE_DATE_FORMAT_RAW}" no es un valor válido ` +
         `(permitidos: ${ALLOWED_DATE_FORMATS.join(', ')}). Usando "iso".`
       );
-      return 'iso';
+      return 'epoch_s';
     })();
 let _dateFormatOverride = null;
 function setDateFormat(fmt) { _dateFormatOverride = ALLOWED_DATE_FORMATS.includes(fmt) ? fmt : null; }

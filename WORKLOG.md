@@ -4,7 +4,83 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-08-27**
+> **Última actualización: 2026-09-04**
+
+## Sesión 2026-09-04
+
+### 149. 🎁 LOTE CON REGALO (portado de PAUTANUEVA) + % AUTOMÁTICO en la carga (manual sin bonus / hgcash) con franja horaria y anti-reuso
+- **Pedido del owner (captura del panel de PAUTANUEVA):** lo mismo acá — notificar
+  a una lista de clientes con regalo (% en próxima carga o fichas), por código
+  o por tiempo — y además: si la carga sale AUTOMÁTICA (hgcash) y el cliente
+  tiene el bono en su primera carga desde que se activó, que se cargue solo y
+  el mensaje diga que es por ese bono; si es carga MANUAL del agente, que el
+  bono también salga y quede marcado como USADO (no reutilizable); elegir
+  franja horaria; y elegir por lote si es automático o "manual con cartel".
+- **Origen:** commits deb7f1b/a947961/fadd2a8/626518d + #263 del repo hermano
+  `~/Documents/PAUTANUEVAnardo` (ya traía applyMode auto/agent, applyScope
+  first/all y applyFromMin/ToMin). Se portó adaptando JUGAYGANA ≠ girox.
+- **Modelo `src/models/NotifBatch.js`** (copiado) + **PromoBonus** con campos
+  `autoApply, applyScope ('first'|'all'), applyFromMin/ToMin, usesCount,
+  usesTotalBonus`. El bono del lote ES un PromoBonus `sourceRuleCode:'lote'`
+  (exento del cap 30% de lectura; admin ve también regalos de $ fijo).
+- **server.js (bloque "LOTES DE NOTIFICACIONES CON REGALO", después de
+  `/api/admin/promo-bonus/:id/use`, o sea DESPUÉS de authMiddleware — TDZ ok):**
+  audiencias (lista / segmento inactivos-ex-cargadores-activos / todos /
+  código público), motor de envío reanudable multi-instancia (claim atómico
+  por destinatario, cron 45 s), `_tryClaimNotifBatchCode` (canje exclusivo
+  del lote, una vez por usuario, atómico), endpoints `POST /api/admin/
+  notif-batches[/preview]`, `GET /api/admin/notif-batches[/:id]` (roles
+  admin|depositor envían; withdrawer también ve) y **`POST /api/gift-code/
+  claim`** (nuevo: este repo no tenía código de bienvenida). Helpers del %
+  automático: `claimAutoPromoPercent` (reserva atómica: scope first →
+  active→used; all → usesCount++), `revertAutoPromoPercent`,
+  `settleAutoPromoPercent`, `_inDailyWindow` (franja ART, cruza medianoche).
+  · **Fichas** (`_creditNotifBatchGift`): `jugaygana.creditUserBalance` +
+    Transaction `source:'notif_batch'`; topes anti-abuso (3 créditos/24 h,
+    $300k/7 d) con alerta roja `security_alert`; ⚠️ SIN reference
+    idempotente en JUGAYGANA → ante fallo/timeout NO se reintenta solo
+    (queda `creditError` "verificar" para el agente). Sin rollover.
+  · **`sendPushIfOffline` ahora devuelve `{delivery: socket|push|none|error}`**
+    (callers viejos ignoran el retorno).
+- **Aplicación AUTOMÁTICA del % en la carga (lo que pidió el owner):**
+  · **Carga manual** (`/api/admin/deposit`): si el agente NO puso bonus →
+    `claimAutoPromoPercent(user, agente)` → crédito individual_bonus → settle
+    (o revert si falla). `bonus` pasa a ser `let` y se pisa con el monto del
+    lote, así el mensaje al cliente sale como carga con bono + línea
+    "🎁 Incluye tu regalo: +X% por el lote (ya utilizado)". Nota interna
+    "⚡ BONO DE LOTE AUTOMÁTICO aplicado… quedó USADO / sigue vigente. No hay
+    que marcar nada". Si el agente cargó bonus a mano, va el suyo (no se
+    suman). Guards: el bono de lote NO consume el cupón install-100 ni el
+    premio de fueguito ni pisa el PromoBonus con el "marcar usado" genérico.
+  · **hgcash** (`hgcashAutoCarga`): tras `_hgcashApplyAppBonus`, si NO hubo
+    bono de app → mismo claim/crédito; `appBonus` pasa a `let` y se rellena
+    con `kind:'lote'` → el mensaje `/sys_deposit_bonus` + línea del regalo, y
+    la nota "🏦 ✅ CARGA AUTOMÁTICA … ⚡ + BONO DE LOTE AUTOMÁTICO +X% … quedó
+    USADO". Nunca se suma al bono de app.
+  · **Anti-reuso:** scope 'first' → `status:'used'` en la reserva atómica
+    (una sola instancia gana); scope 'all' → sigue activo hasta `expiresAt`
+    contando usos; franja horaria → fuera de la franja la carga entra sin
+    bono y el bono sigue vivo. Modo "🧑‍💼 Lo aplica el agente" = cartel verde +
+    "Marcar usado" (vale una carga) como en el hermano.
+- **Panel:** cards "🎁 Lote con regalo" (con guía ❓ adaptada a JUGAYGANA,
+  radios auto/agente, 1ª carga/todas, franja HH:MM, audiencias, validar
+  lista, código público) y "📤 Lotes enviados" (historial + 👥 detalle por
+  usuario) en Notificaciones; `loadNotificationsPanel` carga los lotes;
+  `loadChatPromoBonus` versión del hermano (cartel ⚡ AUTOMÁTICO informativo
+  con "✕ Cancelar bono", regalo $ fijo, origen "Lote de X"). admin-sw v34→v35.
+- **PWA:** botón 🎁 en la barra superior + modal "🎁 Reclamar Bono con Código"
+  (`VIP.ui.openGiftCodeModal/claimGiftCode` → `POST /api/gift-code/claim`).
+  `?v=59` + `CACHE_VERSION='v59'` (HTML+JS juntos).
+- **Validado:** `node --check` OK en todo (server.js, 2 modelos, admin.js,
+  ui.js, app.js, ambos SW); HTML del panel 692/692 divs, ids únicos; scan
+  TDZ 0 rutas antes de authMiddleware; 0 referencias a girox. **Redeploy.**
+  **PROBAR:** (1) lote POR TIEMPO +20% ⚡ automático "1ª carga" a una cuenta
+  de prueba → cartel ⚡ en el chat → cargar MANUAL sin bonus → carga + $bono,
+  mensaje con "Incluye tu regalo", nota interna "quedó USADO", cartel
+  desaparece; (2) ídem con carga hgcash real; (3) segunda carga → sin bono;
+  (4) franja 18:00–23:00 fuera de hora → carga sin bono y cartel sigue;
+  (5) lote "lo aplica el agente" → cartel verde + Marcar usado; (6) lote
+  CON CÓDIGO → el cliente canjea con el botón 🎁; uno de afuera → "no válido".
 
 ## Sesión 2026-08-27
 

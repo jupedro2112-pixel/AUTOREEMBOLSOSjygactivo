@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=58">
-    <link rel="stylesheet" href="/css/login.css?v=58">
-    <link rel="stylesheet" href="/css/header.css?v=58">
-    <link rel="stylesheet" href="/css/chat.css?v=58">
-    <link rel="stylesheet" href="/css/modals.css?v=58">
-    <link rel="stylesheet" href="/css/responsive.css?v=58">
+    <link rel="stylesheet" href="/css/base.css?v=59">
+    <link rel="stylesheet" href="/css/login.css?v=59">
+    <link rel="stylesheet" href="/css/header.css?v=59">
+    <link rel="stylesheet" href="/css/chat.css?v=59">
+    <link rel="stylesheet" href="/css/modals.css?v=59">
+    <link rel="stylesheet" href="/css/responsive.css?v=59">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -447,6 +447,7 @@
         <!-- Barra superior: referidos · info · herramientas -->
         <header class="header header-toolbar">
             <button class="tb-btn referral-btn" id="referralBtn" title="Mis Referidos">🤝</button>
+            <button class="tb-btn gift-code-btn" id="giftCodeBtn" title="Reclamar bono con código">🎁</button>
             <button class="tb-info" id="infoBtn" title="Información de nuestro servicio">
                 <span class="tb-info-icon">ℹ️</span>
                 <span class="tb-info-text">Información de nuestro servicio</span>
@@ -1928,25 +1929,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=58"></script>
-    <script src="/js/campaign.js?v=58"></script>
-    <script src="/js/meta-pixel.js?v=58"></script>
-    <script src="/js/auth.js?v=58"></script>
-    <script src="/js/socket.js?v=58"></script>
-    <script src="/js/chat.js?v=58"></script>
-    <script src="/js/refunds.js?v=58"></script>
-    <script src="/js/fire.js?v=58"></script>
-    <script src="/js/roulette.js?v=58"></script>
-    <script src="/js/reviews.js?v=58"></script>
-    <script src="/js/promobonus.js?v=58"></script>
-    <script src="/js/notifications.js?v=58"></script>
-    <script src="/js/ui.js?v=58"></script>
-    <script src="/js/withdraw.js?v=58"></script>
-    <script src="/js/installbonus.js?v=58"></script>
-    <script src="/js/notifsurvey.js?v=58"></script>
-    <script src="/js/publisherwelcome.js?v=58"></script>
-    <script src="/js/apptest.js?v=58"></script>
-    <script src="/js/app.js?v=58"></script>
+    <script src="/js/config.js?v=59"></script>
+    <script src="/js/campaign.js?v=59"></script>
+    <script src="/js/meta-pixel.js?v=59"></script>
+    <script src="/js/auth.js?v=59"></script>
+    <script src="/js/socket.js?v=59"></script>
+    <script src="/js/chat.js?v=59"></script>
+    <script src="/js/refunds.js?v=59"></script>
+    <script src="/js/fire.js?v=59"></script>
+    <script src="/js/roulette.js?v=59"></script>
+    <script src="/js/reviews.js?v=59"></script>
+    <script src="/js/promobonus.js?v=59"></script>
+    <script src="/js/notifications.js?v=59"></script>
+    <script src="/js/ui.js?v=59"></script>
+    <script src="/js/withdraw.js?v=59"></script>
+    <script src="/js/installbonus.js?v=59"></script>
+    <script src="/js/notifsurvey.js?v=59"></script>
+    <script src="/js/publisherwelcome.js?v=59"></script>
+    <script src="/js/apptest.js?v=59"></script>
+    <script src="/js/app.js?v=59"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA
@@ -3790,6 +3791,25 @@
     </div>
 
     <!-- Modal de Referidos -->
+    <!-- #149 Reclamar Bono con Código (códigos de "Lote con regalo" que llegan por notificación) -->
+    <div id="giftCodeModal" class="modal hidden" onclick="if(event.target===this)hideModal('giftCodeModal')">
+        <div class="modal-content" style="position:relative;max-width:440px;">
+            <button onclick="hideModal('giftCodeModal')" style="position:absolute;top:15px;right:15px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>
+            <div class="modal-header">
+                <h2>🎁 Reclamar Bono con Código</h2>
+                <p>Ingresá el código de regalo que te llegó por notificación</p>
+            </div>
+            <div id="giftCodeBody">
+                <p style="color:#ccc;font-size:12.5px;line-height:1.55;margin:0 0 12px;">Si te mandamos un <strong style="color:#d4af37;">código de regalo</strong>, ingresalo acá y destrabá tu <strong>BONO 🎁</strong>. Es de un solo uso por cuenta y tiene vencimiento.</p>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" id="giftCodeInput" placeholder="EJ: REGALO24" maxlength="30" autocomplete="off" style="flex:1;text-transform:uppercase;letter-spacing:2px;padding:12px;border-radius:10px;border:1px solid rgba(212,175,55,.5);background:rgba(0,0,0,.35);color:#fff;font-size:16px;" onkeydown="if(event.key==='Enter')VIP.ui.claimGiftCode()">
+                    <button id="giftCodeBtnSend" onclick="VIP.ui.claimGiftCode()" style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#1a0b2e;border:none;border-radius:10px;padding:0 16px;font-weight:900;cursor:pointer;">Canjear</button>
+                </div>
+                <div id="giftCodeResult" style="margin-top:12px;font-size:13px;line-height:1.5;"></div>
+            </div>
+        </div>
+    </div>
+
     <div id="referralModal" class="modal hidden" onclick="if(event.target===this)hideModal('referralModal')">
         <div class="modal-content" style="position:relative;max-width:500px;max-height:90vh;overflow-y:auto;">
             <button onclick="hideModal('referralModal')" style="position:absolute;top:15px;right:15px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>

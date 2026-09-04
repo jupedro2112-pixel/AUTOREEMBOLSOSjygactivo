@@ -453,6 +453,8 @@ function setupEventListeners() {
         // Referrals
         const referralBtn = document.getElementById('referralBtn');
         if (referralBtn) referralBtn.addEventListener('click', () => VIP.ui.openReferralModal());
+        const giftCodeBtn = document.getElementById('giftCodeBtn'); // #149
+        if (giftCodeBtn) giftCodeBtn.addEventListener('click', () => VIP.ui.openGiftCodeModal());
 
         // Info modal
         const infoBtn = document.getElementById('infoBtn');

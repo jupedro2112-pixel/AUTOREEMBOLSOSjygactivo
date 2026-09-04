@@ -1440,6 +1440,198 @@
                     </div>
                 </div>
 
+                <!-- LOTE CON REGALO (#149, portado de PAUTANUEVA): notificación a una lista
+                     de usuarios con bono (% próxima carga o $ fijo), por CÓDIGO
+                     exclusivo del lote o por VENTANA de tiempo. El bono es un
+                     PromoBonus → cartel verde del chat + "Marcar usado". -->
+                <div class="commands-section" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem;">
+                        <h3 style="margin:0;font-size:1rem;color:#d4af37">🎁 Lote con regalo</h3>
+                        <button class="btn btn-secondary btn-sm" onclick="var e=document.getElementById('giftBatchAyuda');e.style.display=(e.style.display==='none'?'':'none')">❓ Cómo funciona</button>
+                    </div>
+                    <!-- Guía completa para agentes (#149, portado de PAUTANUEVA). Toggle con ❓. -->
+                    <div id="giftBatchAyuda" style="display:none;background:rgba(83,189,235,0.06);border:1px solid rgba(83,189,235,0.35);border-radius:10px;padding:14px 16px;margin-bottom:14px;color:#ccc;font-size:12px;line-height:1.7;">
+                        <div style="font-weight:900;color:#53bdeb;font-size:13px;margin-bottom:6px;">🎁 LOTES CON REGALO — Guía completa</div>
+                        <p style="margin:0 0 8px;">Herramienta para mandar una notificación a un <b>grupo de clientes</b> con un regalo enganchado. La usan el admin general y los cajeros de carga (retiros solo mira el historial).</p>
+                        <p style="margin:0 0 8px;color:#8fd3a8;"><b>⚡ NUEVO (2026-09-04) — el % se aplica SOLO:</b> con "⚡ Automático" el sistema suma el % en la carga del cliente sin que nadie marque nada, como BONO con el <b>rollover que elijas en el lote</b> (x2, x5… — así el extra no se retira sin jugarlo): entra igual en la <b>carga automática por transferencia (hgcash)</b> y en la <b>carga manual del cajero sin bonus</b> (si el cajero carga con bonus a mano, va el suyo y el del lote queda usado). Elegís si vale para <b>la primera carga</b> o para <b>TODAS las cargas</b> hasta que venza, y opcionalmente una <b>franja horaria</b> (ej. de 18:00 a 23:00, hora Argentina): fuera de la franja la carga entra sin el bono y el bono sigue vivo. El cartel verde del chat lo muestra como "AUTOMÁTICO" (solo informativo, con botón para cancelarlo). Prioridad si el cliente tiene varias cosas: ruleta de bienvenida → ruleta diaria → bono de 1ª carga → lote (nunca se suman entre sí). Los multicuenta detectados por banco no reciben ningún bono automático, tampoco este.</p>
+                        <p style="margin:0 0 8px;color:#ffd166;"><b>⚠️ Regla de oro — quién pone la plata:</b> el <b>% con "🧑‍💼 Lo aplica el agente"</b> lo aplica el agente a mano (cartel verde + marcar usado) — es el modo viejo, por si querés controlarlo vos. Las <b>FICHAS se acreditan SOLAS, siempre</b>: con código, al canjearlo; por tiempo, apenas se envía el lote a todos. Entran como BONO en JUGAYGANA (individual_bonus). El agente no hace nada con las fichas — le llega una nota informativa.</p>
+                        <p style="margin:0 0 8px;color:#ff9d76;"><b>🛡️ Candados anti-abuso (automáticos):</b> cada usuario tiene tope de regalos de lote (máx 3 acreditaciones en 24hs y $300.000 en 7 días). Si alguien lo supera, el crédito SE BLOQUEA solo y salta una <b>alerta roja urgente</b> a todos los admins conectados + una nota en el chat de ese usuario. Todo lo bloqueado queda visible en el detalle del lote ("⚠ sin acreditar").</p>
+                        <ul style="margin:0 0 8px;padding-left:18px;">
+                            <li><b>Tipos de regalo:</b> <b>% extra en la próxima carga</b> (ej. +50%: carga $10.000 → le acreditás $15.000, siempre a mano) o <b>fichas</b> (ej. $5.000 — SIEMPRE automático).</li>
+                            <li><b>🔑 CON CÓDIGO:</b> la notificación lleva un código que el cliente canjea en su app (menú ☰ → "Reclamar Bono con Código"). <b>Solo funciona para los que están EN el lote</b> — si lo comparten en un grupo, al resto le dice "código no válido". Una sola vez por persona, hasta que venza el plazo. Si el regalo es %, al canjear aparece el cartel verde; si es fichas, la plata entra al toque y al agente le llega una nota "no hay que hacer nada".</li>
+                            <li><b>⏰ POR TIEMPO:</b> sin código — al enviar, el bono queda ACTIVADO solo para todos los del lote por las horas que elijas. Ideal promos relámpago ("tenés 2 horas para cargar con +30%"). Al vencer desaparece solo.</li>
+                            <li><b>Audiencias:</b> 📋 lista pegada (usuarios a dedo) · 🎯 <b>segmento</b>: elegís la base — 💸 <b>cargaron antes y no cargan hace ≥ X días</b> (los que más vale recuperar), 😴 sin entrar hace ≥ X días, o 🔥 cargaron en los últimos X días (activos/VIP) — y la afinás con mínimo de cargas históricas, mínimo de $ cargados, publicista y cupo (ej. "los 300 mejores ex-cargadores de santino") · 🌍 lote completo (todos) · 📣 <b>CÓDIGO PÚBLICO</b>: no se envía nada — el código se crea y lo subís VOS a la Comunidad de Telegram o a la red que quieras; CUALQUIER cliente registrado puede canjearlo (una vez por cuenta) mientras esté vigente, con cupo total de canjes opcional (ej. "los primeros 100"). Mismo regalo, mismos topes anti-abuso, y en el historial ves quiénes lo canjearon.</li>
+                            <li><b>🔍 Validar lista SIEMPRE antes de enviar:</b> muestra cuántos son y quién puede recibir: 📱 app instalada = push al celular · 🌐 navegador = notificación del navegador · 🔕 sin notis = NO le llega push, pero el mensaje igual le queda en el chat de la app (lo ve cuando entra).</li>
+                            <li>El envío sale en segundo plano y <b>no se pierde nunca</b> (si el server se reinicia a mitad de un lote, sigue solo donde quedó).</li>
+                        </ul>
+                        <p style="margin:0 0 6px;font-weight:900;color:#34d36b;">El cartel VERDE (lo más importante para el cajero):</p>
+                        <ul style="margin:0 0 8px;padding-left:18px;">
+                            <li>Cuando un cliente del lote tiene el bono activo, al abrir su chat aparece el cartel verde: "BONO VIGENTE: 50% en la carga" o "REGALO PENDIENTE: $5.000", con el vencimiento y de qué lote salió.</li>
+                            <li>Flujo: cliente va a cargar → ves el cartel → le sumás el regalo a la carga → tocás <b>"✓ Marcar usado"</b> (si cargaste con el campo bonus se marca solo). Vale por UNA sola carga.</li>
+                            <li>Sin cartel verde = no tiene nada pendiente: o ya lo usó (queda registrado quién lo marcó), o venció, o nunca estuvo en el lote.</li>
+                        </ul>
+                        <p style="margin:0 0 6px;font-weight:900;color:#53bdeb;">📣 Código PÚBLICO (para Telegram/redes) — paso a paso:</p>
+                        <ul style="margin:0 0 8px;padding-left:18px;">
+                            <li><b>1.</b> En Destinatarios elegí "📣 Código PÚBLICO". No se manda ninguna notificación: el sistema solo CREA el código.</li>
+                            <li><b>2.</b> Elegí el regalo (fichas o %), el código (o 🎲 para autogenerar), la vigencia en horas y el <b>cupo de canjes</b> (ej. 100 = "los primeros 100"; vacío = sin límite — con fichas pensalo bien).</li>
+                            <li><b>3.</b> Creá el código y subilo VOS a la Comunidad de Telegram, historias, o la red que quieras ("Los primeros 100 que pongan el código REGALO24 se llevan $5.000").</li>
+                            <li><b>4.</b> CUALQUIER cliente registrado lo canjea en su app (☰ → "Reclamar Bono con Código"), <b>una sola vez por cuenta</b>, mientras esté vigente y quede cupo. Fichas = se acreditan solas (topes anti-abuso incluidos); % = cartel verde al agente.</li>
+                            <li><b>5.</b> En "📤 Lotes enviados" lo seguís en vivo: "📣 código público · 37 canjes de 100" y con "👥 Ver lote" la lista exacta de quiénes lo canjearon.</li>
+                        </ul>
+                        <p style="margin:0 0 6px;font-weight:900;color:#53bdeb;">📤 Lotes enviados (historial):</p>
+                        <p style="margin:0 0 8px;">Cada lote queda registrado: quién lo envió, cuándo, qué regalo, a cuántos; y con "👥 Ver lote" el detalle persona por persona — si le llegó, si canjeó, y si el bono se usó y qué agente lo aplicó. Los lotes grandes muestran el progreso en vivo ("⏳ enviando 120/300").</p>
+                        <p style="margin:0 0 6px;font-weight:900;">Respuestas rápidas para clientes:</p>
+                        <p style="margin:0;color:#999;">"Me dice código no válido" → no está en el lote o venció. · "Ya lo canjeé, ¿y ahora?" → si el lote es ⚡ automático: que cargue nomás, el % se le suma solo; si es del agente: que avise al cargar y el cajero lo aplica desde el cartel. · "No me llegó la notificación" → sin notis activadas no hay push, pero el mensaje está en su chat igual.</p>
+                    </div>
+                    <p style="margin:0 0 1rem;color:#bbb;font-size:.82rem;line-height:1.5;">
+                        Mandá una notificación a un <b>grupo de clientes</b> con un regalo: <b>% extra en la carga</b> — que ahora <b>se suma SOLO</b>
+                        cuando el cliente carga (por transferencia automática o con el agente, sin cartel que marcar), en la primera carga o en
+                        TODAS las cargas de una franja horaria — o <b>fichas</b> que <b>se acreditan SOLAS</b>.
+                        <b>Con código</b>: solo los del lote pueden canjearlo. Audiencias finas: ex-cargadores, inactivos, cargadores recientes,
+                        por publicista. Con topes anti-abuso y alerta urgente si alguien intenta farmear regalos.
+                    </p>
+                    <div class="form-group">
+                        <label class="form-label">Nombre del lote (opcional, para el historial)</label>
+                        <input type="text" id="giftBatchName" class="form-input" placeholder="Ej: Recupero viernes" maxlength="60" />
+                    </div>
+                    <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:.75rem">
+                        <div>
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Modo</label>
+                            <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchMode" value="code" checked onchange="updateGiftBatchModeUI()"> 🔑 Con código</label>
+                            <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchMode" value="window" onchange="updateGiftBatchModeUI()"> ⏰ Por tiempo</label>
+                        </div>
+                        <div>
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Regalo</label>
+                            <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchType" value="percent" checked onchange="updateGiftBatchTypeUI()"> ％ extra en la carga</label>
+                            <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchType" value="fixed" onchange="updateGiftBatchTypeUI()"> 💵 Fichas (se acreditan solas)</label>
+                        </div>
+                    </div>
+                    <!-- #263 (owner 2026-09-04): el % se aplica SOLO en la carga (auto) —
+                         alcance primera carga / todas, y franja horaria opcional. -->
+                    <div id="giftBatchApplyWrap" style="margin-top:.75rem;background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.25);border-radius:10px;padding:.75rem .9rem">
+                        <div style="display:flex;gap:1.5rem;flex-wrap:wrap">
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">¿Cómo se aplica el %?</label>
+                                <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchApply" value="auto" checked onchange="updateGiftBatchTypeUI()"> ⚡ Automático (se suma solo en la carga)</label>
+                                <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchApply" value="agent" onchange="updateGiftBatchTypeUI()"> 🧑‍💼 Lo aplica el agente (cartel verde)</label>
+                            </div>
+                            <div id="giftBatchScopeWrap">
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">¿En qué cargas?</label>
+                                <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchScope" value="first" checked onchange="updateGiftBatchTypeUI()"> 1️⃣ Solo la primera carga</label>
+                                <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchScope" value="all" onchange="updateGiftBatchTypeUI()"> 🔁 TODAS las cargas hasta que venza</label>
+                            </div>
+                        </div>
+                        <div id="giftBatchWindowWrap" style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;margin-top:.6rem">
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">⏱ Franja horaria (opcional, hora Argentina)</label>
+                                <div style="display:flex;gap:.4rem;align-items:center;font-size:.85rem">
+                                    de <input type="time" id="giftBatchApplyFrom" class="form-input" style="width:120px" onchange="updateGiftBatchTypeUI()" />
+                                    a <input type="time" id="giftBatchApplyTo" class="form-input" style="width:120px" onchange="updateGiftBatchTypeUI()" />
+                                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('giftBatchApplyFrom').value='';document.getElementById('giftBatchApplyTo').value='';">✕</button>
+                                </div>
+                            </div>
+                            <div id="giftBatchApplyHint" style="color:#8fd3a8;font-size:.78rem;max-width:520px;line-height:1.4"></div>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.75rem;align-items:flex-end">
+                        <div>
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Monto (% o $)</label>
+                            <input type="number" id="giftBatchAmount" class="form-input" min="1" step="1" placeholder="Ej: 50" style="width:120px" />
+                        </div>
+                        <div id="giftBatchRolloverWrap">
+                            <label class="form-label" style="display:block;margin-bottom:.3rem" title="El regalo (fichas o % automático) entra como BONO con este rollover. 0 = sin rollover (retirable); x2/x5 = debe apostar N× el bono antes de retirar. Tiene que ser uno de los multiplicadores permitidos en 1girox.">🎯 Rollover del bono (x)</label>
+                            <input type="number" id="giftBatchRollover" class="form-input" min="0" max="50" step="1" value="2" style="width:90px" />
+                        </div>
+                        <div>
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Vigencia (horas)</label>
+                            <input type="number" id="giftBatchHours" class="form-input" min="1" max="168" step="1" value="24" style="width:110px" />
+                        </div>
+                        <div id="giftBatchCodeWrap">
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Código del lote</label>
+                            <div style="display:flex;gap:.4rem">
+                                <input type="text" id="giftBatchCode" class="form-input" placeholder="vacío = auto" maxlength="30" style="width:150px;text-transform:uppercase" />
+                                <button class="btn btn-secondary btn-sm" onclick="genGiftBatchCode()" title="Generar código">🎲</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-top:.75rem">
+                        <label class="form-label">Título del push</label>
+                        <input type="text" id="giftBatchTitle" class="form-input" placeholder="🎁 Tenés un regalo" maxlength="100" />
+                    </div>
+                    <div class="form-group" style="margin-top:.75rem">
+                        <label class="form-label">Mensaje *</label>
+                        <textarea id="giftBatchMessage" class="form-input" rows="3" maxlength="500" placeholder="Ej: ¡Te extrañamos! Volvé y aprovechá este regalo." style="resize:vertical"></textarea>
+                        <div style="color:#777;font-size:.75rem;margin-top:.25rem">El regalo, el código (si hay) y la vigencia se agregan solos al final del mensaje.</div>
+                    </div>
+                    <div class="form-group" style="margin-top:.75rem">
+                        <label class="form-label" style="display:block;margin-bottom:.3rem">Destinatarios *</label>
+                        <div style="margin-bottom:.5rem">
+                            <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchAudience" value="list" checked onchange="updateGiftBatchAudienceUI()"> 📋 Lista pegada</label>
+                            <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchAudience" value="inactive" onchange="updateGiftBatchAudienceUI()"> 🎯 Segmento (inactivos / cargadores)</label>
+                            <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchAudience" value="all" onchange="updateGiftBatchAudienceUI()"> 🌍 Lote completo (todos)</label>
+                            <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchAudience" value="public" onchange="updateGiftBatchAudienceUI()"> 📣 Código PÚBLICO (para Telegram/redes)</label>
+                        </div>
+                        <div id="giftBatchListWrap">
+                            <textarea id="giftBatchUsers" class="form-input" rows="4" placeholder="gxjuan123&#10;gxana456&#10;gxpedro789 (separados por coma, espacio o enter)" style="resize:vertical"></textarea>
+                        </div>
+                        <!-- #263: segmento fino — base + mín. cargas + mín. $ + publicista + cupo -->
+                        <div id="giftBatchInactiveWrap" style="display:none;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">Quiénes</label>
+                                <select id="giftBatchSegBase" class="form-input" style="width:260px" onchange="updateGiftBatchSegHint()">
+                                    <option value="nodeposit">💸 Cargaron antes y NO cargan hace ≥ X días</option>
+                                    <option value="nologin">😴 Sin ENTRAR a la app hace ≥ X días</option>
+                                    <option value="deposited">🔥 Cargaron en los últimos X días</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">X días</label>
+                                <input type="number" id="giftBatchInactiveDays" class="form-input" min="1" max="365" step="1" value="7" style="width:90px" />
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="Cantidad mínima de cargas en toda su historia">Mín. cargas (hist.)</label>
+                                <input type="number" id="giftBatchMinDeposits" class="form-input" min="0" step="1" placeholder="0" style="width:110px" />
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="Suma mínima de $ cargados en toda su historia">Mín. $ cargados (hist.)</label>
+                                <input type="number" id="giftBatchMinTotal" class="form-input" min="0" step="1000" placeholder="0" style="width:140px" />
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">Publicista (código)</label>
+                                <input type="text" id="giftBatchCampaign" class="form-input" placeholder="todos" maxlength="60" style="width:130px" />
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">Cupo (vacío = todos)</label>
+                                <input type="number" id="giftBatchInactiveLimit" class="form-input" min="1" step="1" placeholder="sin cupo" style="width:120px" />
+                            </div>
+                            <div id="giftBatchSegHint" style="color:#777;font-size:.75rem;max-width:420px;line-height:1.4"></div>
+                        </div>
+                        <div id="giftBatchAllNote" style="display:none;color:#ffaa44;font-size:.8rem">⚠️ Va a TODOS los clientes activos. Usá "🔍 Validar lista" para ver cuántos son antes de enviar.</div>
+                        <div id="giftBatchPublicWrap" style="display:none">
+                            <div style="color:#53bdeb;font-size:.8rem;margin-bottom:.5rem">📣 No se envía ninguna notificación: el código se crea y VOS lo subís a la Comunidad de Telegram o a la red que quieras. <b>Cualquier cliente registrado</b> puede canjearlo (una sola vez cada uno) mientras esté vigente. Con fichas aplican los topes anti-abuso de siempre.</div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">Cupo de canjes (ej. 100 — vacío = sin cupo)</label>
+                                <input type="number" id="giftBatchMaxClaims" class="form-input" min="1" step="1" placeholder="sin cupo" style="width:140px" />
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top:1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                        <button class="btn btn-secondary" onclick="previewGiftBatch()">🔍 Validar lista</button>
+                        <button id="giftBatchSendBtn" class="btn btn-primary" onclick="sendGiftBatch()">🚀 Enviar lote</button>
+                        <span id="giftBatchStatus" style="font-size:.85rem;color:#a5b4fc"></span>
+                    </div>
+                    <div id="giftBatchPreview" style="margin-top:.75rem"></div>
+                </div>
+
+                <!-- Historial de lotes enviados: quién lo mandó y a quiénes -->
+                <div class="commands-section" style="background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+                        <h3 style="font-size:1rem;color:#d4af37">📤 Lotes enviados</h3>
+                        <button class="btn btn-secondary btn-sm" onclick="loadNotifBatches()">🔄 Actualizar</button>
+                    </div>
+                    <div id="notifBatchesList"><p style="color:#888;text-align:center;font-size:.85rem">Cargando...</p></div>
+                </div>
+
                 <!-- Resultado del último envío -->
                 <div id="notifResult" style="display:none;background:var(--bg-secondary,#1a1a2e);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem">
                     <h3 style="margin-bottom:1rem;font-size:1rem;color:var(--text-secondary,#aaa)">📋 Resultado del envío</h3>

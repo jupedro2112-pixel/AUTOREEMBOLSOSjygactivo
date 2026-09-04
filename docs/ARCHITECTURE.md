@@ -133,6 +133,12 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   `_getActivePromoBonus`), **BonusStrategyConfig** + **StrategyEnrollment** (estrategia
   por voto de encuesta — APAGADA), **EncuestaVote/EncuestaFire** (motor encuesta —
   bonos apagados), **InactividadFire** (motor inactivos — APAGADO).
+- **NotifBatch** (#149) — "Lote con regalo": notificación a una lista con % en la carga
+  (AUTOMÁTICO en carga manual sin bonus / hgcash, 1ª carga o todas, franja horaria) o
+  fichas; modo código (canje exclusivo `POST /api/gift-code/claim`) o ventana. El bono
+  es un PromoBonus `sourceRuleCode:'lote'` (`autoApply/applyScope/applyFromMin`);
+  `claimAutoPromoPercent` lo reserva atómico en la carga (`/api/admin/deposit`,
+  `hgcashAutoCarga`). Motor de envío reanudable (cron 45 s).
 - **DailyRouletteSpin** — 1 giro/día (índices únicos userId+dateKey y
   username+dateKey). Auto-crédito en JUGAYGANA; `credit_failed` → retry desde panel.
 - **Review** (1 por user, moderada), **OtpCode** (TTL 5 min, hash bcrypt, 3 intentos),

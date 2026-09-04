@@ -281,6 +281,47 @@ VIP.ui = (function () {
         }
     }
 
+    // ---- Regalo por código (#149: lotes con regalo) ----
+    function openGiftCodeModal() {
+        const r = document.getElementById('giftCodeResult'); if (r) r.innerHTML = '';
+        const i = document.getElementById('giftCodeInput'); if (i) i.value = '';
+        showModal('giftCodeModal');
+        setTimeout(() => { if (i) i.focus(); }, 150);
+    }
+    async function claimGiftCode() {
+        const input = document.getElementById('giftCodeInput');
+        const out = document.getElementById('giftCodeResult');
+        const btn = document.getElementById('giftCodeBtnSend');
+        const code = ((input && input.value) || '').trim().toUpperCase();
+        if (!code) { if (out) out.innerHTML = '<span style="color:#ffaa44;">Escribí el código.</span>'; return; }
+        if (btn) btn.disabled = true;
+        if (out) out.innerHTML = '<span style="color:#aaa;">Verificando…</span>';
+        try {
+            const response = await fetch(`${VIP.config.API_URL}/api/gift-code/claim`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${VIP.state.currentToken}` },
+                body: JSON.stringify({ code })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) {
+                if (out) out.innerHTML = '<div style="background:rgba(255,80,80,.12);border:1px solid rgba(255,80,80,.4);border-radius:10px;padding:10px;color:#ffb3b3;">' + escapeHtml(data.error || 'No se pudo canjear el código.') + '</div>';
+                return;
+            }
+            const ok = data.status === 'credited'
+                ? '💰 ¡Listo! Tu regalo ya está <strong>acreditado en tu cuenta</strong>.'
+                : '🎁 ¡Código válido! ' + escapeHtml(data.message || 'Tu bono quedó activado.');
+            if (out) out.innerHTML = '<div style="background:rgba(37,211,102,.12);border:1px solid rgba(37,211,102,.45);border-radius:10px;padding:10px;color:#9ff5c0;">' + ok + '</div>';
+            if (input) input.value = '';
+            if (data.status === 'credited') { try { if (typeof loadBalance === 'function') loadBalance(); } catch (_) {} }
+            try { if (VIP.chat && VIP.chat.loadMessages) VIP.chat.loadMessages(); } catch (_) {}
+        } catch (e) {
+            if (out) out.innerHTML = '<span style="color:#ffb3b3;">Error de conexión. Probá de nuevo.</span>';
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+    function escapeHtml(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
     // ---- Referrals ----
 
     async function openReferralModal() {
@@ -694,6 +735,8 @@ VIP.ui = (function () {
         sendWelcomeMessages,
         loadAndShowCBU,
         openReferralModal,
+        openGiftCodeModal,
+        claimGiftCode,
         loadReferralData,
         copyReferralCode,
         copyReferralLink,

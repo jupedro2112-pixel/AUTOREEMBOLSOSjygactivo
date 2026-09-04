@@ -17895,12 +17895,7 @@ function _fmtMinOfDay(min) {
   const h = Math.floor(min / 60), m = min % 60;
   return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
 }
-// Multiplier a mandar en el depósito: el del lote si lo tiene (ya validado
-// contra bonus.multipliers al crearlo), si no el global (GIROX_BONUS_MULTIPLIER).
-async function _bonusMultiplierFor(claim) {
-  if (claim && claim.claimed && claim.rolloverX != null) return claim.rolloverX;
-  return getGiroxBonusMultiplier();
-}
+// (En el hermano acá vivía _bonusMultiplierFor: JUGAYGANA no usa multiplicador de rollover en el crédito.)
 async function claimAutoPromoPercent(user, usedBy) {
   try {
     const uname = String(user.username || '').toLowerCase();

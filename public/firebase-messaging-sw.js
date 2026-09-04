@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v59'; // v58: modal Mis Referidos con 'cómo funciona' en 3 pasos (#143)
+const CACHE_VERSION = 'v60'; // v58: modal Mis Referidos con 'cómo funciona' en 3 pasos (#143)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

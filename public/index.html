@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=59">
-    <link rel="stylesheet" href="/css/login.css?v=59">
-    <link rel="stylesheet" href="/css/header.css?v=59">
-    <link rel="stylesheet" href="/css/chat.css?v=59">
-    <link rel="stylesheet" href="/css/modals.css?v=59">
-    <link rel="stylesheet" href="/css/responsive.css?v=59">
+    <link rel="stylesheet" href="/css/base.css?v=60">
+    <link rel="stylesheet" href="/css/login.css?v=60">
+    <link rel="stylesheet" href="/css/header.css?v=60">
+    <link rel="stylesheet" href="/css/chat.css?v=60">
+    <link rel="stylesheet" href="/css/modals.css?v=60">
+    <link rel="stylesheet" href="/css/responsive.css?v=60">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -1929,25 +1929,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=59"></script>
-    <script src="/js/campaign.js?v=59"></script>
-    <script src="/js/meta-pixel.js?v=59"></script>
-    <script src="/js/auth.js?v=59"></script>
-    <script src="/js/socket.js?v=59"></script>
-    <script src="/js/chat.js?v=59"></script>
-    <script src="/js/refunds.js?v=59"></script>
-    <script src="/js/fire.js?v=59"></script>
-    <script src="/js/roulette.js?v=59"></script>
-    <script src="/js/reviews.js?v=59"></script>
-    <script src="/js/promobonus.js?v=59"></script>
-    <script src="/js/notifications.js?v=59"></script>
-    <script src="/js/ui.js?v=59"></script>
-    <script src="/js/withdraw.js?v=59"></script>
-    <script src="/js/installbonus.js?v=59"></script>
-    <script src="/js/notifsurvey.js?v=59"></script>
-    <script src="/js/publisherwelcome.js?v=59"></script>
-    <script src="/js/apptest.js?v=59"></script>
-    <script src="/js/app.js?v=59"></script>
+    <script src="/js/config.js?v=60"></script>
+    <script src="/js/campaign.js?v=60"></script>
+    <script src="/js/meta-pixel.js?v=60"></script>
+    <script src="/js/auth.js?v=60"></script>
+    <script src="/js/socket.js?v=60"></script>
+    <script src="/js/chat.js?v=60"></script>
+    <script src="/js/refunds.js?v=60"></script>
+    <script src="/js/fire.js?v=60"></script>
+    <script src="/js/roulette.js?v=60"></script>
+    <script src="/js/reviews.js?v=60"></script>
+    <script src="/js/promobonus.js?v=60"></script>
+    <script src="/js/notifications.js?v=60"></script>
+    <script src="/js/ui.js?v=60"></script>
+    <script src="/js/withdraw.js?v=60"></script>
+    <script src="/js/installbonus.js?v=60"></script>
+    <script src="/js/notifsurvey.js?v=60"></script>
+    <script src="/js/publisherwelcome.js?v=60"></script>
+    <script src="/js/apptest.js?v=60"></script>
+    <script src="/js/app.js?v=60"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA
@@ -3796,16 +3796,40 @@
         <div class="modal-content" style="position:relative;max-width:440px;">
             <button onclick="hideModal('giftCodeModal')" style="position:absolute;top:15px;right:15px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>
             <div class="modal-header">
-                <h2>🎁 Reclamar Bono con Código</h2>
-                <p>Ingresá el código de regalo que te llegó por notificación</p>
+                <h2>🎁 Regalos con código</h2>
+                <p>Canjeá tu código o enterate cómo conseguirlos</p>
+            </div>
+            <!-- Selector de vista: canjear / información (#150) -->
+            <div style="display:flex;gap:8px;margin-bottom:14px;">
+                <button id="giftTabClaim" onclick="VIP.ui.giftCodeShowView('claim')" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(212,175,55,.6);background:rgba(212,175,55,.2);color:#d4af37;font-weight:900;cursor:pointer;">🔑 Canjear código</button>
+                <button id="giftTabInfo" onclick="VIP.ui.giftCodeShowView('info')" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(83,189,235,.5);background:rgba(83,189,235,.08);color:#53bdeb;font-weight:900;cursor:pointer;">ℹ️ INFORMACIÓN</button>
             </div>
             <div id="giftCodeBody">
-                <p style="color:#ccc;font-size:12.5px;line-height:1.55;margin:0 0 12px;">Si te mandamos un <strong style="color:#d4af37;">código de regalo</strong>, ingresalo acá y destrabá tu <strong>BONO 🎁</strong>. Es de un solo uso por cuenta y tiene vencimiento.</p>
+                <p style="color:#ccc;font-size:12.5px;line-height:1.55;margin:0 0 12px;">Si te llegó un <strong style="color:#d4af37;">código de regalo</strong>, ingresalo acá. Es de un solo uso por cuenta y tiene vencimiento.</p>
                 <div style="display:flex;gap:8px;">
-                    <input type="text" id="giftCodeInput" placeholder="EJ: REGALO24" maxlength="30" autocomplete="off" style="flex:1;text-transform:uppercase;letter-spacing:2px;padding:12px;border-radius:10px;border:1px solid rgba(212,175,55,.5);background:rgba(0,0,0,.35);color:#fff;font-size:16px;" onkeydown="if(event.key==='Enter')VIP.ui.claimGiftCode()">
+                    <input type="text" id="giftCodeInput" placeholder="EJ: REGALO24" maxlength="30" autocomplete="off" style="flex:1;min-width:0;text-transform:uppercase;letter-spacing:2px;padding:12px;border-radius:10px;border:1px solid rgba(212,175,55,.5);background:rgba(0,0,0,.35);color:#fff;font-size:16px;" onkeydown="if(event.key==='Enter')VIP.ui.claimGiftCode()">
                     <button id="giftCodeBtnSend" onclick="VIP.ui.claimGiftCode()" style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#1a0b2e;border:none;border-radius:10px;padding:0 16px;font-weight:900;cursor:pointer;">Canjear</button>
                 </div>
                 <div id="giftCodeResult" style="margin-top:12px;font-size:13px;line-height:1.5;"></div>
+                <p style="color:#888;font-size:11.5px;margin:12px 0 0;text-align:center;">¿No tenés ningún código? Tocá <strong style="color:#53bdeb;">ℹ️ INFORMACIÓN</strong> para saber cómo conseguirlos.</p>
+            </div>
+            <div id="giftInfoBody" class="hidden">
+                <div style="background:rgba(83,189,235,.07);border:1px solid rgba(83,189,235,.3);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+                    <p style="color:#e8e8e8;font-size:13px;line-height:1.6;margin:0 0 8px;"><strong style="color:#53bdeb;">¿Qué son los códigos de regalo?</strong><br>Cada tanto regalamos <strong>bonos extra en tu carga</strong> o <strong>fichas</strong>. Se entregan con un código que canjeás acá.</p>
+                    <p style="color:#e8e8e8;font-size:13px;line-height:1.6;margin:0;"><strong style="color:#53bdeb;">¿Dónde se consiguen?</strong><br>📢 En nuestra <strong>Comunidad de Telegram</strong>.<br>🔔 Por <strong>notificación de la app</strong>, directo a tu celular.<br><span style="color:#aaa;font-size:12px;">No hace falta pedirlos: cuando hay un regalo, te llega.</span></p>
+                </div>
+                <a id="giftInfoTelegramBtn" href="#" target="_blank" rel="noopener" style="display:none;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#2AABEE,#1e8fd0);color:#fff;text-decoration:none;border-radius:12px;padding:12px;font-weight:900;font-size:14px;margin-bottom:12px;">📢 Entrar a la Comunidad de Telegram</a>
+                <div style="background:rgba(0,0,0,.25);border-radius:12px;padding:12px 14px;">
+                    <p style="color:#d4af37;font-weight:900;font-size:12.5px;margin:0 0 8px;">Para recibir los regalos por notificación necesitás:</p>
+                    <div id="giftInfoAppRow" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.08);">
+                        <span style="font-size:13px;color:#e8e8e8;">📱 App instalada</span>
+                        <span id="giftInfoAppState" style="font-size:12.5px;font-weight:900;">…</span>
+                    </div>
+                    <div id="giftInfoNotifRow" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;">
+                        <span style="font-size:13px;color:#e8e8e8;">🔔 Notificaciones activas</span>
+                        <span id="giftInfoNotifState" style="font-size:12.5px;font-weight:900;">…</span>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

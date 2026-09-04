@@ -286,7 +286,60 @@ VIP.ui = (function () {
         const r = document.getElementById('giftCodeResult'); if (r) r.innerHTML = '';
         const i = document.getElementById('giftCodeInput'); if (i) i.value = '';
         showModal('giftCodeModal');
-        setTimeout(() => { if (i) i.focus(); }, 150);
+        giftCodeShowView('claim');
+    }
+    // #150: dos vistas separadas — canjear / información (de dónde salen los
+    // códigos + Telegram + estado de app y notificaciones con botones para resolverlo).
+    function giftCodeShowView(view) {
+        const claim = document.getElementById('giftCodeBody');
+        const info = document.getElementById('giftInfoBody');
+        const tC = document.getElementById('giftTabClaim');
+        const tI = document.getElementById('giftTabInfo');
+        const on = (btn, color) => { if (!btn) return; btn.style.background = color + '33'; btn.style.opacity = '1'; };
+        const off = (btn) => { if (!btn) return; btn.style.background = 'transparent'; btn.style.opacity = '.6'; };
+        if (view === 'info') {
+            if (claim) claim.classList.add('hidden');
+            if (info) info.classList.remove('hidden');
+            off(tC); on(tI, '#53bdeb');
+            _renderGiftInfo();
+        } else {
+            if (info) info.classList.add('hidden');
+            if (claim) claim.classList.remove('hidden');
+            on(tC, '#d4af37'); off(tI);
+            setTimeout(() => { const i = document.getElementById('giftCodeInput'); if (i) i.focus(); }, 150);
+        }
+    }
+    async function _renderGiftInfo() {
+        // Telegram: misma URL que la tarjeta de comunidad (canal del equipo del cliente).
+        const tg = document.getElementById('giftInfoTelegramBtn');
+        if (tg) {
+            const ch = document.getElementById('communityChannelBtn');
+            let url = (ch && ch.href && ch.href !== '#' && !/#$/.test(ch.href)) ? ch.href : '';
+            if (!url) {
+                try {
+                    const resp = await fetch(`${VIP.config.API_URL}/api/config/community`, { headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` } });
+                    if (resp.ok) { const d = await resp.json(); url = (d && d.channelUrl) || ''; }
+                } catch (_) {}
+            }
+            if (url) { tg.href = url; tg.style.display = 'flex'; } else { tg.style.display = 'none'; }
+        }
+        // Estado real: app instalada (standalone) y permiso de notificaciones.
+        const okChip = '<span style="color:#25d366;">✅ Sí</span>';
+        const appOk = isAppStandalone();
+        const notifOk = ('Notification' in window) && Notification.permission === 'granted';
+        const appEl = document.getElementById('giftInfoAppState');
+        const notEl = document.getElementById('giftInfoNotifState');
+        if (appEl) appEl.innerHTML = appOk ? okChip :
+            '<button onclick="VIP.ui.installApp()" style="background:rgba(255,80,80,.15);color:#ffb3b3;border:1px solid rgba(255,80,80,.45);border-radius:8px;padding:5px 10px;font-weight:900;font-size:12px;cursor:pointer;">❌ No — Instalar</button>';
+        if (notEl) notEl.innerHTML = notifOk ? okChip :
+            '<button onclick="VIP.ui.giftInfoEnableNotifs()" style="background:rgba(255,80,80,.15);color:#ffb3b3;border:1px solid rgba(255,80,80,.45);border-radius:8px;padding:5px 10px;font-weight:900;font-size:12px;cursor:pointer;">❌ No — Activar</button>';
+    }
+    function giftInfoEnableNotifs() {
+        // Reusa el flujo del 🔔 de la barra (pide permiso + registra el token FCM).
+        const bell = document.getElementById('notificationBtn');
+        if (bell) bell.click();
+        else if (VIP.notifications && VIP.notifications.requestNotificationPermission) VIP.notifications.requestNotificationPermission();
+        setTimeout(_renderGiftInfo, 2500);
     }
     async function claimGiftCode() {
         const input = document.getElementById('giftCodeInput');
@@ -737,6 +790,8 @@ VIP.ui = (function () {
         openReferralModal,
         openGiftCodeModal,
         claimGiftCode,
+        giftCodeShowView,
+        giftInfoEnableNotifs,
         loadReferralData,
         copyReferralCode,
         copyReferralLink,

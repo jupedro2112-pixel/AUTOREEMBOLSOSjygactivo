@@ -8,6 +8,20 @@
 
 ## Sesión 2026-09-04
 
+### 150. Modal 🎁 con dos vistas: "Canjear código" e "ℹ️ INFORMACIÓN" (de dónde salen los códigos + Telegram + estado app/notifs)
+- **Owner:** los clientes preguntan "qué es eso nuevo del regalo". Pedido: un botón
+  de INFORMACIÓN separado del lugar donde se pone el código, que explique que
+  los códigos se dan en la Comunidad de Telegram o por notificación push,
+  derive a Telegram, y muestre si tienen app instalada y notificaciones activas.
+- **PWA:** el modal pasa a "🎁 Regalos con código" con dos botones arriba:
+  🔑 Canjear código (input + Canjear, igual que antes) e ℹ️ INFORMACIÓN:
+  explicación corta, botón "📢 Entrar a la Comunidad de Telegram" (misma URL
+  del canal del equipo: `#communityChannelBtn` o `/api/config/community`), y
+  checklist real: 📱 App instalada (standalone) ✅ / "❌ No — Instalar"
+  (`VIP.ui.installApp`) y 🔔 Notificaciones activas (`Notification.permission`)
+  ✅ / "❌ No — Activar" (dispara el 🔔 de la barra). `VIP.ui.giftCodeShowView`,
+  `giftInfoEnableNotifs`. **`?v=60` + SW v60.** Redeploy (PWA).
+
 ### 149. 🎁 LOTE CON REGALO (portado de PAUTANUEVA) + % AUTOMÁTICO en la carga (manual sin bonus / hgcash) con franja horaria y anti-reuso
 - **Pedido del owner (captura del panel de PAUTANUEVA):** lo mismo acá — notificar
   a una lista de clientes con regalo (% en próxima carga o fichas), por código

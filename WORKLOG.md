@@ -4,7 +4,64 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-04**
+> **Última actualización: 2026-09-08**
+
+## Sesión 2026-09-08
+
+### 151. 🔴 INCIDENTE: DOBLE ACREDITACIÓN en JUGAYGANA por reintento a ciegas (reembolso $18.808 ×2) — fix: verificar por saldo, nunca reenviar plata sin confirmar
+- **Reporte del owner (capturas):** argenJesi081, 07/09 00:02:29 y 00:02:37 en
+  JUGAYGANA: DOS `INDIVIDUAL_BONUS` de $18.808 (8 s de diferencia). En
+  nuestras Transaction: UN solo "Reembolso mensual $18.808". Sin aviso a
+  nadie. Plata real perdida.
+- **Causa (código):** `jugaygana.creditUserBalance` hacía 3 intentos y, ante
+  respuesta HTML/Cloudflare, "esperaba 5 s y REENVIABA el mismo DepositMoney"
+  (los 8 s coinciden exactos). JUGAYGANA había procesado el primero pero la
+  respuesta se perdió detrás de Cloudflare → el reenvío acreditó de nuevo.
+  `depositToUser`/`withdrawFromUser` no reintentaban solos, pero ante
+  HTML/timeout devolvían "falló" sin saber si entró → el flujo reintentaba
+  (hgcash hasta 3×, el agente a mano, el cliente re-reclamando el reembolso
+  porque se liberaba la reserva) → mismo riesgo.
+- **Fix de raíz (`jugaygana.js`):** regla nueva para TODA operación de plata:
+  · JSON con `success:false` = la API lo RECHAZÓ → reintentar es seguro.
+  · HTML / timeout / excepción = AMBIGUO → **verificar por saldo**
+    (`_readBalanceForVerify` antes; `_verifyMoneyByBalance` después: hasta 3
+    lecturas en ~8 s): `confirmed` (Δ ≈ esperado) → success con
+    `verifiedByBalance:true`; `not_applied` (saldo estable) → reintentar es
+    seguro; `unknown` (no se pudo leer o el saldo se movió distinto, p. ej. el
+    cliente está jugando) → **`{ success:false, ambiguous:true }` y NO se
+    reintenta**. Aplicado a `creditUserBalance` (bonos/reembolsos/ruleta/
+    fueguito/lotes), `depositToUser` (cargas manual/hgcash/devoluciones) y
+    `withdrawFromUser` (descuento de retiros). Se eliminó el reenvío
+    "HTML → 5 s → de nuevo".
+- **Callers (`server.js`), ante `ambiguous`:** helper `_alertMoneyAmbiguous`
+  (nota roja 🛑 VERIFICAR EN JUGAYGANA en el chat + Telegram + log ERROR).
+  · Reembolsos (diario/semanal/mensual): la reserva `RefundClaim` NO se libera
+    (antes se borraba → el cliente podía re-reclamar y cobrar doble);
+    `verifyPending:true` (campo nuevo) y `transactionId:'VERIFICAR'`; al
+    cliente: "quedó en verificación, no hace falta reclamar de nuevo".
+  · hgcash: movimiento y comprobante → `needs_review` con chargeError
+    "AMBIGUO", candado HgcashCharge NO se libera (sin reintento automático).
+  · Carga manual: 502 con "NO la repitas: mirá el saldo en JUGAYGANA".
+  · Bono app (hgcash): el cupón NO se devuelve. Lote automático: el bono
+    queda consumido. Lote fichas: la reserva del canje NO se libera.
+  · Ruleta: `creditError` con prefijo `VERIFICAR:`; el retry del panel lo
+    bloquea (409) salvo `force:true`. Bonus manual: 502 + nota.
+  · Descuento de retiro: payout `failed` con "AMBIGUO", nota VERIFICAR (no
+    "Reintentá").
+- **Caso concreto a resolver a mano:** argenJesi081 cobró $18.808 de más el
+  07/09 00:02:37 (segundo INDIVIDUAL_BONUS). Retirárselo desde JUGAYGANA o
+  con "Retirar" del panel. Para buscar otros casos históricos: en el panel de
+  JUGAYGANA, filtrar INDIVIDUAL_BONUS/DEPOSIT del mismo usuario con el mismo
+  monto y <60 s de diferencia (ver también log: "HTML, esperando 5s" era la
+  marca del camino duplicador; ya no existe).
+- **Costo:** una lectura de saldo extra por operación de plata (~1 llamada
+  ShowUsers) — para cargas/retiros ya se hacía el lookup, así que solo suma
+  en los créditos. Aceptable frente al riesgo.
+- **Validado:** `node --check` OK (jugaygana.js, server.js, RefundClaim.js);
+  TDZ scan 0. **Redeploy URGENTE.** PROBAR: (1) carga manual normal → igual
+  que siempre; (2) simular HTML (no se puede forzar): mirar en logs
+  `[verify-saldo]` cuando JUGAYGANA responda Cloudflare; (3) una alerta
+  `🛑 VERIFICAR` en Telegram/chat = un humano mira antes de repetir.
 
 ## Sesión 2026-09-04
 

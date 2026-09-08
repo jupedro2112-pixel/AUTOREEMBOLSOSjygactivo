@@ -1435,6 +1435,21 @@ function _normComprobanteKey(s) {
 
 // Crea y emite un mensaje de sistema adminOnly (sólo lo ven los admins en el
 // chat; el cliente NO lo recibe). Reusa el mismo patrón que la alerta de bonus.
+// #151: una operación de PLATA quedó AMBIGUA (JUGAYGANA no confirmó y el saldo no
+// permitió verificar). Nota roja en el chat + Telegram + log ERROR. El caller NO
+// debe reintentar solo: un humano verifica el saldo en JUGAYGANA.
+async function _alertMoneyAmbiguous(ctx, userId, username, amount, err) {
+  const msg = `🛑 VERIFICAR EN JUGAYGANA — ${ctx}: $${Number(amount).toLocaleString('es-AR')} a ${username}. JUGAYGANA no confirmó la operación y no se pudo verificar por saldo (${jugaygana.errToString(err || 'sin detalle')}). NO se reintentó automáticamente: puede haber entrado o no. Revisá el historial del usuario en JUGAYGANA antes de repetir la operación.`;
+  logger.error(`[money-ambiguous] ${ctx} user=${username} amount=${amount}: ${jugaygana.errToString(err || '')}`);
+  try { if (userId) await _emitAdminOnlyChatNote(userId, username, msg); } catch (_) {}
+  try {
+    if (telegramAlert.isEnabled()) {
+      const e = telegramAlert.esc;
+      await telegramAlert.send(`🛑 <b>${e(_projectLabel())}</b> — VERIFICAR PLATA en JUGAYGANA\n${e(ctx)}: $${Number(amount).toLocaleString('es-AR')} a @${e(username)}\nJUGAYGANA no confirmó y no se pudo verificar por saldo. No se reintentó. Revisar el historial del usuario antes de repetir.`);
+    }
+  } catch (_) {}
+}
+
 async function _emitAdminOnlyChatNote(userId, username, content) {
   try {
     const msg = await Message.create({
@@ -2240,6 +2255,11 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
     // (misma causa documentada del bug "carga sí, bonus no" del flujo manual).
     await new Promise(r => setTimeout(r, 700));
     const credit = await jugaygana.creditUserBalance(user.username, bonusAmount, user.jugayganaUserId || null);
+    if (credit && credit.ambiguous) {
+      // #151: el bono puede haber entrado. NO se devuelve el cupón (evita cobrarlo dos veces).
+      await _alertMoneyAmbiguous(`Bono automático ${pct}% (app)`, user.id, user.username, bonusAmount, credit.error);
+      return out;
+    }
     if (!credit || !credit.success) {
       // Deshacer la marca del 100% para que el cliente no pierda el cupón sin
       // cobrarlo (guard por UsedBy='auto-hgcash' para no pisar otra marca).
@@ -2478,6 +2498,16 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     } catch (_) {}
 
     const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)', user.jugayganaUserId || null);
+    if (!result.success && result.ambiguous) {
+      // #151 AMBIGUO: NO liberar el candado ni reintentar (podría duplicar la carga).
+      // Movimiento y comprobante quedan en needs_review para que un agente verifique.
+      await BankMovement.updateOne({ movementId: movement.movementId },
+        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga entró' } });
+      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
+      await _alertMoneyAmbiguous('Carga automática hgcash', user.id, user.username, amount, result.error);
+      _emitHgcashUpdate('ambiguo');
+      return;
+    }
     if (!result.success) {
       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
@@ -2527,6 +2557,8 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
               metadata: { source: 'notif_batch_auto', promoBonusId: _lcH.id, movementId: movement.movementId }, timestamp: new Date()
             });
           } catch (_) {}
+        } else if (_lcRes && _lcRes.ambiguous) {
+          await _alertMoneyAmbiguous(`Bono de lote automático +${_lcH.pct}% (hgcash)`, user.id, user.username, _lcAmt, _lcRes.error);
         } else {
           await revertAutoPromoPercent(_lcH);
           await _emitAdminOnlyChatNote(user.id, user.username,
@@ -8348,8 +8380,20 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         });
       }
 
+      if (!depositResult.success && depositResult.ambiguous) {
+        // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
+        // se libera la reserva (si se liberara, el cliente reclamaría de nuevo y
+        // podría cobrar doble). Queda marcada para verificación humana.
+        await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: 'VERIFICAR', verifyPending: true } }).catch(() => {});
+        await _alertMoneyAmbiguous('Reembolso', userId, username, refundAmount, depositResult.error);
+        return res.json({
+          success: false,
+          message: 'Tu reembolso quedó en verificación (la plataforma no confirmó la acreditación). Un agente lo va a revisar; no hace falta que vuelvas a reclamarlo.',
+          canClaim: false
+        });
+      }
       if (!depositResult.success) {
-        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        // No se pudo acreditar (la API lo rechazó) → liberar la reserva para permitir reintentar.
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
@@ -8541,8 +8585,20 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
 
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount, jugayganaUserId);
 
+      if (!depositResult.success && depositResult.ambiguous) {
+        // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
+        // se libera la reserva (si se liberara, el cliente reclamaría de nuevo y
+        // podría cobrar doble). Queda marcada para verificación humana.
+        await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: 'VERIFICAR', verifyPending: true } }).catch(() => {});
+        await _alertMoneyAmbiguous('Reembolso', userId, username, refundAmount, depositResult.error);
+        return res.json({
+          success: false,
+          message: 'Tu reembolso quedó en verificación (la plataforma no confirmó la acreditación). Un agente lo va a revisar; no hace falta que vuelvas a reclamarlo.',
+          canClaim: false
+        });
+      }
       if (!depositResult.success) {
-        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        // No se pudo acreditar (la API lo rechazó) → liberar la reserva para permitir reintentar.
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
@@ -8701,8 +8757,20 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
 
       const depositResult = await jugaygana.creditUserBalance(username, refundAmount, jugayganaUserId);
 
+      if (!depositResult.success && depositResult.ambiguous) {
+        // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
+        // se libera la reserva (si se liberara, el cliente reclamaría de nuevo y
+        // podría cobrar doble). Queda marcada para verificación humana.
+        await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: 'VERIFICAR', verifyPending: true } }).catch(() => {});
+        await _alertMoneyAmbiguous('Reembolso', userId, username, refundAmount, depositResult.error);
+        return res.json({
+          success: false,
+          message: 'Tu reembolso quedó en verificación (la plataforma no confirmó la acreditación). Un agente lo va a revisar; no hace falta que vuelvas a reclamarlo.',
+          canClaim: false
+        });
+      }
       if (!depositResult.success) {
-        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        // No se pudo acreditar (la API lo rechazó) → liberar la reserva para permitir reintentar.
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         return res.json({
           success: false,
@@ -8977,6 +9045,12 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
 
     const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
 
+    if (!result.success && result.ambiguous) {
+      // #151: la carga puede haber entrado. El agente NO debe repetirla sin mirar el saldo.
+      await _alertMoneyAmbiguous('Carga manual', user.id, user.username, amount, result.error);
+      return res.status(502).json({ error: `⚠️ JUGAYGANA no confirmó la carga de $${Number(amount).toLocaleString('es-AR')} y no se pudo verificar por saldo. NO la repitas todavía: mirá el saldo/historial del cliente en JUGAYGANA y cargá de nuevo solo si NO entró.`, ambiguous: true });
+    }
+
     if (result.success) {
       // SLA: atender al cliente con una carga cuenta como respuesta (resuelve el reloj).
       await delayClockResolve(user.id, { responded: true, agentId: req.user.userId, agentUsername: req.user.username, via: 'operation', queueHint: 'cargas' });
@@ -9037,6 +9111,10 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
             await _emitAdminOnlyChatNote(user.id, user.username,
               `⚡ BONO DE LOTE AUTOMÁTICO aplicado en esta carga: +${_lc.pct}% = $${_loteAmt.toLocaleString('es-AR')} (${_lc.label}). ` +
               (_lc.scope === 'first' ? 'El bono quedó USADO (era por una sola carga).' : 'El bono sigue vigente para sus próximas cargas.') + ' No hay que marcar nada.');
+          } else if (_lcRes && _lcRes.ambiguous) {
+            // #151: puede haber entrado → el bono queda consumido (no se revierte) y se verifica a mano.
+            _loteClaim = _lc;
+            await _alertMoneyAmbiguous(`Bono de lote automático +${_lc.pct}%`, user.id, user.username, _loteAmt, _lcRes.error);
           } else {
             await revertAutoPromoPercent(_lc);
             await _emitAdminOnlyChatNote(user.id, user.username,
@@ -9715,7 +9793,8 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
       });
     } else {
       logger.error(`[bonus] FAIL admin=${req.user?.username} user=${resolvedUsername} amount=$${bonusAmount} error=${depositResult.error || 'sin error'}`);
-      res.status(400).json({ error: depositResult.error || 'Error al aplicar bonificación' });
+      if (depositResult.ambiguous) await _alertMoneyAmbiguous('Bonus manual', bonusUser.id, resolvedUsername, bonusAmount, depositResult.error);
+      res.status(depositResult.ambiguous ? 502 : 400).json({ error: depositResult.error || 'Error al aplicar bonificación', ambiguous: !!depositResult.ambiguous });
     }
   } catch (error) {
     console.error('Error realizando bonificación:', error);
@@ -15595,6 +15674,12 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   }
   // 3) Descontar en JUGAYGANA.
   const w = await jugaygana.withdrawFromUser(payout.username, amt, `Retiro confirmado - ${payout.username}`);
+  if (w && w.ambiguous) {
+    // #151: el descuento puede haberse hecho. NO reintentar a ciegas.
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'AMBIGUO: verificar en JUGAYGANA si se descontó', balanceBefore: avail, debitConfirmed: false } });
+    await _alertMoneyAmbiguous('Descuento de retiro', payout.userId, payout.username, amt, w.error);
+    return { ok: false, error: 'JUGAYGANA no confirmó el descuento y no se pudo verificar por saldo. NO reintentes: verificá en JUGAYGANA si el saldo bajó antes de pagar.' };
+  }
   if (!w || !w.success) {
     await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo descontar: ' + ((w && w.error) || '') } });
     await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo descontar las fichas ($${amt.toLocaleString('es-AR')}) en JUGAYGANA: ${(w && w.error) || 's/detalle'}. Reintentá.`);
@@ -16853,6 +16938,11 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     } catch (e) {
       credit = { success: false, error: e.message };
     }
+    if (credit && credit.ambiguous) {
+      // #151: el premio puede haber entrado. creditError con prefijo VERIFICAR: el
+      // retry del panel lo bloquea salvo force.
+      await _alertMoneyAmbiguous('Premio ruleta diaria', spinDoc.userId, username, prizeARS, credit.error);
+    }
     if (!credit || !credit.success) {
       // Marcamos credit_failed para retry manual desde panel admin.
       await DailyRouletteSpin.updateOne(
@@ -16860,7 +16950,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         {
           $set: {
             status: 'credit_failed',
-            creditError: String((credit && credit.error) || 'unknown').slice(0, 300)
+            creditError: ((credit && credit.ambiguous) ? 'VERIFICAR: ' : '') + String((credit && credit.error) || 'unknown').slice(0, 280)
           },
           $inc: { creditAttempts: 1 }
         }
@@ -16982,6 +17072,10 @@ app.post('/api/admin/roulette/:id/retry-credit', authMiddleware, adminMiddleware
     if (!spin) return res.status(404).json({ error: 'Spin no encontrado' });
     if (spin.status === 'credited') return res.json({ success: true, alreadyCredited: true });
     if (spin.prizeARS <= 0) return res.status(400).json({ error: 'Este spin no tiene premio.' });
+    // #151: si el crédito anterior quedó AMBIGUO, no reintentar sin confirmación explícita.
+    if (String(spin.creditError || '').startsWith('VERIFICAR') && !(req.body && req.body.force === true)) {
+      return res.status(409).json({ error: 'El crédito anterior quedó AMBIGUO (JUGAYGANA no confirmó). Verificá en el historial del usuario si el premio YA entró; si NO entró, reintentá con force.', needsForce: true });
+    }
 
     let credit;
     try {
@@ -16989,10 +17083,11 @@ app.post('/api/admin/roulette/:id/retry-credit', authMiddleware, adminMiddleware
     } catch (e) {
       credit = { success: false, error: e.message };
     }
+    if (credit && credit.ambiguous) await _alertMoneyAmbiguous('Premio ruleta diaria (reintento)', spin.userId, spin.username, spin.prizeARS, credit.error);
     if (!credit || !credit.success) {
       await DailyRouletteSpin.updateOne(
         { id: spin.id },
-        { $set: { creditError: String((credit && credit.error) || 'unknown').slice(0, 300) }, $inc: { creditAttempts: 1 } }
+        { $set: { creditError: ((credit && credit.ambiguous) ? 'VERIFICAR: ' : '') + String((credit && credit.error) || 'unknown').slice(0, 280) }, $inc: { creditAttempts: 1 } }
       );
       return res.status(503).json({ error: (credit && credit.error) || 'Error acreditando' });
     }
@@ -18187,7 +18282,8 @@ async function _creditNotifBatchGift(uDoc, batch) {
   if (!credit || !credit.success) {
     const why = jugaygana.errToString((credit && credit.error) || 's/detalle');
     logger.warn(`[notif-batch] crédito de fichas falló para ${uDoc.username} (lote ${batch.id}): ${why}`);
-    return { ok: false, retryable: false, reason: why };
+    if (credit && credit.ambiguous) await _alertMoneyAmbiguous('Regalo de fichas (lote)', uDoc.id, uDoc.username, batch.amount, credit.error);
+    return { ok: false, retryable: false, ambiguous: !!(credit && credit.ambiguous), reason: why };
   }
   const txId = (credit.data && (credit.data.transfer_id || credit.data.transferId)) || null;
   await Transaction.create({
@@ -18515,6 +18611,10 @@ async function _tryClaimNotifBatchCode(reqUser, attempt) {
   // ============ REGALO DE FICHAS: acreditación AUTOMÁTICA ============
   if (esFichas) {
     const res2 = await _creditNotifBatchGift(uDoc, batch);
+    if (!res2.ok && res2.ambiguous) {
+      // #151: puede haber entrado → la reserva NO se libera (evita canje doble).
+      return { http: 502, body: { error: 'Tu regalo quedó en verificación (la plataforma no confirmó). Un agente lo revisa; no hace falta que vuelvas a canjear.' } };
+    }
     if (!res2.ok) {
       // Liberar la reserva: en fallo transitorio puede reintentar (la
       // reference fija evita el doble pago si en realidad SÍ se acreditó);

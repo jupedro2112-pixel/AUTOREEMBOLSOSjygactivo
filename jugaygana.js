@@ -765,6 +765,49 @@ async function checkClaimedToday(username) {
 // DEPOSITAR BONUS (reembolso)
 // ============================================
 
+// ============================================================
+// RESULTADOS AMBIGUOS en operaciones de PLATA (#151, incidente 2026-09-07):
+// JUGAYGANA puede PROCESAR un DepositMoney/WithdrawMoney y aun así responder
+// HTML de Cloudflare o cortar la conexión (timeout). Reenviar "por las dudas"
+// = doble acreditación (pasó: dos individual_bonus de $18.808 con 8 s de
+// diferencia = HTML → esperar 5 s → reintento). Regla nueva:
+//   · Respuesta JSON con success:false  → la API lo RECHAZÓ → reintentar es seguro.
+//   · HTML / timeout / excepción        → AMBIGUO → se VERIFICA POR SALDO
+//     (saldo antes vs. después, 3 lecturas en ~8 s):
+//       confirmed   → se da por hecho (success + verifiedByBalance).
+//       not_applied → el saldo no se movió → reintentar es seguro.
+//       unknown     → no se pudo leer o el saldo se movió distinto (el cliente
+//                     está jugando) → NO reintentar: { success:false, ambiguous:true }
+//                     y el caller avisa "VERIFICAR" al agente.
+// ============================================================
+async function _readBalanceForVerify(username) {
+  try {
+    const r = await lookupUserOrError(username);
+    if (r.status === 'found' && r.user && Number.isFinite(Number(r.user.balance))) return Number(r.user.balance);
+  } catch (_) {}
+  return null;
+}
+async function _verifyMoneyByBalance(username, before, expectedDelta, label) {
+  if (before === null || before === undefined) return 'unknown';
+  let stableReads = 0;
+  for (let i = 0; i < 3; i++) {
+    await new Promise(r => setTimeout(r, i === 0 ? 2500 : 3000));
+    const after = await _readBalanceForVerify(username);
+    if (after === null) continue;
+    const delta = after - before;
+    const tol = Math.max(1, Math.abs(expectedDelta) * 0.01);
+    if (Math.abs(delta - expectedDelta) <= tol) {
+      console.warn(`✅ [verify-saldo] ${label} ${username}: CONFIRMADO por saldo (${before} → ${after}, esperado ${expectedDelta >= 0 ? '+' : ''}${expectedDelta})`);
+      return 'confirmed';
+    }
+    if (Math.abs(delta) <= 0.5) { stableReads++; if (stableReads >= 2) { console.warn(`ℹ️ [verify-saldo] ${label} ${username}: saldo sin cambios (${before}) → NO se aplicó`); return 'not_applied'; } continue; }
+    console.warn(`⚠️ [verify-saldo] ${label} ${username}: saldo cambió distinto a lo esperado (${before} → ${after}, esperado ${expectedDelta}) → AMBIGUO`);
+    return 'unknown';
+  }
+  return 'unknown';
+}
+const _AMBIGUOUS_MSG = (label, why) => `JUGAYGANA no confirmó ${label} (${why}) y no se pudo verificar por saldo. NO reintentar a ciegas: VERIFICAR el saldo del cliente en JUGAYGANA antes de repetir la operación.`;
+
 async function creditUserBalance(username, amount, jugayganaUserId = null) {
   console.log(`💰 Cargando $${amount} a ${username} (individual_bonus)${jugayganaUserId ? ' [usando ID guardado]' : ''}`);
 
@@ -802,64 +845,57 @@ async function creditUserBalance(username, amount, jugayganaUserId = null) {
     return h;
   };
 
-  // Bug histórico: este endpoint solía tener UN solo intento + un retry de
-  // sesión inválida. Si JUGAYGANA respondía HTML/Cloudflare puntualmente, el
-  // bonus se perdía mientras la carga principal sí pasaba. Ahora hacemos 3
-  // intentos con backoff (igual patrón que depositToUser/createPlatformUser).
+  // #151: hasta 3 intentos, pero SOLO se reenvía cuando es SEGURO (la API
+  // rechazó con JSON, o el saldo verificado no se movió). Ante HTML/timeout se
+  // verifica por saldo; si no se puede confirmar, se corta con ambiguous:true.
+  const before = await _readBalanceForVerify(username);
   let lastError = 'desconocido';
 
   for (let attempt = 1; attempt <= 3; attempt++) {
+    let outcome = 'fail'; // 'fail' = la API dijo que no (reintento seguro) | 'ambiguous'
     try {
       let resp = await client.post('', buildBody(), { headers: buildHeaders() });
       let data = parsePossiblyWrappedJson(resp.data);
 
-      // HTML/Cloudflare transitorio: esperamos 5s y reintentamos UNA vez
-      // dentro del mismo intento antes de pasar al backoff del loop.
-      if (isHtmlBlocked(data)) {
-        console.warn(`⚠️ creditUserBalance(${username}) intento ${attempt}: HTML, esperando 5s y reintentando...`);
-        await new Promise(r => setTimeout(r, 5000));
-        resp = await client.post('', buildBody(), { headers: buildHeaders() });
-        data = parsePossiblyWrappedJson(resp.data);
-        if (isHtmlBlocked(data)) {
-          lastError = 'JUGAYGANA respondió HTML/Cloudflare';
-        }
-      }
-
-      // Sesión inválida: renovar y reintentar inline.
+      // Sesión inválida: la API RECHAZÓ (no procesó) → renovar y reenviar es seguro.
       if (isSessionError(data, resp.status)) {
         console.error(`🔄 creditUserBalance(${username}) intento ${attempt}: sesión inválida, renovando...`);
         invalidateSession();
         const renewed = await ensureSession();
-        if (renewed) {
-          resp = await client.post('', buildBody(), { headers: buildHeaders() });
-          data = parsePossiblyWrappedJson(resp.data);
-          if (isHtmlBlocked(data)) {
-            lastError = 'JUGAYGANA respondió HTML tras renovar sesión';
-          }
-        } else {
-          lastError = 'No se pudo renovar la sesión';
-        }
+        if (!renewed) return { success: false, error: 'No se pudo renovar la sesión' };
+        resp = await client.post('', buildBody(), { headers: buildHeaders() });
+        data = parsePossiblyWrappedJson(resp.data);
       }
 
-      if (data && data.success) {
-        if (attempt > 1) {
-          console.log(`✅ creditUserBalance(${username}) OK en intento ${attempt}/3`);
-        } else {
-          console.log(`✅ creditUserBalance(${username}) OK`);
-        }
+      if (isHtmlBlocked(data)) {
+        lastError = 'JUGAYGANA respondió HTML/Cloudflare';
+        outcome = 'ambiguous';
+      } else if (data && data.success) {
+        if (attempt > 1) console.log(`✅ creditUserBalance(${username}) OK en intento ${attempt}/3`);
+        else console.log(`✅ creditUserBalance(${username}) OK`);
         return { success: true, data: data };
+      } else {
+        lastError = (data && (data.error || data.message)) || lastError || 'API Error';
+        console.error(`❌ creditUserBalance(${username}) intento ${attempt}/3 rechazado por la API: ${typeof data === 'string' ? data.slice(0,200) : JSON.stringify(data).slice(0,200)}`);
+        outcome = 'fail';
       }
-
-      // Si llegamos acá, no fue success. Capturamos el error de la API para
-      // el último mensaje en caso de que todos los reintentos fallen.
-      lastError = (data && (data.error || data.message)) || lastError || 'API Error';
-      console.error(`❌ creditUserBalance(${username}) intento ${attempt}/3 falló: ${typeof data === 'string' ? data.slice(0,200) : JSON.stringify(data).slice(0,200)}`);
     } catch (err) {
       lastError = err.message;
+      outcome = 'ambiguous';
       console.error(`❌ creditUserBalance(${username}) intento ${attempt}/3 excepción: ${err.message} (code=${err.code || 'n/a'})`);
     }
 
-    // Backoff progresivo entre intentos: 2s, 4s.
+    if (outcome === 'ambiguous') {
+      const v = await _verifyMoneyByBalance(username, before, Number(amount), `crédito $${amount}`);
+      if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+      if (v === 'unknown') {
+        const msg = _AMBIGUOUS_MSG(`el crédito de $${amount}`, lastError);
+        console.error(`🛑 creditUserBalance(${username}, $${amount}) AMBIGUO — sin reintento: ${msg}`);
+        return { success: false, ambiguous: true, error: msg };
+      }
+      // not_applied → reintentar es seguro
+    }
+
     if (attempt < 3) {
       const backoffMs = 2000 * attempt;
       await new Promise(r => setTimeout(r, backoffMs));
@@ -1001,14 +1037,27 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
     const headers = {};
     if (SESSION_COOKIE) headers.Cookie = SESSION_COOKIE;
 
-    const resp = await client.post('', body, { headers });
+    // #151: saldo ANTES (ya lo trajo el lookup) para verificar ante HTML/timeout.
+    const _before = Number.isFinite(Number(userInfo && userInfo.balance)) ? Number(userInfo.balance) : await _readBalanceForVerify(username);
+    let resp;
+    try {
+      resp = await client.post('', body, { headers });
+    } catch (netErr) {
+      const v = await _verifyMoneyByBalance(username, _before, Number(amount), `carga $${amount}`);
+      if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+      if (v === 'not_applied') return { success: false, error: `Sin respuesta de JUGAYGANA (${netErr.message}); la carga NO entró — se puede reintentar.` };
+      return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`la carga de $${amount}`, netErr.message) };
+    }
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
+      const v = await _verifyMoneyByBalance(username, _before, Number(amount), `carga $${amount}`);
+      if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+      if (v === 'not_applied') return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare); la carga NO entró. Reintentá en 1-2 min.' };
+      return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`la carga de $${amount}`, 'HTML/Cloudflare') };
     }
 
-    // Detectar sesión inválida y reintentar una vez
+    // Detectar sesión inválida y reintentar una vez (la API rechazó: reenviar es seguro)
     if (isSessionError(data, resp.status)) {
       console.error('🔄 depositToUser: sesión inválida detectada, renovando...');
       invalidateSession();
@@ -1029,7 +1078,12 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
       const retryResp = await client.post('', retryBody, { headers: retryHeaders });
       data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
+      if (isHtmlBlocked(data)) {
+        const v = await _verifyMoneyByBalance(username, _before, Number(amount), `carga $${amount}`);
+        if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+        if (v === 'not_applied') return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare); la carga NO entró. Reintentá en 1-2 min.' };
+        return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`la carga de $${amount}`, 'HTML/Cloudflare tras renovar sesión') };
+      }
     }
 
     console.log("📩 Resultado DepositMoney:", JSON.stringify(data));
@@ -1162,14 +1216,27 @@ async function withdrawFromUser(username, amount, description = '') {
     const headers = {};
     if (SESSION_COOKIE) headers.Cookie = SESSION_COOKIE;
 
-    const resp = await client.post('', body, { headers });
+    // #151: saldo ANTES para verificar ante HTML/timeout (retiro = delta negativo).
+    const _before = Number.isFinite(Number(userInfo && userInfo.balance)) ? Number(userInfo.balance) : await _readBalanceForVerify(username);
+    let resp;
+    try {
+      resp = await client.post('', body, { headers });
+    } catch (netErr) {
+      const v = await _verifyMoneyByBalance(username, _before, -Number(amount), `retiro $${amount}`);
+      if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+      if (v === 'not_applied') return { success: false, error: `Sin respuesta de JUGAYGANA (${netErr.message}); el retiro NO se descontó — se puede reintentar.` };
+      return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`el retiro de $${amount}`, netErr.message) };
+    }
 
     let data = parsePossiblyWrappedJson(resp.data);
     if (isHtmlBlocked(data)) {
-      return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
+      const v = await _verifyMoneyByBalance(username, _before, -Number(amount), `retiro $${amount}`);
+      if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+      if (v === 'not_applied') return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare); el retiro NO se descontó. Reintentá en 1-2 min.' };
+      return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`el retiro de $${amount}`, 'HTML/Cloudflare') };
     }
 
-    // Detectar sesión inválida y reintentar una vez
+    // Detectar sesión inválida y reintentar una vez (la API rechazó: reenviar es seguro)
     if (isSessionError(data, resp.status)) {
       console.error('🔄 withdrawFromUser: sesión inválida detectada, renovando...');
       invalidateSession();
@@ -1189,7 +1256,12 @@ async function withdrawFromUser(username, amount, description = '') {
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
       const retryResp = await client.post('', retryBody, { headers: retryHeaders });
       data = parsePossiblyWrappedJson(retryResp.data);
-      if (isHtmlBlocked(data)) return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare). Reintentá en 1-2 min.' };
+      if (isHtmlBlocked(data)) {
+        const v = await _verifyMoneyByBalance(username, _before, -Number(amount), `retiro $${amount}`);
+        if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+        if (v === 'not_applied') return { success: false, error: 'JUGAYGANA temporalmente no disponible (HTML/Cloudflare); el retiro NO se descontó. Reintentá en 1-2 min.' };
+        return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`el retiro de $${amount}`, 'HTML/Cloudflare tras renovar sesión') };
+      }
     }
 
     console.log("📩 Resultado WithdrawMoney:", JSON.stringify(data));

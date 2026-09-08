@@ -197,7 +197,11 @@ reembolsos Y del revenue de referidos. `jugayganaUserLinkService.resolveJugaygan
 hace backfill al vuelo del id faltante.
 
 **Comportamiento clave:** JUGAYGANA es flaky — responde HTML (Cloudflare) de forma
-intermitente. Todos los clientes tienen auto-retry + detección de HTML + renovación de
+intermitente. ⚠️ **Plata (#151): NUNCA reenviar un DepositMoney/WithdrawMoney "por las
+dudas".** JUGAYGANA puede procesar y aun así responder HTML/timeout. Los tres métodos de
+plata verifican por saldo ante un resultado ambiguo y devuelven `{success:false,
+ambiguous:true}` cuando no pueden confirmar; el caller debe frenar y alertar
+(`_alertMoneyAmbiguous`), nunca reintentar ni liberar la reserva. Todos los clientes tienen auto-retry + detección de HTML + renovación de
 sesión. Montos en **centavos** (×100) al API. Fechas en hora Argentina (ART, UTC-3).
 NUNCA asumir respuesta inmediata; reusar estos clientes.
 

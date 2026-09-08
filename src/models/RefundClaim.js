@@ -72,6 +72,8 @@ const refundClaimSchema = new mongoose.Schema({
     trim: true
   },
   transactionId: { 
+  // #151: la acreditación quedó AMBIGUA (JUGAYGANA no confirmó y no se pudo verificar por saldo) → un agente verifica a mano. La reserva NO se libera.
+  verifyPending: { type: Boolean, default: false },
     type: String, 
     default: null,
     index: true

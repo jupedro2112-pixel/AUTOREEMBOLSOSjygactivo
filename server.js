@@ -1738,6 +1738,133 @@ function _nameMatch(a, b) {
   return na === nb || na.includes(nb) || nb.includes(na);
 }
 
+// ============================================
+// #152 ANTI-MULTICUENTA por IDENTIDAD BANCARIA
+// ============================================
+// La señal más fuerte que hay: el BANCO ya validó quién es el titular de la cuenta
+// de origen. IP/dispositivo/teléfono se esquivan (incógnito, chip nuevo); la cuenta
+// bancaria no. Estrategia: la multicuenta no se puede impedir, pero se puede hacer
+// que NO SIRVA — los bonos automáticos de la carga se dan una vez por PERSONA REAL
+// (identidad bancaria), no por cuenta. La carga entra igual (es su plata).
+//
+// Identidad = fromCUIT > fromCBU > fromKey (nombre normalizado, ≥8 chars). hgcash en
+// la práctica sólo manda fromName, así que el nombre es la clave habitual.
+// Estados que cuentan como "ese titular YA fondeó esa cuenta": cargados (auto/manual),
+// matcheados en sombra, en revisión y duplicados (todos tienen matchedUserId real).
+const BANK_IDENTITY_STATES = ['auto_charged', 'manual_charged', 'shadow_matched', 'needs_review', 'duplicate'];
+const BANK_IDENTITY_MIN_NAME = 8;
+
+// Clave normalizada del titular de origen (para fromKey). null si es muy corta.
+function _bankFromKey(fromName) {
+  const k = _normName(fromName);
+  return k.length >= BANK_IDENTITY_MIN_NAME ? k : null;
+}
+
+// Cláusulas $or de identidad para un movimiento (o un objeto con fromCUIT/fromCBU/fromName).
+function _bankIdentityOr(mov) {
+  const or = [];
+  const cuit = String((mov && mov.fromCUIT) || '').replace(/\D/g, '');
+  const cbu = String((mov && mov.fromCBU) || '').replace(/\D/g, '');
+  const key = (mov && mov.fromKey) || _bankFromKey(mov && mov.fromName);
+  if (cuit.length >= 11) or.push({ fromCUIT: mov.fromCUIT });
+  if (cbu.length >= 6) or.push({ fromCBU: mov.fromCBU });
+  if (key) or.push({ fromKey: key });
+  return or;
+}
+
+// Etiqueta legible del titular de un movimiento.
+function _bankHolderLabel(mov) {
+  return (mov && (mov.fromName || mov.fromCUIT || mov.fromCBU)) || 'titular desconocido';
+}
+
+// ¿La identidad bancaria de ESTE movimiento ya fondeó a OTRA cuenta nuestra?
+// Devuelve { holder, matchedUserId, matchedUsername } o null. FAIL-OPEN: ante error
+// de DB devuelve null (nunca frena una carga legítima ni le saca el bono por un error).
+async function _findBankMultiAccount(movement, userId) {
+  try {
+    const or = _bankIdentityOr(movement);
+    if (!or.length) return null;
+    const dup = await BankMovement.findOne({
+      $or: or,
+      matchedUserId: { $nin: [null, String(userId)] },
+      matchStatus: { $in: BANK_IDENTITY_STATES }
+    }).sort({ createdAt: -1 }).select('fromName fromCUIT fromCBU matchedUserId matchedUsername').lean();
+    if (!dup) return null;
+    return { holder: _bankHolderLabel(dup), matchedUserId: dup.matchedUserId, matchedUsername: dup.matchedUsername || null };
+  } catch (e) {
+    logger.warn(`[multicuenta-banco] chequeo por movimiento falló (fail-open): ${e.message}`);
+    return null;
+  }
+}
+
+// Para un USUARIO: qué otras cuentas fueron fondeadas por las mismas identidades
+// bancarias que ya lo fondearon a él (movimientos matcheados a este usuario).
+// Devuelve { holders: [nombres], accounts: [{id, username}], count } o null si no hay.
+// Lo usan el fraud-check del panel, el aviso del modal de depósito y la carga manual.
+async function _bankMultiAccountForUser(userId, opts = {}) {
+  try {
+    const mine = await BankMovement.find({ matchedUserId: String(userId), matchStatus: { $in: BANK_IDENTITY_STATES } })
+      .sort({ createdAt: -1 }).limit(40).select('fromName fromCUIT fromCBU fromKey').lean();
+    if (!mine.length) return null;
+    const or = [];
+    const seen = new Set();
+    for (const m of mine) {
+      for (const c of _bankIdentityOr(m)) {
+        const k = JSON.stringify(c);
+        if (!seen.has(k)) { seen.add(k); or.push(c); }
+      }
+    }
+    if (!or.length) return null;
+    const others = await BankMovement.find({
+      $or: or,
+      matchedUserId: { $nin: [null, String(userId)] },
+      matchStatus: { $in: BANK_IDENTITY_STATES }
+    }).sort({ createdAt: -1 }).limit(200).select('fromName fromCUIT fromCBU matchedUserId matchedUsername').lean();
+    if (!others.length) return null;
+    const accMap = new Map();
+    const holders = new Set();
+    for (const o of others) {
+      if (!accMap.has(o.matchedUserId)) accMap.set(o.matchedUserId, { id: o.matchedUserId, username: o.matchedUsername || '?' });
+      holders.add(_bankHolderLabel(o));
+    }
+    let accounts = Array.from(accMap.values());
+    if (opts.withBlocked) {
+      try {
+        const us = await User.find({ id: { $in: accounts.map(a => a.id) } }).select('id username isBlocked').lean();
+        const byId = new Map(us.map(u => [u.id, u]));
+        accounts = accounts.map(a => { const u = byId.get(a.id); return u ? { id: u.id, username: u.username, isBlocked: !!u.isBlocked } : a; });
+      } catch (_) {}
+    }
+    return { holders: Array.from(holders), accounts, count: accounts.length };
+  } catch (e) {
+    logger.warn(`[multicuenta-banco] chequeo por usuario falló (fail-open): ${e.message}`);
+    return null;
+  }
+}
+
+// Señal DÉBIL (lectura de IA): el titular de origen que leyó la IA en el último
+// comprobante del usuario coincide con una identidad bancaria que ya fondeó a OTRA
+// cuenta. Sólo para AVISAR "posible" al agente en la carga manual — nunca decide sola
+// (la IA puede leer mal un nombre). Devuelve { holder, matchedUsername } o null.
+async function _bankMultiAccountFromComprobante(userId, hours = 6) {
+  try {
+    const since = new Date(Date.now() - hours * 3600 * 1000);
+    const comps = await Comprobante.find({ userId: String(userId), createdAt: { $gte: since }, originHolder: { $nin: [null, ''] } })
+      .sort({ createdAt: -1 }).limit(3).select('originHolder').lean();
+    for (const c of comps) {
+      const key = _bankFromKey(c.originHolder);
+      if (!key) continue;
+      const dup = await BankMovement.findOne({ fromKey: key, matchedUserId: { $nin: [null, String(userId)] }, matchStatus: { $in: BANK_IDENTITY_STATES } })
+        .sort({ createdAt: -1 }).select('fromName matchedUsername').lean();
+      if (dup) return { holder: c.originHolder, matchedUsername: dup.matchedUsername || '?' };
+    }
+    return null;
+  } catch (e) {
+    logger.warn(`[multicuenta-banco] chequeo por comprobante falló (fail-open): ${e.message}`);
+    return null;
+  }
+}
+
 // ¿El estado del movimiento cuenta como acreditado?
 function _statusAccredited(status, cfg) {
   const list = (cfg.acceptStatuses || ['done']).map(s => String(s).toLowerCase());
@@ -2483,9 +2610,14 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     // está en juego (app instalada + promo vigente y prendida) para no sumar
     // llamadas a JUGAYGANA en el resto de las cargas. Best-effort: si la
     // lectura falla, preBalance queda null y el bono sale como siempre.
+    // #152 ANTI-MULTICUENTA por IDENTIDAD BANCARIA: si el titular de ORIGEN de esta
+    // transferencia ya fondeó a OTRA cuenta nuestra, es la misma persona con otra
+    // cuenta. La carga entra igual (es su plata) pero SIN bonos automáticos (app
+    // 100%/20% y lote) — el bono se cobra una vez por persona real. Fail-open.
+    const _dupBank = await _findBankMultiAccount(movement, user.id);
     let preBalance = null;
     try {
-      if (_rouletteHasAppInstalled(user)) {
+      if (!_dupBank && _rouletteHasAppInstalled(user)) {
         const _bonusCfg = await getHgcashAppBonusConfig();
         if (_bonusCfg.allEnabled && Date.now() <= HGCASH_APP_BONUS_20_UNTIL.getTime()) {
           // UN solo intento (sin retry): esta lectura es best-effort y corre en el
@@ -2535,11 +2667,22 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     // Corre DESPUÉS de acreditar la carga y ANTES de leer el balance, así el
     // saldo del mensaje ya incluye el bono. Nunca tira: si falla, avisa al
     // agente y la carga sigue como si no hubiera bono.
-    let appBonus = await _hgcashApplyAppBonus(user, Number(amount), preBalance);
+    // #152: con multicuenta confirmada por banco NO se llama al bono de app (no
+    // consume el cupón install-100: le queda por si es un falso positivo que el
+    // agente resuelve a mano) ni al lote, y no se manda el aviso "instalá la app".
+    let appBonus;
+    if (_dupBank) {
+      appBonus = { applied: false, amount: 0, kind: null, hasApp: _rouletteHasAppInstalled(user), noticeOk: false, skippedForBalance: false, preBalance: null, cfg: HGCASH_APP_BONUS_DEFAULTS, skippedForBank: true };
+      await _emitAdminOnlyChatNote(user.id, user.username,
+        `🚨 MULTICUENTA CONFIRMADA POR BANCO: la transferencia viene de ${_dupBank.holder}, que YA cargó en la cuenta @${_dupBank.matchedUsername || _dupBank.matchedUserId}. La carga se acredita SIN bonos automáticos (ni 100% primera carga, ni 20%, ni lote). Verificá y bloqueá si corresponde.`);
+      logger.warn(`[multicuenta-banco] hgcash: ${user.username} fondeado por "${_dupBank.holder}" (ya usado por ${_dupBank.matchedUsername}) → carga sin bonos automáticos`);
+    } else {
+      appBonus = await _hgcashApplyAppBonus(user, Number(amount), preBalance);
+    }
     // #149 BONO DE LOTE AUTOMÁTICO en la carga hgcash: solo si NO hubo bono de app
     // (nunca se suman entre sí). Reserva atómica → crédito → settle; si falla, se
     // libera y el agente lo ve en una nota.
-    if (!appBonus.applied) {
+    if (!appBonus.applied && !_dupBank) {
       const _lcH = await claimAutoPromoPercent(user, 'auto-hgcash');
       if (_lcH.claimed) {
         const _lcAmt = Math.round(Number(amount) * _lcH.pct / 100);
@@ -2656,9 +2799,11 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       ? (appBonus.kind === 'lote'
         ? ` ⚡ + BONO DE LOTE AUTOMÁTICO +${appBonus.pct}% (${appBonus.loteLabel}): $${Number(appBonus.amount).toLocaleString('es-AR')}. ${appBonus.loteScope === 'first' ? 'El bono quedó USADO.' : 'El bono sigue vigente para sus próximas cargas.'} No hay que marcar nada.`
         : ` 🎁 + BONO AUTOMÁTICO ${appBonus.pct}% ${appBonus.kind === 'install_100' ? '(primera carga, app instalada)' : '(app instalada)'}: $${Number(appBonus.amount).toLocaleString('es-AR')}.`)
-      : (appBonus.skippedForBalance
-        ? ` ℹ️ SIN bono ${appBonus.cfg.allPct}%: el cliente ya tenía $${Number(appBonus.preBalance).toLocaleString('es-AR')} de saldo antes de la carga (más de $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR')}).`
-        : '');
+      : (appBonus.skippedForBank
+        ? ` 🚨 SIN bonos automáticos: multicuenta confirmada por banco (${_dupBank.holder} ya cargó en @${_dupBank.matchedUsername || '?'}).`
+        : (appBonus.skippedForBalance
+          ? ` ℹ️ SIN bono ${appBonus.cfg.allPct}%: el cliente ya tenía $${Number(appBonus.preBalance).toLocaleString('es-AR')} de saldo antes de la carga (más de $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR')}).`
+          : ''));
     await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
     _emitHgcashUpdate('cargado');
     logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
@@ -3190,6 +3335,7 @@ app.post('/api/hgcash/webhook', async (req, res) => {
       currency: p.currency || null, direction: p.direction || null,
       status: p.status || null, type: p.type || null, accountId: p.accountId || null,
       fromName: p.fromName || null, fromCBU: p.fromCBU || null, fromCUIT: p.fromCUIT || null,
+      fromKey: _bankFromKey(p.fromName), // #152 identidad bancaria normalizada
       toName: p.toName || null, toCBU: p.toCBU || null, toCUIT: p.toCUIT || null,
       date: p.date ? new Date(p.date) : null, timezone: p.timezone || null,
       topic: p.topic || null, eventType: p.eventType || null, raw: p
@@ -9089,7 +9235,15 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // franja horaria incluidos), se reserva ATÓMICO, se acredita como
       // individual_bonus y, si el crédito falla, se libera para la próxima.
       // Si el agente ya cargó un bonus a mano, va el suyo (el lote NO se suma).
-      if (!bonusRequested) {
+      // #152: con multicuenta confirmada por banco (otra cuenta fondeada por el mismo
+      // titular que ya fondeó a ésta) el lote automático NO se aplica; el bonus
+      // que el agente cargue a mano sí va (es su decisión — el modal se lo avisa).
+      const _dupBankManual = !bonusRequested ? await _bankMultiAccountForUser(user.id) : null;
+      if (_dupBankManual) {
+        await _emitAdminOnlyChatNote(user.id, user.username,
+          `🚨 MULTICUENTA CONFIRMADA POR BANCO: ${_dupBankManual.holders.join(' / ')} también cargó en ${_dupBankManual.accounts.map(a => '@' + a.username).join(', ')}. Esta carga manual entró SIN bono de lote automático. Verificá y bloqueá si corresponde.`);
+      }
+      if (!bonusRequested && !_dupBankManual) {
         const _lc = await claimAutoPromoPercent(user, req.user.username || 'agente');
         if (_lc.claimed) {
           const _loteAmt = Math.round(parseFloat(amount) * _lc.pct / 100);
@@ -10992,6 +11146,24 @@ async function initializeData() {
     logger.error(`[startup] usernameLower backfill falló (el login sigue con el fallback por regex): ${e.message}`);
   }
 
+  // #152 Backfill de BankMovement.fromKey (identidad bancaria normalizada) en los
+  // movimientos viejos. Idempotente y barato cuando no queda nada (índice en fromKey).
+  // Sin esto, el candado anti-multicuenta no vería las cargas anteriores al deploy.
+  try {
+    const cur = BankMovement.find({ fromKey: null, fromName: { $nin: [null, ''] } }).select('_id fromName').lean().cursor();
+    let ops = [], filled = 0;
+    for await (const m of cur) {
+      const key = _bankFromKey(m.fromName);
+      if (!key) continue;
+      ops.push({ updateOne: { filter: { _id: m._id }, update: { $set: { fromKey: key } } } });
+      if (ops.length >= 500) { await BankMovement.bulkWrite(ops, { ordered: false }); filled += ops.length; ops = []; }
+    }
+    if (ops.length) { await BankMovement.bulkWrite(ops, { ordered: false }); filled += ops.length; }
+    if (filled > 0) logger.info(`[startup] BankMovement.fromKey backfill: ${filled} movimientos`);
+  } catch (e) {
+    logger.error(`[startup] backfill de fromKey falló (el candado multicuenta sólo verá movimientos nuevos): ${e.message}`);
+  }
+
   // One-shot: backfill de phoneKey (clave normalizada) en los usuarios con teléfono YA
   // verificado, para que el chequeo de unicidad por phoneKey funcione contra los existentes.
   try {
@@ -11836,13 +12008,20 @@ app.get('/api/admin/users/:userId/app-bonus-hint', authMiddleware, depositorMidd
         firstAvailable = await _installBonusDeviceFree(user);
       }
     }
+    // #152 multicuenta por banco: confirmada (movimientos ya matcheados a este usuario
+    // comparten titular con otra cuenta) o posible (el titular que leyó la IA en su
+    // último comprobante ya fondeó a otra cuenta — lectura de IA, verificar a ojo).
+    const bankDup = await _bankMultiAccountForUser(user.id);
+    const bankPossible = bankDup ? null : await _bankMultiAccountFromComprobante(user.id);
     res.json({
       hasApp,
       firstAvailable,
       firstPct: cfg.firstPct,
       allActive: hasApp && promo20Alive,
       allPct: cfg.allPct,
-      firstUsedBy: user.installBonus100UsedBy || null
+      firstUsedBy: user.installBonus100UsedBy || null,
+      bankDup: bankDup ? { holders: bankDup.holders, accounts: bankDup.accounts.map(a => a.username) } : null,
+      bankPossible
     });
   } catch (error) {
     logger.error(`app-bonus-hint: ${error.message}`);
@@ -14415,6 +14594,13 @@ app.get('/api/admin/users/:userId/fraud-check', authMiddleware, adminMiddleware,
         role: 'user', id: { $ne: user.id }, registrationIp: user.registrationIp
       }).select('id username isBlocked').limit(50).lean();
       if (others.length) reasons.push({ type: 'ip', label: 'la misma IP de registro', strong: false, count: others.length, accounts: pick(others) });
+    }
+
+    // #152 Cuenta bancaria de origen compartida — señal CONFIRMADA por el banco
+    // (la misma persona real fondeó a este usuario y a otras cuentas).
+    const bank = await _bankMultiAccountForUser(user.id, { withBlocked: true });
+    if (bank) {
+      reasons.push({ type: 'bank', label: `la misma cuenta bancaria de origen (${bank.holders.join(' / ')}) — confirmado por el banco`, strong: true, count: bank.count, accounts: bank.accounts.slice(0, SAMPLE), holders: bank.holders });
     }
 
     const strongHit = reasons.some(r => r.strong && r.count >= 1);

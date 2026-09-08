@@ -8,6 +8,68 @@
 
 ## Sesión 2026-09-08
 
+### 152. 🏦 ANTI-MULTICUENTA por IDENTIDAD BANCARIA: el titular de origen que ya fondeó OTRA cuenta no recibe bonos automáticos en la carga hgcash + aviso interno + señal en fraud-check y en el modal de depósito
+- **Pedido del owner:** mucha gente se hace multicuentas por los beneficios a
+  gente nueva. Quería que, cuando el titular de la cuenta bancaria de origen ya
+  cargó con otra cuenta vieja, salga un aviso INTERNO ("ese titular es usado por
+  @x") y NO se dé el bono automático de la carga hgcash. Referencia: captura de
+  1girox ("🚨 MULTICUENTA CONFIRMADA POR BANCO") = entrada #259 del repo hermano
+  `~/Documents/PAUTANUEVAsantino`, portada acá adaptando a JUGAYGANA.
+- **Decisión de diseño (acordada):** la fuente es el BANCO (titular del
+  movimiento de hgcash), no la IA. IP/dispositivo/teléfono se esquivan; la cuenta
+  bancaria ya validó la identidad. La multicuenta no se puede impedir, pero se la
+  hace inútil: los bonos automáticos se dan una vez por PERSONA REAL. El titular
+  que lee la IA del comprobante sólo sirve como aviso "posible" (puede leer mal).
+- **Modelo `BankMovement`:** campo nuevo `fromKey` (= `_normName(fromName)`,
+  mayúsculas sin acentos/puntuación; null si <8 chars) con índice; `fromCUIT`
+  indexado; índice `{matchedUserId, matchStatus}`. Lo setea el webhook al insertar
+  y un **backfill idempotente en cada arranque** (`initializeData`, cursor +
+  bulkWrite de a 500) rellena los movimientos viejos — sin eso el candado no
+  vería las cargas anteriores al deploy.
+- **Helpers (server.js, junto a `_nameMatch`):** `BANK_IDENTITY_STATES`
+  (auto_charged/manual_charged/shadow_matched/needs_review/duplicate = "ese
+  titular YA fondeó esa cuenta"), `_bankIdentityOr` (fromCUIT > fromCBU > fromKey;
+  hgcash en la práctica sólo manda fromName), `_findBankMultiAccount(movement,
+  userId)` (por movimiento), `_bankMultiAccountForUser(userId)` (por usuario: las
+  identidades que ya lo fondearon vs qué otras cuentas fondearon esas mismas
+  identidades) y `_bankMultiAccountFromComprobante(userId)` (señal débil por IA,
+  últimas 6 h). **Todos fail-open**: ante error de DB devuelven null (nunca
+  frenan una carga ni sacan un bono por un error).
+- **Carga automática (`hgcashAutoCarga`):** `_dupBank` se calcula ANTES de leer el
+  saldo previo (si hay dup, no se lee: el 20% no está en juego). La carga entra
+  igual. Si hay dup: NO se llama a `_hgcashApplyAppBonus` (el cupón install-100
+  **no se consume** — le queda por si es un falso positivo que el agente resuelve
+  a mano), NO se reclama el lote, NO se manda `/sys_deposit_no_app_20` (no se le
+  promete nada), y va la nota interna "🚨 MULTICUENTA CONFIRMADA POR BANCO: la
+  transferencia viene de X, que YA cargó en @y. La carga se acredita SIN bonos
+  automáticos… Verificá y bloqueá si corresponde." + `appBonus.skippedForBank` en
+  la nota final de la carga. Log `[multicuenta-banco]`.
+- **Carga manual (`/api/admin/deposit`):** el bonus que pone el agente a mano SÍ
+  va (es su decisión, el modal le avisa); el **lote automático** (#149) NO se
+  aplica si `_bankMultiAccountForUser` confirma multicuenta (+ nota interna).
+  ⚠️ Límite: en la PRIMERA carga manual de una multicuenta el movimiento todavía
+  no está matcheado a ese usuario (lo consume `hgcashConsumeOnManualDeposit`
+  después) → la señal fuerte no salta; para eso está la señal "posible" del modal.
+- **Panel:** `GET …/fraud-check` suma la razón `type:'bank'` (strong, label "la
+  misma cuenta bancaria de origen (Titular) — confirmado por el banco", con
+  `holders`); el banner ⚠️ POSIBLE MULTICUENTA la pinta con 🏦.
+  `GET …/app-bonus-hint` devuelve `bankDup` {holders, accounts} (confirmada) o
+  `bankPossible` {holder, matchedUsername} (IA); el modal Depositar muestra un
+  bloque ROJO "NO aplicar bonos automáticos" o NARANJA "posible, compará a ojo"
+  arriba del aviso de bono de siempre. **admin-sw v35 → v36.**
+- **Bordes aceptados:** homónimos exactos o pareja que comparte cuenta pierden
+  el bono automático (la carga entra; el agente lo da a mano si corresponde).
+  Sólo cubre cargas que pasaron por hgcash (las manuales viejas sin movimiento no
+  dejan titular). La ruleta diaria no depende de la carga → no se toca.
+- **Validado:** `node --check` OK (server.js, BankMovement.js, admin.js,
+  admin-sw.js). Sin rutas nuevas (sin riesgo TDZ). **Redeploy** (back + panel).
+  **PROBAR:** (1) cuenta A carga por hgcash con titular T → bono normal; cuenta B
+  (nueva, con app) carga por hgcash con el MISMO titular T → carga entra, nota
+  🚨 en el chat, sin 100%/20%/lote, sin aviso "instalá la app"; (2) abrir el chat
+  de B → banner POSIBLE MULTICUENTA con 🏦 y la cuenta A; (3) abrir Depositar en
+  B → bloque rojo; (4) log `[startup] BankMovement.fromKey backfill: N` en el
+  primer arranque.
+
 ### 151. 🔴 INCIDENTE: DOBLE ACREDITACIÓN en JUGAYGANA por reintento a ciegas (reembolso $18.808 ×2) — fix: verificar por saldo, nunca reenviar plata sin confirmar
 - **Reporte del owner (capturas):** argenJesi081, 07/09 00:02:29 y 00:02:37 en
   JUGAYGANA: DOS `INDIVIDUAL_BONUS` de $18.808 (8 s de diferencia). En

@@ -97,7 +97,9 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
 ### Plata / banco automático (hgcash)
 - **BankMovement** — cada movimiento que hgcash notifica por webhook. `matchStatus`:
   pending→claiming→shadow_matched|auto_charged|manual_charged|needs_review|duplicate|
-  error|ignored. Dedupe por `movementId` único.
+  error|ignored. Dedupe por `movementId` único. **`fromKey`** (#152) = titular de
+  origen normalizado (`_normName`), indexado; es la IDENTIDAD BANCARIA del candado
+  anti-multicuenta (backfill idempotente en cada arranque).
 - **Comprobante** — cada imagen que la IA (Claude vision, `claude-opus-5` con salida
   estructurada json_schema desde #126; configurable desde el panel → "🔐 Config
   privada" = `Config['aiconfig']`, prioridad panel > env > default, #128) clasificó como
@@ -297,6 +299,15 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   (`HGCASH_APP_BONUS_SKIP_BALANCE_ARS`; se le avisa con
   `/sys_deposit_no_bonus_saldo`, editable — vaciarlo lo apaga; si la lectura de
   saldo falla, el bono sale igual, fail-open). El 100% NO tiene esta condición.
+  **Anti-multicuenta por BANCO** (#152): antes de los bonos, `_findBankMultiAccount`
+  busca si el titular de origen (fromCUIT > fromCBU > fromKey) ya fondeó a OTRA
+  cuenta (estados `BANK_IDENTITY_STATES`). Si sí: la carga entra igual, pero SIN
+  bono de app (el cupón install-100 NO se consume), SIN lote y SIN aviso
+  "instalá la app"; nota interna "🚨 MULTICUENTA CONFIRMADA POR BANCO". Fail-open.
+  La carga MANUAL sólo bloquea el lote automático (`_bankMultiAccountForUser`); el
+  bonus del agente es su decisión, y el modal Depositar (`app-bonus-hint`:
+  `bankDup` confirmada / `bankPossible` por IA) se lo avisa. `fraud-check` suma la
+  razón `bank` (strong).
   **Fan-out** (#94): reenvía el webhook crudo+firma a autoreembolsos.com
   (`HGCASH_FANOUT_URL`, 'off' para apagar). ⚠️ **Guard anti-bucle** (#117,
   incidente 2026-08-20): NO se reenvía si el webhook ya trae `X-Forwarded-By`

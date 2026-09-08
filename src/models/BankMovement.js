@@ -30,7 +30,12 @@ const bankMovementSchema = new mongoose.Schema({
   // Partes
   fromName: { type: String, default: null },
   fromCBU: { type: String, default: null, index: true },
-  fromCUIT: { type: String, default: null },
+  fromCUIT: { type: String, default: null, index: true },
+  // #152 Identidad bancaria de ORIGEN normalizada (_normName del fromName: mayúsculas,
+  // sin acentos ni puntuación). Clave del candado anti-multicuenta: la misma persona
+  // real fondeando a dos cuentas nuestras. La setea el webhook al insertar y un
+  // backfill idempotente en cada arranque (initializeData) para los movimientos viejos.
+  fromKey: { type: String, default: null, index: true },
   toName: { type: String, default: null },
   toCBU: { type: String, default: null },
   toCUIT: { type: String, default: null },
@@ -74,5 +79,7 @@ const bankMovementSchema = new mongoose.Schema({
 
 // Búsqueda de candidatos para matchear con un comprobante.
 bankMovementSchema.index({ direction: 1, matchStatus: 1, amount: 1, createdAt: -1 });
+// #152 Multicuenta por banco: "¿qué movimientos ya matcheados tiene este usuario?"
+bankMovementSchema.index({ matchedUserId: 1, matchStatus: 1 });
 
 module.exports = mongoose.models['BankMovement'] || mongoose.model('BankMovement', bankMovementSchema);

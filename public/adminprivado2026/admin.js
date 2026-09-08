@@ -3110,6 +3110,18 @@ async function loadDepositAppBonusHint() {
         const h = await r.json();
         const base = 'border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px;line-height:1.5;';
         const tag = '<div style="font-weight:800;letter-spacing:.4px;margin-bottom:4px;">🔒 AVISO INTERNO — el cliente NO ve este mensaje</div>';
+        // #152 Multicuenta por BANCO: manda sobre cualquier bono automático.
+        let bankHtml = '';
+        if (h.bankDup) {
+            const accs = (h.bankDup.accounts || []).map(a => '@' + escapeHtml(a)).join(', ');
+            bankHtml = `<div style="margin-bottom:8px;padding:8px;border-radius:6px;background:rgba(220,53,69,.18);border:1px solid rgba(220,53,69,.7);color:#ffd6db;">` +
+                `🚨 <b>MULTICUENTA CONFIRMADA POR BANCO:</b> el titular <b>${escapeHtml((h.bankDup.holders || []).join(' / '))}</b> que fondea esta cuenta ya cargó en ${accs}. ` +
+                `<b>NO aplicar bonos automáticos</b> (100% primera carga / 20% / lote). Verificá y bloqueá si corresponde.</div>`;
+        } else if (h.bankPossible) {
+            bankHtml = `<div style="margin-bottom:8px;padding:8px;border-radius:6px;background:rgba(255,152,0,.15);border:1px solid rgba(255,152,0,.6);color:#ffe2b8;">` +
+                `⚠️ <b>POSIBLE multicuenta:</b> en el último comprobante la IA leyó como titular <b>${escapeHtml(h.bankPossible.holder)}</b>, que ya cargó en @${escapeHtml(h.bankPossible.matchedUsername)}. ` +
+                `Es lectura de IA: compará el comprobante a ojo antes de dar el bono.</div>`;
+        }
         if (h.firstAvailable) {
             el.style.cssText = base + 'background:rgba(212,175,55,.12);border:1px solid rgba(212,175,55,.55);color:#f0e6c8;';
             el.innerHTML = tag +
@@ -3127,6 +3139,7 @@ async function loadDepositAppBonusHint() {
             el.style.cssText = base + 'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.18);color:#bbb;';
             el.innerHTML = tag + '🚫 <b>SIN app instalada o sin notificaciones</b> → NO le corresponde bono automático.';
         }
+        if (bankHtml) el.innerHTML = tag + bankHtml + el.innerHTML.replace(tag, '');
         el.style.display = 'block';
     } catch (e) {
         // Best-effort: si falla, el modal funciona igual sin el aviso.
@@ -4364,7 +4377,7 @@ async function renderFraudBanner(userId) {
         if (userId !== activeConversationId) return;
         if (!data || !data.suspicious || !Array.isArray(data.reasons) || !data.reasons.length) return;
 
-        const iconFor = (t) => t === 'device' ? '📱' : (t === 'phone' ? '☎️' : '🌐');
+        const iconFor = (t) => t === 'device' ? '📱' : (t === 'phone' ? '☎️' : (t === 'bank' ? '🏦' : '🌐'));
         const rows = data.reasons.map(r => {
             const accs = Array.isArray(r.accounts) ? r.accounts : [];
             const names = accs.map(a => escapeHtml(a.username) + (a.isBlocked ? ' 🚫' : '')).join(', ');

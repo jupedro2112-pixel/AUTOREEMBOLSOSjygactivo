@@ -95,6 +95,10 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   puede sumar el % de un "Lote con regalo" vía `claimAutoPromoPercent` (reserva
   atómica en PromoBonus). Un flujo de carga nuevo tiene que llamarlo y hacer
   settle/revert; nunca sumar dos bonos automáticos entre sí.
+- **Anti-multicuenta por BANCO (#152):** el titular de origen del movimiento hgcash
+  (`BankMovement.fromKey`) es la identidad real. Un flujo de bono automático nuevo
+  ligado a una carga tiene que respetar `_findBankMultiAccount` /
+  `_bankMultiAccountForUser` (si hay dup → sin bono automático, la carga entra igual).
 - **Mensajes automáticos al usuario** son editables desde la sección COMANDOS
   (comandos `/sys_*`). Usar el helper `renderSystemCommand(name, fallback, vars)` para
   cualquier mensaje automático nuevo.

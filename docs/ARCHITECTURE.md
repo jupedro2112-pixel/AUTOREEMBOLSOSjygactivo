@@ -400,7 +400,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   auth, socket, chat, ui, refunds, fire, roulette, reviews, promobonus, notifications,
   withdraw, installbonus, notifsurvey, publisherwelcome, campaign, meta-pixel, apptest,
   app). El orden real de carga está en index.html (el comentario de app.js está viejo).
-- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v53) — FCM + caché:
+- **SW único**: `firebase-messaging-sw.js` (CACHE_VERSION v61) — FCM + caché:
   `/js/` y `/css/` stale-while-revalidate (deploy llega en la SIGUIENTE carga sin
   bumpear versión), `/app.js` y manifest network-first, API/socket nunca. `user-sw.js`
   es un stub de auto-desregistro (no volver a registrarlo).
@@ -436,6 +436,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `Config['canalInformativoUrl']` y `communityConfig.channelUrl` quedaron como
   fallback legacy y ya NO se editan desde el panel; el único campo que sigue ahí
   es el **soporte**, que es general para todos los equipos.
+- **Soporte del LOGIN** (#153): los botones "Soporte WhatsApp/Telegram" de la pantalla
+  de login y el 💬 de la barra (`#topbarSupportBtn`) leen el endpoint PÚBLICO
+  `GET /api/config/soporte-vip` (`Config['soporteVipTelegram']`, card "📲 Soporte del
+  LOGIN" en panel→COMANDOS). Vacío → cae al Soporte general (`communityConfig.supportUrl`)
+  y al WhatsApp general de Equipos. Sin nada → el botón avisa (no hay links fijos).
 - **FCM**: todo el manejo real (getToken 3 tiers, refresh, register-token) está en el
   INLINE de index.html; `window.sendFcmTokenAfterLogin` del inline pisa a propósito la
   de notifications.js. Firebase config duplicada en index.html Y en el SW (cambiar

@@ -4593,7 +4593,6 @@ function switchSection(section) {
             showToast('No tienes permiso para acceder a esta sección', 'error');
             return;
         }
-        loadSoporteVip();
         if (!smsAccessGranted) {
             showSmsPasswordModal();
         } else {
@@ -5826,6 +5825,8 @@ async function loadCBUConfig() {
     // Cargar también la URL del Canal Informativo
     // Cargar la config de la Comunidad (Telegram)
     loadCommunityConfig();
+    // #153 Soporte del LOGIN (WhatsApp + Telegram) — card movida acá desde SMS Masivo
+    loadSoporteVip();
     // Cargar la config del banco automático (hgcash)
     loadHgcashConfig();
     // Cargar los rangos de reembolso (solo admin general)

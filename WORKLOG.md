@@ -4,7 +4,45 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-08**
+> **Última actualización: 2026-09-09**
+
+## Sesión 2026-09-09
+
+### 153. Soporte del LOGIN: WhatsApp mandaba a un link hardcodeado de otro proyecto y Telegram decía "no disponible" — fallbacks a COMANDOS + card movida a COMANDOS + 💬 de la barra dinámico
+- **Reporte del owner (capturas):** en la pantalla de login "Soporte WhatsApp"
+  abría un WhatsApp desconocido y "Soporte Telegram" mostraba "no disponible por
+  ahora", aunque el soporte ya estaba cargado en COMANDOS. Adentro de la app las
+  tarjetas Canal/Soporte sí funcionaban.
+- **Causa:** son DOS circuitos. Los botones del login leen
+  `Config['soporteVipTelegram']` (`GET /api/config/soporte-vip`, público), que se
+  editaba en una card al FINAL de la sección **SMS Masivo** ("Soporte del login"),
+  no en COMANDOS → nunca se cargó. Sin URL: Telegram → toast "no disponible";
+  WhatsApp → fallback **hardcodeado** `https://wa.link/metawin2026` en `app.js`
+  (resto de otro proyecto). El 💬 de la barra superior tenía ese mismo link fijo
+  en `index.html`. Las tarjetas de adentro salen de COMANDOS (Equipos + Soporte
+  general) por `/api/config/community`, por eso sí andaban.
+- **Fix (3 cambios):**
+  1. `GET /api/config/soporte-vip`: si la card del login está vacía, **cae a lo de
+     COMANDOS**: Telegram → `communityConfig.supportUrl` (la tarjeta verde
+     "Soporte 24/7"); WhatsApp → `teams.general.whatsapp` (link wa.me con el
+     mensaje fijo `SOPORTE_WA_MENSAJE`). Devuelve `source:'community'|'teams'`
+     cuando usa el fallback.
+  2. PWA: `app.js` ya NO tiene el `wa.link` — sin URL el botón de WhatsApp avisa
+     "Soporte de WhatsApp no disponible por ahora" (igual que Telegram). El 💬 de
+     la barra pasa a `#topbarSupportBtn`, oculto hasta tener URL (se consulta el
+     endpoint público una vez al cargar). **`?v=61` + `CACHE_VERSION='v61'`**
+     (HTML + JS juntos).
+  3. Panel: la card pasa a **COMANDOS**, debajo de "Soporte de Telegram
+     (general)", como "📲 Soporte del LOGIN (WhatsApp + Telegram)" con la
+     explicación de los fallbacks; `loadCommands()` llama `loadSoporteVip()` (se
+     quitó de la sección SMS). **admin-sw v36 → v37.**
+- **Nota:** el mensaje fijo del WhatsApp sigue diciendo "Vengo de VIPCARGAS"
+  (marketing interno sin cambiar, criterio de #124).
+- **Validado:** `node --check` OK (server.js, app.js, admin.js, ambos SW); HTML
+  del panel 692/692 divs, 26/26 sections; 0 `wa.link` en la PWA. Redeploy (back
+  + PWA + panel). **PROBAR:** login sin nada en la card nueva → WhatsApp abre el
+  general de Equipos y Telegram el soporte general; con la card cargada, gana la
+  card; adentro, el 💬 de la barra abre el mismo WhatsApp.
 
 ## Sesión 2026-09-08
 

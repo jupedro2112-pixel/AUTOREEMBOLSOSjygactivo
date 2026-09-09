@@ -116,12 +116,27 @@ function setupEventListeners() {
                 return r.ok ? await r.json() : null;
             } catch (e) { return null; }
         }
+        // #153: sin URL cargada en el panel, el botón AVISA (antes caía a un link
+        // hardcodeado de otro proyecto que mandaba a un WhatsApp desconocido).
         const helpWhatsappBtn = document.getElementById('helpWhatsappBtn');
         if (helpWhatsappBtn) helpWhatsappBtn.addEventListener('click', async () => {
             const d = await _vipFetchSoporte();
-            const url = (d && d.whatsapp && d.whatsapp.url) ? d.whatsapp.url : 'https://wa.link/metawin2026';
-            window.open(url, '_blank');
+            const url = (d && d.whatsapp && d.whatsapp.url) ? d.whatsapp.url : '';
+            if (url) {
+                window.open(url, '_blank');
+            } else {
+                VIP.ui.showToast('Soporte de WhatsApp no disponible por ahora', 'info');
+            }
         });
+        // Botón 💬 de la barra superior (ya adentro): mismo WhatsApp de soporte.
+        // Oculto hasta tener URL; endpoint público, se consulta una vez al cargar.
+        const topbarSupportBtn = document.getElementById('topbarSupportBtn');
+        if (topbarSupportBtn) {
+            _vipFetchSoporte().then(d => {
+                const url = (d && d.whatsapp && d.whatsapp.url) ? d.whatsapp.url : '';
+                if (url) { topbarSupportBtn.href = url; topbarSupportBtn.style.display = ''; }
+            });
+        }
         const helpTelegramBtn = document.getElementById('helpTelegramBtn');
         if (helpTelegramBtn) helpTelegramBtn.addEventListener('click', async () => {
             const d = await _vipFetchSoporte();

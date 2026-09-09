@@ -19617,8 +19617,22 @@ app.get('/api/config/soporte-vip', async (req, res) => {
     const c = (await getConfig('soporteVipTelegram')) || {};
     // Soporta el formato viejo {handle,url} (solo Telegram) y el nuevo
     // {telegram,whatsapp}, así no se pierde la config previa tras el deploy.
-    const telegram = c.telegram || { handle: c.handle || '', url: c.url || '' };
-    const whatsapp = c.whatsapp || { number: '', url: '' };
+    let telegram = c.telegram || { handle: c.handle || '', url: c.url || '' };
+    let whatsapp = c.whatsapp || { number: '', url: '' };
+    // #153 FALLBACKS a lo que ya está cargado en COMANDOS, para que el login no
+    // quede "sin soporte" cuando la card del login está vacía:
+    //  · Telegram → el Soporte general de la app (communityConfig.supportUrl,
+    //    la misma tarjeta verde "Soporte 24/7" de adentro).
+    //  · WhatsApp → el "WhatsApp general" de 👥 Equipos.
+    // Ya NO hay link hardcodeado en el front: sin nada cargado, el botón avisa.
+    if (!telegram.url) {
+      const community = (await getConfig('communityConfig')) || {};
+      if (community.supportUrl) telegram = { handle: '', url: community.supportUrl, source: 'community' };
+    }
+    if (!whatsapp.url) {
+      const teamsCfg = await getTeamsConfig();
+      if (teamsCfg.general.whatsapp) whatsapp = { number: teamsCfg.general.whatsapp, url: buildWhatsappUrl(teamsCfg.general.whatsapp, SOPORTE_WA_MENSAJE), source: 'teams' };
+    }
     res.json({
       telegram: telegram,
       whatsapp: whatsapp,

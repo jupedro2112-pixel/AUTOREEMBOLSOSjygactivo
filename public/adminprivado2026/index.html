@@ -592,6 +592,34 @@
                                 <span class="icon icon-save"></span> Guardar Soporte
                             </button>
                         </div>
+                        <!-- #153 Soporte del LOGIN (WhatsApp + Telegram): los dos botones de
+                             arriba de la pantalla de login y el 💬 de la barra superior.
+                             Antes vivía al final de SMS Masivo (nadie lo encontraba). -->
+                        <div class="panel-subheader" style="margin-top: 24px;">
+                            <h3>📲 Soporte del LOGIN (WhatsApp + Telegram)</h3>
+                        </div>
+                        <div class="cbu-form">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Alimenta los botones <b>"Soporte WhatsApp"</b> y <b>"Soporte Telegram"</b> de la pantalla de
+                                login (antes de entrar) y el 💬 de la barra superior.<br>
+                                Si dejás un campo vacío, se usa lo que ya está cargado: el Telegram cae al
+                                <b>Soporte de Telegram (general)</b> de arriba y el WhatsApp al <b>WhatsApp general</b> de 👥 Equipos.
+                                Sin nada cargado, el botón avisa "no disponible".
+                            </p>
+                            <div class="form-group">
+                                <label>WhatsApp (número con código de país):</label>
+                                <input type="text" id="soporteWhatsappNumber" placeholder="5491122334455" style="width:100%;">
+                                <small style="color:#aaa;font-size:11px;">Solo números, con código de país y sin signos. Ej: +54 9 11 2233-4455 → 5491122334455. El link abre WhatsApp con un mensaje de soporte ya escrito.</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Telegram (usuario con @):</label>
+                                <input type="text" id="soporteTelegramHandle" placeholder="@soportevip" style="width:100%;">
+                                <small style="color:#aaa;font-size:11px;">Poné el @ del usuario o canal, no el link.</small>
+                            </div>
+                            <button class="btn-primary" onclick="saveSoporteVip()">
+                                <span class="icon icon-save"></span> Guardar soporte del login
+                            </button>
+                        </div>
                         <!-- Rangos de reembolso bronce/plata/oro (solo admin general).
                              Reemplaza a los % fijos diario/semanal/mensual (2026-07-28). -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="refundTiersHeader">
@@ -2692,26 +2720,6 @@
 
                 </div>
 
-                <!-- Soporte del login (WhatsApp + Telegram) — alimenta los dos
-                     botones de soporte de la pantalla de login. -->
-                <div class="panel-subheader" style="margin-top:24px;">
-                    <h3>💬 Soporte del login (WhatsApp + Telegram)</h3>
-                </div>
-                <div class="cbu-form">
-                    <div class="form-group">
-                        <label>WhatsApp (número con código de país):</label>
-                        <input type="text" id="soporteWhatsappNumber" placeholder="5491122334455" style="width:100%;">
-                        <small style="color:#aaa;font-size:11px;">Solo números, con código de país y sin signos. Ej: +54 9 11 2233-4455 → 5491122334455. El link abre WhatsApp con el mensaje: "Vengo de VIPCARGAS necesito ayuda".</small>
-                    </div>
-                    <div class="form-group">
-                        <label>Telegram (usuario con @):</label>
-                        <input type="text" id="soporteTelegramHandle" placeholder="@soportevip" style="width:100%;">
-                        <small style="color:#aaa;font-size:11px;">Poné el @ del usuario o canal, no el link.</small>
-                    </div>
-                    <button class="btn-primary" onclick="saveSoporteVip()">
-                        <span class="icon icon-save"></span> Guardar soporte
-                    </button>
-                </div>
             </section>
 
             <!-- ================================================== -->

@@ -8,6 +8,12 @@
 
 ## Sesión 2026-09-09
 
+> **Deploy a EB hecho por el owner el 2026-09-09 (~18:00 UTC)** con #151 + #152 + #153.
+> Verificado desde afuera: `/api/health` ok, PWA `?v=61` + SW v61, admin-sw v37,
+> `/api/config/soporte-vip` ya cae a COMANDOS (`source:'community'` / `'teams'`).
+> Pendiente de PROBAR en vivo: alertas 🛑 VERIFICAR (#151), candado multicuenta por
+> banco (#152, mirar `[startup] BankMovement.fromKey backfill` en el log del arranque).
+
 ### 153. Soporte del LOGIN: WhatsApp mandaba a un link hardcodeado de otro proyecto y Telegram decía "no disponible" — fallbacks a COMANDOS + card movida a COMANDOS + 💬 de la barra dinámico
 - **Reporte del owner (capturas):** en la pantalla de login "Soporte WhatsApp"
   abría un WhatsApp desconocido y "Soporte Telegram" mostraba "no disponible por

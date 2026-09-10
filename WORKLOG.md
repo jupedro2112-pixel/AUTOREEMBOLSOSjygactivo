@@ -4,7 +4,39 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-09**
+> **Última actualización: 2026-09-10**
+
+## Sesión 2026-09-10
+
+### 154. ANÁLISIS (sin cambios de código): ola de alertas 🛑 VERIFICAR = corte de JUGAYGANA (HTTP 502), no bug nuestro — decisión del owner: dejar como está
+- **Reporte del owner:** decenas de "🛑 VERIFICAR PLATA en JUGAYGANA" en Telegram y
+  "a veces no deja acreditar manual". Pidió analizar los logs de EB (log1/log2,
+  las 2 instancias) antes de tocar nada.
+- **Evidencia (web.stdout.log del 10/09):** desde las **20:39 UTC** (17:39 ART) la
+  API de JUGAYGANA responde **HTTP 502 intermitente a TODO** (ShowUsers,
+  DepositMoney, login, royalty-statistics), en las dos instancias al mismo
+  segundo; antes de esa hora el día fue normal y en los 2 días previos hubo 1
+  solo 502 por instancia. Último deploy: 08/09 21:36 UTC → no correlaciona. El
+  error es `ERR_BAD_RESPONSE` (respuesta HTTP a través del túnel del proxy) →
+  **no es el proxy**. Seguía degradado al cierre del log (21:56 UTC).
+- **El 502 = la carga NO entró:** 45/45 verificaciones por saldo tras un 502
+  dieron "saldo sin cambios → NO se aplicó"; 0 "confirmado por saldo". Los 57
+  ambiguos son el caso en que el 502 llegó en el MISMO segundo también a la
+  lectura de saldo previa (JUGAYGANA caído del todo en ese instante) → sin saldo
+  previo el código no puede verificar y corta ambiguo al instante.
+- **Impacto:** 57 alertas, 46 pares usuario+monto, $638.488 marcados; por flujo:
+  33 hgcash, 16 manual, 4 ruleta, 2 retiros, 1 reembolso, 1 bonus. Los agentes
+  repiten igual y enseguida (RoyalOmar718: 2 manuales de $5.000 con 4 s de
+  diferencia, ambas ambiguas).
+- **Mejoras identificadas, NO hechas (owner 2026-09-10: "dejamos esto, es error
+  de JUGAYGANA"):** (1) no enviar plata si el saldo previo no se pudo leer
+  (habría convertido casi todos los ambiguos en error limpio reintentable);
+  (2) verificación por saldo más larga (~40 s); (3) verificador de fondo hasta
+  15 min que resuelva "entró / no entró" y rearme hgcash; (4) candado contra la
+  carga manual repetida al mismo usuario+monto tras un ambiguo. Retomar si el
+  patrón se repite. NO tratar 502 como "seguro no entró" en código (agujero del
+  incidente #151).
+- Logs analizados en el scratchpad de la sesión (no persisten en Tails).
 
 ## Sesión 2026-09-09
 

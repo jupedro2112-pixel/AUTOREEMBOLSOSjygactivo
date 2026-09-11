@@ -44,6 +44,14 @@ y también el código final de referencia (es el mismo producto, otra plataforma
       webhook con outKind y _emitHgcashUpdate(kind, movementId))
   ~/Documents/AUTOREEMBOLSOSjygactivo/public/adminprivado2026/{index.html,admin.js}  (buscá "#155")
 
+IMPORTANTE — OTRA PLATAFORMA: el repo gemelo opera sobre JUGAYGANA (cliente `jugaygana.js`,
+API de admin.agentesadmin.bet). ESTE repo opera sobre **1girox** (Partner API, cliente
+`src/services/giroxService.js`). Donde el gemelo dice JUGAYGANA, acá es 1girox: las operaciones
+de plata van por `girox.depositToUser/creditUserBalance/...` con su reference idempotente, los
+textos al agente y a Telegram dicen "1girox" (nunca "JUGAYGANA"), el cruce del cajero usa lo que
+devuelva la Partner API de 1girox, y el helper `errToString` es el de giroxService. No copiar
+literalmente nada que mencione JUGAYGANA, `jugaygana.js`, `parent_balance` o `ShowUsers`.
+
 Quiero EXACTAMENTE la misma funcionalidad acá, prolija e igual: sección "🏦 Banco" en el panel
 con bandeja en TIEMPO REAL (socket, sin recargar), asignar/vincular/no corresponde/reabrir,
 carga manual anclada con el bloque "¿De dónde viene la plata?" en el modal Depositar,
@@ -53,19 +61,21 @@ guardados, solo admin|withdrawer, Telegram), y el cierre diario (bankCloseServic
 endpoints, eventos de socket y funciones del panel que en el gemelo, para que las dos bases
 queden iguales y los próximos parches se puedan portar 1:1.
 
-REGLAS para portarlo a ESTE repo (girox ≠ JUGAYGANA):
+REGLAS para portarlo a ESTE repo (1girox ≠ JUGAYGANA):
 1. La acreditación asignada va SIEMPRE por nuestro hgcashAutoCarga (con `assign`), que acá
    además tiene: reference idempotente `_ref` (vip-hg-<coelsa|movementId>), ruleta de
    bienvenida/diaria %, bono de primera carga, lote automático y anti-multicuenta #259. Con
    `assign` se conserva TODO eso (es "la misma carga automática, elegida por un agente"). El
    comprobante pasa a ser OPCIONAL: definir `compId` y guardar cada Comprobante.updateOne con
    `if (compId)`. La función tiene que devolver { ok, reason|txId }.
-2. Cruce 2 del cierre (cajero de la plataforma): en el gemelo se alimenta con `parent_balance`
-   que devuelve JUGAYGANA en cada operación. Revisá giroxService: si la Partner API devuelve el
-   saldo del AGENTE/cajero en las respuestas de plata o tiene un endpoint de balance del
-   agente, implementá el hook `setCashierBalanceHook` igual (CashierSnapshot con opAmount con
-   signo). Si NO existe esa info, dejá el cruce en `sin_datos` (el cierre sigue funcionando con
-   los cruces 1 y 3) y anotalo en el WORKLOG como pendiente.
+2. Cruce 2 del cierre (cajero de la plataforma = cuenta agente de 1girox): en el gemelo se
+   alimenta con `parent_balance` que devuelve JUGAYGANA en cada operación. Revisá
+   giroxService: si la Partner API de 1girox devuelve el saldo del AGENTE/cajero en las
+   respuestas de plata o tiene un endpoint de balance del agente, implementá el hook
+   `setCashierBalanceHook` igual en giroxService (CashierSnapshot con opAmount con signo).
+   Si NO existe esa info, dejá el cruce en `sin_datos` (el cierre sigue funcionando con los
+   cruces 1 y 3) y anotalo en el WORKLOG como pendiente. En los tiles y en el Telegram del
+   cierre el rótulo es "Cajero 1girox", no "Cajero JUGAYGANA".
 3. Nada de rutas nuevas antes del `const authMiddleware` (TDZ): el bloque va justo antes de
    "PAGOS AUTOMÁTICOS (retiros)", como en el gemelo. Reusar resolveHgcashAccountId,
    hgcashPay.createCashOut/lookupAlias/getAccounts/getTransactionStatus, telegramAlert,

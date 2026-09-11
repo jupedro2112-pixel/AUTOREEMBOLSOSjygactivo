@@ -8,6 +8,42 @@
 
 ## Sesión 2026-09-11
 
+### 157. Banco: archivo masivo de las ~30 mil pendientes viejas + cierre 24 h (gracia, arrastre, recálculo de D-2, hora configurable)
+- **Owner:** (1) la bandeja muestra "más de 30 mil" pendientes de días anteriores
+  que no se pueden borrar (son entrantes de hgcash de ANTES de que existiera el
+  control, en `pending`/`no_match`); (2) el negocio es 24 h: nunca arranca en $0,
+  un pago pedido 23:54 se paga 00:08, una transferencia de 23:58 se acredita
+  00:05 → ¿cómo puede dar 0 el cierre?
+- **(1) Archivo masivo:** `POST /api/admin/bank/movements/archive-old` (admin)
+  marca `ignored` + `resolution:'archivado'` todo entrante abierto anterior a
+  `before` (default ahora) y fija **`Config['bankcontrol'].startAt`** = inicio del
+  control. Desde ahí la bandeja (tab Pendientes), el badge y el contador solo
+  miran `createdAt >= startAt`. Banner rojo en Pendientes (admin) con el botón
+  "🧹 Archivar todas y arrancar el control desde ahora"; el tray devuelve
+  `oldCount`/`startAt`. Reversible movimiento por movimiento con `/reopen`.
+- **(2) Cierre 24 h — el cierre NO cuenta caja desde cero, concilia FLUJOS del
+  día; lo que cruza la medianoche se tolera así:**
+  · **Gracia** (`bankcontrol.graceMinutes`, default 60): lo que entró en la
+    última hora del día y sigue abierto (entrantes sin acreditar, pagos hgcash
+    sin movimiento, salidas sin origen) NO es diferencia: va a
+    `summary.arrastre` (listado en el panel y en Telegram como "⏭️ Arrastre a
+    mañana").
+  · **Recálculo automático de D-2**: el cron, antes de cerrar D-1, recalcula
+    el día anterior (sin gracia) si tenía diferencias o arrastre → los vínculos
+    que aparecieron después de las 00:00 lo limpian solos; Telegram informa
+    "♻️ Recálculo del D-2: N → M diferencias".
+  · **Hora configurable** (`closeHourART:closeMinute`, default **00:30**) para
+    dejar pasar lo que se acredita justo después de medianoche. Editable en
+    panel → 🏦 Banco → Cierre (fila ⏰, solo admin; `GET/POST /api/admin/bank/
+    control`).
+  · Pagos: se atribuyen por `paidAt` (y su descuento en JUGAYGANA cae en el
+    mismo momento) → un retiro pedido 23:54 y pagado 00:08 es del día 2 en
+    todos los cruces, coherente. El cajero se cruza por snapshots antes/después
+    de las 00:00, sin depender de "saldo inicial $0".
+- **Validado:** `node --check` OK; HTML balanceado. admin-sw v39 → v40. Redeploy.
+  **Operativo:** tras el deploy, entrar a 🏦 Banco → Pendientes como admin →
+  "🧹 Archivar todas…" una sola vez. Después la bandeja arranca limpia.
+
 ### 156. Aprendizaje diario de la auditoría: la IA repetía preguntas ya respondidas y propuestas rechazadas — memoria en el prompt + cupo GLOBAL por día + dedupe por similitud
 - **Reporte del owner:** después de 1-2 semanas la IA "no aprende nada": sigue
   haciendo preguntas que ya contestó días antes y son demasiadas.

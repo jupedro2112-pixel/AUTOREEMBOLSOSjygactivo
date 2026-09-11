@@ -34,6 +34,7 @@ const hgcashPay = require('./hgcashService');
 const logger = require('../utils/logger');
 
 const CASHIER_TOLERANCE_ARS = 5;           // diferencia tolerada en el cruce con el cajero
+const DEFAULT_GRACE_MIN = 60;              // #157 lo que entra en la última hora del día puede resolverse recién al día siguiente
 const LINK_WINDOW_MS = 3 * 3600 * 1000;    // ±3 h para vincular carga manual vieja ↔ movimiento consumido por monto
 const NOT_CHARGED_STATES = ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'];
 // Fuentes de Transaction 'deposit' que NO son plata que entró por banco (regalos/devoluciones).
@@ -71,6 +72,13 @@ async function computeDailyClose(dayKey, opts = {}) {
       was ? { resolved: true, resolvedBy: was.resolvedBy, resolvedAt: was.resolvedAt, note: was.note } : {}));
   };
   const acceptStatuses = opts.acceptStatuses || ['done'];
+  // #157 Operación 24 h: una transferencia de las 23:54 puede acreditarse a las 00:08. Lo que
+  // entró en los últimos `graceMinutes` del día y sigue abierto NO es diferencia: queda en
+  // ARRASTRE y lo verifica el recálculo automático del día siguiente (cron recalcula D-2).
+  const graceMs = Math.max(0, Number(opts.graceMinutes != null ? opts.graceMinutes : DEFAULT_GRACE_MIN)) * 60 * 1000;
+  const graceFrom = new Date(end.getTime() - graceMs);
+  const inGrace = (d) => d && new Date(d).getTime() >= graceFrom.getTime();
+  const arrastre = { entrantes: [], pagos: [], salidas: [] };
 
   // ── 1a. ENTRADAS del banco ────────────────────────────────────────────────
   const inbound = await BankMovement.find({ direction: 'Inbound', createdAt: { $gte: start, $lt: end } })
@@ -81,6 +89,7 @@ async function computeDailyClose(dayKey, opts = {}) {
   const inDuplicate = inDone.filter(m => m.matchStatus === 'duplicate');
   const inOpen = inDone.filter(m => NOT_CHARGED_STATES.includes(m.matchStatus) || (m.matchStatus === 'ignored' && !m.resolution));
   for (const m of inOpen) {
+    if (inGrace(m.createdAt)) { arrastre.entrantes.push({ movementId: m.movementId, amount: m.amount, fromName: m.fromName || null, at: m.createdAt, status: m.matchStatus }); continue; }
     push({ type: 'mov_sin_acreditar', refType: 'movement', refId: m.movementId, amount: m.amount,
       userId: m.matchedUserId || null, username: m.matchedUsername || null, at: m.createdAt,
       detail: `Transferencia de ${m.fromName || m.fromCBU || 'origen desconocido'} sin acreditar (estado: ${m.matchStatus}${m.chargeError ? ' · ' + String(m.chargeError).slice(0, 80) : ''})` });
@@ -149,6 +158,7 @@ async function computeDailyClose(dayKey, opts = {}) {
     outSinOrigen.push(m);
   }
   for (const m of outSinOrigen) {
+    if (inGrace(m.createdAt)) { arrastre.salidas.push({ movementId: m.movementId, amount: m.amount, toName: m.toName || null, at: m.createdAt }); continue; }
     push({ type: 'salida_sin_origen', refType: 'movement', refId: m.movementId, amount: m.amount, at: m.createdAt,
       detail: `Salida de $${Number(m.amount || 0).toLocaleString('es-AR')} a ${m.toName || m.toCBU || '?'} que no es un pago ni una bajada registrada` });
   }
@@ -166,6 +176,7 @@ async function computeDailyClose(dayKey, opts = {}) {
     if (p.paidVia === 'hgcash') {
       const has = outMovByExt.get(p.id) || (p.hgTxId && outMovByHg.get(p.hgTxId)) || (p.hgTransactionId && outMovByHg.get(p.hgTransactionId));
       if (!has) {
+        if (inGrace(p.paidAt)) { arrastre.pagos.push({ payoutId: p.id, amount: p.amount, username: p.username, at: p.paidAt }); continue; }
         push({ type: 'pago_sin_movimiento', refType: 'payout', refId: p.id, amount: p.amount, userId: p.userId, username: p.username, at: p.paidAt,
           detail: `Pago hgcash de $${Number(p.amount).toLocaleString('es-AR')} a @${p.username} sin movimiento saliente en el banco (¿webhook perdido?)` });
       }
@@ -253,7 +264,10 @@ async function computeDailyClose(dayKey, opts = {}) {
       sinTransferencia: { count: cargasSinTransferencia.length, total: _round(cargasSinTransferencia.reduce((s, t) => s + Number(t.amount || 0), 0)) } },
     salidas: { count: outDone.length, total: _round(outDone.reduce((s, m) => s + Number(m.amount || 0), 0)), pagos: outPagos, pagosTotal: _round(sumPagos), bajadas: outBajadas, bajadasTotal: _round(sumBajadas), sinOrigen: outSinOrigen.length },
     pagos: { pagados: paidPayouts.length, total: _round(paidPayouts.reduce((s, p) => s + Number(p.amount || 0), 0)), otroBanco: pagosOtroBanco },
-    transacciones: txTotals
+    transacciones: txTotals,
+    // #157 lo que cruzó la medianoche: se resuelve solo con el recálculo del día siguiente.
+    arrastre: { graceMinutes: graceMs / 60000, entrantes: arrastre.entrantes.slice(0, 50), pagos: arrastre.pagos.slice(0, 50), salidas: arrastre.salidas.slice(0, 50),
+      total: arrastre.entrantes.length + arrastre.pagos.length + arrastre.salidas.length }
   };
 
   const unresolved = diffs.filter(d => !d.resolved).length;
@@ -304,6 +318,7 @@ function formatCloseTelegram(close, esc, projectLabel) {
     lines.push(`🎰 Cajero JUGAYGANA: real ${money(c.actualDelta)} vs. sistema ${money(c.expectedDelta)} → ${c.status === 'ok' ? '✅ cuadra' : '🔴 diferencia ' + money(c.diff)}`);
   }
   if (close.bank && close.bank.netBalance != null) lines.push(`🏦 Saldo hgcash al cierre: ${money(close.bank.netBalance)}`);
+  if (s.arrastre && s.arrastre.total) lines.push(`⏭️ Arrastre a mañana (última hora del día, se verifica solo): ${s.arrastre.entrantes.length} entrada(s), ${s.arrastre.pagos.length} pago(s), ${s.arrastre.salidas.length} salida(s)`);
   const open = (close.diffs || []).filter(d => !d.resolved);
   if (open.length) {
     const byType = {};

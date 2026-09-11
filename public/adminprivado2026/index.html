@@ -2371,6 +2371,7 @@
                     Cada transferencia que entra al banco aparece acá <b>al instante</b>. La automática la carga sola cuando la foto coincide; si no,
                     queda <b>pendiente</b> y hay que <b>asignarla</b> a un usuario (se acredita por el mismo camino que la automática, con el mismo candado) o
                     vincularla a una carga manual ya hecha. <b>Ninguna transferencia puede quedar sin resolver</b>: el cierre diario las marca.
+                    <div id="bankOldBanner" style="display:none;margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(220,53,69,.10);border:1px solid rgba(220,53,69,.45);color:#ffd6db;"></div>
                 </div>
                 <div id="bankTrayWrap" style="overflow-x:auto;">
                     <table class="data-table" style="min-width:980px;">
@@ -2408,6 +2409,15 @@
                         <button class="btn btn-secondary btn-sm" onclick="openBankClose(document.getElementById('bankCloseDate').value, true)">🔄 Recalcular</button>
                         <button class="btn btn-secondary btn-sm" id="bankCloseTgBtn" onclick="bankCloseRun(document.getElementById('bankCloseDate').value, true)" style="display:none;">📨 Recalcular y mandar a Telegram</button>
                         <span id="bankCloseCarry" style="margin-left:auto;font-size:12px;color:#ffb347;"></span>
+                    </div>
+                    <div id="bankControlRow" style="display:none;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:12px;color:#bbb;">
+                        <span>⏰ Cierre automático a las</span>
+                        <input type="number" id="bankCloseHour" min="0" max="23" style="width:58px;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:4px 6px;border-radius:6px;">:
+                        <input type="number" id="bankCloseMinute" min="0" max="59" style="width:58px;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:4px 6px;border-radius:6px;">
+                        <span>hs (ART) · gracia para lo que cruza la medianoche:</span>
+                        <input type="number" id="bankGrace" min="0" max="240" style="width:64px;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:4px 6px;border-radius:6px;"> <span>min</span>
+                        <button class="btn btn-secondary btn-sm" onclick="saveBankControl()">💾 Guardar</button>
+                        <span style="color:#888;">Lo que entra en la última hora del día y se resuelve después de las 00:00 no cuenta como diferencia: queda en "arrastre" y se verifica solo al recalcular el día anterior.</span>
                     </div>
                     <div id="bankCloseList" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
                     <div id="bankCloseBody"></div>

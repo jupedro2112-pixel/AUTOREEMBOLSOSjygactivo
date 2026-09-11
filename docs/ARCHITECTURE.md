@@ -351,8 +351,13 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   pago ni bajada; vincula y PERSISTE pares inequívocos usuario+monto ±3 h), cajero JUGAYGANA
   (Σ opAmount de CashierSnapshot vs delta de saldo, tolerancia $5) y errores (pago sin
   `debitConfirmed`, pago hgcash sin movimiento, ambiguos 🛑 sin resolver). Cron
-  `_runDailyCloseTick` a las 00:05 ART (claim `Config['dailyclose_last']`) → Telegram con
-  arrastre. Panel→🏦 Banco→Cierre: recalcular, resolver diffs con nota (admin).
+  `_runDailyCloseTick` a la hora de `Config['bankcontrol']` (default 00:30 ART; claim
+  `Config['dailyclose_last']`) → recalcula antes D-2 (limpia lo que cruzó la medianoche) →
+  Telegram con arrastre. **24 h (#157):** lo abierto de los últimos `graceMinutes` (60) del
+  día no es diferencia sino `summary.arrastre`. `bankcontrol.startAt` = inicio del control
+  (lo fija el archivo masivo `/api/admin/bank/movements/archive-old`); lo anterior no cuenta
+  en la bandeja ni en el badge. Panel→🏦 Banco→Cierre: recalcular, resolver diffs con nota,
+  hora/gracia (admin).
 - **Reembolsos** (rangos desde 2026-07-28 #97; el DIARIO volvió el 2026-08-14 #102):
   **DIARIO, semanal y mensual**, los tres con el MISMO % de rango.
   `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis, ventanas de

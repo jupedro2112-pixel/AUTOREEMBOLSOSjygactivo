@@ -13457,10 +13457,55 @@ async function loadBankTray() {
         if (c) c.textContent = (j.pendingCount || 0) > 0 ? '(' + j.pendingCount + ')' : '';
         const b = document.getElementById('bankBadge');
         if (b) { b.textContent = String(j.pendingCount || 0); b.style.display = (j.pendingCount || 0) > 0 ? '' : 'none'; }
+        // #157 pendientes viejos (anteriores al inicio del control): archivo masivo, solo admin.
+        const ob = document.getElementById('bankOldBanner');
+        if (ob) {
+            if (j.isAdmin && (j.oldCount || 0) > 0) {
+                ob.style.display = '';
+                ob.innerHTML = '🧹 Hay <b>' + Number(j.oldCount).toLocaleString('es-AR') + '</b> transferencias pendientes ' + (j.startAt ? 'anteriores al inicio del control (' + escapeHtml(fmtFechaHoraAR(j.startAt)) + ')' : 'de antes de que existiera la bandeja') + '. No se pueden asignar una por una. ' +
+                    '<button class="btn btn-sm" style="background:#7a1010;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;margin-left:6px;" onclick="bankArchiveOld(' + Number(j.oldCount) + ')">🧹 Archivar todas y arrancar el control desde ahora</button>';
+            } else if (j.startAt && _bankTab === 'pending') {
+                ob.style.display = ''; ob.style.background = 'rgba(255,255,255,.04)'; ob.style.border = '1px solid rgba(255,255,255,.12)'; ob.style.color = '#aaa';
+                ob.textContent = 'Control activo desde ' + fmtFechaHoraAR(j.startAt) + '. Lo anterior quedó archivado.';
+            } else ob.style.display = 'none';
+        }
         renderBankTray();
     } catch (e) {
         body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error cargando la bandeja</td></tr>';
     }
+}
+async function bankArchiveOld(n) {
+    if (!confirm('¿Archivar ' + Number(n).toLocaleString('es-AR') + ' transferencias pendientes viejas?\n\nQuedan como "archivado" (no se acreditan, no tocan plata) y el control del banco arranca desde AHORA: la bandeja, el badge y el cierre solo van a mirar lo nuevo. Se puede reabrir una por una si hace falta.')) return;
+    try {
+        const r = await authFetch('/api/admin/bank/movements/archive-old', { method: 'POST', body: JSON.stringify({}) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo archivar', 'error'); return; }
+        showToast('🧹 Archivadas ' + Number(j.archived || 0).toLocaleString('es-AR') + ' transferencias. Control activo desde ahora.', 'success');
+        loadBankTray();
+    } catch (_) { showToast('Error al archivar', 'error'); }
+}
+async function loadBankControl() {
+    const row = document.getElementById('bankControlRow');
+    if (!row) return;
+    const isAdmin = currentAdmin && currentAdmin.role === 'admin';
+    row.style.display = isAdmin ? 'flex' : 'none';
+    if (!isAdmin) return;
+    try {
+        const r = await authFetch('/api/admin/bank/control');
+        if (!r.ok) return;
+        const c = await r.json();
+        const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+        set('bankCloseHour', c.closeHourART); set('bankCloseMinute', c.closeMinute); set('bankGrace', c.graceMinutes);
+    } catch (_) {}
+}
+async function saveBankControl() {
+    const v = (id) => (document.getElementById(id) || {}).value;
+    try {
+        const r = await authFetch('/api/admin/bank/control', { method: 'POST', body: JSON.stringify({ closeHourART: v('bankCloseHour'), closeMinute: v('bankCloseMinute'), graceMinutes: v('bankGrace') }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
+        showToast('Cierre automático: ' + j.closeHourART + ':' + String(j.closeMinute).padStart(2, '0') + ' ART · gracia ' + j.graceMinutes + ' min', 'success');
+    } catch (_) { showToast('Error', 'error'); }
 }
 
 function _bankRowHtml(m) {
@@ -13783,6 +13828,7 @@ let _bankCloseLabels = {};
 async function loadBankCloseList() {
     const list = document.getElementById('bankCloseList');
     const inp = document.getElementById('bankCloseDate');
+    loadBankControl();
     try {
         const r = await authFetch('/api/admin/bank/close');
         if (!r.ok) { if (list) list.innerHTML = '<span style="color:#888;">Sin acceso</span>'; return; }
@@ -13836,6 +13882,13 @@ function renderBankClose(c, isToday) {
         tile('🎰 Cajero JUGAYGANA', ca.status === 'sin_datos' ? 'sin datos' : (ca.status === 'ok' ? '✅ cuadra' : '🔴 ' + _money(ca.diff)), ca.status !== 'sin_datos' ? 'real ' + _money(ca.actualDelta) + ' · sistema ' + _money(ca.expectedDelta) + ' · ' + (ca.ops || 0) + ' op.' : 'no hubo operaciones registradas') +
         (bk.netBalance != null ? tile('🏦 Saldo hgcash al cierre', _money(bk.netBalance), bk.actualDelta != null ? 'vs. cierre anterior ' + _money(bk.actualDelta) + ' (entradas−salidas ' + _money(bk.expectedDelta) + ')' : '') : '') +
         '</div>';
+    const ar = s.arrastre || {};
+    if (ar.total) {
+        html += '<div style="margin:6px 0 10px;padding:8px 10px;border-radius:8px;background:rgba(255,179,71,.08);border:1px solid rgba(255,179,71,.4);font-size:12px;color:#ffe2b8;">⏭️ <b>Arrastre a mañana</b> (entró en la última ' + (ar.graceMinutes || 60) + ' min del día y se resuelve después de las 00:00; no cuenta como diferencia, se verifica solo al recalcular): ' +
+            (ar.entrantes || []).map(x => 'entrada ' + _money(x.amount) + ' de ' + escapeHtml(x.fromName || '?') + ' ' + escapeHtml(fmtFechaHoraAR(x.at))).concat(
+            (ar.pagos || []).map(x => 'pago ' + _money(x.amount) + ' a @' + escapeHtml(x.username || '?')),
+            (ar.salidas || []).map(x => 'salida ' + _money(x.amount))).join(' · ') + '</div>';
+    }
     const diffs = c.diffs || [];
     if (!diffs.length) { html += '<div style="color:#4caf50;padding:10px;">No hay diferencias en este día.</div>'; }
     else {
@@ -13935,3 +13988,4 @@ window.bankReopen = bankReopen; window.bankOpenChat = bankOpenChat; window.openS
 window.bankSweepDestChanged = bankSweepDestChanged; window.syncSweep = syncSweep; window.openSweepDestinations = openSweepDestinations;
 window.addSweepDestRow = addSweepDestRow; window.saveSweepDestinations = saveSweepDestinations; window.openBankClose = openBankClose;
 window.bankCloseRun = bankCloseRun; window.bankCloseResolve = bankCloseResolve; window.bankGoToMovement = bankGoToMovement; window.setDepositOrigin = setDepositOrigin;
+window.bankArchiveOld = bankArchiveOld; window.saveBankControl = saveBankControl;

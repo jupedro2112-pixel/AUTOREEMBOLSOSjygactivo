@@ -15941,6 +15941,17 @@ app.get('/api/admin/hgcash/balance', authMiddleware, adminMiddleware, async (req
 // Roles: ver bandeja y asignar → admin | depositor; bajadas → admin | withdrawer;
 // resolver "no corresponde", reabrir, cierre → solo admin general.
 const BANK_TRAY_OPEN_STATES = ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'];
+// #157 Config['bankcontrol'] = { startAt (desde cuándo cuenta la bandeja; lo fija el archivo
+// masivo), closeHourART (default 0), closeMinute (default 30), graceMinutes (default 60) }
+async function getBankControlConfig() {
+  const c = (await getConfig('bankcontrol', null)) || {};
+  return {
+    startAt: c.startAt ? new Date(c.startAt) : null,
+    closeHourART: Number.isFinite(Number(c.closeHourART)) ? Math.min(23, Math.max(0, Number(c.closeHourART))) : 0,
+    closeMinute: Number.isFinite(Number(c.closeMinute)) ? Math.min(59, Math.max(0, Number(c.closeMinute))) : 30,
+    graceMinutes: Number.isFinite(Number(c.graceMinutes)) ? Math.min(240, Math.max(0, Number(c.graceMinutes))) : 60
+  };
+}
 
 // Libera un movimiento reclamado por una carga manual que no llegó a acreditarse.
 async function _bankReleaseClaim(movementId, prev, toStatus, extra) {
@@ -16010,10 +16021,12 @@ app.get('/api/admin/bank/tray', authMiddleware, adminMiddleware, async (req, res
     const search = String(req.query.search || '').trim().slice(0, 60);
     const amountQ = req.query.amount ? Number(String(req.query.amount).replace(/[^\d.]/g, '')) : null;
     const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
+    const bc = await getBankControlConfig();
     const q = {};
     if (tab === 'pending') {
       q.direction = 'Inbound';
       q.matchStatus = { $in: BANK_TRAY_OPEN_STATES };
+      if (bc.startAt) q.createdAt = { $gte: bc.startAt }; // #157 lo anterior al inicio del control no cuenta
     } else if (tab === 'today' || tab === 'day') {
       const dayKey = tab === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : _artDateKey();
       const r = _artDayRange(dayKey);
@@ -16029,8 +16042,14 @@ app.get('/api/admin/bank/tray', authMiddleware, adminMiddleware, async (req, res
     // solo cuentan si el banco los dio por acreditados (status done).
     if (tab === 'pending') movements = movements.filter(m => _statusAccredited(m.status, cfg));
     movements = await _bankEnrichMovements(movements);
-    const pendingCount = await BankMovement.countDocuments({ direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES }, status: { $in: (cfg.acceptStatuses || ['done']) } });
-    res.json({ movements, pendingCount, hgcashEnabled: !!cfg.enabled, mode: cfg.mode || 'shadow', canAssign: _bankCanAssign(req), canSweep: _bankCanSweep(req), isAdmin: req.user.role === 'admin' });
+    const pendQ = { direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES }, status: { $in: (cfg.acceptStatuses || ['done']) } };
+    if (bc.startAt) pendQ.createdAt = { $gte: bc.startAt };
+    const pendingCount = await BankMovement.countDocuments(pendQ);
+    // Viejos (anteriores al inicio del control, o todos si no hay inicio): para el botón de archivo del admin.
+    const oldQ = { direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') } };
+    oldQ.createdAt = { $lt: bc.startAt || new Date(Date.now() - 24 * 3600 * 1000) };
+    const oldCount = req.user.role === 'admin' ? await BankMovement.countDocuments(oldQ) : 0;
+    res.json({ movements, pendingCount, oldCount, startAt: bc.startAt, hgcashEnabled: !!cfg.enabled, mode: cfg.mode || 'shadow', canAssign: _bankCanAssign(req), canSweep: _bankCanSweep(req), isAdmin: req.user.role === 'admin' });
   } catch (error) {
     logger.error(`[bank] tray: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -16151,6 +16170,46 @@ app.post('/api/admin/bank/movements/:movementId/resolve', authMiddleware, adminM
     logger.error(`[bank] resolve: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
+});
+
+// #157 ARCHIVO MASIVO (solo admin general): cierra como "archivado" todo entrante pendiente
+// anterior a `before` (default: ahora) y fija el INICIO DEL CONTROL en esa fecha. Desde ahí
+// la bandeja, el badge y el cierre solo miran lo nuevo. No toca plata; es reversible con
+// /reopen movimiento por movimiento.
+app.post('/api/admin/bank/movements/archive-old', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
+    const before = req.body && req.body.before ? new Date(req.body.before) : new Date();
+    if (isNaN(before.getTime())) return res.status(400).json({ error: 'Fecha inválida' });
+    const note = String((req.body && req.body.note) || 'Archivado masivo: anterior al inicio del control del banco').slice(0, 300);
+    const r = await BankMovement.updateMany(
+      { direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') }, createdAt: { $lt: before } },
+      { $set: { matchStatus: 'ignored', resolution: 'archivado', resolutionNote: note, resolvedBy: req.user.username, resolvedAt: new Date() } }
+    );
+    const cur = (await getConfig('bankcontrol', null)) || {};
+    await setConfig('bankcontrol', Object.assign({}, cur, { startAt: before, startBy: req.user.username }));
+    const n = (r && (r.modifiedCount != null ? r.modifiedCount : r.nModified)) || 0;
+    logger.warn(`[bank] ${req.user.username} archivó ${n} movimiento(s) pendientes anteriores a ${before.toISOString()} — inicio del control fijado`);
+    _emitHgcashUpdate('archivo');
+    res.json({ success: true, archived: n, startAt: before });
+  } catch (error) {
+    logger.error(`[bank] archive-old: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+// Config del control del banco (hora del cierre, gracia). GET todos los que ven la bandeja; POST admin.
+app.get('/api/admin/bank/control', authMiddleware, adminMiddleware, async (req, res) => {
+  try { if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' }); res.json(await getBankControlConfig()); } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/bank/control', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
+    const b = req.body || {};
+    const cur = (await getConfig('bankcontrol', null)) || {};
+    const num = (v, def, min, max) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : def; };
+    await setConfig('bankcontrol', Object.assign({}, cur, { closeHourART: num(b.closeHourART, cur.closeHourART != null ? cur.closeHourART : 0, 0, 23), closeMinute: num(b.closeMinute, cur.closeMinute != null ? cur.closeMinute : 30, 0, 59), graceMinutes: num(b.graceMinutes, cur.graceMinutes != null ? cur.graceMinutes : 60, 0, 240), updatedBy: req.user.username }));
+    res.json(await getBankControlConfig());
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 
 // REABRIR (vuelve a pendiente) — solo admin general.
@@ -16347,8 +16406,8 @@ app.get('/api/admin/bank/close/:date', authMiddleware, adminMiddleware, async (r
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'Fecha inválida' });
     let close = await DailyClose.findOne({ dateKey }).lean();
     if (!close || req.query.live === '1') {
-      const cfg = await getHgcashConfig();
-      close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses });
+      const cfg = await getHgcashConfig(); const bc = await getBankControlConfig();
+      close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses, graceMinutes: bc.graceMinutes });
     }
     res.json({ close, isToday: dateKey === _artDateKey(), labels: bankClose.TYPE_LABELS });
   } catch (error) {
@@ -16361,8 +16420,8 @@ app.post('/api/admin/bank/close/:date/run', authMiddleware, adminMiddleware, asy
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
     const dateKey = String(req.params.date);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'Fecha inválida' });
-    const cfg = await getHgcashConfig();
-    const close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses });
+    const cfg = await getHgcashConfig(); const bc = await getBankControlConfig();
+    const close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses, graceMinutes: bc.graceMinutes });
     if (req.body && req.body.telegram && telegramAlert.isEnabled()) {
       await telegramAlert.send(bankClose.formatCloseTelegram(close, telegramAlert.esc, _projectLabel()));
       await DailyClose.updateOne({ dateKey }, { $set: { notifiedAt: new Date() } });
@@ -16394,9 +16453,11 @@ app.post('/api/admin/bank/close/:date/resolve', authMiddleware, adminMiddleware,
 async function _runDailyCloseTick() {
   try {
     const now = new Date();
+    const bc = await getBankControlConfig();
     const hour = _artHour(now);
     const minute = Number(now.toLocaleString('en-US', { minute: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' }));
-    if (!(hour > 0 || (hour === 0 && minute >= 5))) return;
+    // #157 hora configurable (default 00:30 ART: deja pasar lo que se acredita justo después de medianoche).
+    if (!(hour > bc.closeHourART || (hour === bc.closeHourART && minute >= bc.closeMinute))) return;
     const yesterday = _artDateKey(now.getTime() - 24 * 3600 * 1000);
     const last = await getConfig('dailyclose_last', null);
     if (last === yesterday) return;
@@ -16409,11 +16470,24 @@ async function _runDailyCloseTick() {
     } catch (_) {}
     if (!won) return;
     const cfg = await getHgcashConfig();
-    const close = await bankClose.computeDailyClose(yesterday, { computedBy: 'cron', acceptStatuses: cfg.acceptStatuses });
+    // #157 Recalcular ANTES el día anterior (D-2): lo que quedó en arrastre o como diferencia
+    // por cruzar la medianoche ya tiene sus vínculos y se limpia solo.
+    let healed = null;
+    try {
+      const d2 = _artDateKey(now.getTime() - 48 * 3600 * 1000);
+      const prev = await DailyClose.findOne({ dateKey: d2 }).lean();
+      if (prev && (prev.unresolvedCount > 0 || (prev.summary && prev.summary.arrastre && prev.summary.arrastre.total))) {
+        const re = await bankClose.computeDailyClose(d2, { computedBy: 'cron-recalc', acceptStatuses: cfg.acceptStatuses, graceMinutes: 0 });
+        healed = { dateKey: d2, before: prev.unresolvedCount, after: re.unresolvedCount, status: re.status };
+        logger.info(`[cierre] recálculo ${d2}: ${prev.unresolvedCount} → ${re.unresolvedCount} diferencias (${re.status})`);
+      }
+    } catch (e) { logger.warn(`[cierre] recálculo D-2 falló: ${e.message}`); }
+    const close = await bankClose.computeDailyClose(yesterday, { computedBy: 'cron', acceptStatuses: cfg.acceptStatuses, graceMinutes: bc.graceMinutes });
     logger.info(`[cierre] ${yesterday}: ${close.status} (${close.unresolvedCount} diferencias)`);
     if (telegramAlert.isEnabled()) {
       const carry = await DailyClose.aggregate([{ $match: { dateKey: { $lt: yesterday }, unresolvedCount: { $gt: 0 } } }, { $group: { _id: null, days: { $sum: 1 }, diffs: { $sum: '$unresolvedCount' } } }]);
       let txt = bankClose.formatCloseTelegram(close, telegramAlert.esc, _projectLabel());
+      if (healed) txt += `\n♻️ Recálculo del ${healed.dateKey}: ${healed.before} → ${healed.after} diferencia(s) (${healed.status === 'ok' ? '✅ cerró en 0' : healed.status})`;
       if (carry[0] && carry[0].diffs) txt += `\n📌 Arrastre: ${carry[0].diffs} diferencia(s) de ${carry[0].days} día(s) anteriores sin resolver`;
       await telegramAlert.send(txt);
       await DailyClose.updateOne({ dateKey: yesterday }, { $set: { notifiedAt: new Date() } });

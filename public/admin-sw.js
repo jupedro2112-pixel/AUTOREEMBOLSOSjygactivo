@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 // Bump this version with every deploy so the admin PWA always loads fresh code.
-const CACHE_VERSION = 'v39'; // v39: cupo por día del aprendizaje (#156) // v38: sección 🏦 Banco (bandeja en vivo, bajadas, cierre diario) + origen en Depositar (#155) // v37: card Soporte del login movida a COMANDOS (#153) // v36: aviso multicuenta por banco en modal de depósito + 🏦 en fraud banner (#152) // v32: Contexto aprendido (aprendizaje diario con confirmación) — #146
+const CACHE_VERSION = 'v40'; // v40: archivo masivo de pendientes viejos + hora/gracia del cierre + arrastre (#157) // v39: cupo por día del aprendizaje (#156) // v38: sección 🏦 Banco (bandeja en vivo, bajadas, cierre diario) + origen en Depositar (#155) // v37: card Soporte del login movida a COMANDOS (#153) // v36: aviso multicuenta por banco en modal de depósito + 🏦 en fraud banner (#152) // v32: Contexto aprendido (aprendizaje diario con confirmación) — #146
 const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
 
 // Only pre-cache stable assets (icons rarely change).

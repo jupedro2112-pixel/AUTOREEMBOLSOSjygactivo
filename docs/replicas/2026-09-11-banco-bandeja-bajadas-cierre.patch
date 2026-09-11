@@ -1,0 +1,2701 @@
+From 21d16797153523613620c07ddf3832172ec15ad0 Mon Sep 17 00:00:00 2001
+From: jupedro2112-pixel <ju.pedro2112@gmail.com>
+Date: Fri, 11 Sep 2026 07:18:57 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?feat(banco):=20bandeja=20del=20banco=20en?=
+ =?UTF-8?q?=20tiempo=20real=20(asignar/vincular/no=20corresponde=20por=20e?=
+ =?UTF-8?q?l=20mismo=20camino=20de=20la=20auto-carga),=20carga=20manual=20?=
+ =?UTF-8?q?anclada=20al=20movimiento,=20bajadas=20a=20CBU=20externo=20(adm?=
+ =?UTF-8?q?in|pagos)=20y=20cierre=20diario=20con=203=20cruces=20(banco?=
+ =?UTF-8?q?=E2=86=94sistema,=20cajero=20JUGAYGANA,=20errores)=20+=20Telegr?=
+ =?UTF-8?q?am=2000:05=20ART=20(#155)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013uDxUfFUUudS3aEfoN3Qkn
+---
+ WORKLOG.md                         | 108 ++++-
+ jugaygana.js                       |  21 +
+ public/admin-sw.js                 |   2 +-
+ public/adminprivado2026/admin.js   | 593 ++++++++++++++++++++++-
+ public/adminprivado2026/index.html | 143 ++++++
+ server.js                          | 751 ++++++++++++++++++++++++++---
+ src/models/BankMovement.js         |  14 +
+ src/models/BankSweep.js            |  48 ++
+ src/models/CashierSnapshot.js      |  29 ++
+ src/models/DailyClose.js           |  54 +++
+ src/services/bankCloseService.js   | 322 +++++++++++++
+ 11 files changed, 2013 insertions(+), 72 deletions(-)
+ create mode 100644 src/models/BankSweep.js
+ create mode 100644 src/models/CashierSnapshot.js
+ create mode 100644 src/models/DailyClose.js
+ create mode 100644 src/services/bankCloseService.js
+
+diff --git a/WORKLOG.md b/WORKLOG.md
+index e3472e2..3ca3119 100644
+--- a/WORKLOG.md
++++ b/WORKLOG.md
+@@ -4,7 +4,113 @@
+ > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
+ > negocio y pendientes que NO se ven leyendo el código.
+ >
+-> **Última actualización: 2026-09-10**
++> **Última actualización: 2026-09-11**
++
++## Sesión 2026-09-11
++
++### 155. 🏦 BANDEJA DEL BANCO en tiempo real + carga manual ANCLADA + BAJADAS + CIERRE DIARIO (control fino: ninguna carga de más ni de menos)
++- **Pedido del owner:** hay cargas dobles y cargas que faltan (ej.: no matchea la
++  foto, el agente carga manual, después llega el aviso del banco y se carga de
++  nuevo). Quiere que el agente NO tenga el banco abierto: que vea por API TODAS
++  las transferencias y que **todas queden asignadas a un usuario** (ninguna libre,
++  ninguna carga sin transferencia); que lo que no coincida quede marcado como
++  "otro banco" en el cierre; un **cierre diario automático** que cruce hgcash y
++  JUGAYGANA y dé 0; y que diga también errores humanos (retiro sin descontar,
++  etc.). Además: **bajadas** a un CBU externo (financiera) para que el banco no
++  acumule capital, solo admin general o pagos, con registro de todas.
++- **Causa raíz del ejemplo (código):** `hgcashConsumeOnManualDeposit` solo
++  consumía movimientos YA matcheados al usuario; la carga manual no guardaba a
++  qué movimiento/comprobante correspondía; el comprobante tampoco guardaba con
++  qué carga se usó → sin vínculos en las dos direcciones no había forma de cerrar.
++- **hgcash (docs.hg.cash, verificado):** NO hay endpoint para listar movimientos
++  del ledger AR; solo webhooks "account movement", `GET /accounts` (+ balance) y
++  cash-out. → la bandeja se alimenta por webhook y el cruce con hgcash es por
++  SALDO de cuenta. **JUGAYGANA:** cada DepositMoney/WithdrawMoney/individual_bonus
++  devuelve `parent_balance` (saldo del cajero, centavos) → se guarda por operación.
++- **Modelos:** `BankMovement` + `chargeSource` (auto|assigned|manual_link|
++  legacy_amount|legacy_name|close_link), `transactionId`, `assignedBy/At`,
++  `resolution/resolutionNote/resolvedBy/At` (no_corresponde), `outKind`
++  (payout|sweep|unknown), `payoutId`, `sweepId`; índice `{direction, matchStatus,
++  createdAt}`. Nuevos: **`BankSweep`** (bajadas), **`DailyClose`** (cierre por
++  día, diffs con `key` estable y marca resuelto), **`CashierSnapshot`** (saldo
++  cajero + `opAmount` con signo por operación; TTL 120 d).
++- **jugaygana.js:** `setCashierBalanceHook(fn)` + `_reportCashier` en los 3
++  éxitos de plata (server.js guarda el CashierSnapshot; best-effort).
++- **`hgcashAutoCarga({movement, comprobante, mode, assign})`:** el comprobante
++  pasa a ser OPCIONAL. `assign={user, agent, agentRole, agentId, force}` = carga
++  ASIGNADA desde la bandeja: mismo claim del movimiento (también toma
++  needs_review/error/no_match), mismo candado por coelsa, misma red de seguridad
++  (saltable con `force` si el agente confirma 2 transferencias reales), mismos
++  bonos (app/lote) y anti-multicuenta; sin mínimo (el agente decide); Transaction
++  `source:'hgcash_assigned'` con el agente; movimiento `manual_charged` +
++  `chargeSource:'assigned'`. Ahora **devuelve `{ok, reason|txId}`**. Todos los
++  `Comprobante.updateOne` quedaron guardados con `if (compId)`.
++- **Carga manual (`/api/admin/deposit`) ANCLADA:** acepta `movementId` (elegido
++  en el modal), `origin` (hgcash|otro_banco|sin_movimiento) y `originNote`. Con
++  movimiento: el monto tiene que ser EXACTO al de la transferencia, se reclama
++  atómico ANTES de acreditar (la automática no puede tomarlo en el medio) y al
++  éxito queda `manual_charged` + `transactionId` + `chargeSource:'manual_link'`;
++  si falla/ambiguo se libera (`_bankReleaseClaim`, también desde el catch).
++  Transaction guarda `metadata.{origin, originNote, movementId}`. Sin movimiento:
++  `hgcashConsumeOnManualDeposit` ahora también vincula por **titular** (el
++  originHolder de los comprobantes del cliente en 6 h vs `fromKey` de movimientos
++  pendientes del mismo monto → `legacy_name`) y guarda el `transactionId`.
++- **Webhook:** salientes clasificados por externalID (`sweep-<id>` → bajada;
++  otro → pago); `_emitHgcashUpdate(kind, movementId)` ahora manda por socket el
++  documento (`bank_movement`) → **bandeja en tiempo real sin recargar**; también
++  emite en reentregas (cambio de status).
++- **Endpoints (bloque "#155 BANDEJA DEL BANCO", antes de PAGOS AUTOMÁTICOS):**
++  `GET /api/admin/bank/tray?tab=pending|today|day&day=&search=&amount=`,
++  `GET …/bank/users-search?q=`, `GET …/bank/movements/:id/suggestions`
++  (comprobantes del mismo monto con titular parecido, cargas manuales recientes
++  sin transferencia para VINCULAR, otras cuentas del mismo titular),
++  `POST …/movements/:id/assign {userId, force}`, `POST …/link {transactionId}`,
++  `POST …/resolve {note}` (admin), `POST …/reopen` (admin), `GET …/bank/balance`
++  (admin|withdrawer). **Bajadas:** `GET/POST …/bank/sweeps` (admin|withdrawer;
++  destino guardado, CBU o alias resuelto por hgcash; chequeo de saldo neto;
++  cash-out con externalID `sweep-<id>`; Telegram "🏦 BAJADA"), `POST …/sweeps/:id/
++  sync`, `GET/POST …/bank/sweep-destinations` (Config['sweepDestinations'];
++  editar solo admin). `_handleSweepStatusWebhook` en el webhook de estado.
++  **Cierre:** `GET …/bank/close` (lista + arrastre), `GET …/bank/close/:date`
++  (`?live=1` recalcula), `POST …/close/:date/run {telegram}` (admin),
++  `POST …/close/:date/resolve {key, note, reopen}` (admin).
++- **`src/services/bankCloseService.js`** — 3 cruces del día ART: (1) banco↔sistema
++  (entrantes done sin acreditar; cargas sin transferencia ni origen —vincula
++  solo pares inequívocos usuario+monto ±3 h con movimientos consumidos por monto
++  y PERSISTE el vínculo—; salidas sin pago ni bajada); (2) cajero JUGAYGANA
++  (Σ opAmount vs delta de saldo, tolerancia $5); (3) errores (pago sin
++  `debitConfirmed`, pago hgcash sin movimiento, ambiguos 🛑 sin resolver en
++  RefundClaim/BankMovement/DailyRouletteSpin/PendingPayout). Saldo hgcash al
++  cierre + delta vs cierre anterior (informativo). `status` ok|diff|warn.
++  Telegram con totales y diffs agrupados. **Cron `_runDailyCloseTick`** cada 5
++  min: desde las 00:05 ART corre el día anterior UNA vez por clúster (claim en
++  `Config['dailyclose_last']`), manda Telegram con arrastre de días anteriores.
++- **Panel (admin-sw v37 → v38):** nav **🏦 Banco** (admin, cargas, pagos; badge
++  con pendientes). Tabs: ⏳ Pendientes / 📅 Hoy / 🗓️ Otro día / ⬆️ Bajadas /
++  🧾 Cierre. Filas en vivo (socket `bank_movement` upsert; resueltas quedan 4 s en
++  verde y desaparecen de Pendientes). Modal **Asignar**: buscador + sugerencias
++  (✅ titular coincide / 🔢 op / "este titular ya cargó en @x" / "🔗 Ya cargada:
++  vincular") + forzar + "No corresponde" (admin). Bajadas: modal con destinos
++  guardados o CBU/alias, saldo neto, confirmación; tabla con estado y sync.
++  Cierre: tiles (entradas, cargas, salidas, cajero, saldo hgcash), diffs por
++  tipo con 💬 / 🏦 Ver / ✔️ Resolver (admin, con nota) / ↩️. **Modal Depositar:**
++  bloque "¿De dónde viene la plata?" con las transferencias pendientes (si hay
++  UNA del mismo monto se propone sola; elegir una fija el monto), "Otro banco"
++  (con detalle) o "Sin transferencia" (queda marcada en el cierre).
++- **Fases acordadas:** ahora = modo espejo (los agentes siguen operando igual,
++  pero ya con bandeja + vínculos + cierre). Cuando el cierre dé 0 varios días,
++  cerrar la puerta: apagar la carga manual con monto libre (solo asignar desde la
++  bandeja) — pendiente, decisión del owner.
++- **Validado:** `node --check` OK (server.js, jugaygana.js, 4 modelos, servicio,
++  admin.js, admin-sw); HTML del panel 734/734 divs, 27/27 sections, ids únicos;
++  scan TDZ 0. Sin cambios en la PWA. **Redeploy (back + panel).** **PROBAR:**
++  (1) llega una transferencia sin foto → aparece en Pendientes al instante →
++  Asignar a un usuario → se acredita y la fila pasa a verde; (2) Depositar a
++  mano con una transferencia pendiente del mismo monto → viene preseleccionada →
++  la transferencia queda "manual anclada" y NO se auto-carga cuando llegue la
++  foto; (3) hacer una bajada chica a un destino guardado → Telegram + fila +
++  movimiento saliente "Bajada"; (4) Cierre → Recalcular hoy → tiles y diffs;
++  mañana 00:05 ART llega el cierre a Telegram; (5) resolver un diff con nota.
+ 
+ ## Sesión 2026-09-10
+ 
+diff --git a/jugaygana.js b/jugaygana.js
+index 1ec6a71..570be39 100644
+--- a/jugaygana.js
++++ b/jugaygana.js
+@@ -28,6 +28,22 @@ if (PROXY_URL) {
+   console.log('✅ Proxy configurado:', PROXY_URL.replace(/:.*@/, ':****@'));
+ }
+ 
++// #155 Hook del saldo del CAJERO: cada DepositMoney/WithdrawMoney/individual_bonus
++// exitoso devuelve `parent_balance` (centavos). server.js registra un callback y
++// guarda un CashierSnapshot por operación (base del cierre diario). Best-effort:
++// nunca puede tirar ni frenar la operación de plata.
++let _cashierHook = null;
++function setCashierBalanceHook(fn) { _cashierHook = (typeof fn === 'function') ? fn : null; }
++function _reportCashier(data, opKind, username, amountArs) {
++  try {
++    if (!_cashierHook || !data) return;
++    const raw = data.parent_balance !== undefined ? data.parent_balance : data.sender_amount;
++    if (raw === undefined || raw === null || !Number.isFinite(Number(raw))) return;
++    const sign = opKind === 'withdraw' ? 1 : -1;
++    _cashierHook({ balance: Number(raw) / 100, opAmount: sign * Number(amountArs || 0), opKind, username, at: new Date() });
++  } catch (_) {}
++}
++
+ // Cliente HTTP
+ const client = axios.create({
+   baseURL: API_URL,
+@@ -873,6 +889,7 @@ async function creditUserBalance(username, amount, jugayganaUserId = null) {
+       } else if (data && data.success) {
+         if (attempt > 1) console.log(`✅ creditUserBalance(${username}) OK en intento ${attempt}/3`);
+         else console.log(`✅ creditUserBalance(${username}) OK`);
++        _reportCashier(data, 'bonus', username, amount);
+         return { success: true, data: data };
+       } else {
+         lastError = (data && (data.error || data.message)) || lastError || 'API Error';
+@@ -1089,6 +1106,7 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
+     console.log("📩 Resultado DepositMoney:", JSON.stringify(data));
+ 
+     if (data && (data.success || data.transfer_id || data.transferId)) {
++      _reportCashier(data, 'deposit', username, amount);
+       return { success: true, data };
+     } else {
+       console.error(`❌ depositToUser(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
+@@ -1267,6 +1285,7 @@ async function withdrawFromUser(username, amount, description = '') {
+     console.log("📩 Resultado WithdrawMoney:", JSON.stringify(data));
+ 
+     if (data && (data.success || data.transfer_id || data.transferId)) {
++      _reportCashier(data, 'withdraw', username, amount);
+       return { success: true, data };
+     } else {
+       console.error(`❌ withdrawFromUser(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
+@@ -1649,6 +1668,8 @@ module.exports = {
+   getMonthToDateRangeForDateArgentina,
+   /** Normaliza a string cualquier `.error` devuelto por este cliente (evita "[object Object]"). */
+   errToString,
++  /** #155: callback({balance, opAmount, opKind, username, at}) con el saldo del cajero tras cada operación de plata. */
++  setCashierBalanceHook,
+   /** Returns the current session token, or null if no session is active. */
+   getSessionToken: () => SESSION_TOKEN,
+   /** Returns the current session cookie string, or null if no session is active. */
+diff --git a/public/admin-sw.js b/public/admin-sw.js
+index e4f2a8d..a52c6cf 100644
+--- a/public/admin-sw.js
++++ b/public/admin-sw.js
+@@ -34,7 +34,7 @@ firebase.initializeApp(firebaseConfig);
+ const messaging = firebase.messaging();
+ 
+ // Bump this version with every deploy so the admin PWA always loads fresh code.
+-const CACHE_VERSION = 'v37'; // v37: card Soporte del login movida a COMANDOS (#153) // v36: aviso multicuenta por banco en modal de depósito + 🏦 en fraud banner (#152) // v32: Contexto aprendido (aprendizaje diario con confirmación) — #146
++const CACHE_VERSION = 'v38'; // v38: sección 🏦 Banco (bandeja en vivo, bajadas, cierre diario) + origen en Depositar (#155) // v37: card Soporte del login movida a COMANDOS (#153) // v36: aviso multicuenta por banco en modal de depósito + 🏦 en fraud banner (#152) // v32: Contexto aprendido (aprendizaje diario con confirmación) — #146
+ const CACHE_NAME = 'admin-sala-' + CACHE_VERSION;
+ 
+ // Only pre-cache stable assets (icons rarely change).
+diff --git a/public/adminprivado2026/admin.js b/public/adminprivado2026/admin.js
+index a1ee35d..a5e44bd 100644
+--- a/public/adminprivado2026/admin.js
++++ b/public/adminprivado2026/admin.js
+@@ -264,6 +264,8 @@ function setupEventListeners() {
+         showModal('depositModal');
+         // Aviso INTERNO de bono automático (async, no bloquea el modal)
+         loadDepositAppBonusHint();
++        // #155 origen de la plata (transferencias pendientes de la bandeja)
++        loadDepositOriginPicker();
+     });
+     if (elements.btnBonus) {
+         elements.btnBonus.addEventListener('click', () => {
+@@ -329,6 +331,7 @@ function setupEventListeners() {
+     
+     // Deposit amount change
+     document.getElementById('depositAmount').addEventListener('input', calculateBonus);
++    document.getElementById('depositAmount').addEventListener('input', () => { if (typeof renderDepositOrigin === 'function') renderDepositOrigin(); });
+     
+     // Withdraw amount change - update total
+     document.getElementById('withdrawAmount').addEventListener('input', updateWithdrawTotal);
+@@ -641,6 +644,13 @@ function setupRoleBasedUI() {
+         btnBonus.style.display = ['admin', 'depositor', 'comunidad'].includes(role) ? '' : 'none';
+     }
+ 
++    // #155 Banco: admin general, cargas y pagos
++    const bankNavItem = document.querySelector('.nav-item-bank');
++    if (bankNavItem) {
++        const canBank = ['admin', 'depositor', 'withdrawer'].includes(role);
++        bankNavItem.style.display = canBank ? '' : 'none';
++        if (canBank) { refreshBankBadge(); setInterval(refreshBankBadge, 2 * 60 * 1000); }
++    }
+     // SMS Masivo: solo visible para admin general
+     const smsNavItem = document.querySelector('.nav-item-sms-masivo');
+     if (smsNavItem) {
+@@ -1201,8 +1211,16 @@ function initSocket() {
+     });
+     
+     // hgcash: movimiento nuevo / cambio de estado → refrescar el panel en vivo (si está abierto).
+-    socket.on('hgcash_movement', () => {
++    socket.on('hgcash_movement', (d) => {
+         if (typeof hgcashLiveRefresh === 'function') hgcashLiveRefresh(false);
++        if (typeof bankLiveRefresh === 'function') bankLiveRefresh(d);
++    });
++    // #155 bandeja del banco en tiempo real: llega el documento entero del movimiento.
++    socket.on('bank_movement', (d) => {
++        if (typeof bankApplyMovement === 'function') bankApplyMovement(d && d.movement, d && d.kind);
++    });
++    socket.on('bank_close', () => {
++        if (typeof refreshBankBadge === 'function') refreshBankBadge();
+     });
+ 
+     // USER TYPING
+@@ -3173,12 +3191,12 @@ async function handleDeposit() {
+                 'Content-Type': 'application/json',
+                 'Authorization': `Bearer ${currentToken}`
+             },
+-            body: JSON.stringify({
++            body: JSON.stringify(Object.assign({
+                 userId: selectedUserId,
+                 amount,
+                 bonus,
+                 description
+-            })
++            }, (typeof getDepositOrigin === 'function') ? getDepositOrigin() : {}))
+         });
+         
+         const data = await response.json();
+@@ -4558,6 +4576,7 @@ function switchSection(section) {
+     if (section === 'reembolsos') loadReembolsos();
+     if (section === 'chatDelays') loadChatDelays();
+     if (section === 'reviews') loadReviews();
++    if (section === 'bank') loadBankSection();
+     if (section === 'campaigns') loadCampaigns();
+     if (section === 'publisherAdmins') {
+         if (currentAdmin?.role !== 'admin') {
+@@ -13346,3 +13365,571 @@ window.closePublisherAnalysisModal = closePublisherAnalysisModal;
+ window.openRecoverModal = openRecoverModal;
+ window.closeRecoverModal = closeRecoverModal;
+ window.submitRecover = submitRecover;
++
++
++// ============================================================
++// #155 BANCO — bandeja en tiempo real · bajadas · cierre diario
++// ============================================================
++let _bankTab = 'pending';
++let _bankRows = [];          // movimientos de la vista actual
++let _bankPerms = { canAssign: false, canSweep: false, isAdmin: false };
++let _bankLiveThrottle = 0;
++let _bankAssign = { movementId: null, movement: null, userId: null, username: null };
++
++function _bankVisible() {
++    const sec = document.getElementById('bankSection');
++    return !!(sec && sec.classList.contains('active'));
++}
++function _money(n) { return '$' + Number(n || 0).toLocaleString('es-AR'); }
++
++async function refreshBankBadge() {
++    try {
++        const r = await authFetch('/api/admin/bank/tray?tab=pending&limit=1');
++        if (!r.ok) return;
++        const j = await r.json();
++        const b = document.getElementById('bankBadge');
++        if (b) { b.textContent = String(j.pendingCount || 0); b.style.display = (j.pendingCount || 0) > 0 ? '' : 'none'; }
++        const c = document.getElementById('bankTabPendingCount');
++        if (c) c.textContent = (j.pendingCount || 0) > 0 ? '(' + j.pendingCount + ')' : '';
++    } catch (_) {}
++}
++
++function loadBankSection() {
++    const search = document.getElementById('bankSearch');
++    if (search && !search._wired) {
++        search._wired = true;
++        let t = null;
++        search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadBankTray(), 350); });
++    }
++    const day = document.getElementById('bankDay');
++    if (day && !day.value) day.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
++    bankSetTab(_bankTab || 'pending');
++    loadBankBalance();
++}
++
++function bankSetTab(tab) {
++    _bankTab = tab;
++    document.querySelectorAll('#bankTabs .bank-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
++    const tray = document.getElementById('bankTrayWrap'), help = document.getElementById('bankTrayHelp');
++    const sweeps = document.getElementById('bankSweepsWrap'), close = document.getElementById('bankCloseWrap');
++    const day = document.getElementById('bankDay'), search = document.getElementById('bankSearch');
++    const isTray = ['pending', 'today', 'day'].includes(tab);
++    if (tray) tray.style.display = isTray ? '' : 'none';
++    if (help) help.style.display = tab === 'pending' ? '' : 'none';
++    if (sweeps) sweeps.style.display = tab === 'sweeps' ? '' : 'none';
++    if (close) close.style.display = tab === 'close' ? '' : 'none';
++    if (day) day.style.display = tab === 'day' ? '' : 'none';
++    if (search) search.style.display = isTray ? '' : 'none';
++    if (isTray) loadBankTray();
++    else if (tab === 'sweeps') loadBankSweeps();
++    else if (tab === 'close') loadBankCloseList();
++}
++
++async function loadBankBalance() {
++    const box = document.getElementById('bankBalanceBox'), el = document.getElementById('bankBalanceVal');
++    if (!box || !el) return;
++    try {
++        const r = await authFetch('/api/admin/bank/balance');
++        if (!r.ok) { box.style.display = 'none'; return; }
++        const j = await r.json();
++        if (!j.enabled || !j.accounts || !j.accounts.length) { box.style.display = 'none'; return; }
++        el.innerHTML = j.accounts.map(a => '<b>' + _money(a.netBalance != null ? a.netBalance : a.balance) + '</b>' + (a.pendingFees ? ' <span style="opacity:.7;font-size:11px;">(comisiones pendientes ' + _money(a.pendingFees) + ')</span>' : '')).join(' | ');
++        box.style.display = '';
++    } catch (_) { box.style.display = 'none'; }
++}
++
++async function loadBankTray() {
++    const body = document.getElementById('bankTrayBody');
++    if (!body) return;
++    const qs = new URLSearchParams({ tab: _bankTab });
++    const search = (document.getElementById('bankSearch') || {}).value || '';
++    if (search.trim()) qs.set('search', search.trim());
++    if (_bankTab === 'day') qs.set('day', (document.getElementById('bankDay') || {}).value || '');
++    try {
++        const r = await authFetch('/api/admin/bank/tray?' + qs.toString());
++        if (!r.ok) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Sin acceso</td></tr>'; return; }
++        const j = await r.json();
++        _bankPerms = { canAssign: !!j.canAssign, canSweep: !!j.canSweep, isAdmin: !!j.isAdmin };
++        _bankRows = j.movements || [];
++        const c = document.getElementById('bankTabPendingCount');
++        if (c) c.textContent = (j.pendingCount || 0) > 0 ? '(' + j.pendingCount + ')' : '';
++        const b = document.getElementById('bankBadge');
++        if (b) { b.textContent = String(j.pendingCount || 0); b.style.display = (j.pendingCount || 0) > 0 ? '' : 'none'; }
++        renderBankTray();
++    } catch (e) {
++        body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error cargando la bandeja</td></tr>';
++    }
++}
++
++function _bankRowHtml(m) {
++    const hora = m.createdAt ? fmtFechaHoraAR(m.createdAt) : '—';
++    const isIn = m.direction === 'Inbound';
++    const dir = isIn ? '⬇️ Entra' : '⬆️ Sale';
++    const monto = m.amount != null ? _money(m.amount) : (m.amountRaw || '—');
++    let quien = isIn ? (m.fromName || m.fromCBU || '—') : (m.outKind === 'sweep' ? '⬆️ BAJADA → ' + (m.sweepLabel || m.toName || m.toCBU || '') : (m.toName || m.toCBU || '—'));
++    const ref = m.coelsaCode || m.externalId || '—';
++    const open = isIn && ['pending', 'no_match', 'needs_review', 'error', 'shadow_matched'].includes(m.matchStatus);
++    let estado = isIn ? hgcashStatusBadge(m.matchStatus) : (m.outKind === 'sweep' ? '<span style="background:#5a2d82;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Bajada</span>' : (m.outKind === 'payout' || m.payoutUsername ? '<span style="background:#2a6df0;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Pago a cliente</span>' : '<span style="background:#7a1010;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Salida sin origen</span>'));
++    if (m.status && !/done/i.test(m.status)) estado += ' <span style="font-size:10px;color:#ffb347;">(' + escapeHtml(m.status) + ')</span>';
++    if (m.resolution) estado += '<br><span style="font-size:10px;color:#aaa;">No corresponde: ' + escapeHtml(m.resolutionNote || '') + ' (' + escapeHtml(m.resolvedBy || '') + ')</span>';
++    else if (m.chargeError) estado += '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(m.chargeError).slice(0, 70)) + '</span>';
++    const usuario = m.matchedUsername ? '@' + escapeHtml(m.matchedUsername) : (m.payoutUsername ? '@' + escapeHtml(m.payoutUsername) : (m.sweepBy ? 'por ' + escapeHtml(m.sweepBy) : '—'));
++    const fuente = m.chargeSource === 'assigned' ? ' <span style="font-size:10px;color:#aaa;">(asignada por ' + escapeHtml(m.assignedBy || '') + ')</span>' : (m.chargeSource === 'manual_link' ? ' <span style="font-size:10px;color:#aaa;">(manual anclada)</span>' : '');
++    let acciones = '';
++    if (open && _bankPerms.canAssign) acciones += '<button class="btn btn-sm btn-primary" onclick="openBankAssign(\'' + escapeHtml(m.movementId) + '\')">👤 Asignar</button> ';
++    if (open && _bankPerms.isAdmin) acciones += '<button class="btn btn-sm btn-secondary" onclick="bankResolve(\'' + escapeHtml(m.movementId) + '\')" title="Marcar que NO corresponde acreditar">🚫</button> ';
++    if (isIn && !open && _bankPerms.isAdmin && ['ignored', 'error'].includes(m.matchStatus)) acciones += '<button class="btn btn-sm btn-secondary" onclick="bankReopen(\'' + escapeHtml(m.movementId) + '\')">↩️ Reabrir</button>';
++    if (m.matchedUserId) acciones += ' <button class="btn btn-sm btn-secondary" onclick="bankOpenChat(\'' + escapeHtml(m.matchedUserId) + '\',\'' + escapeHtml(m.matchedUsername || '') + '\')" title="Abrir chat">💬</button>';
++    return '<tr data-mid="' + escapeHtml(m.movementId) + '"' + (open ? ' style="background:rgba(212,130,10,.08);"' : '') + '>' +
++        '<td style="white-space:nowrap;">' + escapeHtml(hora) + '</td>' +
++        '<td>' + dir + '</td>' +
++        '<td style="white-space:nowrap;font-weight:700;">' + escapeHtml(monto) + '</td>' +
++        '<td>' + escapeHtml(quien) + (isIn && m.fromCBU ? '<br><span style="font-size:10px;color:#888;">' + escapeHtml(m.fromCBU) + '</span>' : '') + '</td>' +
++        '<td style="font-size:11px;">' + escapeHtml(ref) + '</td>' +
++        '<td>' + estado + '</td>' +
++        '<td>' + usuario + fuente + '</td>' +
++        '<td style="white-space:nowrap;">' + acciones + '</td></tr>';
++}
++
++function renderBankTray() {
++    const body = document.getElementById('bankTrayBody');
++    if (!body) return;
++    if (!_bankRows.length) {
++        body.innerHTML = '<tr><td colspan="8" style="color:#4caf50;text-align:center;padding:18px;">' + (_bankTab === 'pending' ? '✅ No hay transferencias pendientes' : 'Sin movimientos') + '</td></tr>';
++        return;
++    }
++    body.innerHTML = _bankRows.map(_bankRowHtml).join('');
++}
++
++// Tiempo real: llega el documento → se inserta/actualiza la fila sin recargar.
++function bankApplyMovement(m, kind) {
++    if (!m || !m.movementId) return;
++    refreshBankBadge();
++    if (!_bankVisible()) return;
++    if (!['pending', 'today', 'day'].includes(_bankTab)) { if (_bankTab === 'sweeps' && (m.outKind === 'sweep')) loadBankSweeps(); return; }
++    const belongs = _bankTab === 'pending'
++        ? (m.direction === 'Inbound' && ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'].includes(m.matchStatus))
++        : (_bankTab === 'today');
++    const idx = _bankRows.findIndex(x => x.movementId === m.movementId);
++    if (belongs) { if (idx >= 0) _bankRows[idx] = m; else _bankRows.unshift(m); }
++    else if (idx >= 0) {
++        // En "pendientes" desaparece al resolverse: se deja 4 s en verde para que se vea qué pasó.
++        _bankRows[idx] = m;
++        setTimeout(() => { _bankRows = _bankRows.filter(x => x.movementId !== m.movementId); renderBankTray(); }, 4000);
++    } else return;
++    renderBankTray();
++    if (!belongs && idx >= 0) { const tr = document.querySelector('#bankTrayBody tr[data-mid="' + m.movementId + '"]'); if (tr) tr.style.background = 'rgba(40,167,69,.15)'; }
++    if (m.direction === 'Outbound') loadBankBalance();
++}
++// Aviso genérico (sin documento) → refresco con throttle.
++function bankLiveRefresh(d) {
++    if (d && d.movementId) return; // ya vino (o viene) el documento por bank_movement
++    if (!_bankVisible()) return;
++    const now = Date.now();
++    if (now - _bankLiveThrottle < 2000) return;
++    _bankLiveThrottle = now;
++    if (['pending', 'today', 'day'].includes(_bankTab)) loadBankTray();
++    else if (_bankTab === 'sweeps') loadBankSweeps();
++    loadBankBalance();
++}
++
++function bankOpenChat(userId, username) {
++    try { switchSection('chats'); selectConversation(userId, username); } catch (_) {}
++}
++
++// ── Asignar ────────────────────────────────────────────────────────────────
++async function openBankAssign(movementId) {
++    const m = _bankRows.find(x => x.movementId === movementId);
++    _bankAssign = { movementId, movement: m || null, userId: null, username: null };
++    const head = document.getElementById('bankAssignHead');
++    if (head && m) head.innerHTML = '<b>' + _money(m.amount) + '</b> de <b>' + escapeHtml(m.fromName || m.fromCBU || '?') + '</b> · ' + escapeHtml(m.createdAt ? fmtFechaHoraAR(m.createdAt) : '') + (m.coelsaCode ? ' · coelsa ' + escapeHtml(m.coelsaCode) : '') + (m.chargeError ? '<br><span style="color:#ffb347;font-size:12px;">' + escapeHtml(m.chargeError) + '</span>' : '');
++    const inp = document.getElementById('bankAssignSearch'); if (inp) { inp.value = ''; }
++    const res = document.getElementById('bankAssignResults'); if (res) res.innerHTML = '';
++    const sel = document.getElementById('bankAssignSelected'); if (sel) sel.style.display = 'none';
++    const btn = document.getElementById('bankAssignConfirmBtn'); if (btn) { btn.disabled = true; btn.textContent = '💰 Acreditar a este usuario'; }
++    const fb = document.getElementById('bankAssignForceBtn'); if (fb) fb.style.display = 'none';
++    const rb = document.getElementById('bankResolveBtn'); if (rb) rb.style.display = _bankPerms.isAdmin ? '' : 'none';
++    const sug = document.getElementById('bankAssignSuggestions'); if (sug) sug.innerHTML = '<span style="color:#888;">Buscando sugerencias…</span>';
++    if (inp && !inp._wired) {
++        inp._wired = true;
++        let t = null;
++        inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(bankAssignSearch, 300); });
++    }
++    showModal('bankAssignModal');
++    try {
++        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/suggestions');
++        if (!r.ok) { if (sug) sug.innerHTML = ''; return; }
++        const j = await r.json();
++        let html = '';
++        const comps = (j.comprobantes || []);
++        if (comps.length) {
++            html += '<div style="margin-top:6px;"><b>📷 Comprobantes por ' + _money(j.movement.amount) + ' (12 h):</b></div>';
++            html += comps.slice(0, 8).map(c => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
++                '<span>' + (c.nameMatch ? '✅' : (c.opMatch ? '🔢' : '▫️')) + ' <b>@' + escapeHtml(c.username) + '</b> · titular leído: ' + escapeHtml(c.originHolder || '?') + (c.operationNumber ? ' · op ' + escapeHtml(c.operationNumber) : '') + ' · ' + escapeHtml(fmtFechaHoraAR(c.createdAt)) + (c.used ? ' · <span style="color:#dc3545;">ya usado</span>' : '') + '</span>' +
++                (c.used ? '' : '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankAssignPick(\'' + escapeHtml(c.userId) + '\',\'' + escapeHtml(c.username) + '\')">Elegir</button>') + '</div>').join('');
++        }
++        const sh = (j.sameHolder || []);
++        if (sh.length) {
++            html += '<div style="margin-top:8px;"><b>🏦 Este titular ya cargó antes en:</b></div>';
++            html += sh.slice(0, 5).map(u => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(212,175,55,.06);border:1px solid rgba(212,175,55,.3);display:flex;gap:8px;align-items:center;">' +
++                '<span><b>@' + escapeHtml(u.username) + '</b> · última ' + escapeHtml(fmtFechaHoraAR(u.lastAt)) + ' · ' + _money(u.lastAmount) + '</span>' +
++                '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankAssignPick(\'' + escapeHtml(u.userId) + '\',\'' + escapeHtml(u.username) + '\')">Elegir</button></div>').join('');
++        }
++        const rd = (j.recentDeposits || []).filter(t => !t.hasMovement);
++        if (rd.length) {
++            html += '<div style="margin-top:8px;"><b>🧾 Cargas MANUALES recientes por el mismo monto, sin transferencia:</b> <span style="color:#aaa;">(si ya se cargó a mano, vinculá en vez de acreditar de nuevo)</span></div>';
++            html += rd.slice(0, 6).map(t => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(220,53,69,.08);border:1px solid rgba(220,53,69,.35);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
++                '<span><b>@' + escapeHtml(t.username) + '</b> · ' + _money(t.amount) + ' · ' + escapeHtml(fmtFechaHoraAR(t.timestamp)) + ' · por ' + escapeHtml(t.adminUsername || '?') + '</span>' +
++                '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankLink(\'' + escapeHtml(movementId) + '\',\'' + escapeHtml(t.id) + '\',\'' + escapeHtml(t.username) + '\')">🔗 Ya cargada: vincular</button></div>').join('');
++        }
++        if (!html) html = '<span style="color:#888;">Sin sugerencias: buscá el usuario arriba.</span>';
++        if (sug) sug.innerHTML = html;
++    } catch (_) { if (sug) sug.innerHTML = ''; }
++}
++async function bankAssignSearch() {
++    const q = ((document.getElementById('bankAssignSearch') || {}).value || '').trim();
++    const res = document.getElementById('bankAssignResults');
++    if (!res) return;
++    if (q.length < 2) { res.innerHTML = ''; return; }
++    try {
++        const r = await authFetch('/api/admin/bank/users-search?q=' + encodeURIComponent(q));
++        const j = r.ok ? await r.json() : { users: [] };
++        res.innerHTML = (j.users || []).map(u => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);display:flex;gap:8px;align-items:center;">' +
++            '<span><b>@' + escapeHtml(u.username) + '</b>' + (u.phone ? ' · ' + escapeHtml(u.phone) : '') + (u.isBlocked ? ' · <span style="color:#dc3545;">BLOQUEADO</span>' : '') + '</span>' +
++            '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankAssignPick(\'' + escapeHtml(u.id) + '\',\'' + escapeHtml(u.username) + '\')">Elegir</button></div>').join('') || '<span style="color:#888;">Sin resultados</span>';
++    } catch (_) { res.innerHTML = ''; }
++}
++function bankAssignPick(userId, username) {
++    _bankAssign.userId = userId; _bankAssign.username = username;
++    const sel = document.getElementById('bankAssignSelected');
++    if (sel) { sel.style.display = ''; sel.innerHTML = 'Se va a acreditar <b>' + _money(_bankAssign.movement ? _bankAssign.movement.amount : 0) + '</b> a <b>@' + escapeHtml(username) + '</b> por el mismo camino que la carga automática (bonos automáticos incluidos si le corresponden).'; }
++    const btn = document.getElementById('bankAssignConfirmBtn'); if (btn) btn.disabled = false;
++}
++async function bankAssignConfirm(force) {
++    if (!_bankAssign.movementId || !_bankAssign.userId) return;
++    const btn = document.getElementById('bankAssignConfirmBtn');
++    const fb = document.getElementById('bankAssignForceBtn');
++    if (btn) { btn.disabled = true; btn.textContent = 'Acreditando…'; }
++    try {
++        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(_bankAssign.movementId) + '/assign', { method: 'POST', body: JSON.stringify({ userId: _bankAssign.userId, force: !!force }) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) {
++            showToast(j.error || 'No se pudo acreditar', 'error');
++            if (j.canForce && fb) { fb.style.display = ''; }
++            if (btn) { btn.disabled = false; btn.textContent = '💰 Acreditar a este usuario'; }
++            if (j.reason === 'ambiguous' || j.reason === 'claimed') { hideModal('bankAssignModal'); loadBankTray(); }
++            return;
++        }
++        showToast('✅ ' + _money(_bankAssign.movement ? _bankAssign.movement.amount : 0) + ' acreditados a @' + j.username, 'success');
++        hideModal('bankAssignModal');
++        loadBankTray();
++    } catch (e) {
++        showToast('Error al acreditar', 'error');
++        if (btn) { btn.disabled = false; btn.textContent = '💰 Acreditar a este usuario'; }
++    }
++}
++async function bankLink(movementId, txId, username) {
++    if (!confirm('¿Vincular esta transferencia a la carga manual ya hecha a @' + username + '? NO se acredita de nuevo, solo se ata la transferencia a esa carga.')) return;
++    try {
++        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/link', { method: 'POST', body: JSON.stringify({ transactionId: txId }) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo vincular', 'error'); return; }
++        showToast('🔗 Vinculada', 'success');
++        hideModal('bankAssignModal');
++        loadBankTray();
++    } catch (_) { showToast('Error al vincular', 'error'); }
++}
++async function bankResolve(movementId) {
++    const note = prompt('¿Por qué NO corresponde acreditar esta transferencia? (queda registrado con tu usuario)');
++    if (note === null) return;
++    if (String(note).trim().length < 3) { showToast('Escribí el motivo', 'error'); return; }
++    try {
++        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/resolve', { method: 'POST', body: JSON.stringify({ note: String(note).trim() }) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo resolver', 'error'); return; }
++        showToast('Marcada como "no corresponde"', 'success');
++        hideModal('bankAssignModal');
++        loadBankTray();
++    } catch (_) { showToast('Error', 'error'); }
++}
++function bankResolveFromModal() { if (_bankAssign.movementId) bankResolve(_bankAssign.movementId); }
++async function bankReopen(movementId) {
++    if (!confirm('¿Volver a poner esta transferencia como pendiente?')) return;
++    try {
++        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/reopen', { method: 'POST', body: '{}' });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo reabrir', 'error'); return; }
++        loadBankTray();
++    } catch (_) {}
++}
++
++// ── Bajadas ────────────────────────────────────────────────────────────────
++let _sweepDests = [];
++async function loadBankSweeps() {
++    const body = document.getElementById('bankSweepsBody');
++    if (!body) return;
++    try {
++        const r = await authFetch('/api/admin/bank/sweeps');
++        if (!r.ok) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Sin acceso</td></tr>'; return; }
++        const j = await r.json();
++        const nb = document.getElementById('bankSweepNewBtn'); if (nb) nb.style.display = j.canSweep ? '' : 'none';
++        const db = document.getElementById('bankSweepDestBtn'); if (db) db.style.display = (_bankPerms.isAdmin || (currentAdmin && currentAdmin.role === 'admin')) ? '' : 'none';
++        const tot = document.getElementById('bankSweepsTotal'); if (tot) tot.textContent = 'Bajadas hechas: ' + (j.countDone || 0) + ' · ' + _money(j.totalDone || 0);
++        const st = (s) => ({ pending: ['Pendiente', '#888'], paying: ['En proceso', '#2a6df0'], done: ['Hecha ✓', '#0f8a2f'], failed: ['Falló', '#dc3545'], cancelled: ['Cancelada', '#7a1010'] }[s] || [s, '#888']);
++        body.innerHTML = (j.sweeps || []).map(sw => {
++            const [label, color] = st(sw.status);
++            return '<tr><td style="white-space:nowrap;">' + escapeHtml(fmtFechaHoraAR(sw.createdAt)) + '</td>' +
++                '<td style="font-weight:700;white-space:nowrap;">' + _money(sw.amount) + '</td>' +
++                '<td>' + escapeHtml(sw.destLabel || sw.toName || '—') + '</td>' +
++                '<td style="font-size:11px;">' + escapeHtml(sw.toCBU || '') + '</td>' +
++                '<td>' + escapeHtml(sw.requestedBy || '?') + ' <span style="font-size:10px;color:#888;">(' + escapeHtml(sw.requestedByRole || '') + ')</span></td>' +
++                '<td><span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">' + escapeHtml(label) + '</span>' + (sw.error ? '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(sw.error).slice(0, 80)) + '</span>' : '') + '</td>' +
++                '<td style="font-size:11px;">' + escapeHtml(sw.note || '') + '</td>' +
++                '<td>' + ((sw.status === 'paying' || sw.status === 'pending') && j.canSweep ? '<button class="btn btn-sm btn-secondary" onclick="syncSweep(\'' + escapeHtml(sw.id) + '\')">🔄 Estado</button>' : '') + '</td></tr>';
++        }).join('') || '<tr><td colspan="8" style="color:#888;text-align:center;">Todavía no hay bajadas</td></tr>';
++    } catch (_) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error</td></tr>'; }
++}
++async function loadSweepDestinations() {
++    try { const r = await authFetch('/api/admin/bank/sweep-destinations'); const j = r.ok ? await r.json() : { destinations: [] }; _sweepDests = j.destinations || []; } catch (_) { _sweepDests = []; }
++    const sel = document.getElementById('bankSweepDest');
++    if (sel) sel.innerHTML = '<option value="">— CBU / alias a mano —</option>' + _sweepDests.map(d => '<option value="' + escapeHtml(d.id) + '">' + escapeHtml(d.label) + ' (…' + escapeHtml(String(d.cbu).slice(-6)) + ')</option>').join('');
++}
++async function openSweepModal() {
++    await loadSweepDestinations();
++    ['bankSweepCbu', 'bankSweepName', 'bankSweepLabel', 'bankSweepAmount', 'bankSweepNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
++    const sel = document.getElementById('bankSweepDest'); if (sel) sel.value = '';
++    bankSweepDestChanged();
++    const bal = document.getElementById('bankSweepBalance');
++    if (bal) {
++        bal.textContent = 'Consultando saldo…';
++        try { const r = await authFetch('/api/admin/bank/balance'); const j = r.ok ? await r.json() : null; const a = j && j.accounts && j.accounts[0];
++            bal.innerHTML = a ? '💰 Saldo neto disponible en hgcash: <b>' + _money(a.netBalance != null ? a.netBalance : a.balance) + '</b> <span style="color:#aaa;font-size:11px;">(hgcash descuenta su comisión de la salida: dejá margen)</span>' : 'Saldo no disponible';
++        } catch (_) { bal.textContent = ''; }
++    }
++    showModal('bankSweepModal');
++}
++function bankSweepDestChanged() {
++    const v = (document.getElementById('bankSweepDest') || {}).value || '';
++    const man = document.getElementById('bankSweepManual');
++    if (man) man.style.display = v ? 'none' : '';
++}
++async function submitSweep() {
++    const btn = document.getElementById('bankSweepSubmit');
++    const destinationId = (document.getElementById('bankSweepDest') || {}).value || '';
++    const raw = ((document.getElementById('bankSweepCbu') || {}).value || '').trim();
++    const amount = parseFloat((document.getElementById('bankSweepAmount') || {}).value);
++    if (!(amount > 0)) { showToast('Monto inválido', 'error'); return; }
++    if (!destinationId && !raw) { showToast('Falta el CBU/alias destino', 'error'); return; }
++    const body = { amount, note: (document.getElementById('bankSweepNote') || {}).value || '' };
++    if (destinationId) body.destinationId = destinationId;
++    else {
++        if (/^\d{22}$/.test(raw.replace(/\D/g, '')) && raw.replace(/\D/g, '').length === 22) body.toCBU = raw; else body.alias = raw;
++        body.toName = (document.getElementById('bankSweepName') || {}).value || '';
++        body.destLabel = (document.getElementById('bankSweepLabel') || {}).value || '';
++    }
++    const dest = destinationId ? ((_sweepDests.find(d => d.id === destinationId) || {}).label || 'destino guardado') : raw;
++    if (!confirm('Confirmás la BAJADA de ' + _money(amount) + ' a "' + dest + '"?\n\nEs una transferencia REAL desde la cuenta hgcash. Queda registrada con tu usuario.')) return;
++    setButtonLoading(btn, true, 'Enviando…');
++    try {
++        const r = await authFetch('/api/admin/bank/sweeps', { method: 'POST', body: JSON.stringify(body) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo hacer la bajada', 'error'); return; }
++        showToast('⬆️ Bajada enviada (' + ((j.sweep && j.sweep.status) || 'en proceso') + ')', 'success');
++        hideModal('bankSweepModal');
++        loadBankSweeps(); loadBankBalance();
++    } catch (_) { showToast('Error al enviar la bajada', 'error'); }
++    finally { setButtonLoading(btn, false, '⬆️ Confirmar bajada'); }
++}
++async function syncSweep(id) {
++    try { const r = await authFetch('/api/admin/bank/sweeps/' + encodeURIComponent(id) + '/sync', { method: 'POST', body: '{}' }); const j = await r.json().catch(() => ({})); if (!r.ok) showToast(j.error || 'No se pudo consultar', 'error'); loadBankSweeps(); } catch (_) {}
++}
++async function openSweepDestinations() {
++    await loadSweepDestinations();
++    const list = document.getElementById('bankSweepDestList');
++    if (list) { list.innerHTML = ''; _sweepDests.forEach(d => addSweepDestRow(d)); if (!_sweepDests.length) addSweepDestRow(); }
++    showModal('bankSweepDestModal');
++}
++function addSweepDestRow(d) {
++    const list = document.getElementById('bankSweepDestList'); if (!list) return;
++    d = d || {};
++    const v = (x) => escapeHtml(String(x == null ? '' : x));
++    const row = document.createElement('div');
++    row.className = 'sweep-dest-row';
++    row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center;';
++    row.innerHTML = '<input type="hidden" class="sd-id" value="' + v(d.id) + '">' +
++        '<input type="text" class="sd-label" placeholder="Etiqueta (Financiera X)" value="' + v(d.label) + '" style="flex:1;min-width:130px;">' +
++        '<input type="text" class="sd-cbu" placeholder="CBU/CVU 22 dígitos" value="' + v(d.cbu) + '" style="flex:1.4;min-width:180px;">' +
++        '<input type="text" class="sd-name" placeholder="Titular" value="' + v(d.name) + '" style="flex:1;min-width:120px;">' +
++        '<input type="text" class="sd-cuit" placeholder="CUIT" value="' + v(d.cuit) + '" style="flex:0 0 110px;">' +
++        '<button class="btn btn-sm" style="background:#dc3545;color:#fff;border:none;border-radius:6px;padding:5px 8px;cursor:pointer;" onclick="this.closest(\'.sweep-dest-row\').remove()">🗑️</button>';
++    list.appendChild(row);
++}
++async function saveSweepDestinations() {
++    const rows = Array.from(document.querySelectorAll('#bankSweepDestList .sweep-dest-row'));
++    const destinations = rows.map(r => ({ id: r.querySelector('.sd-id').value || undefined, label: r.querySelector('.sd-label').value, cbu: r.querySelector('.sd-cbu').value, name: r.querySelector('.sd-name').value, cuit: r.querySelector('.sd-cuit').value }));
++    try {
++        const r = await authFetch('/api/admin/bank/sweep-destinations', { method: 'POST', body: JSON.stringify({ destinations }) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
++        showToast('Destinos guardados (' + (j.destinations || []).length + ')', 'success');
++        hideModal('bankSweepDestModal');
++    } catch (_) { showToast('Error al guardar', 'error'); }
++}
++
++// ── Cierre diario ───────────────────────────────────────────────────────────
++let _bankCloseLabels = {};
++async function loadBankCloseList() {
++    const list = document.getElementById('bankCloseList');
++    const inp = document.getElementById('bankCloseDate');
++    try {
++        const r = await authFetch('/api/admin/bank/close');
++        if (!r.ok) { if (list) list.innerHTML = '<span style="color:#888;">Sin acceso</span>'; return; }
++        const j = await r.json();
++        const tg = document.getElementById('bankCloseTgBtn'); if (tg) tg.style.display = (currentAdmin && currentAdmin.role === 'admin') ? '' : 'none';
++        const carry = document.getElementById('bankCloseCarry');
++        if (carry) carry.textContent = (j.unresolved && j.unresolved.diffs) ? '📌 ' + j.unresolved.diffs + ' diferencia(s) sin resolver en ' + j.unresolved.days + ' día(s)' : '';
++        const icon = (c) => c.status === 'ok' ? '✅' : (c.status === 'diff' ? '🔴' : '⚠️');
++        if (list) list.innerHTML = (j.closes || []).slice(0, 14).map(c => '<button class="btn btn-sm btn-secondary" onclick="openBankClose(\'' + c.dateKey + '\')" title="' + escapeHtml(c.status) + '">' + icon(c) + ' ' + c.dateKey.slice(5) + (c.unresolvedCount ? ' (' + c.unresolvedCount + ')' : '') + '</button>').join('');
++        const day = (inp && inp.value) || j.today;
++        if (inp && !inp.value) inp.value = day;
++        openBankClose(day);
++    } catch (_) { if (list) list.innerHTML = ''; }
++}
++async function openBankClose(dateKey, live) {
++    if (!dateKey) return;
++    const inp = document.getElementById('bankCloseDate'); if (inp) inp.value = dateKey;
++    const body = document.getElementById('bankCloseBody');
++    if (body) body.innerHTML = '<div style="color:#888;">Calculando cierre ' + escapeHtml(dateKey) + '…</div>';
++    try {
++        const r = await authFetch('/api/admin/bank/close/' + encodeURIComponent(dateKey) + (live ? '?live=1' : ''));
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { if (body) body.innerHTML = '<div style="color:#dc3545;">' + escapeHtml(j.error || 'Error') + '</div>'; return; }
++        _bankCloseLabels = j.labels || _bankCloseLabels;
++        renderBankClose(j.close, j.isToday);
++    } catch (_) { if (body) body.innerHTML = '<div style="color:#dc3545;">Error</div>'; }
++}
++async function bankCloseRun(dateKey, telegram) {
++    if (!dateKey) return;
++    try {
++        const r = await authFetch('/api/admin/bank/close/' + encodeURIComponent(dateKey) + '/run', { method: 'POST', body: JSON.stringify({ telegram: !!telegram }) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo recalcular', 'error'); return; }
++        _bankCloseLabels = j.labels || _bankCloseLabels;
++        renderBankClose(j.close, false);
++        showToast(telegram ? 'Cierre recalculado y enviado a Telegram' : 'Cierre recalculado', 'success');
++        loadBankCloseList();
++    } catch (_) { showToast('Error', 'error'); }
++}
++function renderBankClose(c, isToday) {
++    const body = document.getElementById('bankCloseBody');
++    if (!body || !c) return;
++    const s = c.summary || {}, ca = c.cashier || {}, bk = c.bank || {};
++    const st = c.status === 'ok' ? '<span style="color:#4caf50;font-weight:800;">✅ 0 diferencias — todo cuadra</span>' : (c.status === 'diff' ? '<span style="color:#ff5050;font-weight:800;">🔴 ' + c.unresolvedCount + ' diferencia(s) sin resolver</span>' : '<span style="color:#ffb347;font-weight:800;">⚠️ Sin diferencias, pero falta el cruce con el cajero</span>');
++    const tile = (t, v, sub) => '<div style="flex:1;min-width:150px;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);"><div style="font-size:10.5px;color:#aaa;text-transform:uppercase;letter-spacing:.5px;">' + t + '</div><div style="font-size:16px;font-weight:800;">' + v + '</div>' + (sub ? '<div style="font-size:11px;color:#bbb;">' + sub + '</div>' : '') + '</div>';
++    let html = '<div style="margin-bottom:10px;font-size:14px;">Cierre <b>' + escapeHtml(c.dateKey) + '</b>' + (isToday ? ' <span style="color:#ffb347;">(día en curso — parcial)</span>' : '') + ' · ' + st + '<div style="font-size:11px;color:#888;">calculado ' + escapeHtml(c.computedAt ? fmtFechaHoraAR(c.computedAt) : '') + ' por ' + escapeHtml(c.computedBy || '') + (c.notifiedAt ? ' · enviado a Telegram' : '') + '</div></div>';
++    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
++        tile('⬇️ Entradas banco', (s.entradas ? s.entradas.count : 0) + ' · ' + _money(s.entradas && s.entradas.total), 'auto ' + (s.entradasCargadas ? s.entradasCargadas.auto : 0) + ' · asignadas ' + (s.entradasCargadas ? s.entradasCargadas.asignadas : 0) + ' · manual ' + (s.entradasCargadas ? s.entradasCargadas.manuales : 0) + ' · no corresponde ' + (s.entradasNoCorresponde ? s.entradasNoCorresponde.count : 0)) +
++        tile('💰 Cargas sistema', (s.cargas ? s.cargas.count : 0) + ' · ' + _money(s.cargas && s.cargas.total), 'con transferencia ' + (s.cargas ? s.cargas.vinculadas : 0) + ' · otro banco ' + (s.cargas && s.cargas.otroBanco ? s.cargas.otroBanco.count : 0) + ' · sin origen ' + (s.cargas && s.cargas.sinTransferencia ? s.cargas.sinTransferencia.count : 0)) +
++        tile('⬆️ Salidas banco', (s.salidas ? s.salidas.count : 0) + ' · ' + _money(s.salidas && s.salidas.total), 'pagos ' + (s.salidas ? s.salidas.pagos : 0) + ' (' + _money(s.salidas && s.salidas.pagosTotal) + ') · bajadas ' + (s.salidas ? s.salidas.bajadas : 0) + ' (' + _money(s.salidas && s.salidas.bajadasTotal) + ')') +
++        tile('🎰 Cajero JUGAYGANA', ca.status === 'sin_datos' ? 'sin datos' : (ca.status === 'ok' ? '✅ cuadra' : '🔴 ' + _money(ca.diff)), ca.status !== 'sin_datos' ? 'real ' + _money(ca.actualDelta) + ' · sistema ' + _money(ca.expectedDelta) + ' · ' + (ca.ops || 0) + ' op.' : 'no hubo operaciones registradas') +
++        (bk.netBalance != null ? tile('🏦 Saldo hgcash al cierre', _money(bk.netBalance), bk.actualDelta != null ? 'vs. cierre anterior ' + _money(bk.actualDelta) + ' (entradas−salidas ' + _money(bk.expectedDelta) + ')' : '') : '') +
++        '</div>';
++    const diffs = c.diffs || [];
++    if (!diffs.length) { html += '<div style="color:#4caf50;padding:10px;">No hay diferencias en este día.</div>'; }
++    else {
++        const byType = {};
++        diffs.forEach(d => { (byType[d.type] = byType[d.type] || []).push(d); });
++        const isAdmin = currentAdmin && currentAdmin.role === 'admin';
++        Object.keys(byType).forEach(t => {
++            const arr = byType[t];
++            html += '<div style="margin-top:12px;"><b>' + escapeHtml(_bankCloseLabels[t] || t) + '</b> <span style="color:#aaa;">(' + arr.length + ')</span></div>';
++            arr.forEach(d => {
++                html += '<div style="padding:7px 10px;margin-top:5px;border-radius:7px;background:' + (d.resolved ? 'rgba(76,175,80,.08)' : 'rgba(220,53,69,.08)') + ';border:1px solid ' + (d.resolved ? 'rgba(76,175,80,.4)' : 'rgba(220,53,69,.35)') + ';font-size:12.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
++                    '<span>' + (d.resolved ? '✅' : '🔴') + ' ' + escapeHtml(d.detail || '') + (d.at ? ' <span style="color:#888;">· ' + escapeHtml(fmtFechaHoraAR(d.at)) + '</span>' : '') + (d.resolved ? '<br><span style="color:#8bc34a;">Resuelto por ' + escapeHtml(d.resolvedBy || '') + ': ' + escapeHtml(d.note || '') + '</span>' : '') + '</span>' +
++                    '<span style="margin-left:auto;white-space:nowrap;">' +
++                    (d.userId ? '<button class="btn btn-sm btn-secondary" onclick="bankOpenChat(\'' + escapeHtml(d.userId) + '\',\'' + escapeHtml(d.username || '') + '\')">💬</button> ' : '') +
++                    (d.refType === 'movement' && !d.resolved ? '<button class="btn btn-sm btn-secondary" onclick="bankGoToMovement(\'' + escapeHtml(d.refId) + '\')">🏦 Ver</button> ' : '') +
++                    (isAdmin ? (d.resolved ? '<button class="btn btn-sm btn-secondary" onclick="bankCloseResolve(\'' + escapeHtml(c.dateKey) + '\',\'' + escapeHtml(d.key) + '\',true)">↩️</button>' : '<button class="btn btn-sm btn-primary" onclick="bankCloseResolve(\'' + escapeHtml(c.dateKey) + '\',\'' + escapeHtml(d.key) + '\',false)">✔️ Resolver</button>') : '') +
++                    '</span></div>';
++            });
++        });
++    }
++    body.innerHTML = html;
++}
++async function bankCloseResolve(dateKey, key, reopen) {
++    let note = '';
++    if (!reopen) { note = prompt('¿Cómo se resolvió? (queda registrado con tu usuario)'); if (note === null) return; if (String(note).trim().length < 3) { showToast('Escribí la resolución', 'error'); return; } }
++    try {
++        const r = await authFetch('/api/admin/bank/close/' + encodeURIComponent(dateKey) + '/resolve', { method: 'POST', body: JSON.stringify({ key, note: String(note || '').trim(), reopen: !!reopen }) });
++        const j = await r.json().catch(() => ({}));
++        if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; }
++        _bankCloseLabels = j.labels || _bankCloseLabels;
++        renderBankClose(j.close, false);
++        loadBankCloseList();
++    } catch (_) { showToast('Error', 'error'); }
++}
++function bankGoToMovement(movementId) {
++    _bankTab = 'today';
++    const s = document.getElementById('bankSearch'); if (s) s.value = '';
++    bankSetTab('today');
++    setTimeout(() => { const tr = document.querySelector('#bankTrayBody tr[data-mid="' + movementId + '"]'); if (tr) { tr.scrollIntoView({ block: 'center' }); tr.style.outline = '2px solid #d4af37'; } }, 600);
++}
++
++// ── Origen de la plata en el modal Depositar (#155) ─────────────────────────
++let _depositPendingMovs = [];
++let _depositOrigin = { origin: 'sin_movimiento', movementId: null };
++async function loadDepositOriginPicker() {
++    _depositPendingMovs = [];
++    _depositOrigin = { origin: 'sin_movimiento', movementId: null };
++    const note = document.getElementById('depositOriginNote'); if (note) { note.value = ''; note.style.display = 'none'; }
++    renderDepositOrigin();
++    try {
++        const r = await authFetch('/api/admin/bank/tray?tab=pending&limit=100');
++        if (!r.ok) return;
++        const j = await r.json();
++        _depositPendingMovs = (j.movements || []).filter(m => m.direction === 'Inbound');
++        renderDepositOrigin();
++    } catch (_) {}
++}
++function renderDepositOrigin() {
++    const list = document.getElementById('depositOriginList');
++    if (!list) return;
++    const amount = parseFloat((document.getElementById('depositAmount') || {}).value) || 0;
++    const same = amount > 0 ? _depositPendingMovs.filter(m => Math.abs(Number(m.amount) - amount) < 0.005) : [];
++    const others = amount > 0 ? _depositPendingMovs.filter(m => Math.abs(Number(m.amount) - amount) >= 0.005).slice(0, 5) : _depositPendingMovs.slice(0, 8);
++    // Auto-selección: si hay exactamente UNA transferencia pendiente por ese monto, se propone.
++    if (same.length === 1 && _depositOrigin.origin !== 'otro_banco' && !_depositOrigin.movementId) _depositOrigin = { origin: 'hgcash', movementId: same[0].movementId };
++    if (_depositOrigin.movementId && !_depositPendingMovs.some(m => m.movementId === _depositOrigin.movementId)) _depositOrigin = { origin: 'sin_movimiento', movementId: null };
++    const row = (m, hl) => '<label style="display:flex;gap:8px;align-items:center;padding:5px 8px;margin-top:4px;border-radius:6px;background:' + (hl ? 'rgba(40,167,69,.12)' : 'rgba(255,255,255,.04)') + ';border:1px solid ' + (hl ? 'rgba(40,167,69,.55)' : 'rgba(255,255,255,.12)') + ';cursor:pointer;">' +
++        '<input type="radio" name="depositOrigin" value="mov:' + escapeHtml(m.movementId) + '" ' + (_depositOrigin.movementId === m.movementId ? 'checked' : '') + ' onchange="setDepositOrigin(this.value)" style="width:auto;">' +
++        '<span>🏦 <b>' + _money(m.amount) + '</b> de ' + escapeHtml(m.fromName || m.fromCBU || '?') + ' · ' + escapeHtml(fmtFechaHoraAR(m.createdAt)) + (m.matchedUsername ? ' · <span style="color:#ffb347;">match @' + escapeHtml(m.matchedUsername) + '</span>' : '') + '</span></label>';
++    let html = '';
++    if (same.length) html += '<div style="color:#8bc34a;font-size:11.5px;">Transferencias pendientes por ' + _money(amount) + ':</div>' + same.map(m => row(m, true)).join('');
++    if (others.length) html += '<div style="color:#aaa;font-size:11px;margin-top:6px;">Otras pendientes:</div>' + others.map(m => row(m, false)).join('');
++    if (!_depositPendingMovs.length) html += '<div style="color:#888;font-size:11.5px;">No hay transferencias pendientes en la bandeja.</div>';
++    html += '<label style="display:flex;gap:8px;align-items:center;padding:5px 8px;margin-top:6px;cursor:pointer;"><input type="radio" name="depositOrigin" value="otro_banco" ' + (_depositOrigin.origin === 'otro_banco' ? 'checked' : '') + ' onchange="setDepositOrigin(this.value)" style="width:auto;"><span>🏛️ Otro banco (no pasó por hgcash) — escribí cuál</span></label>';
++    html += '<label style="display:flex;gap:8px;align-items:center;padding:5px 8px;cursor:pointer;"><input type="radio" name="depositOrigin" value="sin_movimiento" ' + (_depositOrigin.origin === 'sin_movimiento' ? 'checked' : '') + ' onchange="setDepositOrigin(this.value)" style="width:auto;"><span style="color:#ffb347;">⚠️ Sin transferencia asociada (queda marcada en el cierre diario)</span></label>';
++    list.innerHTML = html;
++}
++function setDepositOrigin(v) {
++    if (String(v).startsWith('mov:')) _depositOrigin = { origin: 'hgcash', movementId: String(v).slice(4) };
++    else _depositOrigin = { origin: v, movementId: null };
++    const note = document.getElementById('depositOriginNote');
++    if (note) note.style.display = (_depositOrigin.origin === 'otro_banco' || _depositOrigin.origin === 'sin_movimiento') ? '' : 'none';
++    // Si eligió una transferencia, el monto pasa a ser el de la transferencia (no se tipea a mano).
++    if (_depositOrigin.movementId) {
++        const m = _depositPendingMovs.find(x => x.movementId === _depositOrigin.movementId);
++        const inp = document.getElementById('depositAmount');
++        if (m && inp && Math.abs(parseFloat(inp.value || 0) - Number(m.amount)) >= 0.005) { inp.value = String(m.amount); try { calculateBonus(); } catch (_) {} }
++    }
++}
++function getDepositOrigin() {
++    const note = ((document.getElementById('depositOriginNote') || {}).value || '').trim();
++    return { origin: _depositOrigin.origin, movementId: _depositOrigin.movementId || undefined, originNote: note || undefined };
++}
++window.bankSetTab = bankSetTab; window.loadBankTray = loadBankTray; window.openBankAssign = openBankAssign; window.bankAssignPick = bankAssignPick;
++window.bankAssignConfirm = bankAssignConfirm; window.bankLink = bankLink; window.bankResolve = bankResolve; window.bankResolveFromModal = bankResolveFromModal;
++window.bankReopen = bankReopen; window.bankOpenChat = bankOpenChat; window.openSweepModal = openSweepModal; window.submitSweep = submitSweep;
++window.bankSweepDestChanged = bankSweepDestChanged; window.syncSweep = syncSweep; window.openSweepDestinations = openSweepDestinations;
++window.addSweepDestRow = addSweepDestRow; window.saveSweepDestinations = saveSweepDestinations; window.openBankClose = openBankClose;
++window.bankCloseRun = bankCloseRun; window.bankCloseResolve = bankCloseResolve; window.bankGoToMovement = bankGoToMovement; window.setDepositOrigin = setDepositOrigin;
+diff --git a/public/adminprivado2026/index.html b/public/adminprivado2026/index.html
+index 9fa1901..d5af42d 100644
+--- a/public/adminprivado2026/index.html
++++ b/public/adminprivado2026/index.html
+@@ -88,6 +88,12 @@
+                     <span class="icon icon-exchange"></span>
+                     <span>Transacciones</span>
+                 </a>
++                <!-- #155 Bandeja del banco (admin, cargas y pagos). La muestra setupRoleBasedUI. -->
++                <a href="#" class="nav-item nav-item-bank" data-section="bank" style="display:none">
++                    <span>🏦</span>
++                    <span>Banco</span>
++                    <span id="bankBadge" style="display:none;background:#d4820a;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
++                </a>
+                 <a href="#" class="nav-item" data-section="commands">
+                     <span class="icon icon-terminal"></span>
+                     <span>Comandos</span>
+@@ -2342,6 +2348,72 @@
+ 
+             <!-- SMS Masivo Section -->
+             <!-- AUDITORÍA DE ATENCIÓN (#132): reglas + IA + 👍👎 + Telegram -->
++            <!-- ============================================================
++                 #155 BANCO — bandeja en tiempo real, bajadas y cierre diario
++                 ============================================================ -->
++            <section id="bankSection" class="section">
++                <div class="panel-header" style="flex-wrap:wrap;gap:10px;">
++                    <h2>🏦 Banco</h2>
++                    <div id="bankBalanceBox" style="display:none;margin-left:auto;padding:6px 12px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:12.5px;color:#dfe;">
++                        💰 Saldo hgcash: <b id="bankBalanceVal">…</b> <span style="margin-left:8px;font-size:11px;color:#7CFC00;">● en vivo</span>
++                    </div>
++                </div>
++                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="bankTabs">
++                    <button class="btn btn-secondary btn-sm bank-tab active" data-tab="pending" onclick="bankSetTab('pending')">⏳ Pendientes <span id="bankTabPendingCount" style="opacity:.8;"></span></button>
++                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="today" onclick="bankSetTab('today')">📅 Hoy</button>
++                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="day" onclick="bankSetTab('day')">🗓️ Otro día</button>
++                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="sweeps" onclick="bankSetTab('sweeps')">⬆️ Bajadas</button>
++                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="close" onclick="bankSetTab('close')">🧾 Cierre diario</button>
++                    <input type="text" id="bankSearch" placeholder="Buscar titular / usuario / coelsa / monto" style="margin-left:auto;min-width:240px;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;">
++                    <input type="date" id="bankDay" style="display:none;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;" onchange="loadBankTray()">
++                </div>
++                <div id="bankTrayHelp" style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:#bbb;line-height:1.6;">
++                    Cada transferencia que entra al banco aparece acá <b>al instante</b>. La automática la carga sola cuando la foto coincide; si no,
++                    queda <b>pendiente</b> y hay que <b>asignarla</b> a un usuario (se acredita por el mismo camino que la automática, con el mismo candado) o
++                    vincularla a una carga manual ya hecha. <b>Ninguna transferencia puede quedar sin resolver</b>: el cierre diario las marca.
++                </div>
++                <div id="bankTrayWrap" style="overflow-x:auto;">
++                    <table class="data-table" style="min-width:980px;">
++                        <thead>
++                            <tr><th>Hora</th><th>Dir.</th><th>Monto</th><th>Titular / destino</th><th>Coelsa / ref.</th><th>Estado</th><th>Usuario</th><th>Acciones</th></tr>
++                        </thead>
++                        <tbody id="bankTrayBody"><tr><td colspan="8" style="color:#888;text-align:center;">Cargando…</td></tr></tbody>
++                    </table>
++                </div>
++
++                <!-- Bajadas -->
++                <div id="bankSweepsWrap" style="display:none;">
++                    <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:#bbb;line-height:1.6;">
++                        Una <b>bajada</b> es una transferencia saliente desde la cuenta hgcash a un CBU externo (financiera, etc.) para que el banco no acumule
++                        capital. Solo la pueden hacer el <b>administrador principal</b> y el rol de <b>pagos</b>. Todas quedan registradas y entran al cierre diario.
++                        hgcash cobra comisión sobre la salida: el monto tiene que dejar margen sobre el saldo neto.
++                    </div>
++                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
++                        <button class="btn-primary" id="bankSweepNewBtn" onclick="openSweepModal()" style="display:none;">⬆️ Nueva bajada</button>
++                        <button class="btn btn-secondary btn-sm" id="bankSweepDestBtn" onclick="openSweepDestinations()" style="display:none;">📇 Destinos guardados</button>
++                        <span id="bankSweepsTotal" style="margin-left:auto;font-size:12px;color:#aaa;"></span>
++                    </div>
++                    <div style="overflow-x:auto;">
++                        <table class="data-table" style="min-width:900px;">
++                            <thead><tr><th>Fecha</th><th>Monto</th><th>Destino</th><th>CBU</th><th>Pedida por</th><th>Estado</th><th>Nota</th><th></th></tr></thead>
++                            <tbody id="bankSweepsBody"></tbody>
++                        </table>
++                    </div>
++                </div>
++
++                <!-- Cierre diario -->
++                <div id="bankCloseWrap" style="display:none;">
++                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
++                        <input type="date" id="bankCloseDate" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;" onchange="openBankClose(this.value)">
++                        <button class="btn btn-secondary btn-sm" onclick="openBankClose(document.getElementById('bankCloseDate').value, true)">🔄 Recalcular</button>
++                        <button class="btn btn-secondary btn-sm" id="bankCloseTgBtn" onclick="bankCloseRun(document.getElementById('bankCloseDate').value, true)" style="display:none;">📨 Recalcular y mandar a Telegram</button>
++                        <span id="bankCloseCarry" style="margin-left:auto;font-size:12px;color:#ffb347;"></span>
++                    </div>
++                    <div id="bankCloseList" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
++                    <div id="bankCloseBody"></div>
++                </div>
++            </section>
++
+             <section id="auditSection" class="section">
+                 <div class="panel-header">
+                     <h2>🕵️ AUDITORÍA DE ATENCIÓN</h2>
+@@ -2860,6 +2932,71 @@
+     </div>
+ 
+     <!-- Deposit Modal -->
++    <!-- #155 Asignar movimiento del banco a un usuario -->
++    <div id="bankAssignModal" class="modal hidden">
++        <div class="modal-content" style="max-width:640px;">
++            <div class="modal-header">
++                <h3>🏦 Asignar transferencia</h3>
++                <button class="close-modal">&times;</button>
++            </div>
++            <div class="modal-body">
++                <div id="bankAssignHead" style="font-size:13px;line-height:1.6;margin-bottom:10px;"></div>
++                <div class="form-group">
++                    <label>Buscar usuario:</label>
++                    <input type="text" id="bankAssignSearch" placeholder="usuario o teléfono (mín. 2 letras)" autocomplete="off" style="width:100%;">
++                    <div id="bankAssignResults" style="margin-top:6px;"></div>
++                </div>
++                <div id="bankAssignSuggestions" style="font-size:12px;"></div>
++                <div id="bankAssignSelected" style="display:none;margin-top:10px;padding:10px;border-radius:8px;background:rgba(40,167,69,.12);border:1px solid rgba(40,167,69,.55);font-size:13px;"></div>
++                <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
++                    <button class="btn-primary" id="bankAssignConfirmBtn" onclick="bankAssignConfirm(false)" disabled>💰 Acreditar a este usuario</button>
++                    <button class="btn btn-secondary" id="bankAssignForceBtn" onclick="bankAssignConfirm(true)" style="display:none;">⚠️ Forzar (son 2 transferencias reales)</button>
++                    <button class="btn btn-secondary" id="bankResolveBtn" onclick="bankResolveFromModal()" style="display:none;margin-left:auto;">🚫 No corresponde…</button>
++                </div>
++            </div>
++        </div>
++    </div>
++
++    <!-- #155 Nueva bajada -->
++    <div id="bankSweepModal" class="modal hidden">
++        <div class="modal-content" style="max-width:560px;">
++            <div class="modal-header">
++                <h3>⬆️ Nueva bajada del banco</h3>
++                <button class="close-modal">&times;</button>
++            </div>
++            <div class="modal-body">
++                <div id="bankSweepBalance" style="font-size:12.5px;color:#dfe;margin-bottom:10px;"></div>
++                <div class="form-group">
++                    <label>Destino guardado:</label>
++                    <select id="bankSweepDest" style="width:100%;" onchange="bankSweepDestChanged()"><option value="">— CBU / alias a mano —</option></select>
++                </div>
++                <div id="bankSweepManual">
++                    <div class="form-group"><label>CBU/CVU (22 dígitos) o alias:</label><input type="text" id="bankSweepCbu" placeholder="0000003100…  o  mi.alias.mp" style="width:100%;"></div>
++                    <div class="form-group"><label>Nombre del destinatario (opcional):</label><input type="text" id="bankSweepName" style="width:100%;"></div>
++                    <div class="form-group"><label>Etiqueta (ej. Financiera X):</label><input type="text" id="bankSweepLabel" style="width:100%;" maxlength="60"></div>
++                </div>
++                <div class="form-group"><label>Monto ($):</label><input type="number" id="bankSweepAmount" min="1" style="width:100%;"></div>
++                <div class="form-group"><label>Nota (opcional):</label><input type="text" id="bankSweepNote" style="width:100%;" maxlength="300"></div>
++                <button class="btn-primary" id="bankSweepSubmit" onclick="submitSweep()">⬆️ Confirmar bajada</button>
++            </div>
++        </div>
++    </div>
++
++    <!-- #155 Destinos guardados de bajadas (solo admin general) -->
++    <div id="bankSweepDestModal" class="modal hidden">
++        <div class="modal-content" style="max-width:640px;">
++            <div class="modal-header">
++                <h3>📇 Destinos de bajada</h3>
++                <button class="close-modal">&times;</button>
++            </div>
++            <div class="modal-body">
++                <div id="bankSweepDestList"></div>
++                <button class="btn btn-secondary btn-sm" onclick="addSweepDestRow()" style="margin-top:8px;">➕ Agregar destino</button>
++                <button class="btn-primary" onclick="saveSweepDestinations()" style="margin-top:8px;margin-left:8px;">💾 Guardar</button>
++            </div>
++        </div>
++    </div>
++
+     <div id="depositModal" class="modal hidden">
+         <div class="modal-content">
+             <div class="modal-header">
+@@ -2896,6 +3033,12 @@
+                     <label for="depositAmount">Monto ($):</label>
+                     <input type="number" id="depositAmount" placeholder="Ej: 10000" min="1">
+                 </div>
++                <!-- #155 Origen de la plata: transferencia del banco (elegida de la bandeja) u otro banco. -->
++                <div class="form-group" id="depositOriginGroup">
++                    <label>¿De dónde viene la plata?</label>
++                    <div id="depositOriginList" style="font-size:12.5px;line-height:1.6;"></div>
++                    <input type="text" id="depositOriginNote" placeholder="Motivo / detalle (otro banco, sin movimiento…)" style="width:100%;display:none;margin-top:6px;" maxlength="200">
++                </div>
+                 <div class="form-group">
+                     <label for="depositBonus">Monto de Bonificación ($):</label>
+                     <input type="number" id="depositBonus" placeholder="0" readonly>
+diff --git a/server.js b/server.js
+index a788e48..8caa04b 100644
+--- a/server.js
++++ b/server.js
+@@ -77,6 +77,10 @@ const ChatRating = require('./src/models/ChatRating');
+ const BankMovement = require('./src/models/BankMovement');
+ const HgcashCharge = require('./src/models/HgcashCharge');
+ const PendingPayout = require('./src/models/PendingPayout');
++const BankSweep = require('./src/models/BankSweep');           // #155 bajadas del banco
++const DailyClose = require('./src/models/DailyClose');         // #155 cierre diario
++const CashierSnapshot = require('./src/models/CashierSnapshot'); // #155 saldo del cajero JUGAYGANA por operación
++const bankClose = require('./src/services/bankCloseService');  // #155 cruces del cierre
+ const hgcashPay = require('./src/services/hgcashService');
+ const pdfImage = require('./src/services/pdfImageService');
+ const { generateReferralCode } = require('./src/utils/referralCode');
+@@ -431,6 +435,14 @@ function validatePassword(password) {
+ // Integración JUGAYGANA
+ const jugaygana = require('./jugaygana');
+ const jugayganaMovements = require('./jugaygana-movements');
++// #155: cada operación de plata exitosa contra JUGAYGANA reporta el saldo del CAJERO
++// → CashierSnapshot (base del cruce sistema ↔ JUGAYGANA del cierre diario). Best-effort.
++jugaygana.setCashierBalanceHook((info) => {
++  try {
++    CashierSnapshot.create({ at: info.at || new Date(), balance: Number(info.balance), opAmount: Number(info.opAmount || 0), opKind: info.opKind || null, username: info.username || null })
++      .catch(e => logger.warn(`[cajero] snapshot no guardado: ${e.message}`));
++  } catch (_) {}
++});
+ const jugayganaService = require('./src/services/jugayganaService');
+ // Pool de sesiones JUGAYGANA por publicista — se usa cuando un publisher_admin
+ // crea un usuario y la campaña tiene credenciales propias configuradas.
+@@ -2001,7 +2013,8 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
+   } catch (_) {}
+   const terminal = attempts >= HGCASH_MAX_CHARGE_ATTEMPTS;
+   await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: terminal ? 'error' : 'pending' } });
+-  await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
++  if (comprobante && comprobante.id) await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
++  _emitHgcashUpdate('fallo', movement.movementId);
+   if (user) {
+     const prefijo = terminal ? `Se agotaron los ${HGCASH_MAX_CHARGE_ATTEMPTS} intentos automáticos. ` : '';
+     await _emitAdminOnlyChatNote(user.id, user.username,
+@@ -2013,7 +2026,7 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
+ // matcheado a ese usuario por el MISMO monto (que no se pudo auto-cargar), lo
+ // marcamos como `manual_charged` y consumimos el comprobante. Así esa transferencia
+ // /foto NO vuelve a auto-cargar cuando JUGAYGANA se recupere (evita doble carga).
+-async function hgcashConsumeOnManualDeposit(userId, username, amount) {
++async function hgcashConsumeOnManualDeposit(userId, username, amount, txId = null) {
+   try {
+     const cfg = await getHgcashConfig();
+     if (!cfg.enabled) return false;
+@@ -2027,16 +2040,38 @@ async function hgcashConsumeOnManualDeposit(userId, username, amount) {
+       matchedUserId: userId,
+       matchStatus: { $in: ['pending', 'error', 'needs_review'] }
+     }).sort({ createdAt: -1 }).limit(10).lean();
+-    const target = cands.find(m => _amountsEqual(m.amount, amount));
++    let target = cands.find(m => _amountsEqual(m.amount, amount));
++    let source = 'legacy_amount';
++    if (!target) {
++      // #155 Retro-vínculo por TITULAR: el agente cargó a mano ANTES de que el
++      // movimiento se conectara. Si el cliente mandó un comprobante en las últimas
++      // horas cuyo titular coincide con una transferencia PENDIENTE del mismo
++      // monto, esa transferencia es de esta carga → se consume (nunca se vuelve a
++      // acreditar automático). Es el hueco que producía cargas dobles.
++      try {
++        const since = new Date(Date.now() - 6 * 3600 * 1000);
++        const comps = await Comprobante.find({ userId: String(userId), createdAt: { $gte: since }, originHolder: { $nin: [null, ''] } })
++          .sort({ createdAt: -1 }).limit(5).select('originHolder').lean();
++        const keys = Array.from(new Set(comps.map(c => _bankFromKey(c.originHolder)).filter(Boolean)));
++        if (keys.length) {
++          const pend = await BankMovement.find({ direction: 'Inbound', matchStatus: 'pending', fromKey: { $in: keys }, createdAt: { $gte: since } })
++            .sort({ createdAt: -1 }).limit(10).lean();
++          target = pend.find(m => _amountsEqual(m.amount, amount)) || null;
++          if (target) source = 'legacy_name';
++        }
++      } catch (_) {}
++    }
+     if (!target) return false;
+ 
+     // Claim atómico (evita choque con un reintento automático).
+     const claimed = await BankMovement.findOneAndUpdate(
+       { movementId: target.movementId, matchStatus: { $in: ['pending', 'error', 'needs_review'] } },
+-      { $set: { matchStatus: 'manual_charged', chargedAt: new Date() } },
++      { $set: { matchStatus: 'manual_charged', chargedAt: new Date(), matchedUserId: userId, matchedUsername: username, transactionId: txId, chargeSource: source } },
+       { new: true }
+     );
+     if (!claimed) return false;
++    if (txId) { Transaction.updateOne({ id: txId }, { $set: { 'metadata.movementId': target.movementId } }).catch(() => {}); }
++    _emitHgcashUpdate('cargado', target.movementId);
+ 
+     if (target.matchedComprobanteId) {
+       await Comprobante.updateOne({ id: target.matchedComprobanteId },
+@@ -2183,9 +2218,15 @@ async function handlePayoutStatusWebhook(p) {
+     const status = String(p.status || '').toUpperCase();
+     const ext = p.externalID ? String(p.externalID) : null;
+     const hgId = p.id ? String(p.id) : null;
++    if (ext && /^sweep-/.test(ext)) return _handleSweepStatusWebhook(p, ext.replace(/^sweep-/, '')); // #155 bajada
+     const query = ext ? { id: ext } : (hgId ? { hgTransactionId: hgId } : null);
+     if (!query) return;
+     const payout = await PendingPayout.findOne(query);
++    if (!payout && hgId) {
++      // ¿Es una bajada cuyo request no vino con externalID? (idempotencia por hgRequestId)
++      const sw = await BankSweep.findOne({ hgRequestId: hgId }).select('id').lean();
++      if (sw) return _handleSweepStatusWebhook(p, sw.id);
++    }
+     if (!payout) {
+       logger.warn(`[hgcash-pay] webhook de pago sin payout local: ext=${ext} hgId=${hgId} status=${status}`);
+       return;
+@@ -2227,8 +2268,20 @@ async function handlePayoutStatusWebhook(p) {
+ 
+ // Avisa al panel (en vivo) que hubo un cambio en los movimientos hgcash, para que
+ // refresque la tabla sin recargar. Fire-and-forget; nunca rompe nada.
+-function _emitHgcashUpdate(kind) {
+-  try { notifyAdmins('hgcash_movement', { kind: kind || 'update', at: Date.now() }); } catch (_) {}
++function _emitHgcashUpdate(kind, movementId) {
++  try { notifyAdmins('hgcash_movement', { kind: kind || 'update', at: Date.now(), movementId: movementId || null }); } catch (_) {}
++  // #155 Bandeja del banco en TIEMPO REAL: si se conoce el movimiento, se manda el
++  // documento entero para que el panel actualice la fila sin recargar.
++  if (movementId) {
++    BankMovement.findOne({ movementId }).lean()
++      .then(doc => { if (doc) notifyAdmins('bank_movement', { kind: kind || 'update', movement: _bankMovementPublic(doc) }); })
++      .catch(() => {});
++  }
++}
++// Proyección del movimiento para el panel (sin el payload crudo).
++function _bankMovementPublic(m) {
++  if (!m) return null;
++  const o = Object.assign({}, m); delete o.raw; delete o._id; delete o.__v; return o;
+ }
+ 
+ // ── BONO AUTOMÁTICO POR APP + NOTIFICACIONES (pedido del owner 2026-08-15) ──
+@@ -2442,39 +2495,49 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
+ 
+ // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
+ // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
+-async function hgcashAutoCarga({ movement, comprobante, mode }) {
+-  const shadow = mode !== 'auto';
+-
+-  // 1) Reclamar el movimiento (pending → claiming).
++// #155: también es el ÚNICO camino de la carga ASIGNADA desde la bandeja del banco:
++// `assign = { user, agent, agentRole, force }` → sin comprobante (compId null), el
++// agente eligió el usuario a mano; la plata sale del MOVIMIENTO (monto fijo), con
++// el mismo candado por transferencia y los mismos bonos que la automática.
++// Devuelve { ok, reason|txId } (los callers viejos ignoran el retorno).
++async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
++  const shadow = mode !== 'auto' && !assign;
++  const compId = comprobante ? compId : null;
++  const agentLabel = assign ? (assign.agent || 'agente') : 'auto-hgcash';
++
++  // 1) Reclamar el movimiento (pending → claiming). Una asignación manual también
++  //    puede tomar un movimiento frenado (needs_review / error / no_match).
+   const movClaim = await BankMovement.findOneAndUpdate(
+-    { movementId: movement.movementId, matchStatus: 'pending' },
++    { movementId: movement.movementId, matchStatus: { $in: assign ? ['pending', 'no_match', 'needs_review', 'error'] : ['pending'] } },
+     { $set: { matchStatus: 'claiming' } }, { new: true }
+   );
+-  if (!movClaim) return; // ya lo tomó otro proceso
++  if (!movClaim) return { ok: false, reason: 'claimed' }; // ya lo tomó otro proceso / ya no está pendiente
+ 
+   // 2) Reclamar el comprobante (no cargado/tomado todavía).
+-  const compClaim = await Comprobante.findOneAndUpdate(
+-    { id: comprobante.id, autoCharged: { $ne: true }, bankMatchStatus: { $nin: ['claiming', 'auto_charged', 'shadow_matched'] } },
+-    { $set: { bankMatchStatus: 'claiming', toApiBank: true } }, { new: true }
+-  );
+-  if (!compClaim) {
+-    // El comprobante ya fue tomado por otro movimiento → devolver el movimiento.
+-    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'pending' } });
+-    return;
++  if (compId) {
++    const compClaim = await Comprobante.findOneAndUpdate(
++      { id: compId, autoCharged: { $ne: true }, bankMatchStatus: { $nin: ['claiming', 'auto_charged', 'shadow_matched'] } },
++      { $set: { bankMatchStatus: 'claiming', toApiBank: true } }, { new: true }
++    );
++    if (!compClaim) {
++      // El comprobante ya fue tomado por otro movimiento → devolver el movimiento.
++      await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'pending' } });
++      return { ok: false, reason: 'comprobante_taken' };
++    }
+   }
+ 
+-  const user = await User.findOne({ id: comprobante.userId });
++  const user = assign ? assign.user : await User.findOne({ id: comprobante.userId });
+   if (!user) {
+     await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: 'usuario no encontrado' } });
+-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+-    return;
++    if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'pending' } });
++    return { ok: false, reason: 'user_not_found' };
+   }
+ 
+   // Registrar a quién matcheó el movimiento (sirve para reconciliar y para que una
+   // carga MANUAL a este usuario consuma el movimiento aunque la auto-carga falle).
+   try {
+     await BankMovement.updateOne({ movementId: movement.movementId },
+-      { $set: { matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id } });
++      { $set: { matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId } });
+   } catch (_) {}
+ 
+   const amount = movement.amount;
+@@ -2484,13 +2547,13 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+   // Modo sombra: NO cargar, sólo avisar al admin que el match está listo.
+   if (shadow) {
+     await BankMovement.updateOne({ movementId: movement.movementId }, {
+-      $set: { matchStatus: 'shadow_matched', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id }
++      $set: { matchStatus: 'shadow_matched', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId }
+     });
+-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'shadow_matched', matchedMovementId: movement.movementId } });
++    if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'shadow_matched', matchedMovementId: movement.movementId } });
+     await _emitAdminOnlyChatNote(user.id, user.username,
+       `🏦 MATCH hgcash (MODO SOMBRA) — ${dataDesc}\n✅ La transferencia coincide con el comprobante. Lista para cargar (auto-carga DESACTIVADA — cargá vos).`);
+     logger.info(`[hgcash] shadow match user=${user.username} amount=$${amount} movement=${movement.movementId}`);
+-    return;
++    return { ok: false, reason: 'shadow' };
+   }
+ 
+   // ── MÍNIMO DE CARGA ──────────────────────────────────────────────────────
+@@ -2501,14 +2564,14 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+   try {
+     const _minCfg = await getHgcashConfig();
+     const minCharge = Number(_minCfg.minChargeARS) > 0 ? Number(_minCfg.minChargeARS) : 1500;
+-    if (Number(amount) < minCharge) {
++    if (!assign && Number(amount) < minCharge) {
+       await BankMovement.updateOne({ movementId: movement.movementId },
+-        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `monto $${Number(amount)} menor al mínimo $${minCharge}` } });
+-      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
++        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: `monto $${Number(amount)} menor al mínimo $${minCharge}` } });
++      if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
+       await _emitAdminOnlyChatNote(user.id, user.username,
+         `🏦 ✅ Comprobante CORRECTO (${dataDesc}) — PERO el monto es menor al mínimo de carga ($${minCharge.toLocaleString('es-AR')}). NO se cargó automático.\n👉 Pedile al cliente que envíe la diferencia para llegar al mínimo y cargá la suma a mano.`);
+       logger.info(`[hgcash] bajo mínimo user=${user.username} $${amount} < $${minCharge} mov=${movement.movementId}`);
+-      return;
++      return { ok: false, reason: 'below_min' };
+     }
+   } catch (minErr) {
+     logger.warn(`[hgcash] chequeo de mínimo falló (sigue la carga): ${minErr.message}`);
+@@ -2525,19 +2588,19 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+     try {
+       await HgcashCharge.create({
+         chargeKey, userId: user.id, username: user.username,
+-        amount: Number(amount), movementId: movement.movementId, comprobanteId: comprobante.id
++        amount: Number(amount), movementId: movement.movementId, comprobanteId: compId
+       });
+       chargeLocked = true;
+     } catch (lockErr) {
+       if (lockErr && lockErr.code === 11000) {
+         // Esta transferencia YA fue acreditada → NO recargar (duplicado real).
+         await BankMovement.updateOne({ movementId: movement.movementId },
+-          { $set: { matchStatus: 'duplicate', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `duplicado: coelsa ${chargeKey} ya acreditada` } });
+-        await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'duplicate' } });
++          { $set: { matchStatus: 'duplicate', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: `duplicado: coelsa ${chargeKey} ya acreditada` } });
++        if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'duplicate' } });
+         await _emitAdminOnlyChatNote(user.id, user.username,
+           `🏦 ⚠️ Movimiento DUPLICADO de la misma transferencia (coelsa ${chargeKey}) — NO se cargó de nuevo (ya estaba acreditado).`);
+         logger.warn(`[hgcash] DUPLICADO bloqueado coelsa=${chargeKey} user=${user.username} mov=${movement.movementId}`);
+-        return;
++        return { ok: false, reason: 'duplicate', error: `Esta transferencia (coelsa ${chargeKey}) YA fue acreditada antes.` };
+       }
+       // Otro error de DB: no bloqueamos la carga por eso (la red de seguridad de abajo igual protege).
+       logger.warn(`[hgcash] no se pudo crear el candado de carga (coelsa=${chargeKey}): ${lockErr.message}`);
+@@ -2553,7 +2616,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+   try {
+     const _hgCfg = await getHgcashConfig();
+     const guardMin = Number(_hgCfg.duplicateGuardMinutes) >= 0 ? Number(_hgCfg.duplicateGuardMinutes) : 8;
+-    if (guardMin > 0) {
++    if (guardMin > 0 && !(assign && assign.force)) {
+       const sinceGuard = new Date(Date.now() - guardMin * 60 * 1000);
+       // #131: antes bastaba "mismo usuario + mismo monto en <8 min" para frenar,
+       // aunque la carga anterior fuera OTRA transferencia (otro coelsa, otro
+@@ -2589,12 +2652,12 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+       if (recent) {
+         if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
+         await BankMovement.updateOne({ movementId: movement.movementId },
+-          { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `posible duplicado: ya hubo carga de $${Number(amount)} hace <${guardMin}min` } });
+-        await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review' } });
++          { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: `posible duplicado: ya hubo carga de $${Number(amount)} hace <${guardMin}min` } });
++        if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'needs_review' } });
+         await _emitAdminOnlyChatNote(user.id, user.username,
+           `🏦 ⚠️ POSIBLE DUPLICADO — a este cliente ya se le cargó $${Number(amount).toLocaleString('es-AR')} hace pocos minutos. NO se cargó automático.\nVerificá si son DOS transferencias REALES (dos comprobantes con N° distinto) y, si corresponde, cargá a mano.`);
+         logger.warn(`[hgcash] HOLD posible duplicado user=${user.username} $${amount} mov=${movement.movementId}`);
+-        return;
++        return { ok: false, reason: 'possible_duplicate', error: `A este cliente ya se le cargó $${Number(amount).toLocaleString('es-AR')} hace menos de ${guardMin} min. Si son DOS transferencias reales, confirmá con "forzar".` };
+       }
+     }
+   } catch (guardErr) {
+@@ -2629,37 +2692,42 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+       }
+     } catch (_) {}
+ 
+-    const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)', user.jugayganaUserId || null);
++    const result = await jugaygana.depositToUser(user.username, Number(amount), assign ? `Carga asignada desde bandeja (hgcash) por ${agentLabel}` : 'Carga automática (hgcash)', user.jugayganaUserId || null);
+     if (!result.success && result.ambiguous) {
+       // #151 AMBIGUO: NO liberar el candado ni reintentar (podría duplicar la carga).
+       // Movimiento y comprobante quedan en needs_review para que un agente verifique.
+       await BankMovement.updateOne({ movementId: movement.movementId },
+-        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga entró' } });
+-      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
+-      await _alertMoneyAmbiguous('Carga automática hgcash', user.id, user.username, amount, result.error);
+-      _emitHgcashUpdate('ambiguo');
+-      return;
++        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga entró' } });
++      if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
++      await _alertMoneyAmbiguous(assign ? 'Carga asignada (bandeja)' : 'Carga automática hgcash', user.id, user.username, amount, result.error);
++      _emitHgcashUpdate('ambiguo', movement.movementId);
++      return { ok: false, reason: 'ambiguous', error: result.error };
+     }
+     if (!result.success) {
+       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
+       await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
+-      return;
++      return { ok: false, reason: 'deposit_failed', error: jugaygana.errToString(result.error || 'fallo deposit') };
+     }
+ 
++    const txId = uuidv4();
+     await BankMovement.updateOne({ movementId: movement.movementId }, {
+-      $set: { matchStatus: 'auto_charged', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargedAt: new Date() }
++      $set: Object.assign(
++        { matchStatus: assign ? 'manual_charged' : 'auto_charged', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargedAt: new Date(), transactionId: txId, chargeSource: assign ? 'assigned' : 'auto', chargeError: null },
++        assign ? { assignedBy: agentLabel, assignedAt: new Date() } : {}
++      )
+     });
+-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'auto_charged', matchedMovementId: movement.movementId, autoCharged: true } });
++    if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'auto_charged', matchedMovementId: movement.movementId, autoCharged: true } });
+     charged = true; // ya acreditó: cualquier error posterior NO debe disparar reintento
+ 
+     try { await recordUserActivity(user.id, 'deposit', Number(amount)); } catch (_) {}
+     await Transaction.create({
+-      id: uuidv4(), type: 'deposit', amount: Number(amount),
++      id: txId, type: 'deposit', amount: Number(amount),
+       username: user.username, userId: user.id,
+-      description: `Carga automática hgcash (${opDesc})`,
+-      adminUsername: 'auto-hgcash', adminRole: 'system',
++      description: assign ? `Carga asignada desde bandeja hgcash (${opDesc})` : `Carga automática hgcash (${opDesc})`,
++      adminUsername: agentLabel, adminRole: assign ? (assign.agentRole || 'depositor') : 'system',
++      adminId: assign ? (assign.agentId || null) : null,
+       transactionId: result.data?.transfer_id || result.data?.transferId,
+-      metadata: { source: 'auto_hgcash', movementId: movement.movementId, comprobanteId: comprobante.id },
++      metadata: { source: assign ? 'hgcash_assigned' : 'auto_hgcash', movementId: movement.movementId, comprobanteId: compId },
+       timestamp: new Date()
+     });
+ 
+@@ -2804,19 +2872,24 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
+         : (appBonus.skippedForBalance
+           ? ` ℹ️ SIN bono ${appBonus.cfg.allPct}%: el cliente ya tenía $${Number(appBonus.preBalance).toLocaleString('es-AR')} de saldo antes de la carga (más de $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR')}).`
+           : ''));
+-    await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
+-    _emitHgcashUpdate('cargado');
+-    logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
++    await _emitAdminOnlyChatNote(user.id, user.username, assign
++      ? `🏦 ✅ CARGA ASIGNADA desde la bandeja del banco por ${agentLabel} — ${dataDesc}. Acreditado.${bonusNote}`
++      : `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
++    _emitHgcashUpdate('cargado', movement.movementId);
++    logger.info(`[hgcash] ${assign ? 'carga asignada por ' + agentLabel : 'auto-carga'} OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
++    return { ok: true, txId };
+   } catch (e) {
+     if (charged) {
+       // La carga YA se acreditó; el error fue en un paso posterior (mensaje/transacción).
+       // NO reintentar (sería doble carga). Solo dejamos constancia.
+       logger.error(`[hgcash] carga OK pero falló paso posterior user=${user.username}: ${e.message}`);
++      return { ok: true, txId: null, warning: e.message };
+     } else {
+       // La carga no llegó a confirmarse → liberar el candado y dejarlo reintentable.
+       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
+       await hgcashHandleChargeFailure(movClaim || movement, comprobante, e.message, dataDesc, user);
+       logger.error(`[hgcash] auto-carga excepción user=${user.username}: ${e.message}`);
++      return { ok: false, reason: 'exception', error: e.message };
+     }
+   }
+ }
+@@ -3341,6 +3414,12 @@ app.post('/api/hgcash/webhook', async (req, res) => {
+       topic: p.topic || null, eventType: p.eventType || null, raw: p
+     };
+ 
++    // #155 Salientes: clasificar (pago a cliente / bajada / desconocido) por el externalID.
++    if (doc.direction === 'Outbound') {
++      if (doc.externalId && /^sweep-/.test(doc.externalId)) { doc.outKind = 'sweep'; doc.sweepId = doc.externalId.replace(/^sweep-/, ''); }
++      else if (doc.externalId) { doc.outKind = 'payout'; doc.payoutId = doc.externalId; }
++      else doc.outKind = 'unknown';
++    }
+     let isNew = false;
+     try {
+       await BankMovement.create({
+@@ -3349,6 +3428,9 @@ app.post('/api/hgcash/webhook', async (req, res) => {
+         createdAt: new Date()
+       });
+       isNew = true;
++      if (doc.outKind === 'sweep' && doc.sweepId) {
++        BankSweep.updateOne({ id: doc.sweepId }, { $set: { movementId: doc.movementId } }).catch(() => {});
++      }
+     } catch (e) {
+       if (e && e.code === 11000) {
+         // Reentrega / created+status_change: actualizar datos sin pisar el matchStatus.
+@@ -3359,7 +3441,7 @@ app.post('/api/hgcash/webhook', async (req, res) => {
+     // Responder 2xx YA (el banco reintenta si no; el matcheo corre aparte).
+     res.status(200).json({ ok: true });
+ 
+-    if (isNew) _emitHgcashUpdate('movimiento'); // panel en vivo (entrantes y salientes)
++    _emitHgcashUpdate(isNew ? 'movimiento' : 'estado', doc.movementId); // bandeja del banco en vivo (entrantes y salientes)
+     if (isNew && doc.direction === 'Inbound') {
+       BankMovement.findOne({ movementId: doc.movementId }).lean()
+         .then(fresh => { if (fresh) return hgcashMatchFromMovement(fresh); })
+@@ -9169,9 +9251,17 @@ app.get('/api/movements', authMiddleware, async (req, res) => {
+ });
+ 
+ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, res) => {
++  // #155 Carga manual ANCLADA: origen declarado + movimiento del banco elegido en el modal.
++  // (Fuera del try: el catch tiene que poder liberar el movimiento reclamado.)
++  let _bankMovementId = null;
++  let _bankClaimed = null; // movimiento reclamado (estado previo) para liberarlo si la carga falla
+   try {
+     let { userId, username, amount, bonus = 0, description } = req.body; // `bonus` puede pisarse con el bono de LOTE automático (#149)
+     let _loteClaim = null; // #149: % de lote aplicado solo en esta carga (null = no hubo)
++    _bankMovementId = req.body.movementId ? String(req.body.movementId).slice(0, 80) : null;
++    const _bankOrigin = ['hgcash', 'otro_banco', 'sin_movimiento'].includes(req.body.origin) ? req.body.origin : (_bankMovementId ? 'hgcash' : null);
++    const _bankOriginNote = String(req.body.originNote || '').trim().slice(0, 200);
++    const _depositTxId = uuidv4();
+     
+     // Buscar usuario por ID o username
+     let user;
+@@ -9189,9 +9279,25 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req,
+       return res.status(400).json({ error: 'Monto inválido' });
+     }
+ 
++    // #155: si el agente eligió una transferencia de la bandeja, el monto tiene que
++    // ser EXACTAMENTE el de la transferencia y se reclama atómico antes de acreditar
++    // (así la carga automática no la puede tomar en el medio).
++    if (_bankMovementId) {
++      const mv = await BankMovement.findOne({ movementId: _bankMovementId }).lean();
++      if (!mv || mv.direction !== 'Inbound') return res.status(400).json({ error: 'La transferencia elegida no existe.' });
++      if (!_amountsEqual(mv.amount, amount)) return res.status(400).json({ error: `El monto ($${Number(amount).toLocaleString('es-AR')}) no coincide con la transferencia elegida ($${Number(mv.amount).toLocaleString('es-AR')}).` });
++      _bankClaimed = await BankMovement.findOneAndUpdate(
++        { movementId: _bankMovementId, matchStatus: { $in: ['pending', 'no_match', 'needs_review', 'error'] } },
++        { $set: { matchStatus: 'claiming' } }, { new: false }
++      );
++      if (!_bankClaimed) return res.status(409).json({ error: 'Esa transferencia ya fue acreditada (o la está tomando otro proceso). Refrescá la bandeja.' });
++    }
++    const _bankRelease = (toStatus, extra) => _bankReleaseClaim(_bankMovementId, _bankClaimed, toStatus, extra);
++
+     const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
+ 
+     if (!result.success && result.ambiguous) {
++      await _bankRelease('needs_review', { matchedUserId: user.id, matchedUsername: user.username, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga manual entró' });
+       // #151: la carga puede haber entrado. El agente NO debe repetirla sin mirar el saldo.
+       await _alertMoneyAmbiguous('Carga manual', user.id, user.username, amount, result.error);
+       return res.status(502).json({ error: `⚠️ JUGAYGANA no confirmó la carga de $${Number(amount).toLocaleString('es-AR')} y no se pudo verificar por saldo. NO la repitas todavía: mirá el saldo/historial del cliente en JUGAYGANA y cargá de nuevo solo si NO entró.`, ambiguous: true });
+@@ -9279,10 +9385,20 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req,
+ 
+       await recordUserActivity(user.id, 'deposit', parseFloat(amount));
+ 
+-      // hgcash: si esta carga MANUAL corresponde a una transferencia hgcash pendiente
+-      // de ese usuario (mismo monto), marcarla como cargada → no se auto-carga después.
+-      // Fire-and-forget: no frena la respuesta de la carga.
+-      hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount)).catch(() => {});
++      // hgcash: vincular la carga MANUAL con su transferencia. #155: si el agente la
++      // eligió en el modal, se marca ESA (manual_charged + transactionId); si no,
++      // se busca por monto/titular (legacy) → no se auto-carga después.
++      if (_bankClaimed) {
++        try {
++          await BankMovement.updateOne({ movementId: _bankMovementId }, { $set: {
++            matchStatus: 'manual_charged', matchedUserId: user.id, matchedUsername: user.username, chargedAt: new Date(),
++            transactionId: _depositTxId, chargeSource: 'manual_link', assignedBy: req.user.username || null, assignedAt: new Date(), chargeError: null
++          } });
++        } catch (linkErr) { logger.warn(`[bank] no se pudo vincular la carga manual al movimiento ${_bankMovementId}: ${linkErr.message}`); }
++        _emitHgcashUpdate('cargado', _bankMovementId);
++      } else {
++        hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount), _depositTxId).catch(() => {});
++      }
+ 
+       // ROI de las estrategias: si el depósito incluyó bono, marcamos el
+       // PromoBonus vigente del usuario como usado y guardamos el monto de
+@@ -9579,7 +9695,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req,
+       // Esto mantiene la consistencia con la Transaction tipo 'bonus' separada
+       // (más abajo) que sólo se crea si el bonus efectivamente entró.
+       await Transaction.create({
+-        id: uuidv4(),
++        id: _depositTxId,
+         type: 'deposit',
+         amount: parseFloat(amount),
+         bonus: bonusActuallyApplied ? parseFloat(bonus) : 0,
+@@ -9590,12 +9706,16 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req,
+         adminUsername: req.user?.username,
+         adminRole: req.user?.role || 'admin',
+         transactionId: result.data?.transfer_id || result.data?.transferId,
+-        metadata: bonusRequested && !bonusActuallyApplied ? {
+-          // Trazabilidad: agente pidió bonus pero no entró. Sirve para reportes
+-          // de discrepancias y para que el admin sepa que hubo intento fallido.
+-          requestedBonus: parseFloat(bonus),
+-          bonusFailureReason: bonusJgResult?.error || 'desconocido'
+-        } : null,
++        metadata: Object.assign(
++          // #155 origen declarado de la carga manual (lo cruza el cierre diario).
++          { origin: _bankOrigin, originNote: _bankOriginNote || undefined, movementId: _bankClaimed ? _bankMovementId : undefined },
++          bonusRequested && !bonusActuallyApplied ? {
++            // Trazabilidad: agente pidió bonus pero no entró. Sirve para reportes
++            // de discrepancias y para que el admin sepa que hubo intento fallido.
++            requestedBonus: parseFloat(bonus),
++            bonusFailureReason: bonusJgResult?.error || 'desconocido'
++          } : {}
++        ),
+         timestamp: new Date()
+       });
+ 
+@@ -9657,10 +9777,12 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req,
+         bonusError: bonusRequested && !bonusActuallyApplied ? bonusJgResult?.error : null
+       });
+     } else {
++      await _bankRelease(); // #155: la transferencia vuelve a la bandeja
+       logger.error(`[deposit] FAIL admin=${req.user?.username} user=${user.username} amount=$${amount} bonus=$${bonus || 0} error=${result.error || 'sin error'}`);
+       res.status(400).json({ error: result.error });
+     }
+   } catch (error) {
++    if (_bankClaimed) _bankReleaseClaim(_bankMovementId, _bankClaimed).catch(() => {}); // #155
+     console.error('Error realizando depósito:', error);
+     res.status(500).json({ error: 'Error del servidor' });
+   }
+@@ -15735,6 +15857,501 @@ app.get('/api/admin/hgcash/balance', authMiddleware, adminMiddleware, async (req
+   }
+ });
+ 
++
++// ============================================
++// #155 BANDEJA DEL BANCO · BAJADAS · CIERRE DIARIO
++// ============================================
++// El eje del control: manda el MOVIMIENTO del banco (webhook hgcash), no la foto.
++// Toda transferencia entrante termina en un estado (cargada auto / asignada por un
++// agente / manual anclada / "no corresponde"); toda salida es un pago o una bajada.
++// El panel (sección 🏦 Banco) se actualiza en TIEMPO REAL por socket
++// (`bank_movement` con el documento, `hgcash_movement` como aviso genérico).
++// Roles: ver bandeja y asignar → admin | depositor; bajadas → admin | withdrawer;
++// resolver "no corresponde", reabrir, cierre → solo admin general.
++const BANK_TRAY_OPEN_STATES = ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'];
++
++// Libera un movimiento reclamado por una carga manual que no llegó a acreditarse.
++async function _bankReleaseClaim(movementId, prev, toStatus, extra) {
++  if (!movementId || !prev) return;
++  try {
++    await BankMovement.updateOne({ movementId, matchStatus: 'claiming' },
++      { $set: Object.assign({ matchStatus: toStatus || prev.matchStatus || 'pending' }, extra || {}) });
++  } catch (_) {}
++  _emitHgcashUpdate('liberado', movementId);
++}
++
++function _bankCanView(req) { return ['admin', 'depositor', 'withdrawer'].includes(req.user && req.user.role); }
++function _bankCanAssign(req) { return ['admin', 'depositor'].includes(req.user && req.user.role); }
++function _bankCanSweep(req) { return ['admin', 'withdrawer'].includes(req.user && req.user.role); }
++
++// Enriquecer salientes con el usuario del pago / etiqueta de la bajada.
++async function _bankEnrichMovements(movements) {
++  try {
++    const out = movements.filter(m => m.direction === 'Outbound');
++    const extIds = out.map(m => m.externalId).filter(e => e && !/^sweep-/.test(e));
++    const hgIds = out.map(m => m.movementId).filter(Boolean);
++    const sweepIds = out.map(m => m.sweepId || (m.externalId && /^sweep-/.test(m.externalId) ? m.externalId.replace(/^sweep-/, '') : null)).filter(Boolean);
++    if (extIds.length || hgIds.length) {
++      const or = [];
++      if (extIds.length) or.push({ id: { $in: extIds } });
++      if (hgIds.length) or.push({ hgTxId: { $in: hgIds } }, { hgTransactionId: { $in: hgIds } });
++      const payouts = await PendingPayout.find({ $or: or }).select('id hgTransactionId hgTxId username resolvedCbu titular').lean();
++      const byId = new Map(payouts.map(p => [p.id, p]));
++      const byHg = new Map(); for (const p of payouts) { if (p.hgTxId) byHg.set(p.hgTxId, p); if (p.hgTransactionId) byHg.set(p.hgTransactionId, p); }
++      for (const m of out) {
++        const p = (m.externalId && byId.get(m.externalId)) || byHg.get(m.movementId);
++        if (p) { m.payoutUsername = p.username || null; m.outKind = m.outKind || 'payout'; if (!m.toCBU && p.resolvedCbu) m.toCBU = p.resolvedCbu; if (!m.toName && p.titular) m.toName = p.titular; }
++      }
++    }
++    if (sweepIds.length) {
++      const sweeps = await BankSweep.find({ id: { $in: sweepIds } }).select('id destLabel toName requestedBy').lean();
++      const byId = new Map(sweeps.map(x => [x.id, x]));
++      for (const m of out) {
++        const sid = m.sweepId || (m.externalId && /^sweep-/.test(m.externalId) ? m.externalId.replace(/^sweep-/, '') : null);
++        const sw = sid && byId.get(sid);
++        if (sw) { m.outKind = 'sweep'; m.sweepLabel = sw.destLabel || sw.toName || 'bajada'; m.sweepBy = sw.requestedBy || null; }
++      }
++    }
++  } catch (e) { logger.warn(`[bank] enriquecer movimientos: ${e.message}`); }
++  return movements;
++}
++
++// Buscador liviano de usuarios para asignar desde la bandeja (admin y cargas).
++app.get('/api/admin/bank/users-search', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanAssign(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const q = String(req.query.q || '').trim().slice(0, 40);
++    if (q.length < 2) return res.json({ users: [] });
++    const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++    const users = await User.find({ role: 'user', $or: [{ usernameLower: new RegExp('^' + safe.toLowerCase()) }, { username: new RegExp(safe, 'i') }, { phone: new RegExp(safe.replace(/\D/g, '') || '__none__') }] })
++      .sort({ lastLogin: -1 }).limit(10).select('id username phone isBlocked lastLogin').lean();
++    res.json({ users: users.map(u => ({ id: u.id, username: u.username, phone: u.phone || null, isBlocked: !!u.isBlocked, lastLogin: u.lastLogin || null })) });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++
++// BANDEJA: tab=pending (entrantes sin resolver) | today | day (&day=YYYY-MM-DD) | all (paginado).
++app.get('/api/admin/bank/tray', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const cfg = await getHgcashConfig();
++    const tab = String(req.query.tab || 'pending');
++    const search = String(req.query.search || '').trim().slice(0, 60);
++    const amountQ = req.query.amount ? Number(String(req.query.amount).replace(/[^\d.]/g, '')) : null;
++    const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
++    const q = {};
++    if (tab === 'pending') {
++      q.direction = 'Inbound';
++      q.matchStatus = { $in: BANK_TRAY_OPEN_STATES };
++    } else if (tab === 'today' || tab === 'day') {
++      const dayKey = tab === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : _artDateKey();
++      const r = _artDayRange(dayKey);
++      q.createdAt = { $gte: r.start, $lt: r.end };
++    }
++    if (amountQ && Number.isFinite(amountQ)) q.amount = { $gte: amountQ - 0.005, $lte: amountQ + 0.005 };
++    if (search) {
++      const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++      q.$or = [{ fromName: new RegExp(safe, 'i') }, { toName: new RegExp(safe, 'i') }, { matchedUsername: new RegExp(safe, 'i') }, { coelsaCode: new RegExp(safe, 'i') }, { fromCBU: new RegExp(safe) }, { amountRaw: new RegExp(safe) }];
++    }
++    let movements = await BankMovement.find(q).sort({ createdAt: -1 }).limit(limit).select('-raw').lean();
++    // Salientes: los pagos y bajadas ya están clasificados; los entrantes en la bandeja de pendientes
++    // solo cuentan si el banco los dio por acreditados (status done).
++    if (tab === 'pending') movements = movements.filter(m => _statusAccredited(m.status, cfg));
++    movements = await _bankEnrichMovements(movements);
++    const pendingCount = await BankMovement.countDocuments({ direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES }, status: { $in: (cfg.acceptStatuses || ['done']) } });
++    res.json({ movements, pendingCount, hgcashEnabled: !!cfg.enabled, mode: cfg.mode || 'shadow', canAssign: _bankCanAssign(req), canSweep: _bankCanSweep(req), isAdmin: req.user.role === 'admin' });
++  } catch (error) {
++    logger.error(`[bank] tray: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// SUGERENCIAS para asignar un movimiento: comprobantes del mismo monto (últimas 12 h)
++// con el titular parecido, y cargas manuales recientes del mismo monto sin transferencia.
++app.get('/api/admin/bank/movements/:movementId/suggestions', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const m = await BankMovement.findOne({ movementId: String(req.params.movementId) }).select('-raw').lean();
++    if (!m) return res.status(404).json({ error: 'Movimiento no encontrado' });
++    const since = new Date(Date.now() - 12 * 3600 * 1000);
++    const comps = await Comprobante.find({ isComprobante: true, createdAt: { $gte: since }, amount: { $gte: Number(m.amount) - 0.005, $lte: Number(m.amount) + 0.005 } })
++      .sort({ createdAt: -1 }).limit(30).select('id userId username originHolder originCbu operationNumber createdAt bankMatchStatus autoCharged imageHash').lean();
++    const comprobantes = comps.map(c => ({
++      id: c.id, userId: c.userId, username: c.username, originHolder: c.originHolder || null, operationNumber: c.operationNumber || null,
++      createdAt: c.createdAt, used: !!c.autoCharged || ['auto_charged', 'manual_charged', 'duplicate'].includes(c.bankMatchStatus),
++      nameMatch: !!(c.originHolder && m.fromName && _nameMatch(c.originHolder, m.fromName)),
++      opMatch: !!(c.operationNumber && (m.coelsaCode || m.externalId) && String(c.operationNumber).replace(/\D/g, '') && (String(m.coelsaCode || '').includes(String(c.operationNumber)) || String(c.operationNumber).includes(String(m.coelsaCode || '__'))))
++    })).sort((a, b) => (b.nameMatch + b.opMatch) - (a.nameMatch + a.opMatch));
++    const txs = await Transaction.find({ type: 'deposit', timestamp: { $gte: since }, amount: { $gte: Number(m.amount) - 0.005, $lte: Number(m.amount) + 0.005 }, 'metadata.source': { $nin: ['auto_hgcash', 'hgcash_assigned'] } })
++      .sort({ timestamp: -1 }).limit(20).select('id userId username amount timestamp adminUsername metadata').lean();
++    const recentDeposits = txs.map(t => ({ id: t.id, userId: t.userId, username: t.username, amount: t.amount, timestamp: t.timestamp, adminUsername: t.adminUsername, hasMovement: !!(t.metadata && t.metadata.movementId) }));
++    // Otras cuentas ya fondeadas por este titular (identidad bancaria): suele ser el mismo cliente.
++    let sameHolder = [];
++    try {
++      const or = _bankIdentityOr(m);
++      if (or.length) {
++        const prevMovs = await BankMovement.find({ $or: or, movementId: { $ne: m.movementId }, matchedUserId: { $ne: null }, matchStatus: { $in: ['auto_charged', 'manual_charged'] } })
++          .sort({ createdAt: -1 }).limit(20).select('matchedUserId matchedUsername createdAt amount').lean();
++        const seen = new Set();
++        for (const pm of prevMovs) { if (!seen.has(pm.matchedUserId)) { seen.add(pm.matchedUserId); sameHolder.push({ userId: pm.matchedUserId, username: pm.matchedUsername, lastAt: pm.createdAt, lastAmount: pm.amount }); } }
++      }
++    } catch (_) {}
++    res.json({ movement: m, comprobantes, recentDeposits, sameHolder });
++  } catch (error) {
++    logger.error(`[bank] suggestions: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// ASIGNAR un movimiento a un usuario → acredita por el MISMO camino de la carga automática.
++app.post('/api/admin/bank/movements/:movementId/assign', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanAssign(req)) return res.status(403).json({ error: 'Solo admin o cargas pueden asignar' });
++    const movementId = String(req.params.movementId);
++    const userId = String((req.body && req.body.userId) || '').trim();
++    const force = !!(req.body && req.body.force);
++    if (!userId) return res.status(400).json({ error: 'Falta el usuario' });
++    const movement = await BankMovement.findOne({ movementId }).lean();
++    if (!movement || movement.direction !== 'Inbound') return res.status(404).json({ error: 'Movimiento no encontrado' });
++    const cfg = await getHgcashConfig();
++    if (!_statusAccredited(movement.status, cfg)) return res.status(400).json({ error: `El banco todavía no acreditó esta transferencia (estado ${movement.status || '?'}).` });
++    if (!BANK_TRAY_OPEN_STATES.includes(movement.matchStatus) || movement.matchStatus === 'claiming') return res.status(409).json({ error: 'Esa transferencia ya no está pendiente. Refrescá la bandeja.' });
++    const user = await User.findOne({ id: userId });
++    if (!user || user.role !== 'user') return res.status(404).json({ error: 'Usuario no encontrado' });
++    const r = await hgcashAutoCarga({ movement, comprobante: null, mode: 'auto', assign: { user, agent: req.user.username, agentRole: req.user.role, agentId: req.user.userId, force } });
++    if (!r || !r.ok) {
++      const reason = (r && r.reason) || 'error';
++      const msg = (r && r.error) || ({ claimed: 'Otro proceso tomó esta transferencia. Refrescá la bandeja.', ambiguous: 'JUGAYGANA no confirmó la carga: quedó en VERIFICAR (no la repitas).', deposit_failed: 'JUGAYGANA rechazó la carga.' })[reason] || 'No se pudo acreditar.';
++      return res.status(reason === 'possible_duplicate' ? 409 : (reason === 'ambiguous' ? 502 : 400)).json({ error: msg, reason, canForce: reason === 'possible_duplicate' });
++    }
++    logger.info(`[bank] ${req.user.username} asignó movimiento ${movementId} ($${movement.amount}) a ${user.username}`);
++    res.json({ success: true, txId: r.txId || null, username: user.username });
++  } catch (error) {
++    logger.error(`[bank] assign: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// VINCULAR un movimiento a una carga manual YA hecha (la plata ya se acreditó; solo se ata).
++app.post('/api/admin/bank/movements/:movementId/link', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanAssign(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const movementId = String(req.params.movementId);
++    const txId = String((req.body && req.body.transactionId) || '').trim();
++    if (!txId) return res.status(400).json({ error: 'Falta la carga a vincular' });
++    const [movement, tx] = await Promise.all([BankMovement.findOne({ movementId }).lean(), Transaction.findOne({ id: txId, type: 'deposit' }).lean()]);
++    if (!movement || movement.direction !== 'Inbound') return res.status(404).json({ error: 'Movimiento no encontrado' });
++    if (!tx) return res.status(404).json({ error: 'Carga no encontrada' });
++    if (tx.metadata && tx.metadata.movementId) return res.status(409).json({ error: 'Esa carga ya está vinculada a otra transferencia.' });
++    if (!_amountsEqual(tx.amount, movement.amount)) return res.status(400).json({ error: 'El monto de la carga no coincide con la transferencia.' });
++    const claimed = await BankMovement.findOneAndUpdate(
++      { movementId, matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') } },
++      { $set: { matchStatus: 'manual_charged', matchedUserId: tx.userId, matchedUsername: tx.username, chargedAt: new Date(), transactionId: tx.id, chargeSource: 'manual_link', assignedBy: req.user.username, assignedAt: new Date(), chargeError: null } },
++      { new: true }
++    );
++    if (!claimed) return res.status(409).json({ error: 'Esa transferencia ya no está pendiente.' });
++    await Transaction.updateOne({ id: tx.id }, { $set: { 'metadata.movementId': movementId, 'metadata.origin': 'hgcash', 'metadata.linkedBy': req.user.username } });
++    await _emitAdminOnlyChatNote(tx.userId, tx.username, `🏦 🔗 Transferencia de $${Number(movement.amount).toLocaleString('es-AR')} (${movement.fromName || movement.fromCBU || 's/origen'}) vinculada por ${req.user.username} a la carga manual ya hecha. No se acredita de nuevo.`);
++    _emitHgcashUpdate('vinculado', movementId);
++    res.json({ success: true });
++  } catch (error) {
++    logger.error(`[bank] link: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// RESOLVER "no corresponde" (entrante que NO se acredita a nadie) — solo admin general, con motivo.
++app.post('/api/admin/bank/movements/:movementId/resolve', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
++    const movementId = String(req.params.movementId);
++    const note = String((req.body && req.body.note) || '').trim().slice(0, 300);
++    if (note.length < 3) return res.status(400).json({ error: 'Escribí el motivo' });
++    const upd = await BankMovement.findOneAndUpdate(
++      { movementId, matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') } },
++      { $set: { matchStatus: 'ignored', resolution: 'no_corresponde', resolutionNote: note, resolvedBy: req.user.username, resolvedAt: new Date() } },
++      { new: true }
++    );
++    if (!upd) return res.status(409).json({ error: 'Esa transferencia ya no está pendiente.' });
++    logger.warn(`[bank] ${req.user.username} marcó NO CORRESPONDE movimiento ${movementId} ($${upd.amount}): ${note}`);
++    _emitHgcashUpdate('resuelto', movementId);
++    res.json({ success: true });
++  } catch (error) {
++    logger.error(`[bank] resolve: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// REABRIR (vuelve a pendiente) — solo admin general.
++app.post('/api/admin/bank/movements/:movementId/reopen', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
++    const movementId = String(req.params.movementId);
++    const upd = await BankMovement.findOneAndUpdate(
++      { movementId, direction: 'Inbound', matchStatus: { $in: ['ignored', 'error', 'needs_review', 'no_match', 'shadow_matched'] } },
++      { $set: { matchStatus: 'pending', resolution: null, resolutionNote: null, resolvedBy: null, resolvedAt: null, chargeError: null } },
++      { new: true }
++    );
++    if (!upd) return res.status(409).json({ error: 'No se puede reabrir (¿ya está acreditada?).' });
++    _emitHgcashUpdate('reabierto', movementId);
++    res.json({ success: true });
++  } catch (error) {
++    logger.error(`[bank] reopen: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// SALDO hgcash para la bandeja (admin general y pagos).
++app.get('/api/admin/bank/balance', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!['admin', 'withdrawer'].includes(req.user.role)) return res.status(403).json({ error: 'Sin permiso' });
++    if (!hgcashPay.isEnabled()) return res.json({ enabled: false, accounts: [] });
++    const now = Date.now();
++    if (_hgcashBalanceCache.accounts && (now - _hgcashBalanceCache.at) < 15000) return res.json({ enabled: true, accounts: _hgcashBalanceCache.accounts, cached: true });
++    const acc = await hgcashPay.getAccounts();
++    if (!acc.ok) return res.status(502).json({ error: 'No se pudo consultar el saldo: ' + (acc.error || 's/detalle') });
++    const accounts = (Array.isArray(acc.data) ? acc.data : []).map(a => ({ id: a.id, name: a.name || null, currency: a.currency || null, balance: a.balance, netBalance: a.netBalance, pendingFees: a.pendingFees, status: a.status || null }));
++    _hgcashBalanceCache = { at: now, accounts };
++    res.json({ enabled: true, accounts });
++  } catch (error) {
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// ── BAJADAS (sweeps) ────────────────────────────────────────────────────────
++// Destinos guardados: Config['sweepDestinations'] = [{ id, label, cbu, name, cuit }]
++app.get('/api/admin/bank/sweep-destinations', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanSweep(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const list = (await getConfig('sweepDestinations')) || [];
++    res.json({ destinations: Array.isArray(list) ? list : [] });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++app.post('/api/admin/bank/sweep-destinations', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal edita los destinos' });
++    const raw = Array.isArray(req.body && req.body.destinations) ? req.body.destinations : [];
++    const list = raw.map(d => ({
++      id: String(d.id || uuidv4()).slice(0, 40),
++      label: String(d.label || '').trim().slice(0, 60),
++      cbu: String(d.cbu || '').replace(/\D/g, '').slice(0, 22),
++      name: String(d.name || '').trim().slice(0, 100),
++      cuit: String(d.cuit || '').replace(/\D/g, '').slice(0, 11)
++    })).filter(d => d.label && d.cbu.length === 22);
++    await setConfig('sweepDestinations', list);
++    logger.info(`[bank] ${req.user.username} guardó ${list.length} destino(s) de bajada`);
++    res.json({ success: true, destinations: list });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++
++app.get('/api/admin/bank/sweeps', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 60));
++    const sweeps = await BankSweep.find({}).sort({ createdAt: -1 }).limit(limit).lean();
++    const agg = await BankSweep.aggregate([{ $match: { status: 'done' } }, { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }]);
++    res.json({ sweeps, totalDone: agg[0] ? agg[0].total : 0, countDone: agg[0] ? agg[0].count : 0, canSweep: _bankCanSweep(req) });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++
++// Crear una BAJADA: cash-out de hgcash a un CBU externo. Solo admin general o pagos.
++app.post('/api/admin/bank/sweeps', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanSweep(req)) return res.status(403).json({ error: 'Solo el administrador principal o el rol de pagos pueden hacer bajadas' });
++    if (!hgcashPay.isEnabled()) return res.status(503).json({ error: 'hgcash no está configurado (falta HGCASH_API_TOKEN)' });
++    const b = req.body || {};
++    const amount = Number(String(b.amount || '').replace(/[^\d.]/g, ''));
++    if (!(amount > 0)) return res.status(400).json({ error: 'Monto inválido' });
++    let toCBU = String(b.toCBU || '').replace(/\D/g, '');
++    let toName = String(b.toName || '').trim().slice(0, 100);
++    let toCUIT = String(b.toCUIT || '').replace(/\D/g, '').slice(0, 11) || null;
++    let destLabel = String(b.destLabel || '').trim().slice(0, 60) || null;
++    const alias = String(b.alias || '').trim().slice(0, 60) || null;
++    if (b.destinationId) {
++      const list = (await getConfig('sweepDestinations')) || [];
++      const d = (Array.isArray(list) ? list : []).find(x => x.id === String(b.destinationId));
++      if (!d) return res.status(400).json({ error: 'Destino guardado no encontrado' });
++      toCBU = d.cbu; toName = d.name || toName; toCUIT = d.cuit || toCUIT; destLabel = d.label;
++    } else if (!toCBU && alias) {
++      const lk = await hgcashPay.lookupAlias(alias);
++      if (!lk.ok) return res.status(400).json({ error: 'No se pudo resolver el alias: ' + (lk.error || '') });
++      const d = lk.data || {};
++      toCBU = String(d.cvu || d.cbu || '').replace(/\D/g, '');
++      if (!toName) toName = String(d.nombre || d.name || '').slice(0, 100);
++      if (!toCUIT && d.cuit) toCUIT = String(d.cuit).replace(/\D/g, '').slice(0, 11);
++    }
++    if (toCBU.length !== 22) return res.status(400).json({ error: 'CBU/CVU destino inválido (22 dígitos)' });
++    const accountId = await resolveHgcashAccountId();
++    if (!accountId) return res.status(503).json({ error: 'No se pudo resolver la cuenta hgcash' });
++    let balanceBefore = null;
++    try { const acc = await hgcashPay.getAccounts(); const a = acc.ok ? (acc.data || []).find(x => String(x.id) === String(accountId)) : null; if (a) balanceBefore = Number(a.netBalance != null ? a.netBalance : a.balance); } catch (_) {}
++    if (balanceBefore !== null && amount > balanceBefore) return res.status(400).json({ error: `Saldo neto insuficiente en hgcash ($${balanceBefore.toLocaleString('es-AR')}). Recordá que hgcash cobra comisión sobre la salida.` });
++
++    const sweep = await BankSweep.create({
++      id: uuidv4(), amount, toCBU, toName: toName || null, toCUIT, alias, destLabel,
++      concept: `Bajada ${destLabel || toName || ''}`.trim().slice(0, 120), note: String(b.note || '').trim().slice(0, 300) || null,
++      requestedBy: req.user.username, requestedByRole: req.user.role, status: 'pending', accountId: String(accountId), balanceBefore
++    });
++    const webhookUrl = `${req.protocol}://${req.get('host')}/api/hgcash/webhook`;
++    let result = await hgcashPay.createCashOut({ accountId, amount, toCBU, toName: toName || undefined, toCUIT: toCUIT || undefined, concept: sweep.concept, externalID: `sweep-${sweep.id}`, webhookUrl });
++    if (!result.ok && result.httpStatus === 403) {
++      const fresh = await resolveHgcashAccountId({ force: true });
++      if (fresh && String(fresh) !== String(accountId)) result = await hgcashPay.createCashOut({ accountId: fresh, amount, toCBU, toName: toName || undefined, toCUIT: toCUIT || undefined, concept: sweep.concept, externalID: `sweep-${sweep.id}`, webhookUrl });
++    }
++    if (!result.ok) {
++      if (result.httpStatus === 409 && /duplicate/i.test(String(result.error))) {
++        await BankSweep.updateOne({ id: sweep.id }, { $set: { status: 'paying' } });
++      } else {
++        await BankSweep.updateOne({ id: sweep.id }, { $set: { status: 'failed', error: String(result.error).slice(0, 300) } });
++        _emitHgcashUpdate('bajada');
++        return res.status(400).json({ error: 'hgcash rechazó la bajada: ' + result.error });
++      }
++    } else {
++      const hgId = result.data && result.data.id;
++      const hgStatus = String((result.data && result.data.status) || 'PENDING').toUpperCase();
++      await BankSweep.updateOne({ id: sweep.id }, { $set: { hgRequestId: hgId ? String(hgId) : null, hgStatus, status: hgStatus === 'DONE' ? 'done' : 'paying', doneAt: hgStatus === 'DONE' ? new Date() : null } });
++    }
++    logger.warn(`[bank] BAJADA $${amount} → ${toCBU} (${destLabel || toName || 'sin etiqueta'}) pedida por ${req.user.username} (${req.user.role}) sweep=${sweep.id}`);
++    try {
++      if (telegramAlert.isEnabled()) {
++        const e = telegramAlert.esc;
++        await telegramAlert.send(`🏦 <b>${e(_projectLabel())}</b> — BAJADA del banco\n$${Number(amount).toLocaleString('es-AR')} → ${e(destLabel || toName || toCBU)} (CBU …${toCBU.slice(-6)})\nPedida por @${e(req.user.username)} (${e(req.user.role)})${b.note ? '\nNota: ' + e(String(b.note).slice(0, 200)) : ''}`);
++      }
++    } catch (_) {}
++    _emitHgcashUpdate('bajada');
++    const fresh = await BankSweep.findOne({ id: sweep.id }).lean();
++    res.json({ success: true, sweep: fresh });
++  } catch (error) {
++    logger.error(`[bank] sweep: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++
++// Sincronizar el estado de una bajada con hgcash (por si se perdió el webhook).
++app.post('/api/admin/bank/sweeps/:id/sync', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanSweep(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const sw = await BankSweep.findOne({ id: String(req.params.id) }).lean();
++    if (!sw) return res.status(404).json({ error: 'Bajada no encontrada' });
++    if (!sw.hgRequestId) return res.status(400).json({ error: 'Esta bajada no tiene request en hgcash' });
++    const st = await hgcashPay.getTransactionStatus(sw.hgRequestId);
++    if (!st.ok) return res.status(502).json({ error: 'hgcash no respondió: ' + (st.error || '') });
++    await _handleSweepStatusWebhook({ externalID: `sweep-${sw.id}`, id: sw.hgRequestId, status: st.status }, sw.id);
++    res.json({ success: true, sweep: await BankSweep.findOne({ id: sw.id }).lean() });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++
++// Webhook de estado (topic TRANSACTION_REQUEST) de una BAJADA.
++async function _handleSweepStatusWebhook(p, sweepId) {
++  try {
++    const status = String(p.status || '').toUpperCase();
++    const sw = await BankSweep.findOne({ id: sweepId });
++    if (!sw) { logger.warn(`[bank] webhook de bajada sin registro local: ${sweepId}`); return; }
++    const set = { hgStatus: status || sw.hgStatus };
++    if (p.id && !sw.hgRequestId) set.hgRequestId = String(p.id);
++    if (p.transactionId && !sw.hgTxId) set.hgTxId = String(p.transactionId);
++    if (status === 'DONE') { set.status = 'done'; set.doneAt = sw.doneAt || new Date(); }
++    else if (status === 'ERROR' || status === 'CANCELLED') { set.status = status === 'ERROR' ? 'failed' : 'cancelled'; set.error = String(p.errorCode || p.error || status).slice(0, 300); }
++    else if (status && sw.status === 'pending') { set.status = 'paying'; }
++    await BankSweep.updateOne({ id: sweepId }, { $set: set });
++    if (set.hgTxId) { BankMovement.updateOne({ movementId: set.hgTxId }, { $set: { outKind: 'sweep', sweepId } }).catch(() => {}); }
++    if (set.status === 'done' || set.status === 'failed') logger.info(`[bank] bajada ${sweepId} → ${set.status}`);
++    _emitHgcashUpdate('bajada');
++  } catch (e) { logger.warn(`[bank] webhook bajada falló: ${e.message}`); }
++}
++
++// ── CIERRE DIARIO ───────────────────────────────────────────────────────────
++app.get('/api/admin/bank/close', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const list = await DailyClose.find({}).sort({ dateKey: -1 }).limit(45).select('dateKey status computedAt unresolvedCount summary.entradas summary.cargas summary.salidas cashier.status cashier.diff').lean();
++    const carry = await DailyClose.aggregate([{ $match: { unresolvedCount: { $gt: 0 } } }, { $group: { _id: null, days: { $sum: 1 }, diffs: { $sum: '$unresolvedCount' } } }]);
++    res.json({ closes: list, unresolved: carry[0] ? { days: carry[0].days, diffs: carry[0].diffs } : { days: 0, diffs: 0 }, today: _artDateKey() });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++app.get('/api/admin/bank/close/:date', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
++    const dateKey = String(req.params.date);
++    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'Fecha inválida' });
++    let close = await DailyClose.findOne({ dateKey }).lean();
++    if (!close || req.query.live === '1') {
++      const cfg = await getHgcashConfig();
++      close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses });
++    }
++    res.json({ close, isToday: dateKey === _artDateKey(), labels: bankClose.TYPE_LABELS });
++  } catch (error) {
++    logger.error(`[bank] close get: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++app.post('/api/admin/bank/close/:date/run', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
++    const dateKey = String(req.params.date);
++    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'Fecha inválida' });
++    const cfg = await getHgcashConfig();
++    const close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses });
++    if (req.body && req.body.telegram && telegramAlert.isEnabled()) {
++      await telegramAlert.send(bankClose.formatCloseTelegram(close, telegramAlert.esc, _projectLabel()));
++      await DailyClose.updateOne({ dateKey }, { $set: { notifiedAt: new Date() } });
++    }
++    res.json({ close, labels: bankClose.TYPE_LABELS });
++  } catch (error) {
++    logger.error(`[bank] close run: ${error.message}`);
++    res.status(500).json({ error: 'Error del servidor' });
++  }
++});
++app.post('/api/admin/bank/close/:date/resolve', authMiddleware, adminMiddleware, async (req, res) => {
++  try {
++    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
++    const dateKey = String(req.params.date);
++    const key = String((req.body && req.body.key) || '');
++    const note = String((req.body && req.body.note) || '').trim().slice(0, 300);
++    const reopen = !!(req.body && req.body.reopen);
++    if (!key) return res.status(400).json({ error: 'Falta la diferencia' });
++    if (!reopen && note.length < 3) return res.status(400).json({ error: 'Escribí cómo se resolvió' });
++    const close = await bankClose.resolveDiff(dateKey, key, { by: req.user.username, note, reopen });
++    if (!close) return res.status(404).json({ error: 'Diferencia no encontrada' });
++    logger.info(`[bank] ${req.user.username} ${reopen ? 'reabrió' : 'resolvió'} ${key} del cierre ${dateKey}${note ? ': ' + note : ''}`);
++    res.json({ close, labels: bankClose.TYPE_LABELS });
++  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
++});
++
++// Cron: a las 00:05 ART corre el cierre del día anterior UNA vez por clúster
++// (claim atómico en Config['dailyclose_last']) y lo manda a Telegram.
++async function _runDailyCloseTick() {
++  try {
++    const now = new Date();
++    const hour = _artHour(now);
++    const minute = Number(now.toLocaleString('en-US', { minute: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' }));
++    if (!(hour > 0 || (hour === 0 && minute >= 5))) return;
++    const yesterday = _artDateKey(now.getTime() - 24 * 3600 * 1000);
++    const last = await getConfig('dailyclose_last', null);
++    if (last === yesterday) return;
++    // Claim atómico entre instancias: gana la que cambia el valor.
++    let won = false;
++    try {
++      const r = await Config.findOneAndUpdate({ key: 'dailyclose_last', value: { $ne: yesterday } }, { $set: { value: yesterday } }, { new: true });
++      if (r) won = true;
++      else if (!(await Config.findOne({ key: 'dailyclose_last' }).lean())) { await setConfig('dailyclose_last', yesterday); won = true; }
++    } catch (_) {}
++    if (!won) return;
++    const cfg = await getHgcashConfig();
++    const close = await bankClose.computeDailyClose(yesterday, { computedBy: 'cron', acceptStatuses: cfg.acceptStatuses });
++    logger.info(`[cierre] ${yesterday}: ${close.status} (${close.unresolvedCount} diferencias)`);
++    if (telegramAlert.isEnabled()) {
++      const carry = await DailyClose.aggregate([{ $match: { dateKey: { $lt: yesterday }, unresolvedCount: { $gt: 0 } } }, { $group: { _id: null, days: { $sum: 1 }, diffs: { $sum: '$unresolvedCount' } } }]);
++      let txt = bankClose.formatCloseTelegram(close, telegramAlert.esc, _projectLabel());
++      if (carry[0] && carry[0].diffs) txt += `\n📌 Arrastre: ${carry[0].diffs} diferencia(s) de ${carry[0].days} día(s) anteriores sin resolver`;
++      await telegramAlert.send(txt);
++      await DailyClose.updateOne({ dateKey: yesterday }, { $set: { notifiedAt: new Date() } });
++    }
++    notifyAdmins('bank_close', { dateKey: yesterday, status: close.status, unresolved: close.unresolvedCount });
++  } catch (e) { logger.warn(`[cierre] tick falló: ${e.message}`); }
++}
++setTimeout(() => { _runDailyCloseTick(); }, 2 * 60 * 1000);
++setInterval(() => { _runDailyCloseTick(); }, 5 * 60 * 1000);
++
+ // ============================================
+ // PAGOS AUTOMÁTICOS (retiros) — el agente verifica y confirma, se paga por hgcash
+ // ============================================
+diff --git a/src/models/BankMovement.js b/src/models/BankMovement.js
+index b592ee5..2132ff7 100644
+--- a/src/models/BankMovement.js
++++ b/src/models/BankMovement.js
+@@ -68,6 +68,18 @@ const bankMovementSchema = new mongoose.Schema({
+   matchedUserId: { type: String, default: null },
+   matchedUsername: { type: String, default: null },
+   matchedComprobanteId: { type: String, default: null },
++  // #155 Bandeja del banco / cierre diario
++  chargeSource: { type: String, default: null },   // auto | assigned (bandeja) | manual_link (carga manual anclada) | legacy_amount (consumo por monto) | close_link (vinculado por el cierre)
++  transactionId: { type: String, default: null, index: true }, // Transaction.id de la acreditación vinculada
++  assignedBy: { type: String, default: null },
++  assignedAt: { type: Date, default: null },
++  resolution: { type: String, default: null },     // no_corresponde | otro (movimiento entrante que NO se acredita a nadie, con motivo)
++  resolutionNote: { type: String, default: null },
++  resolvedBy: { type: String, default: null },
++  resolvedAt: { type: Date, default: null },
++  outKind: { type: String, default: null },        // salientes: payout | sweep | unknown
++  payoutId: { type: String, default: null },
++  sweepId: { type: String, default: null },
+   chargeError: { type: String, default: null },
+   chargeAttempts: { type: Number, default: 0 }, // intentos de auto-carga fallidos
+   chargedAt: { type: Date, default: null },
+@@ -81,5 +93,7 @@ const bankMovementSchema = new mongoose.Schema({
+ bankMovementSchema.index({ direction: 1, matchStatus: 1, amount: 1, createdAt: -1 });
+ // #152 Multicuenta por banco: "¿qué movimientos ya matcheados tiene este usuario?"
+ bankMovementSchema.index({ matchedUserId: 1, matchStatus: 1 });
++// #155 Bandeja del banco: pendientes por dirección y cierre por día.
++bankMovementSchema.index({ direction: 1, matchStatus: 1, createdAt: -1 });
+ 
+ module.exports = mongoose.models['BankMovement'] || mongoose.model('BankMovement', bankMovementSchema);
+diff --git a/src/models/BankSweep.js b/src/models/BankSweep.js
+new file mode 100644
+index 0000000..faf2682
+--- /dev/null
++++ b/src/models/BankSweep.js
+@@ -0,0 +1,48 @@
++/**
++ * Modelo BankSweep — "BAJADAS" del banco (#155).
++ *
++ * Una bajada es una transferencia SALIENTE desde nuestra cuenta hgcash hacia un CBU
++ * externo (financiera, etc.) para que el banco no acumule mucho capital junto.
++ * NO es un pago a un cliente (eso es PendingPayout). Solo la pueden hacer el admin
++ * general o el rol de pagos (withdrawer), y TODAS quedan registradas acá.
++ *
++ * Se paga por la misma API de cash-out de hgcash, con externalID `sweep-<id>`
++ * (idempotencia: el mismo id nunca se paga dos veces). El webhook de estado
++ * (topic TRANSACTION_REQUEST) actualiza `status`; el movimiento saliente del
++ * ledger (direction Outbound, externalId = sweep-<id>) se vincula en `movementId`.
++ * Registro permanente (sin TTL): es parte del cierre diario.
++ */
++const mongoose = require('mongoose');
++
++const bankSweepSchema = new mongoose.Schema({
++  id: { type: String, required: true, unique: true, index: true },
++  amount: { type: Number, required: true },
++  toCBU: { type: String, required: true },
++  toName: { type: String, default: null },
++  toCUIT: { type: String, default: null },
++  alias: { type: String, default: null },
++  destLabel: { type: String, default: null },   // nombre del destino guardado (ej. "Financiera X")
++  concept: { type: String, default: null },
++  note: { type: String, default: null },
++  requestedBy: { type: String, default: null },
++  requestedByRole: { type: String, default: null },
++  status: {
++    type: String,
++    enum: ['pending', 'paying', 'done', 'failed', 'cancelled'],
++    default: 'pending',
++    index: true
++  },
++  accountId: { type: String, default: null },
++  balanceBefore: { type: Number, default: null }, // saldo neto hgcash antes de pedirla (informativo)
++  hgRequestId: { type: String, default: null, index: true }, // id del REQUEST (createCashOut)
++  hgTxId: { type: String, default: null },                   // id de la transacción real (ledger)
++  hgStatus: { type: String, default: null },
++  error: { type: String, default: null },
++  movementId: { type: String, default: null },               // BankMovement saliente vinculado
++  doneAt: { type: Date, default: null },
++  createdAt: { type: Date, default: Date.now, index: true }
++}, {
++  timestamps: true
++});
++
++module.exports = mongoose.models['BankSweep'] || mongoose.model('BankSweep', bankSweepSchema);
+diff --git a/src/models/CashierSnapshot.js b/src/models/CashierSnapshot.js
+new file mode 100644
+index 0000000..a9cd802
+--- /dev/null
++++ b/src/models/CashierSnapshot.js
+@@ -0,0 +1,29 @@
++/**
++ * Modelo CashierSnapshot — saldo del CAJERO de JUGAYGANA visto en cada operación (#155).
++ *
++ * Cada DepositMoney / WithdrawMoney / individual_bonus que hacemos devuelve
++ * `parent_balance` (saldo de nuestra cuenta cajera, en centavos). Lo guardamos
++ * en cada operación exitosa junto con el movimiento que la produjo
++ * (`opAmount`, con signo desde el punto de vista del cajero: una carga al cliente
++ * es negativa, un retiro es positiva). Con eso el cierre diario compara:
++ *   saldo al fin del día − saldo al inicio  vs  Σ opAmount del día
++ * Si no coincide, alguien movió plata en JUGAYGANA por fuera del sistema (carga
++ * directa en su panel, operación ambigua que sí entró, etc.).
++ * TTL 120 días (índice en `at`).
++ */
++const mongoose = require('mongoose');
++
++const cashierSnapshotSchema = new mongoose.Schema({
++  at: { type: Date, default: Date.now, index: true },
++  balance: { type: Number, required: true },      // saldo del cajero DESPUÉS de la operación (ARS)
++  opAmount: { type: Number, default: 0 },         // efecto de la operación sobre el cajero (ARS, con signo)
++  opKind: { type: String, default: null },        // deposit | withdraw | bonus
++  username: { type: String, default: null },
++  verified: { type: Boolean, default: false }     // true si el éxito se confirmó por saldo (sin respuesta JSON) → opAmount estimado
++}, {
++  timestamps: false
++});
++
++cashierSnapshotSchema.index({ at: 1 }, { expireAfterSeconds: 120 * 24 * 3600 });
++
++module.exports = mongoose.models['CashierSnapshot'] || mongoose.model('CashierSnapshot', cashierSnapshotSchema);
+diff --git a/src/models/DailyClose.js b/src/models/DailyClose.js
+new file mode 100644
+index 0000000..951d27a
+--- /dev/null
++++ b/src/models/DailyClose.js
+@@ -0,0 +1,54 @@
++/**
++ * Modelo DailyClose — CIERRE DIARIO del banco (#155).
++ *
++ * Un documento por día argentino (`dateKey` = 'YYYY-MM-DD', único). Lo genera el
++ * cron a las 00:05 ART para el día anterior (o el admin a mano desde el panel) y
++ * concilia tres cruces:
++ *   1. Banco ↔ sistema: cada transferencia entrante tiene una acreditación vinculada
++ *      (o está marcada "no corresponde"); cada carga tiene su transferencia (o está
++ *      declarada "otro banco"); cada salida es un pago o una bajada.
++ *   2. Sistema ↔ JUGAYGANA: el saldo del CAJERO (CashierSnapshot) tiene que haberse
++ *      movido exactamente lo que nosotros operamos.
++ *   3. Errores humanos/sistema: pagos sin descuento confirmado, operaciones ambiguas
++ *      sin resolver, etc.
++ * `diffs[]` es la lista de diferencias; cada una se puede marcar RESUELTA desde el
++ * panel con una nota (quién y cuándo). El cierre queda "ok" cuando no queda ninguna
++ * sin resolver. Se recalcula al pedirlo (los diffs resueltos se conservan por `key`).
++ * Registro permanente (sin TTL).
++ */
++const mongoose = require('mongoose');
++
++const diffSchema = new mongoose.Schema({
++  key: { type: String, required: true },      // identificador estable (tipo:refId) para conservar "resuelto" entre recálculos
++  type: { type: String, required: true },     // mov_sin_acreditar | carga_sin_transferencia | salida_sin_origen | pago_sin_descuento | pago_sin_movimiento | ambiguo | cajero_descuadre | ...
++  refType: { type: String, default: null },   // movement | transaction | payout | refund | roulette | cashier
++  refId: { type: String, default: null },
++  amount: { type: Number, default: null },
++  userId: { type: String, default: null },
++  username: { type: String, default: null },
++  detail: { type: String, default: null },
++  at: { type: Date, default: null },
++  resolved: { type: Boolean, default: false },
++  resolvedBy: { type: String, default: null },
++  resolvedAt: { type: Date, default: null },
++  note: { type: String, default: null }
++}, { _id: false });
++
++const dailyCloseSchema = new mongoose.Schema({
++  dateKey: { type: String, required: true, unique: true, index: true },
++  status: { type: String, enum: ['ok', 'diff', 'warn'], default: 'warn', index: true },
++  computedAt: { type: Date, default: null },
++  computedBy: { type: String, default: null },  // 'cron' | username
++  runs: { type: Number, default: 0 },
++  summary: { type: mongoose.Schema.Types.Mixed, default: null },   // totales del día (entradas, cargas, salidas, bajadas, otro banco…)
++  cashier: { type: mongoose.Schema.Types.Mixed, default: null },   // cruce con el cajero de JUGAYGANA
++  bank: { type: mongoose.Schema.Types.Mixed, default: null },      // saldo hgcash al cierre + delta vs. cierre anterior (informativo)
++  diffs: { type: [diffSchema], default: [] },
++  unresolvedCount: { type: Number, default: 0 },
++  notifiedAt: { type: Date, default: null },
++  createdAt: { type: Date, default: Date.now }
++}, {
++  timestamps: true
++});
++
++module.exports = mongoose.models['DailyClose'] || mongoose.model('DailyClose', dailyCloseSchema);
+diff --git a/src/services/bankCloseService.js b/src/services/bankCloseService.js
+new file mode 100644
+index 0000000..5e01004
+--- /dev/null
++++ b/src/services/bankCloseService.js
+@@ -0,0 +1,322 @@
++/**
++ * bankCloseService.js — CIERRE DIARIO del banco (#155).
++ *
++ * Concilia un día argentino completo en tres cruces y devuelve/persiste un DailyClose:
++ *   1. BANCO ↔ SISTEMA
++ *      · Toda transferencia ENTRANTE acreditada (status done) tiene una carga vinculada
++ *        (auto/asignada/manual anclada) o una resolución explícita ("no corresponde").
++ *      · Toda CARGA (Transaction deposit) tiene un movimiento vinculado o un origen
++ *        declarado ("otro banco"). Las cargas manuales viejas que consumieron un
++ *        movimiento por monto (sin vínculo guardado) se VINCULAN acá si el par es
++ *        inequívoco (mismo usuario, mismo monto, ±3 h) y se persiste el vínculo.
++ *      · Toda SALIDA es un pago a cliente (PendingPayout) o una bajada (BankSweep).
++ *   2. SISTEMA ↔ JUGAYGANA (cajero): el saldo del cajero (CashierSnapshot) tiene que
++ *      haberse movido exactamente Σ opAmount del día. Un descuadre = plata movida por
++ *      fuera del sistema (carga directa en JUGAYGANA, operación ambigua que sí entró…).
++ *   3. ERRORES: pagos hgcash sin descuento confirmado, pagos sin movimiento bancario,
++ *      operaciones ambiguas (🛑 VERIFICAR) sin resolver.
++ *
++ * Los diffs tienen `key` estable (tipo:refId): al recalcular, los que ya estaban
++ * marcados resueltos conservan la marca. El cierre queda `ok` cuando no hay diffs sin
++ * resolver y el cajero cuadra; `warn` si faltan datos para cruzar; `diff` si hay algo.
++ *
++ * NO toca plata. Solo lee, vincula pares inequívocos y escribe el DailyClose.
++ */
++const BankMovement = require('../models/BankMovement');
++const Transaction = require('../models/Transaction');
++const PendingPayout = require('../models/PendingPayout');
++const BankSweep = require('../models/BankSweep');
++const DailyClose = require('../models/DailyClose');
++const CashierSnapshot = require('../models/CashierSnapshot');
++const RefundClaim = require('../models/RefundClaim');
++const DailyRouletteSpin = require('../models/DailyRouletteSpin');
++const hgcashPay = require('./hgcashService');
++const logger = require('../utils/logger');
++
++const CASHIER_TOLERANCE_ARS = 5;           // diferencia tolerada en el cruce con el cajero
++const LINK_WINDOW_MS = 3 * 3600 * 1000;    // ±3 h para vincular carga manual vieja ↔ movimiento consumido por monto
++const NOT_CHARGED_STATES = ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'];
++// Fuentes de Transaction 'deposit' que NO son plata que entró por banco (regalos/devoluciones).
++const NON_BANK_DEPOSIT_SOURCES = ['install_bonus', 'welcome_gift', 'payout_refund', 'notif_batch', 'notif_batch_auto', 'auto_hgcash_bonus'];
++
++function _artDayRange(dayKey) {
++  const start = new Date(`${dayKey}T03:00:00.000Z`); // 00:00 ART = 03:00 UTC (sin DST)
++  return { start, end: new Date(start.getTime() + 24 * 3600 * 1000) };
++}
++function _artDateKey(d) { return new Date(d || Date.now()).toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); }
++function _amountsEqual(a, b) { return Math.abs(Number(a) - Number(b)) < 0.005; }
++function _round(n) { return Math.round(Number(n || 0) * 100) / 100; }
++function _accredited(status, acceptStatuses) {
++  const list = (acceptStatuses || ['done']).map(s => String(s).toLowerCase());
++  return list.includes(String(status || '').toLowerCase());
++}
++
++/**
++ * Calcula (y persiste) el cierre de un día.
++ * @param {string} dayKey 'YYYY-MM-DD' (día ART)
++ * @param {object} opts { computedBy, acceptStatuses, hgcashEnabled }
++ */
++async function computeDailyClose(dayKey, opts = {}) {
++  const { start, end } = _artDayRange(dayKey);
++  const prev = await DailyClose.findOne({ dateKey: dayKey }).lean();
++  const prevResolved = new Map();
++  if (prev && Array.isArray(prev.diffs)) {
++    for (const d of prev.diffs) if (d.resolved) prevResolved.set(d.key, d);
++  }
++  const diffs = [];
++  const push = (d) => {
++    const key = `${d.type}:${d.refId || d.detail || ''}`;
++    const was = prevResolved.get(key);
++    diffs.push(Object.assign({ key, resolved: false, resolvedBy: null, resolvedAt: null, note: null }, d,
++      was ? { resolved: true, resolvedBy: was.resolvedBy, resolvedAt: was.resolvedAt, note: was.note } : {}));
++  };
++  const acceptStatuses = opts.acceptStatuses || ['done'];
++
++  // ── 1a. ENTRADAS del banco ────────────────────────────────────────────────
++  const inbound = await BankMovement.find({ direction: 'Inbound', createdAt: { $gte: start, $lt: end } })
++    .sort({ createdAt: 1 }).lean();
++  const inDone = inbound.filter(m => _accredited(m.status, acceptStatuses));
++  const inCharged = inDone.filter(m => ['auto_charged', 'manual_charged'].includes(m.matchStatus));
++  const inResolved = inDone.filter(m => m.matchStatus === 'ignored' && m.resolution);
++  const inDuplicate = inDone.filter(m => m.matchStatus === 'duplicate');
++  const inOpen = inDone.filter(m => NOT_CHARGED_STATES.includes(m.matchStatus) || (m.matchStatus === 'ignored' && !m.resolution));
++  for (const m of inOpen) {
++    push({ type: 'mov_sin_acreditar', refType: 'movement', refId: m.movementId, amount: m.amount,
++      userId: m.matchedUserId || null, username: m.matchedUsername || null, at: m.createdAt,
++      detail: `Transferencia de ${m.fromName || m.fromCBU || 'origen desconocido'} sin acreditar (estado: ${m.matchStatus}${m.chargeError ? ' · ' + String(m.chargeError).slice(0, 80) : ''})` });
++  }
++
++  // ── 1b. CARGAS del sistema ────────────────────────────────────────────────
++  const deposits = await Transaction.find({ type: 'deposit', timestamp: { $gte: start, $lt: end } })
++    .sort({ timestamp: 1 }).lean();
++  const bankDeposits = deposits.filter(t => !NON_BANK_DEPOSIT_SOURCES.includes(((t.metadata || {}).source) || ''));
++  // Movimientos manual_charged por MONTO (sin vínculo): candidatos para vincular con cargas manuales viejas.
++  const consumedUnlinked = await BankMovement.find({
++    direction: 'Inbound', matchStatus: 'manual_charged', transactionId: null,
++    chargedAt: { $gte: new Date(start.getTime() - LINK_WINDOW_MS), $lt: new Date(end.getTime() + LINK_WINDOW_MS) }
++  }).lean();
++  const linkedNow = [];
++  let cargasOtroBanco = [], cargasSinTransferencia = [], cargasVinculadas = 0, sumCargas = 0;
++  for (const t of bankDeposits) {
++    sumCargas += Number(t.amount || 0);
++    const md = t.metadata || {};
++    if (md.movementId) { cargasVinculadas++; continue; }
++    if (md.origin === 'otro_banco') { cargasOtroBanco.push(t); continue; }
++    // Vínculo inequívoco con un movimiento consumido por monto (legacy): mismo usuario + monto + ±3 h.
++    const tsMs = new Date(t.timestamp).getTime();
++    const cands = consumedUnlinked.filter(m => m.matchedUserId === t.userId && _amountsEqual(m.amount, t.amount) &&
++      m.chargedAt && Math.abs(new Date(m.chargedAt).getTime() - tsMs) <= LINK_WINDOW_MS && !linkedNow.includes(m.movementId));
++    if (cands.length === 1) {
++      const m = cands[0];
++      linkedNow.push(m.movementId);
++      try {
++        await BankMovement.updateOne({ movementId: m.movementId, transactionId: null }, { $set: { transactionId: t.id, chargeSource: m.chargeSource || 'close_link' } });
++        await Transaction.updateOne({ id: t.id }, { $set: { 'metadata.movementId': m.movementId, 'metadata.linkedByClose': dayKey } });
++      } catch (e) { logger.warn(`[cierre] no se pudo persistir vínculo ${t.id}↔${m.movementId}: ${e.message}`); }
++      cargasVinculadas++;
++      continue;
++    }
++    cargasSinTransferencia.push(t);
++  }
++  for (const t of cargasSinTransferencia) {
++    push({ type: 'carga_sin_transferencia', refType: 'transaction', refId: t.id, amount: t.amount, userId: t.userId, username: t.username, at: t.timestamp,
++      detail: `Carga de $${Number(t.amount).toLocaleString('es-AR')} a @${t.username} por ${t.adminUsername || '?'} sin transferencia vinculada ni origen declarado` });
++  }
++
++  // ── 1c. SALIDAS del banco ─────────────────────────────────────────────────
++  const outbound = await BankMovement.find({ direction: 'Outbound', createdAt: { $gte: start, $lt: end } }).sort({ createdAt: 1 }).lean();
++  const outDone = outbound.filter(m => _accredited(m.status, acceptStatuses));
++  const extIds = outDone.map(m => m.externalId).filter(Boolean);
++  const hgIds = outDone.map(m => m.movementId).filter(Boolean);
++  const payoutsByExt = new Map(), payoutsByTx = new Map();
++  if (extIds.length || hgIds.length) {
++    const or = [];
++    if (extIds.length) or.push({ id: { $in: extIds } });
++    if (hgIds.length) or.push({ hgTxId: { $in: hgIds } }, { hgTransactionId: { $in: hgIds } });
++    const ps = await PendingPayout.find({ $or: or }).select('id username userId amount hgTxId hgTransactionId status debitConfirmed deductAtPay').lean();
++    for (const p of ps) { payoutsByExt.set(p.id, p); if (p.hgTxId) payoutsByTx.set(p.hgTxId, p); if (p.hgTransactionId) payoutsByTx.set(p.hgTransactionId, p); }
++  }
++  const sweepIds = extIds.filter(e => /^sweep-/.test(e)).map(e => e.replace(/^sweep-/, ''));
++  const sweeps = sweepIds.length ? await BankSweep.find({ id: { $in: sweepIds } }).lean() : [];
++  const sweepById = new Map(sweeps.map(s => [s.id, s]));
++  let outPagos = 0, sumPagos = 0, outBajadas = 0, sumBajadas = 0, outSinOrigen = [];
++  for (const m of outDone) {
++    const sweep = m.externalId && /^sweep-/.test(m.externalId) ? sweepById.get(m.externalId.replace(/^sweep-/, '')) : (m.sweepId ? sweepById.get(m.sweepId) : null);
++    if (sweep || m.outKind === 'sweep') { outBajadas++; sumBajadas += Number(m.amount || 0); continue; }
++    const p = (m.externalId && payoutsByExt.get(m.externalId)) || payoutsByTx.get(m.movementId) || (m.payoutId && payoutsByExt.get(m.payoutId));
++    if (p || m.outKind === 'payout') { outPagos++; sumPagos += Number(m.amount || 0); continue; }
++    if (m.outKind === 'fee' || m.resolution) continue;
++    outSinOrigen.push(m);
++  }
++  for (const m of outSinOrigen) {
++    push({ type: 'salida_sin_origen', refType: 'movement', refId: m.movementId, amount: m.amount, at: m.createdAt,
++      detail: `Salida de $${Number(m.amount || 0).toLocaleString('es-AR')} a ${m.toName || m.toCBU || '?'} que no es un pago ni una bajada registrada` });
++  }
++
++  // ── 3a. Pagos del día: descuento confirmado y movimiento bancario ─────────
++  const paidPayouts = await PendingPayout.find({ status: 'paid', paidAt: { $gte: start, $lt: end } }).lean();
++  const outMovByExt = new Map(outbound.map(m => [m.externalId, m]).filter(([k]) => k));
++  const outMovByHg = new Map(); for (const m of outbound) { outMovByHg.set(m.movementId, m); }
++  let pagosOtroBanco = 0;
++  for (const p of paidPayouts) {
++    if (p.deductAtPay === true && p.debitConfirmed !== true) {
++      push({ type: 'pago_sin_descuento', refType: 'payout', refId: p.id, amount: p.amount, userId: p.userId, username: p.username, at: p.paidAt,
++        detail: `Pago de $${Number(p.amount).toLocaleString('es-AR')} a @${p.username} marcado PAGADO sin descuento de fichas confirmado en JUGAYGANA` });
++    }
++    if (p.paidVia === 'hgcash') {
++      const has = outMovByExt.get(p.id) || (p.hgTxId && outMovByHg.get(p.hgTxId)) || (p.hgTransactionId && outMovByHg.get(p.hgTransactionId));
++      if (!has) {
++        push({ type: 'pago_sin_movimiento', refType: 'payout', refId: p.id, amount: p.amount, userId: p.userId, username: p.username, at: p.paidAt,
++          detail: `Pago hgcash de $${Number(p.amount).toLocaleString('es-AR')} a @${p.username} sin movimiento saliente en el banco (¿webhook perdido?)` });
++      }
++    } else if (p.paidVia === 'other_bank') { pagosOtroBanco++; }
++  }
++
++  // ── 3b. Operaciones AMBIGUAS (🛑 VERIFICAR) sin resolver ─────────────────
++  const ambRefunds = await RefundClaim.find({ verifyPending: true, claimedAt: { $gte: start, $lt: end } }).lean().catch(() => []);
++  for (const r of ambRefunds) {
++    push({ type: 'ambiguo', refType: 'refund', refId: r.id || String(r._id), amount: r.amount, userId: r.userId, username: r.username, at: r.claimedAt,
++      detail: `Reembolso ${r.type || ''} de $${Number(r.amount || 0).toLocaleString('es-AR')} a @${r.username} quedó en VERIFICAR (JUGAYGANA no confirmó)` });
++  }
++  const ambMovs = inbound.filter(m => /AMBIGUO/i.test(String(m.chargeError || '')) && NOT_CHARGED_STATES.includes(m.matchStatus));
++  for (const m of ambMovs) {
++    push({ type: 'ambiguo', refType: 'movement', refId: m.movementId, amount: m.amount, userId: m.matchedUserId, username: m.matchedUsername, at: m.createdAt,
++      detail: `Carga automática de $${Number(m.amount || 0).toLocaleString('es-AR')} a @${m.matchedUsername || '?'} quedó AMBIGUA (verificar si entró en JUGAYGANA)` });
++  }
++  const ambSpins = await DailyRouletteSpin.find({ creditError: { $regex: '^VERIFICAR' }, spunAt: { $gte: start, $lt: end } }).lean().catch(() => []);
++  for (const sp of ambSpins) {
++    push({ type: 'ambiguo', refType: 'roulette', refId: String(sp._id), amount: sp.prizeARS || null, userId: sp.userId, username: sp.username, at: sp.spunAt,
++      detail: `Premio de ruleta a @${sp.username || '?'} quedó en VERIFICAR` });
++  }
++  const ambPayouts = await PendingPayout.find({ error: { $regex: 'AMBIGUO' }, updatedAt: { $gte: start, $lt: end }, status: { $in: ['failed', 'paying'] } }).lean().catch(() => []);
++  for (const p of ambPayouts) {
++    push({ type: 'ambiguo', refType: 'payout', refId: p.id, amount: p.amount, userId: p.userId, username: p.username, at: p.updatedAt,
++      detail: `Descuento del retiro de $${Number(p.amount).toLocaleString('es-AR')} a @${p.username} quedó AMBIGUO` });
++  }
++
++  // ── 2. CAJERO de JUGAYGANA ───────────────────────────────────────────────
++  const snapStart = await CashierSnapshot.findOne({ at: { $lt: start, $gte: new Date(start.getTime() - 3 * 24 * 3600 * 1000) } }).sort({ at: -1 }).lean();
++  const snaps = await CashierSnapshot.find({ at: { $gte: start, $lt: end } }).sort({ at: 1 }).lean();
++  const cashier = { startBalance: null, startAt: null, endBalance: null, endAt: null, ops: snaps.length, expectedDelta: null, actualDelta: null, diff: null, status: 'sin_datos' };
++  if (snaps.length) {
++    const first = snaps[0], last = snaps[snaps.length - 1];
++    // Inicio: último snapshot ANTES del día; si no hay, el saldo previo a la primera operación del día.
++    const startBal = snapStart ? snapStart.balance : (first.balance - Number(first.opAmount || 0));
++    cashier.startBalance = _round(startBal); cashier.startAt = snapStart ? snapStart.at : first.at;
++    cashier.endBalance = _round(last.balance); cashier.endAt = last.at;
++    cashier.expectedDelta = _round(snaps.reduce((a, s) => a + Number(s.opAmount || 0), 0));
++    cashier.actualDelta = _round(last.balance - startBal);
++    cashier.diff = _round(cashier.actualDelta - cashier.expectedDelta);
++    cashier.status = Math.abs(cashier.diff) <= CASHIER_TOLERANCE_ARS ? 'ok' : 'descuadre';
++    if (cashier.status === 'descuadre') {
++      push({ type: 'cajero_descuadre', refType: 'cashier', refId: dayKey, amount: cashier.diff, at: last.at,
++        detail: `El cajero de JUGAYGANA se movió $${cashier.actualDelta.toLocaleString('es-AR')} y nuestras operaciones suman $${cashier.expectedDelta.toLocaleString('es-AR')} → diferencia $${cashier.diff.toLocaleString('es-AR')} (plata movida por fuera del sistema, recarga del cajero, o una operación ambigua que sí entró)` });
++    }
++  }
++  // Suma de lo que registramos en Transactions (informativo, para comparar con Σ opAmount).
++  const txAgg = await Transaction.aggregate([
++    { $match: { timestamp: { $gte: start, $lt: end }, type: { $in: ['deposit', 'bonus', 'refund', 'fire_reward', 'referral_commission', 'withdrawal'] } } },
++    { $group: { _id: '$type', total: { $sum: '$amount' }, count: { $sum: 1 } } }
++  ]);
++  const txTotals = {}; for (const r of txAgg) txTotals[r._id] = { total: _round(r.total), count: r.count };
++
++  // ── Saldo hgcash al cierre (informativo) ─────────────────────────────────
++  let bank = null;
++  try {
++    if (hgcashPay.isEnabled()) {
++      const acc = await hgcashPay.getAccounts();
++      if (acc.ok && Array.isArray(acc.data) && acc.data.length) {
++        const a = acc.data[0];
++        bank = { accountId: a.id, balance: a.balance, netBalance: a.netBalance, pendingFees: a.pendingFees, at: new Date() };
++        const prevClose = await DailyClose.findOne({ dateKey: { $lt: dayKey }, 'bank.balance': { $ne: null } }).sort({ dateKey: -1 }).lean();
++        if (prevClose && prevClose.bank) {
++          bank.prevBalance = prevClose.bank.balance; bank.prevDate = prevClose.dateKey;
++          bank.actualDelta = _round(Number(a.balance) - Number(prevClose.bank.balance));
++          bank.expectedDelta = _round(inDone.reduce((s, m) => s + Number(m.amount || 0), 0) - outDone.reduce((s, m) => s + Number(m.amount || 0), 0));
++          bank.note = 'Delta del ledger hgcash vs. entradas−salidas del día (informativo: las comisiones y movimientos fuera del rango lo corren).';
++        }
++      }
++    }
++  } catch (e) { logger.warn(`[cierre] saldo hgcash no disponible: ${e.message}`); }
++
++  const summary = {
++    entradas: { count: inDone.length, total: _round(inDone.reduce((s, m) => s + Number(m.amount || 0), 0)) },
++    entradasCargadas: { count: inCharged.length, total: _round(inCharged.reduce((s, m) => s + Number(m.amount || 0), 0)),
++      auto: inCharged.filter(m => m.matchStatus === 'auto_charged').length,
++      asignadas: inCharged.filter(m => m.chargeSource === 'assigned').length,
++      manuales: inCharged.filter(m => m.matchStatus === 'manual_charged' && m.chargeSource !== 'assigned').length },
++    entradasNoCorresponde: { count: inResolved.length, total: _round(inResolved.reduce((s, m) => s + Number(m.amount || 0), 0)) },
++    entradasDuplicadas: { count: inDuplicate.length },
++    entradasSinAcreditar: { count: inOpen.length, total: _round(inOpen.reduce((s, m) => s + Number(m.amount || 0), 0)) },
++    cargas: { count: bankDeposits.length, total: _round(sumCargas), vinculadas: cargasVinculadas, vinculadasPorCierre: linkedNow.length,
++      otroBanco: { count: cargasOtroBanco.length, total: _round(cargasOtroBanco.reduce((s, t) => s + Number(t.amount || 0), 0)) },
++      sinTransferencia: { count: cargasSinTransferencia.length, total: _round(cargasSinTransferencia.reduce((s, t) => s + Number(t.amount || 0), 0)) } },
++    salidas: { count: outDone.length, total: _round(outDone.reduce((s, m) => s + Number(m.amount || 0), 0)), pagos: outPagos, pagosTotal: _round(sumPagos), bajadas: outBajadas, bajadasTotal: _round(sumBajadas), sinOrigen: outSinOrigen.length },
++    pagos: { pagados: paidPayouts.length, total: _round(paidPayouts.reduce((s, p) => s + Number(p.amount || 0), 0)), otroBanco: pagosOtroBanco },
++    transacciones: txTotals
++  };
++
++  const unresolved = diffs.filter(d => !d.resolved).length;
++  const status = unresolved > 0 ? 'diff' : (cashier.status === 'sin_datos' ? 'warn' : 'ok');
++  const doc = await DailyClose.findOneAndUpdate(
++    { dateKey: dayKey },
++    { $set: { status, computedAt: new Date(), computedBy: opts.computedBy || 'cron', summary, cashier, bank, diffs, unresolvedCount: unresolved }, $inc: { runs: 1 }, $setOnInsert: { createdAt: new Date() } },
++    { new: true, upsert: true }
++  ).lean();
++  return doc;
++}
++
++/** Marca un diff como resuelto (o lo reabre) y recalcula el estado del cierre. */
++async function resolveDiff(dayKey, key, { by, note, reopen = false }) {
++  const close = await DailyClose.findOne({ dateKey: dayKey });
++  if (!close) return null;
++  const d = (close.diffs || []).find(x => x.key === key);
++  if (!d) return null;
++  d.resolved = !reopen; d.resolvedBy = reopen ? null : (by || null); d.resolvedAt = reopen ? null : new Date(); d.note = reopen ? null : (note || null);
++  close.unresolvedCount = close.diffs.filter(x => !x.resolved).length;
++  close.status = close.unresolvedCount > 0 ? 'diff' : ((close.cashier && close.cashier.status === 'sin_datos') ? 'warn' : 'ok');
++  await close.save();
++  return close.toObject();
++}
++
++const TYPE_LABELS = {
++  mov_sin_acreditar: 'Transferencias recibidas SIN acreditar',
++  carga_sin_transferencia: 'Cargas SIN transferencia ni origen declarado',
++  salida_sin_origen: 'Salidas del banco sin pago ni bajada',
++  pago_sin_descuento: 'Pagos sin descuento de fichas confirmado',
++  pago_sin_movimiento: 'Pagos hgcash sin movimiento bancario',
++  ambiguo: 'Operaciones en VERIFICAR sin resolver',
++  cajero_descuadre: 'Descuadre del cajero de JUGAYGANA'
++};
++
++/** Texto HTML (Telegram) del cierre. `esc` = escapador HTML del servicio de Telegram. */
++function formatCloseTelegram(close, esc, projectLabel) {
++  const s = close.summary || {}, c = close.cashier || {};
++  const money = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
++  const lines = [];
++  lines.push(`🧾 <b>${esc(projectLabel || 'proyecto')}</b> — CIERRE ${esc(close.dateKey)}`);
++  const un = close.unresolvedCount || 0;
++  lines.push(un === 0 && close.status === 'ok' ? '✅ <b>0 diferencias</b> — todo cuadra' : (un === 0 ? '⚠️ Sin diferencias, pero falta el cruce con el cajero (sin operaciones registradas)' : `🔴 <b>${un} diferencia(s)</b> sin resolver`));
++  lines.push(`⬇️ Entradas: ${s.entradas ? s.entradas.count : 0} · ${money(s.entradas && s.entradas.total)} (auto ${s.entradasCargadas ? s.entradasCargadas.auto : 0} · asignadas ${s.entradasCargadas ? s.entradasCargadas.asignadas : 0} · manuales ${s.entradasCargadas ? s.entradasCargadas.manuales : 0})`);
++  lines.push(`💰 Cargas: ${s.cargas ? s.cargas.count : 0} · ${money(s.cargas && s.cargas.total)} (otro banco ${s.cargas && s.cargas.otroBanco ? s.cargas.otroBanco.count : 0})`);
++  lines.push(`⬆️ Salidas: pagos ${s.salidas ? s.salidas.pagos : 0} · ${money(s.salidas && s.salidas.pagosTotal)} — bajadas ${s.salidas ? s.salidas.bajadas : 0} · ${money(s.salidas && s.salidas.bajadasTotal)}`);
++  if (c.status && c.status !== 'sin_datos') {
++    lines.push(`🎰 Cajero JUGAYGANA: real ${money(c.actualDelta)} vs. sistema ${money(c.expectedDelta)} → ${c.status === 'ok' ? '✅ cuadra' : '🔴 diferencia ' + money(c.diff)}`);
++  }
++  if (close.bank && close.bank.netBalance != null) lines.push(`🏦 Saldo hgcash al cierre: ${money(close.bank.netBalance)}`);
++  const open = (close.diffs || []).filter(d => !d.resolved);
++  if (open.length) {
++    const byType = {};
++    for (const d of open) { (byType[d.type] = byType[d.type] || []).push(d); }
++    for (const t of Object.keys(byType)) {
++      const arr = byType[t];
++      const total = arr.reduce((a, d) => a + Math.abs(Number(d.amount || 0)), 0);
++      lines.push(`• <b>${esc(TYPE_LABELS[t] || t)}</b>: ${arr.length} · ${money(total)}`);
++      for (const d of arr.slice(0, 6)) lines.push(`   – ${esc(String(d.detail || '').slice(0, 160))}`);
++      if (arr.length > 6) lines.push(`   – … y ${arr.length - 6} más (ver panel → 🏦 Banco → Cierre)`);
++    }
++  }
++  return lines.join('\n');
++}
++
++module.exports = { computeDailyClose, resolveDiff, formatCloseTelegram, TYPE_LABELS, _artDateKey, _artDayRange };
+-- 
+2.47.3
+
+
+From 221bd3d1551b13f368aa18eacf6cf3463e0616d5 Mon Sep 17 00:00:00 2001
+From: jupedro2112-pixel <ju.pedro2112@gmail.com>
+Date: Fri, 11 Sep 2026 07:20:05 +0000
+Subject: [PATCH 2/2] docs(banco): ARCHITECTURE + CLAUDE.md para la bandeja del
+ banco, bajadas y cierre diario (#155)
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013uDxUfFUUudS3aEfoN3Qkn
+---
+ CLAUDE.md            |  8 +++++++-
+ docs/ARCHITECTURE.md | 38 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/CLAUDE.md b/CLAUDE.md
+index a8319a8..f4ef14d 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -59,7 +59,8 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
+ - `jugaygana-movements.js` — endpoint alterno (deposit/withdraw/balance).
+ - `src/services/jugayganaService.js` — cliente refactorizado (lo usa referidos).
+ - `src/services/jugayganaPublisherSessions.js` — pool de sesiones por publicista.
+-- `src/models/` — schemas Mongoose canónicos (fuente de verdad).
++- `src/models/` — schemas Mongoose canónicos (fuente de verdad). Banco: BankMovement,
++  BankSweep (bajadas), DailyClose (cierre), CashierSnapshot (saldo cajero JUGAYGANA).
+ - `src/services/` — lógica (referidos, notificaciones, otp, metaCapi, fbAds, hgcash,
+   comprobantes IA, analítica publicistas…).
+ - `public/` — PWA del cliente (namespace global `window.VIP`, SW único
+@@ -95,6 +96,11 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
+   puede sumar el % de un "Lote con regalo" vía `claimAutoPromoPercent` (reserva
+   atómica en PromoBonus). Un flujo de carga nuevo tiene que llamarlo y hacer
+   settle/revert; nunca sumar dos bonos automáticos entre sí.
++- **Bandeja del banco / cierre diario (#155):** una transferencia hgcash = UNA acreditación.
++  Toda carga que venga del banco tiene que dejar el vínculo en las dos direcciones
++  (`BankMovement.transactionId`+`chargeSource` y `Transaction.metadata.movementId`), y la
++  carga asignada desde la bandeja va SIEMPRE por `hgcashAutoCarga({assign})`. Si no, el
++  cierre diario (`src/services/bankCloseService.js`, Telegram 00:05 ART) lo marca.
+ - **Anti-multicuenta por BANCO (#152):** el titular de origen del movimiento hgcash
+   (`BankMovement.fromKey`) es la identidad real. Un flujo de bono automático nuevo
+   ligado a una carga tiene que respetar `_findBankMultiAccount` /
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 04a19e4..ed58c1b 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -108,6 +108,12 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
+   `monto|origen|cbu|fecha|hora` que EXIGE fecha) + `imageHash` (SHA-256) para detectar
+   reutilización. Aviso de duplicado en 3 niveles (imagen / N° / solo datos = "posible").
+   `bankMatchStatus` para la auto-carga.
++- **BankSweep** (#155) — BAJADAS: salidas de hgcash a un CBU externo (financiera) para no
++  acumular capital; solo admin general / pagos; externalID `sweep-<id>`; registro permanente.
++- **DailyClose** (#155) — cierre diario por `dateKey` ART: `summary`, `cashier` (cruce con
++  el cajero JUGAYGANA), `bank` (saldo hgcash), `diffs[]` con `key` estable y `resolved`.
++- **CashierSnapshot** (#155) — saldo del cajero de JUGAYGANA tras cada operación de plata
++  (`parent_balance`/100) + `opAmount` con signo; TTL 120 d. Base del cruce sistema↔JUGAYGANA.
+ - **HgcashCharge** — candado de idempotencia de la carga automática: índice único por
+   `chargeKey` (coelsaCode) — la MISMA transferencia se acredita UNA sola vez entre
+   instancias. Si la carga falla en JUGAYGANA, el registro se BORRA para permitir retry.
+@@ -299,6 +305,15 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
+   (`HGCASH_APP_BONUS_SKIP_BALANCE_ARS`; se le avisa con
+   `/sys_deposit_no_bonus_saldo`, editable — vaciarlo lo apaga; si la lectura de
+   saldo falla, el bono sale igual, fail-open). El 100% NO tiene esta condición.
++  **BANDEJA DEL BANCO (#155):** manda el MOVIMIENTO, no la foto. Todo entrante `done`
++  termina en un estado: cargado auto (foto matcheó) · **asignado** por un agente desde
++  panel→🏦 Banco (`POST /api/admin/bank/movements/:id/assign` → `hgcashAutoCarga` con
++  `assign`, mismo candado/bonos, sin comprobante) · **manual anclado** (el modal Depositar
++  manda `movementId`: monto exacto, claim atómico antes de acreditar, `chargeSource:
++  'manual_link'`) · vinculado a una carga manual ya hecha (`/link`) · "no corresponde"
++  (admin, con motivo). El panel se actualiza por socket `bank_movement` (doc entero) sin
++  recargar. `BankMovement.chargeSource/transactionId` y `Transaction.metadata.{movementId,
++  origin}` son los vínculos en las dos direcciones que el cierre cruza.
+   **Anti-multicuenta por BANCO** (#152): antes de los bonos, `_findBankMultiAccount`
+   busca si el titular de origen (fromCUIT > fromCBU > fromKey) ya fondeó a OTRA
+   cuenta (estados `BANK_IDENTITY_STATES`). Si sí: la carga entra igual, pero SIN
+@@ -327,6 +342,17 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
+   devolver; si se descontó → devolución (split bonus/fichas para pagos legacy).
+   `pay-other-bank` = pago manual (descuenta igual). Poller `_pollPayingPayouts` cada
+   45s (últimas 2h) cubre webhooks perdidos.
++- **Bajadas** (#155): `POST /api/admin/bank/sweeps` (admin|withdrawer) → cash-out hgcash a
++  un CBU externo (destino guardado en `Config['sweepDestinations']`, CBU o alias resuelto),
++  externalID `sweep-<id>`; el webhook de estado (`_handleSweepStatusWebhook`) y el movimiento
++  saliente (`outKind:'sweep'`) se vinculan solos. Telegram "🏦 BAJADA". Registro en BankSweep.
++- **Cierre diario** (#155, `src/services/bankCloseService.js`): 3 cruces del día ART —
++  banco↔sistema (entrantes sin acreditar / cargas sin transferencia ni origen / salidas sin
++  pago ni bajada; vincula y PERSISTE pares inequívocos usuario+monto ±3 h), cajero JUGAYGANA
++  (Σ opAmount de CashierSnapshot vs delta de saldo, tolerancia $5) y errores (pago sin
++  `debitConfirmed`, pago hgcash sin movimiento, ambiguos 🛑 sin resolver). Cron
++  `_runDailyCloseTick` a las 00:05 ART (claim `Config['dailyclose_last']`) → Telegram con
++  arrastre. Panel→🏦 Banco→Cierre: recalcular, resolver diffs con nota (admin).
+ - **Reembolsos** (rangos desde 2026-07-28 #97; el DIARIO volvió el 2026-08-14 #102):
+   **DIARIO, semanal y mensual**, los tres con el MISMO % de rango.
+   `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis, ventanas de
+@@ -476,6 +502,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
+   futuras configs sensibles sin pasar por SSM. **SMS Masivo usa esta misma clave** (#129;
+   `SMS_MASIVO_PASSWORD` de SSM solo es fallback mientras no haya clave definida) y la
+   exige del lado server en `bulk-sms` y `bulk-sms/preview` (#130).
++- **🏦 Banco** (#155): nav para admin/depositor/withdrawer (badge = pendientes). Tabs
++  Pendientes/Hoy/Otro día (filas en vivo por socket), Bajadas (modal + destinos guardados;
++  crear solo admin|withdrawer), Cierre (tiles + diffs resolubles). El modal Depositar tiene
++  el bloque "¿De dónde viene la plata?" (transferencia pendiente / otro banco / sin
++  transferencia) que alimenta `movementId`/`origin` de `/api/admin/deposit`.
+ - Secciones "Automatización" y "Estrategia de bonos" están marcadas "No se usa" en el
+   sidebar pero siguen funcionales (candidatas a limpieza con el owner).
+ - La sección "Base de Datos" fue ELIMINADA por completo (2026-07-09): era inalcanzable.
+@@ -495,6 +526,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
+ | Limpieza mensajes >3d | 6 h | activo (red de seguridad del TTL) | deleteMany |
+ | `_runChatAuditTick` (auditoría IA de chats quietos, #132) | 5 min | activo si `auditconfig.enabled` | claim `ChatStatus.auditLockAt` + `lastAuditMsgAt` |
+ | `_runAuditLearnTick` (aprendizaje diario de chats bien evaluados, #146) | 10 min (dispara 1×/día a `learnHourART`) | activo si `auditconfig.learnEnabled` | `Config['auditlearnlast']` = fecha ART |
++| `_runDailyCloseTick` (cierre diario del banco, #155) | 5 min (corre 1×/día desde las 00:05 ART) | activo | claim `Config['dailyclose_last']` + DailyClose único por dateKey |
+ 
+ Migraciones one-shot: patrón flag en Config (`migration_*_done`) en `initializeData()`.
+ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
+@@ -562,6 +594,12 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
+   HTML sin pasar por `renderIndexHtml`.
+ - **Firebase config duplicada** (index.html + firebase-messaging-sw.js) y VAPID key en
+   el inline: cambiar en ambos lados.
++- **Vínculos banco↔carga (#155):** una acreditación por transferencia. Cualquier flujo
++  nuevo que acredite plata que entró por hgcash tiene que dejar `BankMovement.transactionId`
++  + `chargeSource` y `Transaction.metadata.movementId` (o `origin:'otro_banco'`), o el cierre
++  diario lo marca como diferencia. La carga asignada SIEMPRE va por `hgcashAutoCarga`
++  (nunca un `depositToUser` suelto). `_emitHgcashUpdate(kind, movementId)` con movementId
++  para que la bandeja se actualice en vivo.
+ - **`X-Token` en royalty-statistics** y **`child_user_id` obligatorio** — cambiarlos
+   rompe referidos Y reembolsos.
+ - **`_communityRecommendCard` (roulette.js)**: feature pedida por el owner que nunca
+-- 
+2.47.3
+

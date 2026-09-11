@@ -97,6 +97,10 @@
   bloque "¿De dónde viene la plata?" con las transferencias pendientes (si hay
   UNA del mismo monto se propone sola; elegir una fija el monto), "Otro banco"
   (con detalle) o "Sin transferencia" (queda marcada en el cierre).
+- **Paquete de réplica para el hermano (girox):** `docs/replicas/2026-09-11-banco-bandeja-
+  bajadas-cierre.patch` (diff exacto de los 2 commits) + `docs/replicas/README-2026-09-11-
+  banco.md` (prompt para pegar al asistente del otro repo + reglas de adaptación: girox,
+  cruce del cajero, TDZ, panel).
 - **Fases acordadas:** ahora = modo espejo (los agentes siguen operando igual,
   pero ya con bandeja + vínculos + cierre). Cuando el cierre dé 0 varios días,
   cerrar la puerta: apagar la carga manual con monto libre (solo asignar desde la

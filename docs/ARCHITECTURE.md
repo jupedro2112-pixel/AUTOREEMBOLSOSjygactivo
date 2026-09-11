@@ -414,7 +414,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   criterio base (código) + hechos del sistema (`_systemFactsForAi`, de la config) +
   contexto aprendido (`Config['auditlearned']`, propuesto por la IA desde chats ≥8 y
   confirmado por el owner, #146) + reglas del dueño (`auditconfig.extraRules`, a mano o
-  vía "🧠 Enseñarle a la IA" #145).
+  vía "🧠 Enseñarle a la IA" #145). El aprendizaje diario (#156) recibe además la MEMORIA
+  de todo lo ya preguntado/respondido/rechazado (`Config['auditproposals']`, hasta 2000
+  ítems), tiene cupo GLOBAL por día (`learnMaxProposalsPerDay`/`learnMaxQuestionsPerDay`) y
+  dedupe por similitud (`_learnSimilar`).
 - **SLA demoras**: reloj en ChatStatus (`delayClockOnUserMessage`/`delayClockResolve`);
   responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
   ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).

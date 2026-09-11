@@ -367,8 +367,13 @@ const LEARN_SYSTEM = [
   '  o una práctica que no sabés si es correcta o normal (ej. "piden DNI para retiros',
   '  grandes", "cobran comisión en X"), hacé una PREGUNTA corta al dueño en "dudas" en vez',
   '  de asumir. Preguntar antes que aprender mal.',
-  '- Máximo 6 propuestas y 4 dudas por análisis. Si no hay nada nuevo, hay_novedades=false',
-  '  y listas vacías: es una respuesta válida y esperable cuando la base ya está completa.',
+  '- MEMORIA: te doy la lista de lo que YA se preguntó y el dueño respondió, lo que el dueño',
+  '  RECHAZÓ y lo que está pendiente. NO vuelvas a proponer ni preguntar NADA de eso, ni',
+  '  reformulado, ni un caso particular de lo mismo. Si un tema ya fue respondido, dalo por',
+  '  sabido. Si fue rechazado, el dueño no lo quiere: no insistas.',
+  '- Tenés un CUPO por día (te digo cuánto te queda). Usalo solo para cosas realmente nuevas:',
+  '  lo normal, cuando la base ya está completa, es hay_novedades=false y listas vacías. Es',
+  '  una respuesta válida y esperable. Menos y mejor.',
   '- Español rioplatense, concreto.'
 ].join('\n');
 const LEARN_SCHEMA = {
@@ -382,12 +387,15 @@ const LEARN_SCHEMA = {
   required: ['hay_novedades', 'resumen', 'propuestas', 'dudas'],
   additionalProperties: false
 };
-async function learnFromChats({ samples, learnedDoc, rules, systemFacts }) {
+async function learnFromChats({ samples, learnedDoc, rules, systemFacts, memory, quota }) {
   if (!getApiKey()) return { ok: false, error: 'ANTHROPIC_API_KEY no configurada' };
+  const q = quota || { proposals: 6, questions: 4 };
   const userText = [
     'HECHOS DEL SISTEMA:', String(systemFacts || '(sin datos)').slice(0, 6000), '',
     'CONTEXTO YA APRENDIDO:', String(learnedDoc || '(vacío)').slice(0, 8000), '',
     'REGLAS DEL DUEÑO (no las repitas ni las cuestiones; son para tu referencia):', String(rules || '(ninguna)').slice(0, 6000), '',
+    'MEMORIA — YA PREGUNTADO / RESPONDIDO / RECHAZADO (NO repetir ni reformular nada de esto):', String(memory || '(todavía no hay historial)').slice(0, 12000), '',
+    `CUPO RESTANTE PARA HOY: ${q.proposals} propuesta(s) y ${q.questions} duda(s). Si no hay nada realmente nuevo, devolvé listas vacías.`, '',
     `MUESTRA DE ${samples.length} CHATS BIEN EVALUADOS:`,
     ...samples.map((sm, i) => `--- CHAT ${i + 1} (puntaje ${sm.score}/10, cliente ${sm.username}) ---\n${String(sm.transcript || '').slice(0, 5000)}`),
     '', 'Analizá y completá el JSON.'
@@ -413,8 +421,8 @@ async function learnFromChats({ samples, learnedDoc, rules, systemFacts }) {
       ok: true,
       hasNews: !!parsed.hay_novedades,
       summary: clean(parsed.resumen),
-      proposals: (Array.isArray(parsed.propuestas) ? parsed.propuestas : []).slice(0, 6).map(p => ({ text: clean(p.texto), why: clean(p.motivo) })).filter(p => p.text),
-      questions: (Array.isArray(parsed.dudas) ? parsed.dudas : []).slice(0, 4).map(q => ({ question: clean(q.pregunta), context: clean(q.contexto) })).filter(q => q.question),
+      proposals: (Array.isArray(parsed.propuestas) ? parsed.propuestas : []).slice(0, Math.max(0, q.proposals)).map(p => ({ text: clean(p.texto), why: clean(p.motivo) })).filter(p => p.text),
+      questions: (Array.isArray(parsed.dudas) ? parsed.dudas : []).slice(0, Math.max(0, q.questions)).map(qq => ({ question: clean(qq.pregunta), context: clean(qq.contexto) })).filter(qq => qq.question),
       model: data.model || getModel(), usage: data.usage || null
     };
   } catch (err) {

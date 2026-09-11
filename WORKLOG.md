@@ -8,6 +8,32 @@
 
 ## Sesión 2026-09-11
 
+### 156. Aprendizaje diario de la auditoría: la IA repetía preguntas ya respondidas y propuestas rechazadas — memoria en el prompt + cupo GLOBAL por día + dedupe por similitud
+- **Reporte del owner:** después de 1-2 semanas la IA "no aprende nada": sigue
+  haciendo preguntas que ya contestó días antes y son demasiadas.
+- **Causas (código de #146/#147):** (1) el prompt de `learnFromChats` recibía el
+  doc, las reglas y los hechos, pero NO la lista de preguntas ya hechas: al
+  responder una duda, el destilador la convertía en regla/contexto y la pregunta
+  original se perdía → la IA la volvía a hacer con otras palabras; (2) lo
+  RECHAZADO (❌ No) solo cambiaba `status` y nunca se le mostraba de nuevo → lo
+  proponía al otro día; (3) el filtro de repetidos era exacto (minúsculas o 60
+  chars dentro del doc): una reformulación pasaba como nueva; (4) el tope "6
+  propuestas y 4 dudas" era POR TANDA: 300 chats en tandas de 15 = hasta 20
+  llamadas × 10 ítems por día; (5) el historial se cortaba en 300 ítems, así que
+  los rechazos viejos se borraban.
+- **Fix (`_runAuditLearn` + `chatAuditAiService.learnFromChats`):** bloque
+  MEMORIA en el prompt con TODO el historial (respondidas con la respuesta del
+  dueño, rechazadas "no insistir", pendientes, ya incorporadas) e instrucción
+  explícita de no repetir ni reformular; cupo GLOBAL por día (`learnMaxProposalsPerDay`
+  6 / `learnMaxQuestionsPerDay` 4, editables en 🔐 Config privada → Auditoría →
+  📚) que se pasa como "cupo restante" a cada tanda y corta las tandas cuando se
+  llena; dedupe por similitud de palabras (`_learnSimilar`: normalización sin
+  acentos, Jaccard ≥ 0,5 o contención ≥ 0,8, stop-words) contra historial + doc +
+  reglas; historial guardado hasta 2000 ítems. admin-sw v38 → v39.
+- **Validado:** `node --check` OK. Redeploy. **Esperable:** desde el primer
+  análisis post-deploy, ninguna pregunta ya respondida/rechazada vuelve, y como
+  mucho 6+4 ítems por día; cuando la base esté completa, "no hay nada nuevo".
+
 ### 155. 🏦 BANDEJA DEL BANCO en tiempo real + carga manual ANCLADA + BAJADAS + CIERRE DIARIO (control fino: ninguna carga de más ni de menos)
 - **Pedido del owner:** hay cargas dobles y cargas que faltan (ej.: no matchea la
   foto, el agente carga manual, después llega el aviso del banco y se carga de

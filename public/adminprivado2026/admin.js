@@ -5314,6 +5314,7 @@ function renderPrivateAuditConfig(a) {
     set('pcTgToken', ''); chk('pcTgTokenClear', false); set('pcTgChatId', a.telegramChatId || '');
     set('pcAuditExtraRules', a.extraRules || '');
     chk('pcLearnEnabled', a.learnEnabled !== false); set('pcLearnHour', a.learnHourART); set('pcLearnMinScore', a.learnMinScore); set('pcLearnMaxChats', a.learnMaxChats);
+    set('pcLearnMaxProposals', a.learnMaxProposalsPerDay != null ? a.learnMaxProposalsPerDay : 6); set('pcLearnMaxQuestions', a.learnMaxQuestionsPerDay != null ? a.learnMaxQuestionsPerDay : 4);
     loadLearnedContext();
     const th = document.getElementById('pcTgTokenHint'); if (th) th.textContent = a.telegramTokenSet ? `(guardado: ${a.telegramTokenHint})` : '(sin token en el panel)';
     const flags = document.getElementById('pcAuditFlags');
@@ -5338,6 +5339,7 @@ async function savePrivateAuditConfig() {
         alertFlags: Array.from(document.querySelectorAll('.pcAuditFlag:checked')).map(x => x.value),
         extraRules: v('pcAuditExtraRules') || '',
         learnEnabled: c('pcLearnEnabled'), learnHourART: v('pcLearnHour'), learnMinScore: v('pcLearnMinScore'), learnMaxChats: v('pcLearnMaxChats'),
+        learnMaxProposalsPerDay: v('pcLearnMaxProposals'), learnMaxQuestionsPerDay: v('pcLearnMaxQuestions'),
         telegramChatId: (v('pcTgChatId') || '').trim()
     };
     const tok = (v('pcTgToken') || '').trim();

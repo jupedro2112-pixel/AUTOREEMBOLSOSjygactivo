@@ -6122,6 +6122,7 @@ const AUDIT_DEFAULTS = {
   rulesEnabled: true, ratingEnabled: true, ratingCooldownHours: 6,
   extraRules: '',
   learnEnabled: true, learnHourART: 0, learnMinScore: 8, learnMaxChats: 300, // #146/#147: a las 00:01 ART, el día anterior completo
+  learnMaxProposalsPerDay: 6, learnMaxQuestionsPerDay: 4, // #156: cupo GLOBAL por día (no por tanda)
   telegram: { botToken: '', chatId: '' }
 };
 async function _getAuditConfig() {
@@ -6276,6 +6277,7 @@ async function _auditConfigForPanel() {
     rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false, ratingCooldownHours: a.ratingCooldownHours,
     extraRules: a.extraRules || '',
     learnEnabled: a.learnEnabled !== false, learnHourART: a.learnHourART, learnMinScore: a.learnMinScore, learnMaxChats: a.learnMaxChats,
+    learnMaxProposalsPerDay: a.learnMaxProposalsPerDay, learnMaxQuestionsPerDay: a.learnMaxQuestionsPerDay,
     telegramTokenSet: !!(a.telegram && a.telegram.botToken),
     telegramTokenHint: a.telegram && a.telegram.botToken ? '••••' + String(a.telegram.botToken).slice(-4) : null,
     telegramChatId: (a.telegram && a.telegram.chatId) || '',
@@ -6320,6 +6322,7 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, pri
       extraRules: a.extraRules !== undefined ? String(a.extraRules || '').slice(0, 8000) : (cur.extraRules || ''),
       learnEnabled: a.learnEnabled !== undefined ? a.learnEnabled !== false : cur.learnEnabled !== false,
       learnHourART: num(a.learnHourART, cur.learnHourART, 0, 23), learnMinScore: num(a.learnMinScore, cur.learnMinScore, 5, 10), learnMaxChats: num(a.learnMaxChats, cur.learnMaxChats, 3, 1000),
+      learnMaxProposalsPerDay: num(a.learnMaxProposalsPerDay, cur.learnMaxProposalsPerDay, 0, 30), learnMaxQuestionsPerDay: num(a.learnMaxQuestionsPerDay, cur.learnMaxQuestionsPerDay, 0, 30),
       telegram: { botToken, chatId },
       updatedBy: req.user.username, updatedAt: new Date()
     };
@@ -6384,6 +6387,27 @@ function _artDayRange(dayKey) {
 // día. daily → el día anterior; manual → hoy hasta ahora (si hoy no hay nada, ayer).
 // Sin tope chico: se procesa en tandas de 15 chats por llamada y se acumulan las
 // propuestas/dudas (dedupe entre tandas, contra pendientes y contra el doc).
+// #156 ¿Dos textos dicen lo mismo? Normaliza (minúsculas, sin acentos ni puntuación) y
+// compara conjuntos de palabras (Jaccard) o inclusión. Sirve para no re-preguntar lo mismo
+// reformulado.
+function _learnNorm(t) {
+  return String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9ñ ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+const _LEARN_STOP = new Set(['el','la','los','las','de','del','que','y','o','a','en','un','una','unos','unas','se','al','por','para','con','sin','es','son','su','sus','lo','le','les','como','si','no','ya','mas','muy','hay','este','esta','esto','estos','estas','ese','esa','eso','cuando','donde','cual','cuales','the','of','to','and']);
+function _learnWords(t) { return new Set(_learnNorm(t).split(' ').filter(w => w.length > 2 && !_LEARN_STOP.has(w))); }
+function _learnSimilar(a, b) {
+  const na = _learnNorm(a), nb = _learnNorm(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 40 && nb.length >= 40 && (na.includes(nb) || nb.includes(na))) return true;
+  const wa = _learnWords(a), wb = _learnWords(b);
+  if (wa.size < 3 || wb.size < 3) return false;
+  let inter = 0; for (const w of wa) if (wb.has(w)) inter++;
+  const jacc = inter / (wa.size + wb.size - inter);
+  const contain = inter / Math.min(wa.size, wb.size);
+  return jacc >= 0.5 || contain >= 0.8;
+}
+
 async function _runAuditLearn(trigger) {
   const cfg = await _getAuditConfig();
   if (cfg.learnEnabled === false && trigger !== 'manual') return { skipped: 'apagado' };
@@ -6411,21 +6435,51 @@ async function _runAuditLearn(trigger) {
   const learned = (await getConfig('auditlearned', null)) || {};
   const facts = await _systemFactsForAi();
   const store = (await getConfig('auditproposals', null)) || [];
-  const docLower = String(learned.doc || '').toLowerCase();
-  const seen = new Set(store.filter(p => p.status === 'pending').map(p => p.text.toLowerCase()));
-  const exists = (t) => { const k = String(t || '').toLowerCase(); return !k || seen.has(k) || docLower.includes(k.slice(0, 60)); };
+  // #156 MEMORIA: la IA volvía a preguntar lo ya respondido y a proponer lo rechazado porque
+  // el prompt solo recibía el doc y las reglas (la pregunta original se perdía) y el filtro
+  // de repetidos era exacto. Ahora: (1) va al prompt TODO el historial (respondido con la
+  // respuesta, rechazado, aceptado, pendiente) con orden de no repetir ni reformular;
+  // (2) dedupe por SIMILITUD de palabras contra todo el historial + doc + reglas; (3) cupo
+  // GLOBAL por día (no por tanda: 300 chats en tandas de 15 eran hasta 20×(6+4) ítems).
+  const maxP = Number(cfg.learnMaxProposalsPerDay) > 0 ? Number(cfg.learnMaxProposalsPerDay) : 6;
+  const maxQ = Number(cfg.learnMaxQuestionsPerDay) > 0 ? Number(cfg.learnMaxQuestionsPerDay) : 4;
+  const memLine = (p) => {
+    const t = String(p.text || '').slice(0, 220);
+    if (p.status === 'answered') return `- [RESPONDIDA] ${t} → respuesta del dueño: ${String(p.answer || p.finalText || '').slice(0, 220)}`;
+    if (p.status === 'rejected') return `- [RECHAZADA por el dueño, no insistir] ${t}`;
+    if (p.status === 'accepted') return `- [YA INCORPORADA al contexto] ${t}`;
+    return `- [PENDIENTE de respuesta, no repetir] ${t}`;
+  };
+  const byStatus = (st, n) => store.filter(p => p.status === st).slice(0, n).map(memLine);
+  const memory = [].concat(byStatus('answered', 120), byStatus('rejected', 120), byStatus('pending', 60), byStatus('accepted', 60)).join('\n');
+  const known = store.map(p => p.text).concat(String(learned.doc || '').split('\n'), String(cfg.extraRules || '').split('\n')).filter(Boolean);
+  const exists = (t) => !String(t || '').trim() || known.some(k => _learnSimilar(k, t));
   const added = []; const summaries = []; let model = null; let calls = 0;
   let docSoFar = learned.doc || '';
   for (let i = 0; i < samples.length; i += 15) {
+    const leftP = maxP - added.filter(x => x.kind === 'context').length;
+    const leftQ = maxQ - added.filter(x => x.kind === 'question').length;
+    if (leftP <= 0 && leftQ <= 0) { logger.info(`[audit-learn] cupo del día completo (${maxP}+${maxQ}) tras ${calls} tanda(s); se omiten ${samples.length - i} chats`); break; }
     const chunk = samples.slice(i, i + 15);
-    const r = await chatAuditAi.learnFromChats({ samples: chunk, learnedDoc: docSoFar, rules: cfg.extraRules || '', systemFacts: facts });
+    const r = await chatAuditAi.learnFromChats({ samples: chunk, learnedDoc: docSoFar, rules: cfg.extraRules || '', systemFacts: facts, memory, quota: { proposals: leftP, questions: leftQ } });
     calls++;
     if (!r.ok) { logger.warn(`[audit-learn] tanda ${calls} falló: ${r.error}`); if (!added.length && calls === 1) return { error: r.error }; continue; }
     model = r.model; if (r.summary) summaries.push(r.summary);
-    for (const pr of r.proposals) { if (!exists(pr.text)) { const item = { id: uuidv4(), kind: 'context', text: pr.text, why: pr.why, status: 'pending', at: new Date(), dayKey }; store.unshift(item); added.push(item); seen.add(pr.text.toLowerCase()); docSoFar += '\n- (propuesto) ' + pr.text; } }
-    for (const q of r.questions) { if (!exists(q.question)) { const item = { id: uuidv4(), kind: 'question', text: q.question, why: q.context, status: 'pending', at: new Date(), dayKey }; store.unshift(item); added.push(item); seen.add(q.question.toLowerCase()); } }
+    for (const pr of r.proposals) {
+      if (added.filter(x => x.kind === 'context').length >= maxP) break;
+      if (exists(pr.text)) continue;
+      const item = { id: uuidv4(), kind: 'context', text: pr.text, why: pr.why, status: 'pending', at: new Date(), dayKey };
+      store.unshift(item); added.push(item); known.push(pr.text); docSoFar += '\n- (propuesto) ' + pr.text;
+    }
+    for (const q of r.questions) {
+      if (added.filter(x => x.kind === 'question').length >= maxQ) break;
+      if (exists(q.question)) continue;
+      const item = { id: uuidv4(), kind: 'question', text: q.question, why: q.context, status: 'pending', at: new Date(), dayKey };
+      store.unshift(item); added.push(item); known.push(q.question);
+    }
   }
-  await setConfig('auditproposals', store.slice(0, 300));
+  // Historial completo: los resueltos son la MEMORIA (antes se cortaba en 300 y se perdían).
+  await setConfig('auditproposals', store.slice(0, 2000));
   const res = { ok: true, hasNews: added.length > 0, dayKey, summary: summaries.slice(0, 3).join(' · ').slice(0, 600), proposals: added.filter(x => x.kind === 'context'), questions: added.filter(x => x.kind === 'question'), sampled: samples.length, calls, model };
   try {
     await setConfig('auditlearnlog', [{ at: new Date(), trigger, dayKey, sampled: samples.length, calls, proposals: res.proposals.length, questions: res.questions.length, summary: res.summary }].concat((await getConfig('auditlearnlog', null)) || []).slice(0, 60));

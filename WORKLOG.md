@@ -29,7 +29,10 @@
   📚) que se pasa como "cupo restante" a cada tanda y corta las tandas cuando se
   llena; dedupe por similitud de palabras (`_learnSimilar`: normalización sin
   acentos, Jaccard ≥ 0,5 o contención ≥ 0,8, stop-words) contra historial + doc +
-  reglas; historial guardado hasta 2000 ítems. admin-sw v38 → v39.
+  reglas; historial guardado hasta 2000 ítems. admin-sw v38 → v39. **Limpieza de lo
+  pendiente viejo:** `_learnAutoClosePending` cierra solas (`auto_closed`, con `dupOf`)
+  las pendientes que repiten algo ya respondido/rechazado/incorporado — corre al abrir
+  📚 en el panel y en cada análisis, así la lista se depura sola tras el deploy.
 - **Validado:** `node --check` OK. Redeploy. **Esperable:** desde el primer
   análisis post-deploy, ninguna pregunta ya respondida/rechazada vuelve, y como
   mucho 6+4 ítems por día; cuando la base esté completa, "no hay nada nuevo".

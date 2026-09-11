@@ -6408,6 +6408,19 @@ function _learnSimilar(a, b) {
   return jacc >= 0.5 || contain >= 0.8;
 }
 
+// #156 Cierra solas las PENDIENTES que repiten algo ya respondido/rechazado/incorporado
+// (quedan `auto_closed`, con referencia al ítem original). Devuelve cuántas cerró.
+function _learnAutoClosePending(store) {
+  const resolved = store.filter(p => ['answered', 'rejected', 'accepted'].includes(p.status));
+  let n = 0;
+  for (const p of store) {
+    if (p.status !== 'pending') continue;
+    const dup = resolved.find(r => _learnSimilar(r.text, p.text));
+    if (dup) { p.status = 'auto_closed'; p.resolvedAt = new Date(); p.resolvedBy = 'sistema'; p.dupOf = dup.id; p.answer = dup.answer || dup.finalText || null; n++; }
+  }
+  return n;
+}
+
 async function _runAuditLearn(trigger) {
   const cfg = await _getAuditConfig();
   if (cfg.learnEnabled === false && trigger !== 'manual') return { skipped: 'apagado' };
@@ -6441,6 +6454,8 @@ async function _runAuditLearn(trigger) {
   // respuesta, rechazado, aceptado, pendiente) con orden de no repetir ni reformular;
   // (2) dedupe por SIMILITUD de palabras contra todo el historial + doc + reglas; (3) cupo
   // GLOBAL por día (no por tanda: 300 chats en tandas de 15 eran hasta 20×(6+4) ítems).
+  const closed = _learnAutoClosePending(store);
+  if (closed) logger.info(`[audit-learn] ${closed} pendiente(s) cerradas solas por repetir algo ya resuelto`);
   const maxP = Number(cfg.learnMaxProposalsPerDay) > 0 ? Number(cfg.learnMaxProposalsPerDay) : 6;
   const maxQ = Number(cfg.learnMaxQuestionsPerDay) > 0 ? Number(cfg.learnMaxQuestionsPerDay) : 4;
   const memLine = (p) => {
@@ -6569,7 +6584,10 @@ app.post('/api/admin/private-config/audit/learned', authMiddleware, adminMiddlew
     const learned = (await getConfig('auditlearned', null)) || {};
     const store = (await getConfig('auditproposals', null)) || [];
     const log = (await getConfig('auditlearnlog', null)) || [];
-    res.json({ success: true, doc: learned.doc || '', updatedAt: learned.updatedAt || null, pending: store.filter(p => p.status === 'pending'), lastRuns: log.slice(0, 5), facts: await _systemFactsForAi() });
+    // #156: al abrir el panel se cierran solas las pendientes que repiten algo ya resuelto.
+    const closed = _learnAutoClosePending(store);
+    if (closed) { await setConfig('auditproposals', store); logger.info(`[audit-learn] panel: ${closed} pendiente(s) repetidas cerradas solas`); }
+    res.json({ success: true, doc: learned.doc || '', updatedAt: learned.updatedAt || null, pending: store.filter(p => p.status === 'pending'), autoClosed: closed, lastRuns: log.slice(0, 5), facts: await _systemFactsForAi() });
   } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 // Editar el doc a mano.

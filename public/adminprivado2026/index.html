@@ -88,6 +88,12 @@
                     <span class="icon icon-exchange"></span>
                     <span>Transacciones</span>
                 </a>
+                <!-- #155 Bandeja del banco (admin, cargas y pagos). La muestra setupRoleBasedUI. -->
+                <a href="#" class="nav-item nav-item-bank" data-section="bank" style="display:none">
+                    <span>🏦</span>
+                    <span>Banco</span>
+                    <span id="bankBadge" style="display:none;background:#d4820a;color:#fff;font-size:9px;font-weight:900;padding:1px 6px;border-radius:8px;margin-left:4px;">0</span>
+                </a>
                 <a href="#" class="nav-item" data-section="commands">
                     <span class="icon icon-terminal"></span>
                     <span>Comandos</span>
@@ -2342,6 +2348,72 @@
 
             <!-- SMS Masivo Section -->
             <!-- AUDITORÍA DE ATENCIÓN (#132): reglas + IA + 👍👎 + Telegram -->
+            <!-- ============================================================
+                 #155 BANCO — bandeja en tiempo real, bajadas y cierre diario
+                 ============================================================ -->
+            <section id="bankSection" class="section">
+                <div class="panel-header" style="flex-wrap:wrap;gap:10px;">
+                    <h2>🏦 Banco</h2>
+                    <div id="bankBalanceBox" style="display:none;margin-left:auto;padding:6px 12px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:12.5px;color:#dfe;">
+                        💰 Saldo hgcash: <b id="bankBalanceVal">…</b> <span style="margin-left:8px;font-size:11px;color:#7CFC00;">● en vivo</span>
+                    </div>
+                </div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="bankTabs">
+                    <button class="btn btn-secondary btn-sm bank-tab active" data-tab="pending" onclick="bankSetTab('pending')">⏳ Pendientes <span id="bankTabPendingCount" style="opacity:.8;"></span></button>
+                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="today" onclick="bankSetTab('today')">📅 Hoy</button>
+                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="day" onclick="bankSetTab('day')">🗓️ Otro día</button>
+                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="sweeps" onclick="bankSetTab('sweeps')">⬆️ Bajadas</button>
+                    <button class="btn btn-secondary btn-sm bank-tab" data-tab="close" onclick="bankSetTab('close')">🧾 Cierre diario</button>
+                    <input type="text" id="bankSearch" placeholder="Buscar titular / usuario / coelsa / monto" style="margin-left:auto;min-width:240px;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;">
+                    <input type="date" id="bankDay" style="display:none;background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;" onchange="loadBankTray()">
+                </div>
+                <div id="bankTrayHelp" style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:#bbb;line-height:1.6;">
+                    Cada transferencia que entra al banco aparece acá <b>al instante</b>. La automática la carga sola cuando la foto coincide; si no,
+                    queda <b>pendiente</b> y hay que <b>asignarla</b> a un usuario (se acredita por el mismo camino que la automática, con el mismo candado) o
+                    vincularla a una carga manual ya hecha. <b>Ninguna transferencia puede quedar sin resolver</b>: el cierre diario las marca.
+                </div>
+                <div id="bankTrayWrap" style="overflow-x:auto;">
+                    <table class="data-table" style="min-width:980px;">
+                        <thead>
+                            <tr><th>Hora</th><th>Dir.</th><th>Monto</th><th>Titular / destino</th><th>Coelsa / ref.</th><th>Estado</th><th>Usuario</th><th>Acciones</th></tr>
+                        </thead>
+                        <tbody id="bankTrayBody"><tr><td colspan="8" style="color:#888;text-align:center;">Cargando…</td></tr></tbody>
+                    </table>
+                </div>
+
+                <!-- Bajadas -->
+                <div id="bankSweepsWrap" style="display:none;">
+                    <div style="background:rgba(212,175,55,0.06);border:1px solid rgba(212,175,55,0.30);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:#bbb;line-height:1.6;">
+                        Una <b>bajada</b> es una transferencia saliente desde la cuenta hgcash a un CBU externo (financiera, etc.) para que el banco no acumule
+                        capital. Solo la pueden hacer el <b>administrador principal</b> y el rol de <b>pagos</b>. Todas quedan registradas y entran al cierre diario.
+                        hgcash cobra comisión sobre la salida: el monto tiene que dejar margen sobre el saldo neto.
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                        <button class="btn-primary" id="bankSweepNewBtn" onclick="openSweepModal()" style="display:none;">⬆️ Nueva bajada</button>
+                        <button class="btn btn-secondary btn-sm" id="bankSweepDestBtn" onclick="openSweepDestinations()" style="display:none;">📇 Destinos guardados</button>
+                        <span id="bankSweepsTotal" style="margin-left:auto;font-size:12px;color:#aaa;"></span>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" style="min-width:900px;">
+                            <thead><tr><th>Fecha</th><th>Monto</th><th>Destino</th><th>CBU</th><th>Pedida por</th><th>Estado</th><th>Nota</th><th></th></tr></thead>
+                            <tbody id="bankSweepsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Cierre diario -->
+                <div id="bankCloseWrap" style="display:none;">
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+                        <input type="date" id="bankCloseDate" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;" onchange="openBankClose(this.value)">
+                        <button class="btn btn-secondary btn-sm" onclick="openBankClose(document.getElementById('bankCloseDate').value, true)">🔄 Recalcular</button>
+                        <button class="btn btn-secondary btn-sm" id="bankCloseTgBtn" onclick="bankCloseRun(document.getElementById('bankCloseDate').value, true)" style="display:none;">📨 Recalcular y mandar a Telegram</button>
+                        <span id="bankCloseCarry" style="margin-left:auto;font-size:12px;color:#ffb347;"></span>
+                    </div>
+                    <div id="bankCloseList" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;"></div>
+                    <div id="bankCloseBody"></div>
+                </div>
+            </section>
+
             <section id="auditSection" class="section">
                 <div class="panel-header">
                     <h2>🕵️ AUDITORÍA DE ATENCIÓN</h2>
@@ -2860,6 +2932,71 @@
     </div>
 
     <!-- Deposit Modal -->
+    <!-- #155 Asignar movimiento del banco a un usuario -->
+    <div id="bankAssignModal" class="modal hidden">
+        <div class="modal-content" style="max-width:640px;">
+            <div class="modal-header">
+                <h3>🏦 Asignar transferencia</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="bankAssignHead" style="font-size:13px;line-height:1.6;margin-bottom:10px;"></div>
+                <div class="form-group">
+                    <label>Buscar usuario:</label>
+                    <input type="text" id="bankAssignSearch" placeholder="usuario o teléfono (mín. 2 letras)" autocomplete="off" style="width:100%;">
+                    <div id="bankAssignResults" style="margin-top:6px;"></div>
+                </div>
+                <div id="bankAssignSuggestions" style="font-size:12px;"></div>
+                <div id="bankAssignSelected" style="display:none;margin-top:10px;padding:10px;border-radius:8px;background:rgba(40,167,69,.12);border:1px solid rgba(40,167,69,.55);font-size:13px;"></div>
+                <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+                    <button class="btn-primary" id="bankAssignConfirmBtn" onclick="bankAssignConfirm(false)" disabled>💰 Acreditar a este usuario</button>
+                    <button class="btn btn-secondary" id="bankAssignForceBtn" onclick="bankAssignConfirm(true)" style="display:none;">⚠️ Forzar (son 2 transferencias reales)</button>
+                    <button class="btn btn-secondary" id="bankResolveBtn" onclick="bankResolveFromModal()" style="display:none;margin-left:auto;">🚫 No corresponde…</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- #155 Nueva bajada -->
+    <div id="bankSweepModal" class="modal hidden">
+        <div class="modal-content" style="max-width:560px;">
+            <div class="modal-header">
+                <h3>⬆️ Nueva bajada del banco</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="bankSweepBalance" style="font-size:12.5px;color:#dfe;margin-bottom:10px;"></div>
+                <div class="form-group">
+                    <label>Destino guardado:</label>
+                    <select id="bankSweepDest" style="width:100%;" onchange="bankSweepDestChanged()"><option value="">— CBU / alias a mano —</option></select>
+                </div>
+                <div id="bankSweepManual">
+                    <div class="form-group"><label>CBU/CVU (22 dígitos) o alias:</label><input type="text" id="bankSweepCbu" placeholder="0000003100…  o  mi.alias.mp" style="width:100%;"></div>
+                    <div class="form-group"><label>Nombre del destinatario (opcional):</label><input type="text" id="bankSweepName" style="width:100%;"></div>
+                    <div class="form-group"><label>Etiqueta (ej. Financiera X):</label><input type="text" id="bankSweepLabel" style="width:100%;" maxlength="60"></div>
+                </div>
+                <div class="form-group"><label>Monto ($):</label><input type="number" id="bankSweepAmount" min="1" style="width:100%;"></div>
+                <div class="form-group"><label>Nota (opcional):</label><input type="text" id="bankSweepNote" style="width:100%;" maxlength="300"></div>
+                <button class="btn-primary" id="bankSweepSubmit" onclick="submitSweep()">⬆️ Confirmar bajada</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- #155 Destinos guardados de bajadas (solo admin general) -->
+    <div id="bankSweepDestModal" class="modal hidden">
+        <div class="modal-content" style="max-width:640px;">
+            <div class="modal-header">
+                <h3>📇 Destinos de bajada</h3>
+                <button class="close-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="bankSweepDestList"></div>
+                <button class="btn btn-secondary btn-sm" onclick="addSweepDestRow()" style="margin-top:8px;">➕ Agregar destino</button>
+                <button class="btn-primary" onclick="saveSweepDestinations()" style="margin-top:8px;margin-left:8px;">💾 Guardar</button>
+            </div>
+        </div>
+    </div>
+
     <div id="depositModal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
@@ -2895,6 +3032,12 @@
                 <div class="form-group">
                     <label for="depositAmount">Monto ($):</label>
                     <input type="number" id="depositAmount" placeholder="Ej: 10000" min="1">
+                </div>
+                <!-- #155 Origen de la plata: transferencia del banco (elegida de la bandeja) u otro banco. -->
+                <div class="form-group" id="depositOriginGroup">
+                    <label>¿De dónde viene la plata?</label>
+                    <div id="depositOriginList" style="font-size:12.5px;line-height:1.6;"></div>
+                    <input type="text" id="depositOriginNote" placeholder="Motivo / detalle (otro banco, sin movimiento…)" style="width:100%;display:none;margin-top:6px;" maxlength="200">
                 </div>
                 <div class="form-group">
                     <label for="depositBonus">Monto de Bonificación ($):</label>

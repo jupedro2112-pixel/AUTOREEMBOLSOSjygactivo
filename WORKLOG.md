@@ -4,7 +4,113 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-10**
+> **Última actualización: 2026-09-11**
+
+## Sesión 2026-09-11
+
+### 155. 🏦 BANDEJA DEL BANCO en tiempo real + carga manual ANCLADA + BAJADAS + CIERRE DIARIO (control fino: ninguna carga de más ni de menos)
+- **Pedido del owner:** hay cargas dobles y cargas que faltan (ej.: no matchea la
+  foto, el agente carga manual, después llega el aviso del banco y se carga de
+  nuevo). Quiere que el agente NO tenga el banco abierto: que vea por API TODAS
+  las transferencias y que **todas queden asignadas a un usuario** (ninguna libre,
+  ninguna carga sin transferencia); que lo que no coincida quede marcado como
+  "otro banco" en el cierre; un **cierre diario automático** que cruce hgcash y
+  JUGAYGANA y dé 0; y que diga también errores humanos (retiro sin descontar,
+  etc.). Además: **bajadas** a un CBU externo (financiera) para que el banco no
+  acumule capital, solo admin general o pagos, con registro de todas.
+- **Causa raíz del ejemplo (código):** `hgcashConsumeOnManualDeposit` solo
+  consumía movimientos YA matcheados al usuario; la carga manual no guardaba a
+  qué movimiento/comprobante correspondía; el comprobante tampoco guardaba con
+  qué carga se usó → sin vínculos en las dos direcciones no había forma de cerrar.
+- **hgcash (docs.hg.cash, verificado):** NO hay endpoint para listar movimientos
+  del ledger AR; solo webhooks "account movement", `GET /accounts` (+ balance) y
+  cash-out. → la bandeja se alimenta por webhook y el cruce con hgcash es por
+  SALDO de cuenta. **JUGAYGANA:** cada DepositMoney/WithdrawMoney/individual_bonus
+  devuelve `parent_balance` (saldo del cajero, centavos) → se guarda por operación.
+- **Modelos:** `BankMovement` + `chargeSource` (auto|assigned|manual_link|
+  legacy_amount|legacy_name|close_link), `transactionId`, `assignedBy/At`,
+  `resolution/resolutionNote/resolvedBy/At` (no_corresponde), `outKind`
+  (payout|sweep|unknown), `payoutId`, `sweepId`; índice `{direction, matchStatus,
+  createdAt}`. Nuevos: **`BankSweep`** (bajadas), **`DailyClose`** (cierre por
+  día, diffs con `key` estable y marca resuelto), **`CashierSnapshot`** (saldo
+  cajero + `opAmount` con signo por operación; TTL 120 d).
+- **jugaygana.js:** `setCashierBalanceHook(fn)` + `_reportCashier` en los 3
+  éxitos de plata (server.js guarda el CashierSnapshot; best-effort).
+- **`hgcashAutoCarga({movement, comprobante, mode, assign})`:** el comprobante
+  pasa a ser OPCIONAL. `assign={user, agent, agentRole, agentId, force}` = carga
+  ASIGNADA desde la bandeja: mismo claim del movimiento (también toma
+  needs_review/error/no_match), mismo candado por coelsa, misma red de seguridad
+  (saltable con `force` si el agente confirma 2 transferencias reales), mismos
+  bonos (app/lote) y anti-multicuenta; sin mínimo (el agente decide); Transaction
+  `source:'hgcash_assigned'` con el agente; movimiento `manual_charged` +
+  `chargeSource:'assigned'`. Ahora **devuelve `{ok, reason|txId}`**. Todos los
+  `Comprobante.updateOne` quedaron guardados con `if (compId)`.
+- **Carga manual (`/api/admin/deposit`) ANCLADA:** acepta `movementId` (elegido
+  en el modal), `origin` (hgcash|otro_banco|sin_movimiento) y `originNote`. Con
+  movimiento: el monto tiene que ser EXACTO al de la transferencia, se reclama
+  atómico ANTES de acreditar (la automática no puede tomarlo en el medio) y al
+  éxito queda `manual_charged` + `transactionId` + `chargeSource:'manual_link'`;
+  si falla/ambiguo se libera (`_bankReleaseClaim`, también desde el catch).
+  Transaction guarda `metadata.{origin, originNote, movementId}`. Sin movimiento:
+  `hgcashConsumeOnManualDeposit` ahora también vincula por **titular** (el
+  originHolder de los comprobantes del cliente en 6 h vs `fromKey` de movimientos
+  pendientes del mismo monto → `legacy_name`) y guarda el `transactionId`.
+- **Webhook:** salientes clasificados por externalID (`sweep-<id>` → bajada;
+  otro → pago); `_emitHgcashUpdate(kind, movementId)` ahora manda por socket el
+  documento (`bank_movement`) → **bandeja en tiempo real sin recargar**; también
+  emite en reentregas (cambio de status).
+- **Endpoints (bloque "#155 BANDEJA DEL BANCO", antes de PAGOS AUTOMÁTICOS):**
+  `GET /api/admin/bank/tray?tab=pending|today|day&day=&search=&amount=`,
+  `GET …/bank/users-search?q=`, `GET …/bank/movements/:id/suggestions`
+  (comprobantes del mismo monto con titular parecido, cargas manuales recientes
+  sin transferencia para VINCULAR, otras cuentas del mismo titular),
+  `POST …/movements/:id/assign {userId, force}`, `POST …/link {transactionId}`,
+  `POST …/resolve {note}` (admin), `POST …/reopen` (admin), `GET …/bank/balance`
+  (admin|withdrawer). **Bajadas:** `GET/POST …/bank/sweeps` (admin|withdrawer;
+  destino guardado, CBU o alias resuelto por hgcash; chequeo de saldo neto;
+  cash-out con externalID `sweep-<id>`; Telegram "🏦 BAJADA"), `POST …/sweeps/:id/
+  sync`, `GET/POST …/bank/sweep-destinations` (Config['sweepDestinations'];
+  editar solo admin). `_handleSweepStatusWebhook` en el webhook de estado.
+  **Cierre:** `GET …/bank/close` (lista + arrastre), `GET …/bank/close/:date`
+  (`?live=1` recalcula), `POST …/close/:date/run {telegram}` (admin),
+  `POST …/close/:date/resolve {key, note, reopen}` (admin).
+- **`src/services/bankCloseService.js`** — 3 cruces del día ART: (1) banco↔sistema
+  (entrantes done sin acreditar; cargas sin transferencia ni origen —vincula
+  solo pares inequívocos usuario+monto ±3 h con movimientos consumidos por monto
+  y PERSISTE el vínculo—; salidas sin pago ni bajada); (2) cajero JUGAYGANA
+  (Σ opAmount vs delta de saldo, tolerancia $5); (3) errores (pago sin
+  `debitConfirmed`, pago hgcash sin movimiento, ambiguos 🛑 sin resolver en
+  RefundClaim/BankMovement/DailyRouletteSpin/PendingPayout). Saldo hgcash al
+  cierre + delta vs cierre anterior (informativo). `status` ok|diff|warn.
+  Telegram con totales y diffs agrupados. **Cron `_runDailyCloseTick`** cada 5
+  min: desde las 00:05 ART corre el día anterior UNA vez por clúster (claim en
+  `Config['dailyclose_last']`), manda Telegram con arrastre de días anteriores.
+- **Panel (admin-sw v37 → v38):** nav **🏦 Banco** (admin, cargas, pagos; badge
+  con pendientes). Tabs: ⏳ Pendientes / 📅 Hoy / 🗓️ Otro día / ⬆️ Bajadas /
+  🧾 Cierre. Filas en vivo (socket `bank_movement` upsert; resueltas quedan 4 s en
+  verde y desaparecen de Pendientes). Modal **Asignar**: buscador + sugerencias
+  (✅ titular coincide / 🔢 op / "este titular ya cargó en @x" / "🔗 Ya cargada:
+  vincular") + forzar + "No corresponde" (admin). Bajadas: modal con destinos
+  guardados o CBU/alias, saldo neto, confirmación; tabla con estado y sync.
+  Cierre: tiles (entradas, cargas, salidas, cajero, saldo hgcash), diffs por
+  tipo con 💬 / 🏦 Ver / ✔️ Resolver (admin, con nota) / ↩️. **Modal Depositar:**
+  bloque "¿De dónde viene la plata?" con las transferencias pendientes (si hay
+  UNA del mismo monto se propone sola; elegir una fija el monto), "Otro banco"
+  (con detalle) o "Sin transferencia" (queda marcada en el cierre).
+- **Fases acordadas:** ahora = modo espejo (los agentes siguen operando igual,
+  pero ya con bandeja + vínculos + cierre). Cuando el cierre dé 0 varios días,
+  cerrar la puerta: apagar la carga manual con monto libre (solo asignar desde la
+  bandeja) — pendiente, decisión del owner.
+- **Validado:** `node --check` OK (server.js, jugaygana.js, 4 modelos, servicio,
+  admin.js, admin-sw); HTML del panel 734/734 divs, 27/27 sections, ids únicos;
+  scan TDZ 0. Sin cambios en la PWA. **Redeploy (back + panel).** **PROBAR:**
+  (1) llega una transferencia sin foto → aparece en Pendientes al instante →
+  Asignar a un usuario → se acredita y la fila pasa a verde; (2) Depositar a
+  mano con una transferencia pendiente del mismo monto → viene preseleccionada →
+  la transferencia queda "manual anclada" y NO se auto-carga cuando llegue la
+  foto; (3) hacer una bajada chica a un destino guardado → Telegram + fila +
+  movimiento saliente "Bajada"; (4) Cierre → Recalcular hoy → tiles y diffs;
+  mañana 00:05 ART llega el cierre a Telegram; (5) resolver un diff con nota.
 
 ## Sesión 2026-09-10
 

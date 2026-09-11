@@ -68,6 +68,18 @@ const bankMovementSchema = new mongoose.Schema({
   matchedUserId: { type: String, default: null },
   matchedUsername: { type: String, default: null },
   matchedComprobanteId: { type: String, default: null },
+  // #155 Bandeja del banco / cierre diario
+  chargeSource: { type: String, default: null },   // auto | assigned (bandeja) | manual_link (carga manual anclada) | legacy_amount (consumo por monto) | close_link (vinculado por el cierre)
+  transactionId: { type: String, default: null, index: true }, // Transaction.id de la acreditación vinculada
+  assignedBy: { type: String, default: null },
+  assignedAt: { type: Date, default: null },
+  resolution: { type: String, default: null },     // no_corresponde | otro (movimiento entrante que NO se acredita a nadie, con motivo)
+  resolutionNote: { type: String, default: null },
+  resolvedBy: { type: String, default: null },
+  resolvedAt: { type: Date, default: null },
+  outKind: { type: String, default: null },        // salientes: payout | sweep | unknown
+  payoutId: { type: String, default: null },
+  sweepId: { type: String, default: null },
   chargeError: { type: String, default: null },
   chargeAttempts: { type: Number, default: 0 }, // intentos de auto-carga fallidos
   chargedAt: { type: Date, default: null },
@@ -81,5 +93,7 @@ const bankMovementSchema = new mongoose.Schema({
 bankMovementSchema.index({ direction: 1, matchStatus: 1, amount: 1, createdAt: -1 });
 // #152 Multicuenta por banco: "¿qué movimientos ya matcheados tiene este usuario?"
 bankMovementSchema.index({ matchedUserId: 1, matchStatus: 1 });
+// #155 Bandeja del banco: pendientes por dirección y cierre por día.
+bankMovementSchema.index({ direction: 1, matchStatus: 1, createdAt: -1 });
 
 module.exports = mongoose.models['BankMovement'] || mongoose.model('BankMovement', bankMovementSchema);

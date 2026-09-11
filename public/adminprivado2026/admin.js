@@ -264,6 +264,8 @@ function setupEventListeners() {
         showModal('depositModal');
         // Aviso INTERNO de bono automático (async, no bloquea el modal)
         loadDepositAppBonusHint();
+        // #155 origen de la plata (transferencias pendientes de la bandeja)
+        loadDepositOriginPicker();
     });
     if (elements.btnBonus) {
         elements.btnBonus.addEventListener('click', () => {
@@ -329,6 +331,7 @@ function setupEventListeners() {
     
     // Deposit amount change
     document.getElementById('depositAmount').addEventListener('input', calculateBonus);
+    document.getElementById('depositAmount').addEventListener('input', () => { if (typeof renderDepositOrigin === 'function') renderDepositOrigin(); });
     
     // Withdraw amount change - update total
     document.getElementById('withdrawAmount').addEventListener('input', updateWithdrawTotal);
@@ -641,6 +644,13 @@ function setupRoleBasedUI() {
         btnBonus.style.display = ['admin', 'depositor', 'comunidad'].includes(role) ? '' : 'none';
     }
 
+    // #155 Banco: admin general, cargas y pagos
+    const bankNavItem = document.querySelector('.nav-item-bank');
+    if (bankNavItem) {
+        const canBank = ['admin', 'depositor', 'withdrawer'].includes(role);
+        bankNavItem.style.display = canBank ? '' : 'none';
+        if (canBank) { refreshBankBadge(); setInterval(refreshBankBadge, 2 * 60 * 1000); }
+    }
     // SMS Masivo: solo visible para admin general
     const smsNavItem = document.querySelector('.nav-item-sms-masivo');
     if (smsNavItem) {
@@ -1201,8 +1211,16 @@ function initSocket() {
     });
     
     // hgcash: movimiento nuevo / cambio de estado → refrescar el panel en vivo (si está abierto).
-    socket.on('hgcash_movement', () => {
+    socket.on('hgcash_movement', (d) => {
         if (typeof hgcashLiveRefresh === 'function') hgcashLiveRefresh(false);
+        if (typeof bankLiveRefresh === 'function') bankLiveRefresh(d);
+    });
+    // #155 bandeja del banco en tiempo real: llega el documento entero del movimiento.
+    socket.on('bank_movement', (d) => {
+        if (typeof bankApplyMovement === 'function') bankApplyMovement(d && d.movement, d && d.kind);
+    });
+    socket.on('bank_close', () => {
+        if (typeof refreshBankBadge === 'function') refreshBankBadge();
     });
 
     // USER TYPING
@@ -3173,12 +3191,12 @@ async function handleDeposit() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${currentToken}`
             },
-            body: JSON.stringify({
+            body: JSON.stringify(Object.assign({
                 userId: selectedUserId,
                 amount,
                 bonus,
                 description
-            })
+            }, (typeof getDepositOrigin === 'function') ? getDepositOrigin() : {}))
         });
         
         const data = await response.json();
@@ -4558,6 +4576,7 @@ function switchSection(section) {
     if (section === 'reembolsos') loadReembolsos();
     if (section === 'chatDelays') loadChatDelays();
     if (section === 'reviews') loadReviews();
+    if (section === 'bank') loadBankSection();
     if (section === 'campaigns') loadCampaigns();
     if (section === 'publisherAdmins') {
         if (currentAdmin?.role !== 'admin') {
@@ -13346,3 +13365,571 @@ window.closePublisherAnalysisModal = closePublisherAnalysisModal;
 window.openRecoverModal = openRecoverModal;
 window.closeRecoverModal = closeRecoverModal;
 window.submitRecover = submitRecover;
+
+
+// ============================================================
+// #155 BANCO — bandeja en tiempo real · bajadas · cierre diario
+// ============================================================
+let _bankTab = 'pending';
+let _bankRows = [];          // movimientos de la vista actual
+let _bankPerms = { canAssign: false, canSweep: false, isAdmin: false };
+let _bankLiveThrottle = 0;
+let _bankAssign = { movementId: null, movement: null, userId: null, username: null };
+
+function _bankVisible() {
+    const sec = document.getElementById('bankSection');
+    return !!(sec && sec.classList.contains('active'));
+}
+function _money(n) { return '$' + Number(n || 0).toLocaleString('es-AR'); }
+
+async function refreshBankBadge() {
+    try {
+        const r = await authFetch('/api/admin/bank/tray?tab=pending&limit=1');
+        if (!r.ok) return;
+        const j = await r.json();
+        const b = document.getElementById('bankBadge');
+        if (b) { b.textContent = String(j.pendingCount || 0); b.style.display = (j.pendingCount || 0) > 0 ? '' : 'none'; }
+        const c = document.getElementById('bankTabPendingCount');
+        if (c) c.textContent = (j.pendingCount || 0) > 0 ? '(' + j.pendingCount + ')' : '';
+    } catch (_) {}
+}
+
+function loadBankSection() {
+    const search = document.getElementById('bankSearch');
+    if (search && !search._wired) {
+        search._wired = true;
+        let t = null;
+        search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadBankTray(), 350); });
+    }
+    const day = document.getElementById('bankDay');
+    if (day && !day.value) day.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    bankSetTab(_bankTab || 'pending');
+    loadBankBalance();
+}
+
+function bankSetTab(tab) {
+    _bankTab = tab;
+    document.querySelectorAll('#bankTabs .bank-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    const tray = document.getElementById('bankTrayWrap'), help = document.getElementById('bankTrayHelp');
+    const sweeps = document.getElementById('bankSweepsWrap'), close = document.getElementById('bankCloseWrap');
+    const day = document.getElementById('bankDay'), search = document.getElementById('bankSearch');
+    const isTray = ['pending', 'today', 'day'].includes(tab);
+    if (tray) tray.style.display = isTray ? '' : 'none';
+    if (help) help.style.display = tab === 'pending' ? '' : 'none';
+    if (sweeps) sweeps.style.display = tab === 'sweeps' ? '' : 'none';
+    if (close) close.style.display = tab === 'close' ? '' : 'none';
+    if (day) day.style.display = tab === 'day' ? '' : 'none';
+    if (search) search.style.display = isTray ? '' : 'none';
+    if (isTray) loadBankTray();
+    else if (tab === 'sweeps') loadBankSweeps();
+    else if (tab === 'close') loadBankCloseList();
+}
+
+async function loadBankBalance() {
+    const box = document.getElementById('bankBalanceBox'), el = document.getElementById('bankBalanceVal');
+    if (!box || !el) return;
+    try {
+        const r = await authFetch('/api/admin/bank/balance');
+        if (!r.ok) { box.style.display = 'none'; return; }
+        const j = await r.json();
+        if (!j.enabled || !j.accounts || !j.accounts.length) { box.style.display = 'none'; return; }
+        el.innerHTML = j.accounts.map(a => '<b>' + _money(a.netBalance != null ? a.netBalance : a.balance) + '</b>' + (a.pendingFees ? ' <span style="opacity:.7;font-size:11px;">(comisiones pendientes ' + _money(a.pendingFees) + ')</span>' : '')).join(' | ');
+        box.style.display = '';
+    } catch (_) { box.style.display = 'none'; }
+}
+
+async function loadBankTray() {
+    const body = document.getElementById('bankTrayBody');
+    if (!body) return;
+    const qs = new URLSearchParams({ tab: _bankTab });
+    const search = (document.getElementById('bankSearch') || {}).value || '';
+    if (search.trim()) qs.set('search', search.trim());
+    if (_bankTab === 'day') qs.set('day', (document.getElementById('bankDay') || {}).value || '');
+    try {
+        const r = await authFetch('/api/admin/bank/tray?' + qs.toString());
+        if (!r.ok) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Sin acceso</td></tr>'; return; }
+        const j = await r.json();
+        _bankPerms = { canAssign: !!j.canAssign, canSweep: !!j.canSweep, isAdmin: !!j.isAdmin };
+        _bankRows = j.movements || [];
+        const c = document.getElementById('bankTabPendingCount');
+        if (c) c.textContent = (j.pendingCount || 0) > 0 ? '(' + j.pendingCount + ')' : '';
+        const b = document.getElementById('bankBadge');
+        if (b) { b.textContent = String(j.pendingCount || 0); b.style.display = (j.pendingCount || 0) > 0 ? '' : 'none'; }
+        renderBankTray();
+    } catch (e) {
+        body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error cargando la bandeja</td></tr>';
+    }
+}
+
+function _bankRowHtml(m) {
+    const hora = m.createdAt ? fmtFechaHoraAR(m.createdAt) : '—';
+    const isIn = m.direction === 'Inbound';
+    const dir = isIn ? '⬇️ Entra' : '⬆️ Sale';
+    const monto = m.amount != null ? _money(m.amount) : (m.amountRaw || '—');
+    let quien = isIn ? (m.fromName || m.fromCBU || '—') : (m.outKind === 'sweep' ? '⬆️ BAJADA → ' + (m.sweepLabel || m.toName || m.toCBU || '') : (m.toName || m.toCBU || '—'));
+    const ref = m.coelsaCode || m.externalId || '—';
+    const open = isIn && ['pending', 'no_match', 'needs_review', 'error', 'shadow_matched'].includes(m.matchStatus);
+    let estado = isIn ? hgcashStatusBadge(m.matchStatus) : (m.outKind === 'sweep' ? '<span style="background:#5a2d82;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Bajada</span>' : (m.outKind === 'payout' || m.payoutUsername ? '<span style="background:#2a6df0;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Pago a cliente</span>' : '<span style="background:#7a1010;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Salida sin origen</span>'));
+    if (m.status && !/done/i.test(m.status)) estado += ' <span style="font-size:10px;color:#ffb347;">(' + escapeHtml(m.status) + ')</span>';
+    if (m.resolution) estado += '<br><span style="font-size:10px;color:#aaa;">No corresponde: ' + escapeHtml(m.resolutionNote || '') + ' (' + escapeHtml(m.resolvedBy || '') + ')</span>';
+    else if (m.chargeError) estado += '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(m.chargeError).slice(0, 70)) + '</span>';
+    const usuario = m.matchedUsername ? '@' + escapeHtml(m.matchedUsername) : (m.payoutUsername ? '@' + escapeHtml(m.payoutUsername) : (m.sweepBy ? 'por ' + escapeHtml(m.sweepBy) : '—'));
+    const fuente = m.chargeSource === 'assigned' ? ' <span style="font-size:10px;color:#aaa;">(asignada por ' + escapeHtml(m.assignedBy || '') + ')</span>' : (m.chargeSource === 'manual_link' ? ' <span style="font-size:10px;color:#aaa;">(manual anclada)</span>' : '');
+    let acciones = '';
+    if (open && _bankPerms.canAssign) acciones += '<button class="btn btn-sm btn-primary" onclick="openBankAssign(\'' + escapeHtml(m.movementId) + '\')">👤 Asignar</button> ';
+    if (open && _bankPerms.isAdmin) acciones += '<button class="btn btn-sm btn-secondary" onclick="bankResolve(\'' + escapeHtml(m.movementId) + '\')" title="Marcar que NO corresponde acreditar">🚫</button> ';
+    if (isIn && !open && _bankPerms.isAdmin && ['ignored', 'error'].includes(m.matchStatus)) acciones += '<button class="btn btn-sm btn-secondary" onclick="bankReopen(\'' + escapeHtml(m.movementId) + '\')">↩️ Reabrir</button>';
+    if (m.matchedUserId) acciones += ' <button class="btn btn-sm btn-secondary" onclick="bankOpenChat(\'' + escapeHtml(m.matchedUserId) + '\',\'' + escapeHtml(m.matchedUsername || '') + '\')" title="Abrir chat">💬</button>';
+    return '<tr data-mid="' + escapeHtml(m.movementId) + '"' + (open ? ' style="background:rgba(212,130,10,.08);"' : '') + '>' +
+        '<td style="white-space:nowrap;">' + escapeHtml(hora) + '</td>' +
+        '<td>' + dir + '</td>' +
+        '<td style="white-space:nowrap;font-weight:700;">' + escapeHtml(monto) + '</td>' +
+        '<td>' + escapeHtml(quien) + (isIn && m.fromCBU ? '<br><span style="font-size:10px;color:#888;">' + escapeHtml(m.fromCBU) + '</span>' : '') + '</td>' +
+        '<td style="font-size:11px;">' + escapeHtml(ref) + '</td>' +
+        '<td>' + estado + '</td>' +
+        '<td>' + usuario + fuente + '</td>' +
+        '<td style="white-space:nowrap;">' + acciones + '</td></tr>';
+}
+
+function renderBankTray() {
+    const body = document.getElementById('bankTrayBody');
+    if (!body) return;
+    if (!_bankRows.length) {
+        body.innerHTML = '<tr><td colspan="8" style="color:#4caf50;text-align:center;padding:18px;">' + (_bankTab === 'pending' ? '✅ No hay transferencias pendientes' : 'Sin movimientos') + '</td></tr>';
+        return;
+    }
+    body.innerHTML = _bankRows.map(_bankRowHtml).join('');
+}
+
+// Tiempo real: llega el documento → se inserta/actualiza la fila sin recargar.
+function bankApplyMovement(m, kind) {
+    if (!m || !m.movementId) return;
+    refreshBankBadge();
+    if (!_bankVisible()) return;
+    if (!['pending', 'today', 'day'].includes(_bankTab)) { if (_bankTab === 'sweeps' && (m.outKind === 'sweep')) loadBankSweeps(); return; }
+    const belongs = _bankTab === 'pending'
+        ? (m.direction === 'Inbound' && ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'].includes(m.matchStatus))
+        : (_bankTab === 'today');
+    const idx = _bankRows.findIndex(x => x.movementId === m.movementId);
+    if (belongs) { if (idx >= 0) _bankRows[idx] = m; else _bankRows.unshift(m); }
+    else if (idx >= 0) {
+        // En "pendientes" desaparece al resolverse: se deja 4 s en verde para que se vea qué pasó.
+        _bankRows[idx] = m;
+        setTimeout(() => { _bankRows = _bankRows.filter(x => x.movementId !== m.movementId); renderBankTray(); }, 4000);
+    } else return;
+    renderBankTray();
+    if (!belongs && idx >= 0) { const tr = document.querySelector('#bankTrayBody tr[data-mid="' + m.movementId + '"]'); if (tr) tr.style.background = 'rgba(40,167,69,.15)'; }
+    if (m.direction === 'Outbound') loadBankBalance();
+}
+// Aviso genérico (sin documento) → refresco con throttle.
+function bankLiveRefresh(d) {
+    if (d && d.movementId) return; // ya vino (o viene) el documento por bank_movement
+    if (!_bankVisible()) return;
+    const now = Date.now();
+    if (now - _bankLiveThrottle < 2000) return;
+    _bankLiveThrottle = now;
+    if (['pending', 'today', 'day'].includes(_bankTab)) loadBankTray();
+    else if (_bankTab === 'sweeps') loadBankSweeps();
+    loadBankBalance();
+}
+
+function bankOpenChat(userId, username) {
+    try { switchSection('chats'); selectConversation(userId, username); } catch (_) {}
+}
+
+// ── Asignar ────────────────────────────────────────────────────────────────
+async function openBankAssign(movementId) {
+    const m = _bankRows.find(x => x.movementId === movementId);
+    _bankAssign = { movementId, movement: m || null, userId: null, username: null };
+    const head = document.getElementById('bankAssignHead');
+    if (head && m) head.innerHTML = '<b>' + _money(m.amount) + '</b> de <b>' + escapeHtml(m.fromName || m.fromCBU || '?') + '</b> · ' + escapeHtml(m.createdAt ? fmtFechaHoraAR(m.createdAt) : '') + (m.coelsaCode ? ' · coelsa ' + escapeHtml(m.coelsaCode) : '') + (m.chargeError ? '<br><span style="color:#ffb347;font-size:12px;">' + escapeHtml(m.chargeError) + '</span>' : '');
+    const inp = document.getElementById('bankAssignSearch'); if (inp) { inp.value = ''; }
+    const res = document.getElementById('bankAssignResults'); if (res) res.innerHTML = '';
+    const sel = document.getElementById('bankAssignSelected'); if (sel) sel.style.display = 'none';
+    const btn = document.getElementById('bankAssignConfirmBtn'); if (btn) { btn.disabled = true; btn.textContent = '💰 Acreditar a este usuario'; }
+    const fb = document.getElementById('bankAssignForceBtn'); if (fb) fb.style.display = 'none';
+    const rb = document.getElementById('bankResolveBtn'); if (rb) rb.style.display = _bankPerms.isAdmin ? '' : 'none';
+    const sug = document.getElementById('bankAssignSuggestions'); if (sug) sug.innerHTML = '<span style="color:#888;">Buscando sugerencias…</span>';
+    if (inp && !inp._wired) {
+        inp._wired = true;
+        let t = null;
+        inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(bankAssignSearch, 300); });
+    }
+    showModal('bankAssignModal');
+    try {
+        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/suggestions');
+        if (!r.ok) { if (sug) sug.innerHTML = ''; return; }
+        const j = await r.json();
+        let html = '';
+        const comps = (j.comprobantes || []);
+        if (comps.length) {
+            html += '<div style="margin-top:6px;"><b>📷 Comprobantes por ' + _money(j.movement.amount) + ' (12 h):</b></div>';
+            html += comps.slice(0, 8).map(c => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+                '<span>' + (c.nameMatch ? '✅' : (c.opMatch ? '🔢' : '▫️')) + ' <b>@' + escapeHtml(c.username) + '</b> · titular leído: ' + escapeHtml(c.originHolder || '?') + (c.operationNumber ? ' · op ' + escapeHtml(c.operationNumber) : '') + ' · ' + escapeHtml(fmtFechaHoraAR(c.createdAt)) + (c.used ? ' · <span style="color:#dc3545;">ya usado</span>' : '') + '</span>' +
+                (c.used ? '' : '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankAssignPick(\'' + escapeHtml(c.userId) + '\',\'' + escapeHtml(c.username) + '\')">Elegir</button>') + '</div>').join('');
+        }
+        const sh = (j.sameHolder || []);
+        if (sh.length) {
+            html += '<div style="margin-top:8px;"><b>🏦 Este titular ya cargó antes en:</b></div>';
+            html += sh.slice(0, 5).map(u => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(212,175,55,.06);border:1px solid rgba(212,175,55,.3);display:flex;gap:8px;align-items:center;">' +
+                '<span><b>@' + escapeHtml(u.username) + '</b> · última ' + escapeHtml(fmtFechaHoraAR(u.lastAt)) + ' · ' + _money(u.lastAmount) + '</span>' +
+                '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankAssignPick(\'' + escapeHtml(u.userId) + '\',\'' + escapeHtml(u.username) + '\')">Elegir</button></div>').join('');
+        }
+        const rd = (j.recentDeposits || []).filter(t => !t.hasMovement);
+        if (rd.length) {
+            html += '<div style="margin-top:8px;"><b>🧾 Cargas MANUALES recientes por el mismo monto, sin transferencia:</b> <span style="color:#aaa;">(si ya se cargó a mano, vinculá en vez de acreditar de nuevo)</span></div>';
+            html += rd.slice(0, 6).map(t => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(220,53,69,.08);border:1px solid rgba(220,53,69,.35);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+                '<span><b>@' + escapeHtml(t.username) + '</b> · ' + _money(t.amount) + ' · ' + escapeHtml(fmtFechaHoraAR(t.timestamp)) + ' · por ' + escapeHtml(t.adminUsername || '?') + '</span>' +
+                '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankLink(\'' + escapeHtml(movementId) + '\',\'' + escapeHtml(t.id) + '\',\'' + escapeHtml(t.username) + '\')">🔗 Ya cargada: vincular</button></div>').join('');
+        }
+        if (!html) html = '<span style="color:#888;">Sin sugerencias: buscá el usuario arriba.</span>';
+        if (sug) sug.innerHTML = html;
+    } catch (_) { if (sug) sug.innerHTML = ''; }
+}
+async function bankAssignSearch() {
+    const q = ((document.getElementById('bankAssignSearch') || {}).value || '').trim();
+    const res = document.getElementById('bankAssignResults');
+    if (!res) return;
+    if (q.length < 2) { res.innerHTML = ''; return; }
+    try {
+        const r = await authFetch('/api/admin/bank/users-search?q=' + encodeURIComponent(q));
+        const j = r.ok ? await r.json() : { users: [] };
+        res.innerHTML = (j.users || []).map(u => '<div style="padding:5px 8px;margin-top:4px;border-radius:6px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);display:flex;gap:8px;align-items:center;">' +
+            '<span><b>@' + escapeHtml(u.username) + '</b>' + (u.phone ? ' · ' + escapeHtml(u.phone) : '') + (u.isBlocked ? ' · <span style="color:#dc3545;">BLOQUEADO</span>' : '') + '</span>' +
+            '<button class="btn btn-sm btn-secondary" style="margin-left:auto;" onclick="bankAssignPick(\'' + escapeHtml(u.id) + '\',\'' + escapeHtml(u.username) + '\')">Elegir</button></div>').join('') || '<span style="color:#888;">Sin resultados</span>';
+    } catch (_) { res.innerHTML = ''; }
+}
+function bankAssignPick(userId, username) {
+    _bankAssign.userId = userId; _bankAssign.username = username;
+    const sel = document.getElementById('bankAssignSelected');
+    if (sel) { sel.style.display = ''; sel.innerHTML = 'Se va a acreditar <b>' + _money(_bankAssign.movement ? _bankAssign.movement.amount : 0) + '</b> a <b>@' + escapeHtml(username) + '</b> por el mismo camino que la carga automática (bonos automáticos incluidos si le corresponden).'; }
+    const btn = document.getElementById('bankAssignConfirmBtn'); if (btn) btn.disabled = false;
+}
+async function bankAssignConfirm(force) {
+    if (!_bankAssign.movementId || !_bankAssign.userId) return;
+    const btn = document.getElementById('bankAssignConfirmBtn');
+    const fb = document.getElementById('bankAssignForceBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Acreditando…'; }
+    try {
+        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(_bankAssign.movementId) + '/assign', { method: 'POST', body: JSON.stringify({ userId: _bankAssign.userId, force: !!force }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+            showToast(j.error || 'No se pudo acreditar', 'error');
+            if (j.canForce && fb) { fb.style.display = ''; }
+            if (btn) { btn.disabled = false; btn.textContent = '💰 Acreditar a este usuario'; }
+            if (j.reason === 'ambiguous' || j.reason === 'claimed') { hideModal('bankAssignModal'); loadBankTray(); }
+            return;
+        }
+        showToast('✅ ' + _money(_bankAssign.movement ? _bankAssign.movement.amount : 0) + ' acreditados a @' + j.username, 'success');
+        hideModal('bankAssignModal');
+        loadBankTray();
+    } catch (e) {
+        showToast('Error al acreditar', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '💰 Acreditar a este usuario'; }
+    }
+}
+async function bankLink(movementId, txId, username) {
+    if (!confirm('¿Vincular esta transferencia a la carga manual ya hecha a @' + username + '? NO se acredita de nuevo, solo se ata la transferencia a esa carga.')) return;
+    try {
+        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/link', { method: 'POST', body: JSON.stringify({ transactionId: txId }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo vincular', 'error'); return; }
+        showToast('🔗 Vinculada', 'success');
+        hideModal('bankAssignModal');
+        loadBankTray();
+    } catch (_) { showToast('Error al vincular', 'error'); }
+}
+async function bankResolve(movementId) {
+    const note = prompt('¿Por qué NO corresponde acreditar esta transferencia? (queda registrado con tu usuario)');
+    if (note === null) return;
+    if (String(note).trim().length < 3) { showToast('Escribí el motivo', 'error'); return; }
+    try {
+        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/resolve', { method: 'POST', body: JSON.stringify({ note: String(note).trim() }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo resolver', 'error'); return; }
+        showToast('Marcada como "no corresponde"', 'success');
+        hideModal('bankAssignModal');
+        loadBankTray();
+    } catch (_) { showToast('Error', 'error'); }
+}
+function bankResolveFromModal() { if (_bankAssign.movementId) bankResolve(_bankAssign.movementId); }
+async function bankReopen(movementId) {
+    if (!confirm('¿Volver a poner esta transferencia como pendiente?')) return;
+    try {
+        const r = await authFetch('/api/admin/bank/movements/' + encodeURIComponent(movementId) + '/reopen', { method: 'POST', body: '{}' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo reabrir', 'error'); return; }
+        loadBankTray();
+    } catch (_) {}
+}
+
+// ── Bajadas ────────────────────────────────────────────────────────────────
+let _sweepDests = [];
+async function loadBankSweeps() {
+    const body = document.getElementById('bankSweepsBody');
+    if (!body) return;
+    try {
+        const r = await authFetch('/api/admin/bank/sweeps');
+        if (!r.ok) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Sin acceso</td></tr>'; return; }
+        const j = await r.json();
+        const nb = document.getElementById('bankSweepNewBtn'); if (nb) nb.style.display = j.canSweep ? '' : 'none';
+        const db = document.getElementById('bankSweepDestBtn'); if (db) db.style.display = (_bankPerms.isAdmin || (currentAdmin && currentAdmin.role === 'admin')) ? '' : 'none';
+        const tot = document.getElementById('bankSweepsTotal'); if (tot) tot.textContent = 'Bajadas hechas: ' + (j.countDone || 0) + ' · ' + _money(j.totalDone || 0);
+        const st = (s) => ({ pending: ['Pendiente', '#888'], paying: ['En proceso', '#2a6df0'], done: ['Hecha ✓', '#0f8a2f'], failed: ['Falló', '#dc3545'], cancelled: ['Cancelada', '#7a1010'] }[s] || [s, '#888']);
+        body.innerHTML = (j.sweeps || []).map(sw => {
+            const [label, color] = st(sw.status);
+            return '<tr><td style="white-space:nowrap;">' + escapeHtml(fmtFechaHoraAR(sw.createdAt)) + '</td>' +
+                '<td style="font-weight:700;white-space:nowrap;">' + _money(sw.amount) + '</td>' +
+                '<td>' + escapeHtml(sw.destLabel || sw.toName || '—') + '</td>' +
+                '<td style="font-size:11px;">' + escapeHtml(sw.toCBU || '') + '</td>' +
+                '<td>' + escapeHtml(sw.requestedBy || '?') + ' <span style="font-size:10px;color:#888;">(' + escapeHtml(sw.requestedByRole || '') + ')</span></td>' +
+                '<td><span style="background:' + color + ';color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">' + escapeHtml(label) + '</span>' + (sw.error ? '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(sw.error).slice(0, 80)) + '</span>' : '') + '</td>' +
+                '<td style="font-size:11px;">' + escapeHtml(sw.note || '') + '</td>' +
+                '<td>' + ((sw.status === 'paying' || sw.status === 'pending') && j.canSweep ? '<button class="btn btn-sm btn-secondary" onclick="syncSweep(\'' + escapeHtml(sw.id) + '\')">🔄 Estado</button>' : '') + '</td></tr>';
+        }).join('') || '<tr><td colspan="8" style="color:#888;text-align:center;">Todavía no hay bajadas</td></tr>';
+    } catch (_) { body.innerHTML = '<tr><td colspan="8" style="color:#888;text-align:center;">Error</td></tr>'; }
+}
+async function loadSweepDestinations() {
+    try { const r = await authFetch('/api/admin/bank/sweep-destinations'); const j = r.ok ? await r.json() : { destinations: [] }; _sweepDests = j.destinations || []; } catch (_) { _sweepDests = []; }
+    const sel = document.getElementById('bankSweepDest');
+    if (sel) sel.innerHTML = '<option value="">— CBU / alias a mano —</option>' + _sweepDests.map(d => '<option value="' + escapeHtml(d.id) + '">' + escapeHtml(d.label) + ' (…' + escapeHtml(String(d.cbu).slice(-6)) + ')</option>').join('');
+}
+async function openSweepModal() {
+    await loadSweepDestinations();
+    ['bankSweepCbu', 'bankSweepName', 'bankSweepLabel', 'bankSweepAmount', 'bankSweepNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    const sel = document.getElementById('bankSweepDest'); if (sel) sel.value = '';
+    bankSweepDestChanged();
+    const bal = document.getElementById('bankSweepBalance');
+    if (bal) {
+        bal.textContent = 'Consultando saldo…';
+        try { const r = await authFetch('/api/admin/bank/balance'); const j = r.ok ? await r.json() : null; const a = j && j.accounts && j.accounts[0];
+            bal.innerHTML = a ? '💰 Saldo neto disponible en hgcash: <b>' + _money(a.netBalance != null ? a.netBalance : a.balance) + '</b> <span style="color:#aaa;font-size:11px;">(hgcash descuenta su comisión de la salida: dejá margen)</span>' : 'Saldo no disponible';
+        } catch (_) { bal.textContent = ''; }
+    }
+    showModal('bankSweepModal');
+}
+function bankSweepDestChanged() {
+    const v = (document.getElementById('bankSweepDest') || {}).value || '';
+    const man = document.getElementById('bankSweepManual');
+    if (man) man.style.display = v ? 'none' : '';
+}
+async function submitSweep() {
+    const btn = document.getElementById('bankSweepSubmit');
+    const destinationId = (document.getElementById('bankSweepDest') || {}).value || '';
+    const raw = ((document.getElementById('bankSweepCbu') || {}).value || '').trim();
+    const amount = parseFloat((document.getElementById('bankSweepAmount') || {}).value);
+    if (!(amount > 0)) { showToast('Monto inválido', 'error'); return; }
+    if (!destinationId && !raw) { showToast('Falta el CBU/alias destino', 'error'); return; }
+    const body = { amount, note: (document.getElementById('bankSweepNote') || {}).value || '' };
+    if (destinationId) body.destinationId = destinationId;
+    else {
+        if (/^\d{22}$/.test(raw.replace(/\D/g, '')) && raw.replace(/\D/g, '').length === 22) body.toCBU = raw; else body.alias = raw;
+        body.toName = (document.getElementById('bankSweepName') || {}).value || '';
+        body.destLabel = (document.getElementById('bankSweepLabel') || {}).value || '';
+    }
+    const dest = destinationId ? ((_sweepDests.find(d => d.id === destinationId) || {}).label || 'destino guardado') : raw;
+    if (!confirm('Confirmás la BAJADA de ' + _money(amount) + ' a "' + dest + '"?\n\nEs una transferencia REAL desde la cuenta hgcash. Queda registrada con tu usuario.')) return;
+    setButtonLoading(btn, true, 'Enviando…');
+    try {
+        const r = await authFetch('/api/admin/bank/sweeps', { method: 'POST', body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo hacer la bajada', 'error'); return; }
+        showToast('⬆️ Bajada enviada (' + ((j.sweep && j.sweep.status) || 'en proceso') + ')', 'success');
+        hideModal('bankSweepModal');
+        loadBankSweeps(); loadBankBalance();
+    } catch (_) { showToast('Error al enviar la bajada', 'error'); }
+    finally { setButtonLoading(btn, false, '⬆️ Confirmar bajada'); }
+}
+async function syncSweep(id) {
+    try { const r = await authFetch('/api/admin/bank/sweeps/' + encodeURIComponent(id) + '/sync', { method: 'POST', body: '{}' }); const j = await r.json().catch(() => ({})); if (!r.ok) showToast(j.error || 'No se pudo consultar', 'error'); loadBankSweeps(); } catch (_) {}
+}
+async function openSweepDestinations() {
+    await loadSweepDestinations();
+    const list = document.getElementById('bankSweepDestList');
+    if (list) { list.innerHTML = ''; _sweepDests.forEach(d => addSweepDestRow(d)); if (!_sweepDests.length) addSweepDestRow(); }
+    showModal('bankSweepDestModal');
+}
+function addSweepDestRow(d) {
+    const list = document.getElementById('bankSweepDestList'); if (!list) return;
+    d = d || {};
+    const v = (x) => escapeHtml(String(x == null ? '' : x));
+    const row = document.createElement('div');
+    row.className = 'sweep-dest-row';
+    row.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;align-items:center;';
+    row.innerHTML = '<input type="hidden" class="sd-id" value="' + v(d.id) + '">' +
+        '<input type="text" class="sd-label" placeholder="Etiqueta (Financiera X)" value="' + v(d.label) + '" style="flex:1;min-width:130px;">' +
+        '<input type="text" class="sd-cbu" placeholder="CBU/CVU 22 dígitos" value="' + v(d.cbu) + '" style="flex:1.4;min-width:180px;">' +
+        '<input type="text" class="sd-name" placeholder="Titular" value="' + v(d.name) + '" style="flex:1;min-width:120px;">' +
+        '<input type="text" class="sd-cuit" placeholder="CUIT" value="' + v(d.cuit) + '" style="flex:0 0 110px;">' +
+        '<button class="btn btn-sm" style="background:#dc3545;color:#fff;border:none;border-radius:6px;padding:5px 8px;cursor:pointer;" onclick="this.closest(\'.sweep-dest-row\').remove()">🗑️</button>';
+    list.appendChild(row);
+}
+async function saveSweepDestinations() {
+    const rows = Array.from(document.querySelectorAll('#bankSweepDestList .sweep-dest-row'));
+    const destinations = rows.map(r => ({ id: r.querySelector('.sd-id').value || undefined, label: r.querySelector('.sd-label').value, cbu: r.querySelector('.sd-cbu').value, name: r.querySelector('.sd-name').value, cuit: r.querySelector('.sd-cuit').value }));
+    try {
+        const r = await authFetch('/api/admin/bank/sweep-destinations', { method: 'POST', body: JSON.stringify({ destinations }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo guardar', 'error'); return; }
+        showToast('Destinos guardados (' + (j.destinations || []).length + ')', 'success');
+        hideModal('bankSweepDestModal');
+    } catch (_) { showToast('Error al guardar', 'error'); }
+}
+
+// ── Cierre diario ───────────────────────────────────────────────────────────
+let _bankCloseLabels = {};
+async function loadBankCloseList() {
+    const list = document.getElementById('bankCloseList');
+    const inp = document.getElementById('bankCloseDate');
+    try {
+        const r = await authFetch('/api/admin/bank/close');
+        if (!r.ok) { if (list) list.innerHTML = '<span style="color:#888;">Sin acceso</span>'; return; }
+        const j = await r.json();
+        const tg = document.getElementById('bankCloseTgBtn'); if (tg) tg.style.display = (currentAdmin && currentAdmin.role === 'admin') ? '' : 'none';
+        const carry = document.getElementById('bankCloseCarry');
+        if (carry) carry.textContent = (j.unresolved && j.unresolved.diffs) ? '📌 ' + j.unresolved.diffs + ' diferencia(s) sin resolver en ' + j.unresolved.days + ' día(s)' : '';
+        const icon = (c) => c.status === 'ok' ? '✅' : (c.status === 'diff' ? '🔴' : '⚠️');
+        if (list) list.innerHTML = (j.closes || []).slice(0, 14).map(c => '<button class="btn btn-sm btn-secondary" onclick="openBankClose(\'' + c.dateKey + '\')" title="' + escapeHtml(c.status) + '">' + icon(c) + ' ' + c.dateKey.slice(5) + (c.unresolvedCount ? ' (' + c.unresolvedCount + ')' : '') + '</button>').join('');
+        const day = (inp && inp.value) || j.today;
+        if (inp && !inp.value) inp.value = day;
+        openBankClose(day);
+    } catch (_) { if (list) list.innerHTML = ''; }
+}
+async function openBankClose(dateKey, live) {
+    if (!dateKey) return;
+    const inp = document.getElementById('bankCloseDate'); if (inp) inp.value = dateKey;
+    const body = document.getElementById('bankCloseBody');
+    if (body) body.innerHTML = '<div style="color:#888;">Calculando cierre ' + escapeHtml(dateKey) + '…</div>';
+    try {
+        const r = await authFetch('/api/admin/bank/close/' + encodeURIComponent(dateKey) + (live ? '?live=1' : ''));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (body) body.innerHTML = '<div style="color:#dc3545;">' + escapeHtml(j.error || 'Error') + '</div>'; return; }
+        _bankCloseLabels = j.labels || _bankCloseLabels;
+        renderBankClose(j.close, j.isToday);
+    } catch (_) { if (body) body.innerHTML = '<div style="color:#dc3545;">Error</div>'; }
+}
+async function bankCloseRun(dateKey, telegram) {
+    if (!dateKey) return;
+    try {
+        const r = await authFetch('/api/admin/bank/close/' + encodeURIComponent(dateKey) + '/run', { method: 'POST', body: JSON.stringify({ telegram: !!telegram }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo recalcular', 'error'); return; }
+        _bankCloseLabels = j.labels || _bankCloseLabels;
+        renderBankClose(j.close, false);
+        showToast(telegram ? 'Cierre recalculado y enviado a Telegram' : 'Cierre recalculado', 'success');
+        loadBankCloseList();
+    } catch (_) { showToast('Error', 'error'); }
+}
+function renderBankClose(c, isToday) {
+    const body = document.getElementById('bankCloseBody');
+    if (!body || !c) return;
+    const s = c.summary || {}, ca = c.cashier || {}, bk = c.bank || {};
+    const st = c.status === 'ok' ? '<span style="color:#4caf50;font-weight:800;">✅ 0 diferencias — todo cuadra</span>' : (c.status === 'diff' ? '<span style="color:#ff5050;font-weight:800;">🔴 ' + c.unresolvedCount + ' diferencia(s) sin resolver</span>' : '<span style="color:#ffb347;font-weight:800;">⚠️ Sin diferencias, pero falta el cruce con el cajero</span>');
+    const tile = (t, v, sub) => '<div style="flex:1;min-width:150px;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.12);"><div style="font-size:10.5px;color:#aaa;text-transform:uppercase;letter-spacing:.5px;">' + t + '</div><div style="font-size:16px;font-weight:800;">' + v + '</div>' + (sub ? '<div style="font-size:11px;color:#bbb;">' + sub + '</div>' : '') + '</div>';
+    let html = '<div style="margin-bottom:10px;font-size:14px;">Cierre <b>' + escapeHtml(c.dateKey) + '</b>' + (isToday ? ' <span style="color:#ffb347;">(día en curso — parcial)</span>' : '') + ' · ' + st + '<div style="font-size:11px;color:#888;">calculado ' + escapeHtml(c.computedAt ? fmtFechaHoraAR(c.computedAt) : '') + ' por ' + escapeHtml(c.computedBy || '') + (c.notifiedAt ? ' · enviado a Telegram' : '') + '</div></div>';
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">' +
+        tile('⬇️ Entradas banco', (s.entradas ? s.entradas.count : 0) + ' · ' + _money(s.entradas && s.entradas.total), 'auto ' + (s.entradasCargadas ? s.entradasCargadas.auto : 0) + ' · asignadas ' + (s.entradasCargadas ? s.entradasCargadas.asignadas : 0) + ' · manual ' + (s.entradasCargadas ? s.entradasCargadas.manuales : 0) + ' · no corresponde ' + (s.entradasNoCorresponde ? s.entradasNoCorresponde.count : 0)) +
+        tile('💰 Cargas sistema', (s.cargas ? s.cargas.count : 0) + ' · ' + _money(s.cargas && s.cargas.total), 'con transferencia ' + (s.cargas ? s.cargas.vinculadas : 0) + ' · otro banco ' + (s.cargas && s.cargas.otroBanco ? s.cargas.otroBanco.count : 0) + ' · sin origen ' + (s.cargas && s.cargas.sinTransferencia ? s.cargas.sinTransferencia.count : 0)) +
+        tile('⬆️ Salidas banco', (s.salidas ? s.salidas.count : 0) + ' · ' + _money(s.salidas && s.salidas.total), 'pagos ' + (s.salidas ? s.salidas.pagos : 0) + ' (' + _money(s.salidas && s.salidas.pagosTotal) + ') · bajadas ' + (s.salidas ? s.salidas.bajadas : 0) + ' (' + _money(s.salidas && s.salidas.bajadasTotal) + ')') +
+        tile('🎰 Cajero JUGAYGANA', ca.status === 'sin_datos' ? 'sin datos' : (ca.status === 'ok' ? '✅ cuadra' : '🔴 ' + _money(ca.diff)), ca.status !== 'sin_datos' ? 'real ' + _money(ca.actualDelta) + ' · sistema ' + _money(ca.expectedDelta) + ' · ' + (ca.ops || 0) + ' op.' : 'no hubo operaciones registradas') +
+        (bk.netBalance != null ? tile('🏦 Saldo hgcash al cierre', _money(bk.netBalance), bk.actualDelta != null ? 'vs. cierre anterior ' + _money(bk.actualDelta) + ' (entradas−salidas ' + _money(bk.expectedDelta) + ')' : '') : '') +
+        '</div>';
+    const diffs = c.diffs || [];
+    if (!diffs.length) { html += '<div style="color:#4caf50;padding:10px;">No hay diferencias en este día.</div>'; }
+    else {
+        const byType = {};
+        diffs.forEach(d => { (byType[d.type] = byType[d.type] || []).push(d); });
+        const isAdmin = currentAdmin && currentAdmin.role === 'admin';
+        Object.keys(byType).forEach(t => {
+            const arr = byType[t];
+            html += '<div style="margin-top:12px;"><b>' + escapeHtml(_bankCloseLabels[t] || t) + '</b> <span style="color:#aaa;">(' + arr.length + ')</span></div>';
+            arr.forEach(d => {
+                html += '<div style="padding:7px 10px;margin-top:5px;border-radius:7px;background:' + (d.resolved ? 'rgba(76,175,80,.08)' : 'rgba(220,53,69,.08)') + ';border:1px solid ' + (d.resolved ? 'rgba(76,175,80,.4)' : 'rgba(220,53,69,.35)') + ';font-size:12.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+                    '<span>' + (d.resolved ? '✅' : '🔴') + ' ' + escapeHtml(d.detail || '') + (d.at ? ' <span style="color:#888;">· ' + escapeHtml(fmtFechaHoraAR(d.at)) + '</span>' : '') + (d.resolved ? '<br><span style="color:#8bc34a;">Resuelto por ' + escapeHtml(d.resolvedBy || '') + ': ' + escapeHtml(d.note || '') + '</span>' : '') + '</span>' +
+                    '<span style="margin-left:auto;white-space:nowrap;">' +
+                    (d.userId ? '<button class="btn btn-sm btn-secondary" onclick="bankOpenChat(\'' + escapeHtml(d.userId) + '\',\'' + escapeHtml(d.username || '') + '\')">💬</button> ' : '') +
+                    (d.refType === 'movement' && !d.resolved ? '<button class="btn btn-sm btn-secondary" onclick="bankGoToMovement(\'' + escapeHtml(d.refId) + '\')">🏦 Ver</button> ' : '') +
+                    (isAdmin ? (d.resolved ? '<button class="btn btn-sm btn-secondary" onclick="bankCloseResolve(\'' + escapeHtml(c.dateKey) + '\',\'' + escapeHtml(d.key) + '\',true)">↩️</button>' : '<button class="btn btn-sm btn-primary" onclick="bankCloseResolve(\'' + escapeHtml(c.dateKey) + '\',\'' + escapeHtml(d.key) + '\',false)">✔️ Resolver</button>') : '') +
+                    '</span></div>';
+            });
+        });
+    }
+    body.innerHTML = html;
+}
+async function bankCloseResolve(dateKey, key, reopen) {
+    let note = '';
+    if (!reopen) { note = prompt('¿Cómo se resolvió? (queda registrado con tu usuario)'); if (note === null) return; if (String(note).trim().length < 3) { showToast('Escribí la resolución', 'error'); return; } }
+    try {
+        const r = await authFetch('/api/admin/bank/close/' + encodeURIComponent(dateKey) + '/resolve', { method: 'POST', body: JSON.stringify({ key, note: String(note || '').trim(), reopen: !!reopen }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { showToast(j.error || 'No se pudo', 'error'); return; }
+        _bankCloseLabels = j.labels || _bankCloseLabels;
+        renderBankClose(j.close, false);
+        loadBankCloseList();
+    } catch (_) { showToast('Error', 'error'); }
+}
+function bankGoToMovement(movementId) {
+    _bankTab = 'today';
+    const s = document.getElementById('bankSearch'); if (s) s.value = '';
+    bankSetTab('today');
+    setTimeout(() => { const tr = document.querySelector('#bankTrayBody tr[data-mid="' + movementId + '"]'); if (tr) { tr.scrollIntoView({ block: 'center' }); tr.style.outline = '2px solid #d4af37'; } }, 600);
+}
+
+// ── Origen de la plata en el modal Depositar (#155) ─────────────────────────
+let _depositPendingMovs = [];
+let _depositOrigin = { origin: 'sin_movimiento', movementId: null };
+async function loadDepositOriginPicker() {
+    _depositPendingMovs = [];
+    _depositOrigin = { origin: 'sin_movimiento', movementId: null };
+    const note = document.getElementById('depositOriginNote'); if (note) { note.value = ''; note.style.display = 'none'; }
+    renderDepositOrigin();
+    try {
+        const r = await authFetch('/api/admin/bank/tray?tab=pending&limit=100');
+        if (!r.ok) return;
+        const j = await r.json();
+        _depositPendingMovs = (j.movements || []).filter(m => m.direction === 'Inbound');
+        renderDepositOrigin();
+    } catch (_) {}
+}
+function renderDepositOrigin() {
+    const list = document.getElementById('depositOriginList');
+    if (!list) return;
+    const amount = parseFloat((document.getElementById('depositAmount') || {}).value) || 0;
+    const same = amount > 0 ? _depositPendingMovs.filter(m => Math.abs(Number(m.amount) - amount) < 0.005) : [];
+    const others = amount > 0 ? _depositPendingMovs.filter(m => Math.abs(Number(m.amount) - amount) >= 0.005).slice(0, 5) : _depositPendingMovs.slice(0, 8);
+    // Auto-selección: si hay exactamente UNA transferencia pendiente por ese monto, se propone.
+    if (same.length === 1 && _depositOrigin.origin !== 'otro_banco' && !_depositOrigin.movementId) _depositOrigin = { origin: 'hgcash', movementId: same[0].movementId };
+    if (_depositOrigin.movementId && !_depositPendingMovs.some(m => m.movementId === _depositOrigin.movementId)) _depositOrigin = { origin: 'sin_movimiento', movementId: null };
+    const row = (m, hl) => '<label style="display:flex;gap:8px;align-items:center;padding:5px 8px;margin-top:4px;border-radius:6px;background:' + (hl ? 'rgba(40,167,69,.12)' : 'rgba(255,255,255,.04)') + ';border:1px solid ' + (hl ? 'rgba(40,167,69,.55)' : 'rgba(255,255,255,.12)') + ';cursor:pointer;">' +
+        '<input type="radio" name="depositOrigin" value="mov:' + escapeHtml(m.movementId) + '" ' + (_depositOrigin.movementId === m.movementId ? 'checked' : '') + ' onchange="setDepositOrigin(this.value)" style="width:auto;">' +
+        '<span>🏦 <b>' + _money(m.amount) + '</b> de ' + escapeHtml(m.fromName || m.fromCBU || '?') + ' · ' + escapeHtml(fmtFechaHoraAR(m.createdAt)) + (m.matchedUsername ? ' · <span style="color:#ffb347;">match @' + escapeHtml(m.matchedUsername) + '</span>' : '') + '</span></label>';
+    let html = '';
+    if (same.length) html += '<div style="color:#8bc34a;font-size:11.5px;">Transferencias pendientes por ' + _money(amount) + ':</div>' + same.map(m => row(m, true)).join('');
+    if (others.length) html += '<div style="color:#aaa;font-size:11px;margin-top:6px;">Otras pendientes:</div>' + others.map(m => row(m, false)).join('');
+    if (!_depositPendingMovs.length) html += '<div style="color:#888;font-size:11.5px;">No hay transferencias pendientes en la bandeja.</div>';
+    html += '<label style="display:flex;gap:8px;align-items:center;padding:5px 8px;margin-top:6px;cursor:pointer;"><input type="radio" name="depositOrigin" value="otro_banco" ' + (_depositOrigin.origin === 'otro_banco' ? 'checked' : '') + ' onchange="setDepositOrigin(this.value)" style="width:auto;"><span>🏛️ Otro banco (no pasó por hgcash) — escribí cuál</span></label>';
+    html += '<label style="display:flex;gap:8px;align-items:center;padding:5px 8px;cursor:pointer;"><input type="radio" name="depositOrigin" value="sin_movimiento" ' + (_depositOrigin.origin === 'sin_movimiento' ? 'checked' : '') + ' onchange="setDepositOrigin(this.value)" style="width:auto;"><span style="color:#ffb347;">⚠️ Sin transferencia asociada (queda marcada en el cierre diario)</span></label>';
+    list.innerHTML = html;
+}
+function setDepositOrigin(v) {
+    if (String(v).startsWith('mov:')) _depositOrigin = { origin: 'hgcash', movementId: String(v).slice(4) };
+    else _depositOrigin = { origin: v, movementId: null };
+    const note = document.getElementById('depositOriginNote');
+    if (note) note.style.display = (_depositOrigin.origin === 'otro_banco' || _depositOrigin.origin === 'sin_movimiento') ? '' : 'none';
+    // Si eligió una transferencia, el monto pasa a ser el de la transferencia (no se tipea a mano).
+    if (_depositOrigin.movementId) {
+        const m = _depositPendingMovs.find(x => x.movementId === _depositOrigin.movementId);
+        const inp = document.getElementById('depositAmount');
+        if (m && inp && Math.abs(parseFloat(inp.value || 0) - Number(m.amount)) >= 0.005) { inp.value = String(m.amount); try { calculateBonus(); } catch (_) {} }
+    }
+}
+function getDepositOrigin() {
+    const note = ((document.getElementById('depositOriginNote') || {}).value || '').trim();
+    return { origin: _depositOrigin.origin, movementId: _depositOrigin.movementId || undefined, originNote: note || undefined };
+}
+window.bankSetTab = bankSetTab; window.loadBankTray = loadBankTray; window.openBankAssign = openBankAssign; window.bankAssignPick = bankAssignPick;
+window.bankAssignConfirm = bankAssignConfirm; window.bankLink = bankLink; window.bankResolve = bankResolve; window.bankResolveFromModal = bankResolveFromModal;
+window.bankReopen = bankReopen; window.bankOpenChat = bankOpenChat; window.openSweepModal = openSweepModal; window.submitSweep = submitSweep;
+window.bankSweepDestChanged = bankSweepDestChanged; window.syncSweep = syncSweep; window.openSweepDestinations = openSweepDestinations;
+window.addSweepDestRow = addSweepDestRow; window.saveSweepDestinations = saveSweepDestinations; window.openBankClose = openBankClose;
+window.bankCloseRun = bankCloseRun; window.bankCloseResolve = bankCloseResolve; window.bankGoToMovement = bankGoToMovement; window.setDepositOrigin = setDepositOrigin;

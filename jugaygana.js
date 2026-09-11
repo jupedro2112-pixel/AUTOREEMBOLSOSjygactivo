@@ -28,6 +28,22 @@ if (PROXY_URL) {
   console.log('✅ Proxy configurado:', PROXY_URL.replace(/:.*@/, ':****@'));
 }
 
+// #155 Hook del saldo del CAJERO: cada DepositMoney/WithdrawMoney/individual_bonus
+// exitoso devuelve `parent_balance` (centavos). server.js registra un callback y
+// guarda un CashierSnapshot por operación (base del cierre diario). Best-effort:
+// nunca puede tirar ni frenar la operación de plata.
+let _cashierHook = null;
+function setCashierBalanceHook(fn) { _cashierHook = (typeof fn === 'function') ? fn : null; }
+function _reportCashier(data, opKind, username, amountArs) {
+  try {
+    if (!_cashierHook || !data) return;
+    const raw = data.parent_balance !== undefined ? data.parent_balance : data.sender_amount;
+    if (raw === undefined || raw === null || !Number.isFinite(Number(raw))) return;
+    const sign = opKind === 'withdraw' ? 1 : -1;
+    _cashierHook({ balance: Number(raw) / 100, opAmount: sign * Number(amountArs || 0), opKind, username, at: new Date() });
+  } catch (_) {}
+}
+
 // Cliente HTTP
 const client = axios.create({
   baseURL: API_URL,
@@ -873,6 +889,7 @@ async function creditUserBalance(username, amount, jugayganaUserId = null) {
       } else if (data && data.success) {
         if (attempt > 1) console.log(`✅ creditUserBalance(${username}) OK en intento ${attempt}/3`);
         else console.log(`✅ creditUserBalance(${username}) OK`);
+        _reportCashier(data, 'bonus', username, amount);
         return { success: true, data: data };
       } else {
         lastError = (data && (data.error || data.message)) || lastError || 'API Error';
@@ -1089,6 +1106,7 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
     console.log("📩 Resultado DepositMoney:", JSON.stringify(data));
 
     if (data && (data.success || data.transfer_id || data.transferId)) {
+      _reportCashier(data, 'deposit', username, amount);
       return { success: true, data };
     } else {
       console.error(`❌ depositToUser(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
@@ -1267,6 +1285,7 @@ async function withdrawFromUser(username, amount, description = '') {
     console.log("📩 Resultado WithdrawMoney:", JSON.stringify(data));
 
     if (data && (data.success || data.transfer_id || data.transferId)) {
+      _reportCashier(data, 'withdraw', username, amount);
       return { success: true, data };
     } else {
       console.error(`❌ withdrawFromUser(${username}, $${amount}): API respondió sin success. data=${JSON.stringify(data)}`);
@@ -1649,6 +1668,8 @@ module.exports = {
   getMonthToDateRangeForDateArgentina,
   /** Normaliza a string cualquier `.error` devuelto por este cliente (evita "[object Object]"). */
   errToString,
+  /** #155: callback({balance, opAmount, opKind, username, at}) con el saldo del cajero tras cada operación de plata. */
+  setCashierBalanceHook,
   /** Returns the current session token, or null if no session is active. */
   getSessionToken: () => SESSION_TOKEN,
   /** Returns the current session cookie string, or null if no session is active. */

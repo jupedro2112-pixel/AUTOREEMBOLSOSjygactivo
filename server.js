@@ -77,6 +77,10 @@ const ChatRating = require('./src/models/ChatRating');
 const BankMovement = require('./src/models/BankMovement');
 const HgcashCharge = require('./src/models/HgcashCharge');
 const PendingPayout = require('./src/models/PendingPayout');
+const BankSweep = require('./src/models/BankSweep');           // #155 bajadas del banco
+const DailyClose = require('./src/models/DailyClose');         // #155 cierre diario
+const CashierSnapshot = require('./src/models/CashierSnapshot'); // #155 saldo del cajero JUGAYGANA por operación
+const bankClose = require('./src/services/bankCloseService');  // #155 cruces del cierre
 const hgcashPay = require('./src/services/hgcashService');
 const pdfImage = require('./src/services/pdfImageService');
 const { generateReferralCode } = require('./src/utils/referralCode');
@@ -431,6 +435,14 @@ function validatePassword(password) {
 // Integración JUGAYGANA
 const jugaygana = require('./jugaygana');
 const jugayganaMovements = require('./jugaygana-movements');
+// #155: cada operación de plata exitosa contra JUGAYGANA reporta el saldo del CAJERO
+// → CashierSnapshot (base del cruce sistema ↔ JUGAYGANA del cierre diario). Best-effort.
+jugaygana.setCashierBalanceHook((info) => {
+  try {
+    CashierSnapshot.create({ at: info.at || new Date(), balance: Number(info.balance), opAmount: Number(info.opAmount || 0), opKind: info.opKind || null, username: info.username || null })
+      .catch(e => logger.warn(`[cajero] snapshot no guardado: ${e.message}`));
+  } catch (_) {}
+});
 const jugayganaService = require('./src/services/jugayganaService');
 // Pool de sesiones JUGAYGANA por publicista — se usa cuando un publisher_admin
 // crea un usuario y la campaña tiene credenciales propias configuradas.
@@ -2001,7 +2013,8 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
   } catch (_) {}
   const terminal = attempts >= HGCASH_MAX_CHARGE_ATTEMPTS;
   await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: terminal ? 'error' : 'pending' } });
-  await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+  if (comprobante && comprobante.id) await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+  _emitHgcashUpdate('fallo', movement.movementId);
   if (user) {
     const prefijo = terminal ? `Se agotaron los ${HGCASH_MAX_CHARGE_ATTEMPTS} intentos automáticos. ` : '';
     await _emitAdminOnlyChatNote(user.id, user.username,
@@ -2013,7 +2026,7 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
 // matcheado a ese usuario por el MISMO monto (que no se pudo auto-cargar), lo
 // marcamos como `manual_charged` y consumimos el comprobante. Así esa transferencia
 // /foto NO vuelve a auto-cargar cuando JUGAYGANA se recupere (evita doble carga).
-async function hgcashConsumeOnManualDeposit(userId, username, amount) {
+async function hgcashConsumeOnManualDeposit(userId, username, amount, txId = null) {
   try {
     const cfg = await getHgcashConfig();
     if (!cfg.enabled) return false;
@@ -2027,16 +2040,38 @@ async function hgcashConsumeOnManualDeposit(userId, username, amount) {
       matchedUserId: userId,
       matchStatus: { $in: ['pending', 'error', 'needs_review'] }
     }).sort({ createdAt: -1 }).limit(10).lean();
-    const target = cands.find(m => _amountsEqual(m.amount, amount));
+    let target = cands.find(m => _amountsEqual(m.amount, amount));
+    let source = 'legacy_amount';
+    if (!target) {
+      // #155 Retro-vínculo por TITULAR: el agente cargó a mano ANTES de que el
+      // movimiento se conectara. Si el cliente mandó un comprobante en las últimas
+      // horas cuyo titular coincide con una transferencia PENDIENTE del mismo
+      // monto, esa transferencia es de esta carga → se consume (nunca se vuelve a
+      // acreditar automático). Es el hueco que producía cargas dobles.
+      try {
+        const since = new Date(Date.now() - 6 * 3600 * 1000);
+        const comps = await Comprobante.find({ userId: String(userId), createdAt: { $gte: since }, originHolder: { $nin: [null, ''] } })
+          .sort({ createdAt: -1 }).limit(5).select('originHolder').lean();
+        const keys = Array.from(new Set(comps.map(c => _bankFromKey(c.originHolder)).filter(Boolean)));
+        if (keys.length) {
+          const pend = await BankMovement.find({ direction: 'Inbound', matchStatus: 'pending', fromKey: { $in: keys }, createdAt: { $gte: since } })
+            .sort({ createdAt: -1 }).limit(10).lean();
+          target = pend.find(m => _amountsEqual(m.amount, amount)) || null;
+          if (target) source = 'legacy_name';
+        }
+      } catch (_) {}
+    }
     if (!target) return false;
 
     // Claim atómico (evita choque con un reintento automático).
     const claimed = await BankMovement.findOneAndUpdate(
       { movementId: target.movementId, matchStatus: { $in: ['pending', 'error', 'needs_review'] } },
-      { $set: { matchStatus: 'manual_charged', chargedAt: new Date() } },
+      { $set: { matchStatus: 'manual_charged', chargedAt: new Date(), matchedUserId: userId, matchedUsername: username, transactionId: txId, chargeSource: source } },
       { new: true }
     );
     if (!claimed) return false;
+    if (txId) { Transaction.updateOne({ id: txId }, { $set: { 'metadata.movementId': target.movementId } }).catch(() => {}); }
+    _emitHgcashUpdate('cargado', target.movementId);
 
     if (target.matchedComprobanteId) {
       await Comprobante.updateOne({ id: target.matchedComprobanteId },
@@ -2183,9 +2218,15 @@ async function handlePayoutStatusWebhook(p) {
     const status = String(p.status || '').toUpperCase();
     const ext = p.externalID ? String(p.externalID) : null;
     const hgId = p.id ? String(p.id) : null;
+    if (ext && /^sweep-/.test(ext)) return _handleSweepStatusWebhook(p, ext.replace(/^sweep-/, '')); // #155 bajada
     const query = ext ? { id: ext } : (hgId ? { hgTransactionId: hgId } : null);
     if (!query) return;
     const payout = await PendingPayout.findOne(query);
+    if (!payout && hgId) {
+      // ¿Es una bajada cuyo request no vino con externalID? (idempotencia por hgRequestId)
+      const sw = await BankSweep.findOne({ hgRequestId: hgId }).select('id').lean();
+      if (sw) return _handleSweepStatusWebhook(p, sw.id);
+    }
     if (!payout) {
       logger.warn(`[hgcash-pay] webhook de pago sin payout local: ext=${ext} hgId=${hgId} status=${status}`);
       return;
@@ -2227,8 +2268,20 @@ async function handlePayoutStatusWebhook(p) {
 
 // Avisa al panel (en vivo) que hubo un cambio en los movimientos hgcash, para que
 // refresque la tabla sin recargar. Fire-and-forget; nunca rompe nada.
-function _emitHgcashUpdate(kind) {
-  try { notifyAdmins('hgcash_movement', { kind: kind || 'update', at: Date.now() }); } catch (_) {}
+function _emitHgcashUpdate(kind, movementId) {
+  try { notifyAdmins('hgcash_movement', { kind: kind || 'update', at: Date.now(), movementId: movementId || null }); } catch (_) {}
+  // #155 Bandeja del banco en TIEMPO REAL: si se conoce el movimiento, se manda el
+  // documento entero para que el panel actualice la fila sin recargar.
+  if (movementId) {
+    BankMovement.findOne({ movementId }).lean()
+      .then(doc => { if (doc) notifyAdmins('bank_movement', { kind: kind || 'update', movement: _bankMovementPublic(doc) }); })
+      .catch(() => {});
+  }
+}
+// Proyección del movimiento para el panel (sin el payload crudo).
+function _bankMovementPublic(m) {
+  if (!m) return null;
+  const o = Object.assign({}, m); delete o.raw; delete o._id; delete o.__v; return o;
 }
 
 // ── BONO AUTOMÁTICO POR APP + NOTIFICACIONES (pedido del owner 2026-08-15) ──
@@ -2442,39 +2495,49 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
 
 // Acredita la carga (modo 'auto') o sólo avisa (modo 'shadow'). Reclama de forma
 // ATÓMICA el movimiento Y el comprobante para que nunca se cargue dos veces.
-async function hgcashAutoCarga({ movement, comprobante, mode }) {
-  const shadow = mode !== 'auto';
+// #155: también es el ÚNICO camino de la carga ASIGNADA desde la bandeja del banco:
+// `assign = { user, agent, agentRole, force }` → sin comprobante (compId null), el
+// agente eligió el usuario a mano; la plata sale del MOVIMIENTO (monto fijo), con
+// el mismo candado por transferencia y los mismos bonos que la automática.
+// Devuelve { ok, reason|txId } (los callers viejos ignoran el retorno).
+async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
+  const shadow = mode !== 'auto' && !assign;
+  const compId = comprobante ? compId : null;
+  const agentLabel = assign ? (assign.agent || 'agente') : 'auto-hgcash';
 
-  // 1) Reclamar el movimiento (pending → claiming).
+  // 1) Reclamar el movimiento (pending → claiming). Una asignación manual también
+  //    puede tomar un movimiento frenado (needs_review / error / no_match).
   const movClaim = await BankMovement.findOneAndUpdate(
-    { movementId: movement.movementId, matchStatus: 'pending' },
+    { movementId: movement.movementId, matchStatus: { $in: assign ? ['pending', 'no_match', 'needs_review', 'error'] : ['pending'] } },
     { $set: { matchStatus: 'claiming' } }, { new: true }
   );
-  if (!movClaim) return; // ya lo tomó otro proceso
+  if (!movClaim) return { ok: false, reason: 'claimed' }; // ya lo tomó otro proceso / ya no está pendiente
 
   // 2) Reclamar el comprobante (no cargado/tomado todavía).
-  const compClaim = await Comprobante.findOneAndUpdate(
-    { id: comprobante.id, autoCharged: { $ne: true }, bankMatchStatus: { $nin: ['claiming', 'auto_charged', 'shadow_matched'] } },
-    { $set: { bankMatchStatus: 'claiming', toApiBank: true } }, { new: true }
-  );
-  if (!compClaim) {
-    // El comprobante ya fue tomado por otro movimiento → devolver el movimiento.
-    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'pending' } });
-    return;
+  if (compId) {
+    const compClaim = await Comprobante.findOneAndUpdate(
+      { id: compId, autoCharged: { $ne: true }, bankMatchStatus: { $nin: ['claiming', 'auto_charged', 'shadow_matched'] } },
+      { $set: { bankMatchStatus: 'claiming', toApiBank: true } }, { new: true }
+    );
+    if (!compClaim) {
+      // El comprobante ya fue tomado por otro movimiento → devolver el movimiento.
+      await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'pending' } });
+      return { ok: false, reason: 'comprobante_taken' };
+    }
   }
 
-  const user = await User.findOne({ id: comprobante.userId });
+  const user = assign ? assign.user : await User.findOne({ id: comprobante.userId });
   if (!user) {
     await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'error', chargeError: 'usuario no encontrado' } });
-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
-    return;
+    if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'pending' } });
+    return { ok: false, reason: 'user_not_found' };
   }
 
   // Registrar a quién matcheó el movimiento (sirve para reconciliar y para que una
   // carga MANUAL a este usuario consuma el movimiento aunque la auto-carga falle).
   try {
     await BankMovement.updateOne({ movementId: movement.movementId },
-      { $set: { matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id } });
+      { $set: { matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId } });
   } catch (_) {}
 
   const amount = movement.amount;
@@ -2484,13 +2547,13 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   // Modo sombra: NO cargar, sólo avisar al admin que el match está listo.
   if (shadow) {
     await BankMovement.updateOne({ movementId: movement.movementId }, {
-      $set: { matchStatus: 'shadow_matched', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id }
+      $set: { matchStatus: 'shadow_matched', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId }
     });
-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'shadow_matched', matchedMovementId: movement.movementId } });
+    if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'shadow_matched', matchedMovementId: movement.movementId } });
     await _emitAdminOnlyChatNote(user.id, user.username,
       `🏦 MATCH hgcash (MODO SOMBRA) — ${dataDesc}\n✅ La transferencia coincide con el comprobante. Lista para cargar (auto-carga DESACTIVADA — cargá vos).`);
     logger.info(`[hgcash] shadow match user=${user.username} amount=$${amount} movement=${movement.movementId}`);
-    return;
+    return { ok: false, reason: 'shadow' };
   }
 
   // ── MÍNIMO DE CARGA ──────────────────────────────────────────────────────
@@ -2501,14 +2564,14 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   try {
     const _minCfg = await getHgcashConfig();
     const minCharge = Number(_minCfg.minChargeARS) > 0 ? Number(_minCfg.minChargeARS) : 1500;
-    if (Number(amount) < minCharge) {
+    if (!assign && Number(amount) < minCharge) {
       await BankMovement.updateOne({ movementId: movement.movementId },
-        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `monto $${Number(amount)} menor al mínimo $${minCharge}` } });
-      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
+        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: `monto $${Number(amount)} menor al mínimo $${minCharge}` } });
+      if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
       await _emitAdminOnlyChatNote(user.id, user.username,
         `🏦 ✅ Comprobante CORRECTO (${dataDesc}) — PERO el monto es menor al mínimo de carga ($${minCharge.toLocaleString('es-AR')}). NO se cargó automático.\n👉 Pedile al cliente que envíe la diferencia para llegar al mínimo y cargá la suma a mano.`);
       logger.info(`[hgcash] bajo mínimo user=${user.username} $${amount} < $${minCharge} mov=${movement.movementId}`);
-      return;
+      return { ok: false, reason: 'below_min' };
     }
   } catch (minErr) {
     logger.warn(`[hgcash] chequeo de mínimo falló (sigue la carga): ${minErr.message}`);
@@ -2525,19 +2588,19 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
     try {
       await HgcashCharge.create({
         chargeKey, userId: user.id, username: user.username,
-        amount: Number(amount), movementId: movement.movementId, comprobanteId: comprobante.id
+        amount: Number(amount), movementId: movement.movementId, comprobanteId: compId
       });
       chargeLocked = true;
     } catch (lockErr) {
       if (lockErr && lockErr.code === 11000) {
         // Esta transferencia YA fue acreditada → NO recargar (duplicado real).
         await BankMovement.updateOne({ movementId: movement.movementId },
-          { $set: { matchStatus: 'duplicate', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `duplicado: coelsa ${chargeKey} ya acreditada` } });
-        await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'duplicate' } });
+          { $set: { matchStatus: 'duplicate', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: `duplicado: coelsa ${chargeKey} ya acreditada` } });
+        if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'duplicate' } });
         await _emitAdminOnlyChatNote(user.id, user.username,
           `🏦 ⚠️ Movimiento DUPLICADO de la misma transferencia (coelsa ${chargeKey}) — NO se cargó de nuevo (ya estaba acreditado).`);
         logger.warn(`[hgcash] DUPLICADO bloqueado coelsa=${chargeKey} user=${user.username} mov=${movement.movementId}`);
-        return;
+        return { ok: false, reason: 'duplicate', error: `Esta transferencia (coelsa ${chargeKey}) YA fue acreditada antes.` };
       }
       // Otro error de DB: no bloqueamos la carga por eso (la red de seguridad de abajo igual protege).
       logger.warn(`[hgcash] no se pudo crear el candado de carga (coelsa=${chargeKey}): ${lockErr.message}`);
@@ -2553,7 +2616,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
   try {
     const _hgCfg = await getHgcashConfig();
     const guardMin = Number(_hgCfg.duplicateGuardMinutes) >= 0 ? Number(_hgCfg.duplicateGuardMinutes) : 8;
-    if (guardMin > 0) {
+    if (guardMin > 0 && !(assign && assign.force)) {
       const sinceGuard = new Date(Date.now() - guardMin * 60 * 1000);
       // #131: antes bastaba "mismo usuario + mismo monto en <8 min" para frenar,
       // aunque la carga anterior fuera OTRA transferencia (otro coelsa, otro
@@ -2589,12 +2652,12 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       if (recent) {
         if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
         await BankMovement.updateOne({ movementId: movement.movementId },
-          { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: `posible duplicado: ya hubo carga de $${Number(amount)} hace <${guardMin}min` } });
-        await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review' } });
+          { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: `posible duplicado: ya hubo carga de $${Number(amount)} hace <${guardMin}min` } });
+        if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'needs_review' } });
         await _emitAdminOnlyChatNote(user.id, user.username,
           `🏦 ⚠️ POSIBLE DUPLICADO — a este cliente ya se le cargó $${Number(amount).toLocaleString('es-AR')} hace pocos minutos. NO se cargó automático.\nVerificá si son DOS transferencias REALES (dos comprobantes con N° distinto) y, si corresponde, cargá a mano.`);
         logger.warn(`[hgcash] HOLD posible duplicado user=${user.username} $${amount} mov=${movement.movementId}`);
-        return;
+        return { ok: false, reason: 'possible_duplicate', error: `A este cliente ya se le cargó $${Number(amount).toLocaleString('es-AR')} hace menos de ${guardMin} min. Si son DOS transferencias reales, confirmá con "forzar".` };
       }
     }
   } catch (guardErr) {
@@ -2629,37 +2692,42 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
       }
     } catch (_) {}
 
-    const result = await jugaygana.depositToUser(user.username, Number(amount), 'Carga automática (hgcash)', user.jugayganaUserId || null);
+    const result = await jugaygana.depositToUser(user.username, Number(amount), assign ? `Carga asignada desde bandeja (hgcash) por ${agentLabel}` : 'Carga automática (hgcash)', user.jugayganaUserId || null);
     if (!result.success && result.ambiguous) {
       // #151 AMBIGUO: NO liberar el candado ni reintentar (podría duplicar la carga).
       // Movimiento y comprobante quedan en needs_review para que un agente verifique.
       await BankMovement.updateOne({ movementId: movement.movementId },
-        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga entró' } });
-      await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
-      await _alertMoneyAmbiguous('Carga automática hgcash', user.id, user.username, amount, result.error);
-      _emitHgcashUpdate('ambiguo');
-      return;
+        { $set: { matchStatus: 'needs_review', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga entró' } });
+      if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'needs_review', matchedMovementId: movement.movementId } });
+      await _alertMoneyAmbiguous(assign ? 'Carga asignada (bandeja)' : 'Carga automática hgcash', user.id, user.username, amount, result.error);
+      _emitHgcashUpdate('ambiguo', movement.movementId);
+      return { ok: false, reason: 'ambiguous', error: result.error };
     }
     if (!result.success) {
       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
-      return;
+      return { ok: false, reason: 'deposit_failed', error: jugaygana.errToString(result.error || 'fallo deposit') };
     }
 
+    const txId = uuidv4();
     await BankMovement.updateOne({ movementId: movement.movementId }, {
-      $set: { matchStatus: 'auto_charged', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: comprobante.id, chargedAt: new Date() }
+      $set: Object.assign(
+        { matchStatus: assign ? 'manual_charged' : 'auto_charged', matchedUserId: user.id, matchedUsername: user.username, matchedComprobanteId: compId, chargedAt: new Date(), transactionId: txId, chargeSource: assign ? 'assigned' : 'auto', chargeError: null },
+        assign ? { assignedBy: agentLabel, assignedAt: new Date() } : {}
+      )
     });
-    await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'auto_charged', matchedMovementId: movement.movementId, autoCharged: true } });
+    if (compId) await Comprobante.updateOne({ id: compId }, { $set: { bankMatchStatus: 'auto_charged', matchedMovementId: movement.movementId, autoCharged: true } });
     charged = true; // ya acreditó: cualquier error posterior NO debe disparar reintento
 
     try { await recordUserActivity(user.id, 'deposit', Number(amount)); } catch (_) {}
     await Transaction.create({
-      id: uuidv4(), type: 'deposit', amount: Number(amount),
+      id: txId, type: 'deposit', amount: Number(amount),
       username: user.username, userId: user.id,
-      description: `Carga automática hgcash (${opDesc})`,
-      adminUsername: 'auto-hgcash', adminRole: 'system',
+      description: assign ? `Carga asignada desde bandeja hgcash (${opDesc})` : `Carga automática hgcash (${opDesc})`,
+      adminUsername: agentLabel, adminRole: assign ? (assign.agentRole || 'depositor') : 'system',
+      adminId: assign ? (assign.agentId || null) : null,
       transactionId: result.data?.transfer_id || result.data?.transferId,
-      metadata: { source: 'auto_hgcash', movementId: movement.movementId, comprobanteId: comprobante.id },
+      metadata: { source: assign ? 'hgcash_assigned' : 'auto_hgcash', movementId: movement.movementId, comprobanteId: compId },
       timestamp: new Date()
     });
 
@@ -2804,19 +2872,24 @@ async function hgcashAutoCarga({ movement, comprobante, mode }) {
         : (appBonus.skippedForBalance
           ? ` ℹ️ SIN bono ${appBonus.cfg.allPct}%: el cliente ya tenía $${Number(appBonus.preBalance).toLocaleString('es-AR')} de saldo antes de la carga (más de $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR')}).`
           : ''));
-    await _emitAdminOnlyChatNote(user.id, user.username, `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
-    _emitHgcashUpdate('cargado');
-    logger.info(`[hgcash] auto-carga OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
+    await _emitAdminOnlyChatNote(user.id, user.username, assign
+      ? `🏦 ✅ CARGA ASIGNADA desde la bandeja del banco por ${agentLabel} — ${dataDesc}. Acreditado.${bonusNote}`
+      : `🏦 ✅ CARGA AUTOMÁTICA hgcash — ${dataDesc}. Acreditado.${bonusNote}`);
+    _emitHgcashUpdate('cargado', movement.movementId);
+    logger.info(`[hgcash] ${assign ? 'carga asignada por ' + agentLabel : 'auto-carga'} OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
+    return { ok: true, txId };
   } catch (e) {
     if (charged) {
       // La carga YA se acreditó; el error fue en un paso posterior (mensaje/transacción).
       // NO reintentar (sería doble carga). Solo dejamos constancia.
       logger.error(`[hgcash] carga OK pero falló paso posterior user=${user.username}: ${e.message}`);
+      return { ok: true, txId: null, warning: e.message };
     } else {
       // La carga no llegó a confirmarse → liberar el candado y dejarlo reintentable.
       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, e.message, dataDesc, user);
       logger.error(`[hgcash] auto-carga excepción user=${user.username}: ${e.message}`);
+      return { ok: false, reason: 'exception', error: e.message };
     }
   }
 }
@@ -3341,6 +3414,12 @@ app.post('/api/hgcash/webhook', async (req, res) => {
       topic: p.topic || null, eventType: p.eventType || null, raw: p
     };
 
+    // #155 Salientes: clasificar (pago a cliente / bajada / desconocido) por el externalID.
+    if (doc.direction === 'Outbound') {
+      if (doc.externalId && /^sweep-/.test(doc.externalId)) { doc.outKind = 'sweep'; doc.sweepId = doc.externalId.replace(/^sweep-/, ''); }
+      else if (doc.externalId) { doc.outKind = 'payout'; doc.payoutId = doc.externalId; }
+      else doc.outKind = 'unknown';
+    }
     let isNew = false;
     try {
       await BankMovement.create({
@@ -3349,6 +3428,9 @@ app.post('/api/hgcash/webhook', async (req, res) => {
         createdAt: new Date()
       });
       isNew = true;
+      if (doc.outKind === 'sweep' && doc.sweepId) {
+        BankSweep.updateOne({ id: doc.sweepId }, { $set: { movementId: doc.movementId } }).catch(() => {});
+      }
     } catch (e) {
       if (e && e.code === 11000) {
         // Reentrega / created+status_change: actualizar datos sin pisar el matchStatus.
@@ -3359,7 +3441,7 @@ app.post('/api/hgcash/webhook', async (req, res) => {
     // Responder 2xx YA (el banco reintenta si no; el matcheo corre aparte).
     res.status(200).json({ ok: true });
 
-    if (isNew) _emitHgcashUpdate('movimiento'); // panel en vivo (entrantes y salientes)
+    _emitHgcashUpdate(isNew ? 'movimiento' : 'estado', doc.movementId); // bandeja del banco en vivo (entrantes y salientes)
     if (isNew && doc.direction === 'Inbound') {
       BankMovement.findOne({ movementId: doc.movementId }).lean()
         .then(fresh => { if (fresh) return hgcashMatchFromMovement(fresh); })
@@ -9169,9 +9251,17 @@ app.get('/api/movements', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, res) => {
+  // #155 Carga manual ANCLADA: origen declarado + movimiento del banco elegido en el modal.
+  // (Fuera del try: el catch tiene que poder liberar el movimiento reclamado.)
+  let _bankMovementId = null;
+  let _bankClaimed = null; // movimiento reclamado (estado previo) para liberarlo si la carga falla
   try {
     let { userId, username, amount, bonus = 0, description } = req.body; // `bonus` puede pisarse con el bono de LOTE automático (#149)
     let _loteClaim = null; // #149: % de lote aplicado solo en esta carga (null = no hubo)
+    _bankMovementId = req.body.movementId ? String(req.body.movementId).slice(0, 80) : null;
+    const _bankOrigin = ['hgcash', 'otro_banco', 'sin_movimiento'].includes(req.body.origin) ? req.body.origin : (_bankMovementId ? 'hgcash' : null);
+    const _bankOriginNote = String(req.body.originNote || '').trim().slice(0, 200);
+    const _depositTxId = uuidv4();
     
     // Buscar usuario por ID o username
     let user;
@@ -9189,9 +9279,25 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       return res.status(400).json({ error: 'Monto inválido' });
     }
 
+    // #155: si el agente eligió una transferencia de la bandeja, el monto tiene que
+    // ser EXACTAMENTE el de la transferencia y se reclama atómico antes de acreditar
+    // (así la carga automática no la puede tomar en el medio).
+    if (_bankMovementId) {
+      const mv = await BankMovement.findOne({ movementId: _bankMovementId }).lean();
+      if (!mv || mv.direction !== 'Inbound') return res.status(400).json({ error: 'La transferencia elegida no existe.' });
+      if (!_amountsEqual(mv.amount, amount)) return res.status(400).json({ error: `El monto ($${Number(amount).toLocaleString('es-AR')}) no coincide con la transferencia elegida ($${Number(mv.amount).toLocaleString('es-AR')}).` });
+      _bankClaimed = await BankMovement.findOneAndUpdate(
+        { movementId: _bankMovementId, matchStatus: { $in: ['pending', 'no_match', 'needs_review', 'error'] } },
+        { $set: { matchStatus: 'claiming' } }, { new: false }
+      );
+      if (!_bankClaimed) return res.status(409).json({ error: 'Esa transferencia ya fue acreditada (o la está tomando otro proceso). Refrescá la bandeja.' });
+    }
+    const _bankRelease = (toStatus, extra) => _bankReleaseClaim(_bankMovementId, _bankClaimed, toStatus, extra);
+
     const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
 
     if (!result.success && result.ambiguous) {
+      await _bankRelease('needs_review', { matchedUserId: user.id, matchedUsername: user.username, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga manual entró' });
       // #151: la carga puede haber entrado. El agente NO debe repetirla sin mirar el saldo.
       await _alertMoneyAmbiguous('Carga manual', user.id, user.username, amount, result.error);
       return res.status(502).json({ error: `⚠️ JUGAYGANA no confirmó la carga de $${Number(amount).toLocaleString('es-AR')} y no se pudo verificar por saldo. NO la repitas todavía: mirá el saldo/historial del cliente en JUGAYGANA y cargá de nuevo solo si NO entró.`, ambiguous: true });
@@ -9279,10 +9385,20 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
 
       await recordUserActivity(user.id, 'deposit', parseFloat(amount));
 
-      // hgcash: si esta carga MANUAL corresponde a una transferencia hgcash pendiente
-      // de ese usuario (mismo monto), marcarla como cargada → no se auto-carga después.
-      // Fire-and-forget: no frena la respuesta de la carga.
-      hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount)).catch(() => {});
+      // hgcash: vincular la carga MANUAL con su transferencia. #155: si el agente la
+      // eligió en el modal, se marca ESA (manual_charged + transactionId); si no,
+      // se busca por monto/titular (legacy) → no se auto-carga después.
+      if (_bankClaimed) {
+        try {
+          await BankMovement.updateOne({ movementId: _bankMovementId }, { $set: {
+            matchStatus: 'manual_charged', matchedUserId: user.id, matchedUsername: user.username, chargedAt: new Date(),
+            transactionId: _depositTxId, chargeSource: 'manual_link', assignedBy: req.user.username || null, assignedAt: new Date(), chargeError: null
+          } });
+        } catch (linkErr) { logger.warn(`[bank] no se pudo vincular la carga manual al movimiento ${_bankMovementId}: ${linkErr.message}`); }
+        _emitHgcashUpdate('cargado', _bankMovementId);
+      } else {
+        hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount), _depositTxId).catch(() => {});
+      }
 
       // ROI de las estrategias: si el depósito incluyó bono, marcamos el
       // PromoBonus vigente del usuario como usado y guardamos el monto de
@@ -9579,7 +9695,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // Esto mantiene la consistencia con la Transaction tipo 'bonus' separada
       // (más abajo) que sólo se crea si el bonus efectivamente entró.
       await Transaction.create({
-        id: uuidv4(),
+        id: _depositTxId,
         type: 'deposit',
         amount: parseFloat(amount),
         bonus: bonusActuallyApplied ? parseFloat(bonus) : 0,
@@ -9590,12 +9706,16 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         adminUsername: req.user?.username,
         adminRole: req.user?.role || 'admin',
         transactionId: result.data?.transfer_id || result.data?.transferId,
-        metadata: bonusRequested && !bonusActuallyApplied ? {
-          // Trazabilidad: agente pidió bonus pero no entró. Sirve para reportes
-          // de discrepancias y para que el admin sepa que hubo intento fallido.
-          requestedBonus: parseFloat(bonus),
-          bonusFailureReason: bonusJgResult?.error || 'desconocido'
-        } : null,
+        metadata: Object.assign(
+          // #155 origen declarado de la carga manual (lo cruza el cierre diario).
+          { origin: _bankOrigin, originNote: _bankOriginNote || undefined, movementId: _bankClaimed ? _bankMovementId : undefined },
+          bonusRequested && !bonusActuallyApplied ? {
+            // Trazabilidad: agente pidió bonus pero no entró. Sirve para reportes
+            // de discrepancias y para que el admin sepa que hubo intento fallido.
+            requestedBonus: parseFloat(bonus),
+            bonusFailureReason: bonusJgResult?.error || 'desconocido'
+          } : {}
+        ),
         timestamp: new Date()
       });
 
@@ -9657,10 +9777,12 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         bonusError: bonusRequested && !bonusActuallyApplied ? bonusJgResult?.error : null
       });
     } else {
+      await _bankRelease(); // #155: la transferencia vuelve a la bandeja
       logger.error(`[deposit] FAIL admin=${req.user?.username} user=${user.username} amount=$${amount} bonus=$${bonus || 0} error=${result.error || 'sin error'}`);
       res.status(400).json({ error: result.error });
     }
   } catch (error) {
+    if (_bankClaimed) _bankReleaseClaim(_bankMovementId, _bankClaimed).catch(() => {}); // #155
     console.error('Error realizando depósito:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
@@ -15734,6 +15856,501 @@ app.get('/api/admin/hgcash/balance', authMiddleware, adminMiddleware, async (req
     res.status(500).json({ error: 'Error del servidor' });
   }
 });
+
+
+// ============================================
+// #155 BANDEJA DEL BANCO · BAJADAS · CIERRE DIARIO
+// ============================================
+// El eje del control: manda el MOVIMIENTO del banco (webhook hgcash), no la foto.
+// Toda transferencia entrante termina en un estado (cargada auto / asignada por un
+// agente / manual anclada / "no corresponde"); toda salida es un pago o una bajada.
+// El panel (sección 🏦 Banco) se actualiza en TIEMPO REAL por socket
+// (`bank_movement` con el documento, `hgcash_movement` como aviso genérico).
+// Roles: ver bandeja y asignar → admin | depositor; bajadas → admin | withdrawer;
+// resolver "no corresponde", reabrir, cierre → solo admin general.
+const BANK_TRAY_OPEN_STATES = ['pending', 'no_match', 'needs_review', 'error', 'claiming', 'shadow_matched'];
+
+// Libera un movimiento reclamado por una carga manual que no llegó a acreditarse.
+async function _bankReleaseClaim(movementId, prev, toStatus, extra) {
+  if (!movementId || !prev) return;
+  try {
+    await BankMovement.updateOne({ movementId, matchStatus: 'claiming' },
+      { $set: Object.assign({ matchStatus: toStatus || prev.matchStatus || 'pending' }, extra || {}) });
+  } catch (_) {}
+  _emitHgcashUpdate('liberado', movementId);
+}
+
+function _bankCanView(req) { return ['admin', 'depositor', 'withdrawer'].includes(req.user && req.user.role); }
+function _bankCanAssign(req) { return ['admin', 'depositor'].includes(req.user && req.user.role); }
+function _bankCanSweep(req) { return ['admin', 'withdrawer'].includes(req.user && req.user.role); }
+
+// Enriquecer salientes con el usuario del pago / etiqueta de la bajada.
+async function _bankEnrichMovements(movements) {
+  try {
+    const out = movements.filter(m => m.direction === 'Outbound');
+    const extIds = out.map(m => m.externalId).filter(e => e && !/^sweep-/.test(e));
+    const hgIds = out.map(m => m.movementId).filter(Boolean);
+    const sweepIds = out.map(m => m.sweepId || (m.externalId && /^sweep-/.test(m.externalId) ? m.externalId.replace(/^sweep-/, '') : null)).filter(Boolean);
+    if (extIds.length || hgIds.length) {
+      const or = [];
+      if (extIds.length) or.push({ id: { $in: extIds } });
+      if (hgIds.length) or.push({ hgTxId: { $in: hgIds } }, { hgTransactionId: { $in: hgIds } });
+      const payouts = await PendingPayout.find({ $or: or }).select('id hgTransactionId hgTxId username resolvedCbu titular').lean();
+      const byId = new Map(payouts.map(p => [p.id, p]));
+      const byHg = new Map(); for (const p of payouts) { if (p.hgTxId) byHg.set(p.hgTxId, p); if (p.hgTransactionId) byHg.set(p.hgTransactionId, p); }
+      for (const m of out) {
+        const p = (m.externalId && byId.get(m.externalId)) || byHg.get(m.movementId);
+        if (p) { m.payoutUsername = p.username || null; m.outKind = m.outKind || 'payout'; if (!m.toCBU && p.resolvedCbu) m.toCBU = p.resolvedCbu; if (!m.toName && p.titular) m.toName = p.titular; }
+      }
+    }
+    if (sweepIds.length) {
+      const sweeps = await BankSweep.find({ id: { $in: sweepIds } }).select('id destLabel toName requestedBy').lean();
+      const byId = new Map(sweeps.map(x => [x.id, x]));
+      for (const m of out) {
+        const sid = m.sweepId || (m.externalId && /^sweep-/.test(m.externalId) ? m.externalId.replace(/^sweep-/, '') : null);
+        const sw = sid && byId.get(sid);
+        if (sw) { m.outKind = 'sweep'; m.sweepLabel = sw.destLabel || sw.toName || 'bajada'; m.sweepBy = sw.requestedBy || null; }
+      }
+    }
+  } catch (e) { logger.warn(`[bank] enriquecer movimientos: ${e.message}`); }
+  return movements;
+}
+
+// Buscador liviano de usuarios para asignar desde la bandeja (admin y cargas).
+app.get('/api/admin/bank/users-search', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanAssign(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const q = String(req.query.q || '').trim().slice(0, 40);
+    if (q.length < 2) return res.json({ users: [] });
+    const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const users = await User.find({ role: 'user', $or: [{ usernameLower: new RegExp('^' + safe.toLowerCase()) }, { username: new RegExp(safe, 'i') }, { phone: new RegExp(safe.replace(/\D/g, '') || '__none__') }] })
+      .sort({ lastLogin: -1 }).limit(10).select('id username phone isBlocked lastLogin').lean();
+    res.json({ users: users.map(u => ({ id: u.id, username: u.username, phone: u.phone || null, isBlocked: !!u.isBlocked, lastLogin: u.lastLogin || null })) });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+// BANDEJA: tab=pending (entrantes sin resolver) | today | day (&day=YYYY-MM-DD) | all (paginado).
+app.get('/api/admin/bank/tray', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const cfg = await getHgcashConfig();
+    const tab = String(req.query.tab || 'pending');
+    const search = String(req.query.search || '').trim().slice(0, 60);
+    const amountQ = req.query.amount ? Number(String(req.query.amount).replace(/[^\d.]/g, '')) : null;
+    const limit = Math.min(300, Math.max(1, parseInt(req.query.limit, 10) || 200));
+    const q = {};
+    if (tab === 'pending') {
+      q.direction = 'Inbound';
+      q.matchStatus = { $in: BANK_TRAY_OPEN_STATES };
+    } else if (tab === 'today' || tab === 'day') {
+      const dayKey = tab === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? String(req.query.day) : _artDateKey();
+      const r = _artDayRange(dayKey);
+      q.createdAt = { $gte: r.start, $lt: r.end };
+    }
+    if (amountQ && Number.isFinite(amountQ)) q.amount = { $gte: amountQ - 0.005, $lte: amountQ + 0.005 };
+    if (search) {
+      const safe = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      q.$or = [{ fromName: new RegExp(safe, 'i') }, { toName: new RegExp(safe, 'i') }, { matchedUsername: new RegExp(safe, 'i') }, { coelsaCode: new RegExp(safe, 'i') }, { fromCBU: new RegExp(safe) }, { amountRaw: new RegExp(safe) }];
+    }
+    let movements = await BankMovement.find(q).sort({ createdAt: -1 }).limit(limit).select('-raw').lean();
+    // Salientes: los pagos y bajadas ya están clasificados; los entrantes en la bandeja de pendientes
+    // solo cuentan si el banco los dio por acreditados (status done).
+    if (tab === 'pending') movements = movements.filter(m => _statusAccredited(m.status, cfg));
+    movements = await _bankEnrichMovements(movements);
+    const pendingCount = await BankMovement.countDocuments({ direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES }, status: { $in: (cfg.acceptStatuses || ['done']) } });
+    res.json({ movements, pendingCount, hgcashEnabled: !!cfg.enabled, mode: cfg.mode || 'shadow', canAssign: _bankCanAssign(req), canSweep: _bankCanSweep(req), isAdmin: req.user.role === 'admin' });
+  } catch (error) {
+    logger.error(`[bank] tray: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// SUGERENCIAS para asignar un movimiento: comprobantes del mismo monto (últimas 12 h)
+// con el titular parecido, y cargas manuales recientes del mismo monto sin transferencia.
+app.get('/api/admin/bank/movements/:movementId/suggestions', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const m = await BankMovement.findOne({ movementId: String(req.params.movementId) }).select('-raw').lean();
+    if (!m) return res.status(404).json({ error: 'Movimiento no encontrado' });
+    const since = new Date(Date.now() - 12 * 3600 * 1000);
+    const comps = await Comprobante.find({ isComprobante: true, createdAt: { $gte: since }, amount: { $gte: Number(m.amount) - 0.005, $lte: Number(m.amount) + 0.005 } })
+      .sort({ createdAt: -1 }).limit(30).select('id userId username originHolder originCbu operationNumber createdAt bankMatchStatus autoCharged imageHash').lean();
+    const comprobantes = comps.map(c => ({
+      id: c.id, userId: c.userId, username: c.username, originHolder: c.originHolder || null, operationNumber: c.operationNumber || null,
+      createdAt: c.createdAt, used: !!c.autoCharged || ['auto_charged', 'manual_charged', 'duplicate'].includes(c.bankMatchStatus),
+      nameMatch: !!(c.originHolder && m.fromName && _nameMatch(c.originHolder, m.fromName)),
+      opMatch: !!(c.operationNumber && (m.coelsaCode || m.externalId) && String(c.operationNumber).replace(/\D/g, '') && (String(m.coelsaCode || '').includes(String(c.operationNumber)) || String(c.operationNumber).includes(String(m.coelsaCode || '__'))))
+    })).sort((a, b) => (b.nameMatch + b.opMatch) - (a.nameMatch + a.opMatch));
+    const txs = await Transaction.find({ type: 'deposit', timestamp: { $gte: since }, amount: { $gte: Number(m.amount) - 0.005, $lte: Number(m.amount) + 0.005 }, 'metadata.source': { $nin: ['auto_hgcash', 'hgcash_assigned'] } })
+      .sort({ timestamp: -1 }).limit(20).select('id userId username amount timestamp adminUsername metadata').lean();
+    const recentDeposits = txs.map(t => ({ id: t.id, userId: t.userId, username: t.username, amount: t.amount, timestamp: t.timestamp, adminUsername: t.adminUsername, hasMovement: !!(t.metadata && t.metadata.movementId) }));
+    // Otras cuentas ya fondeadas por este titular (identidad bancaria): suele ser el mismo cliente.
+    let sameHolder = [];
+    try {
+      const or = _bankIdentityOr(m);
+      if (or.length) {
+        const prevMovs = await BankMovement.find({ $or: or, movementId: { $ne: m.movementId }, matchedUserId: { $ne: null }, matchStatus: { $in: ['auto_charged', 'manual_charged'] } })
+          .sort({ createdAt: -1 }).limit(20).select('matchedUserId matchedUsername createdAt amount').lean();
+        const seen = new Set();
+        for (const pm of prevMovs) { if (!seen.has(pm.matchedUserId)) { seen.add(pm.matchedUserId); sameHolder.push({ userId: pm.matchedUserId, username: pm.matchedUsername, lastAt: pm.createdAt, lastAmount: pm.amount }); } }
+      }
+    } catch (_) {}
+    res.json({ movement: m, comprobantes, recentDeposits, sameHolder });
+  } catch (error) {
+    logger.error(`[bank] suggestions: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ASIGNAR un movimiento a un usuario → acredita por el MISMO camino de la carga automática.
+app.post('/api/admin/bank/movements/:movementId/assign', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanAssign(req)) return res.status(403).json({ error: 'Solo admin o cargas pueden asignar' });
+    const movementId = String(req.params.movementId);
+    const userId = String((req.body && req.body.userId) || '').trim();
+    const force = !!(req.body && req.body.force);
+    if (!userId) return res.status(400).json({ error: 'Falta el usuario' });
+    const movement = await BankMovement.findOne({ movementId }).lean();
+    if (!movement || movement.direction !== 'Inbound') return res.status(404).json({ error: 'Movimiento no encontrado' });
+    const cfg = await getHgcashConfig();
+    if (!_statusAccredited(movement.status, cfg)) return res.status(400).json({ error: `El banco todavía no acreditó esta transferencia (estado ${movement.status || '?'}).` });
+    if (!BANK_TRAY_OPEN_STATES.includes(movement.matchStatus) || movement.matchStatus === 'claiming') return res.status(409).json({ error: 'Esa transferencia ya no está pendiente. Refrescá la bandeja.' });
+    const user = await User.findOne({ id: userId });
+    if (!user || user.role !== 'user') return res.status(404).json({ error: 'Usuario no encontrado' });
+    const r = await hgcashAutoCarga({ movement, comprobante: null, mode: 'auto', assign: { user, agent: req.user.username, agentRole: req.user.role, agentId: req.user.userId, force } });
+    if (!r || !r.ok) {
+      const reason = (r && r.reason) || 'error';
+      const msg = (r && r.error) || ({ claimed: 'Otro proceso tomó esta transferencia. Refrescá la bandeja.', ambiguous: 'JUGAYGANA no confirmó la carga: quedó en VERIFICAR (no la repitas).', deposit_failed: 'JUGAYGANA rechazó la carga.' })[reason] || 'No se pudo acreditar.';
+      return res.status(reason === 'possible_duplicate' ? 409 : (reason === 'ambiguous' ? 502 : 400)).json({ error: msg, reason, canForce: reason === 'possible_duplicate' });
+    }
+    logger.info(`[bank] ${req.user.username} asignó movimiento ${movementId} ($${movement.amount}) a ${user.username}`);
+    res.json({ success: true, txId: r.txId || null, username: user.username });
+  } catch (error) {
+    logger.error(`[bank] assign: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// VINCULAR un movimiento a una carga manual YA hecha (la plata ya se acreditó; solo se ata).
+app.post('/api/admin/bank/movements/:movementId/link', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanAssign(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const movementId = String(req.params.movementId);
+    const txId = String((req.body && req.body.transactionId) || '').trim();
+    if (!txId) return res.status(400).json({ error: 'Falta la carga a vincular' });
+    const [movement, tx] = await Promise.all([BankMovement.findOne({ movementId }).lean(), Transaction.findOne({ id: txId, type: 'deposit' }).lean()]);
+    if (!movement || movement.direction !== 'Inbound') return res.status(404).json({ error: 'Movimiento no encontrado' });
+    if (!tx) return res.status(404).json({ error: 'Carga no encontrada' });
+    if (tx.metadata && tx.metadata.movementId) return res.status(409).json({ error: 'Esa carga ya está vinculada a otra transferencia.' });
+    if (!_amountsEqual(tx.amount, movement.amount)) return res.status(400).json({ error: 'El monto de la carga no coincide con la transferencia.' });
+    const claimed = await BankMovement.findOneAndUpdate(
+      { movementId, matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') } },
+      { $set: { matchStatus: 'manual_charged', matchedUserId: tx.userId, matchedUsername: tx.username, chargedAt: new Date(), transactionId: tx.id, chargeSource: 'manual_link', assignedBy: req.user.username, assignedAt: new Date(), chargeError: null } },
+      { new: true }
+    );
+    if (!claimed) return res.status(409).json({ error: 'Esa transferencia ya no está pendiente.' });
+    await Transaction.updateOne({ id: tx.id }, { $set: { 'metadata.movementId': movementId, 'metadata.origin': 'hgcash', 'metadata.linkedBy': req.user.username } });
+    await _emitAdminOnlyChatNote(tx.userId, tx.username, `🏦 🔗 Transferencia de $${Number(movement.amount).toLocaleString('es-AR')} (${movement.fromName || movement.fromCBU || 's/origen'}) vinculada por ${req.user.username} a la carga manual ya hecha. No se acredita de nuevo.`);
+    _emitHgcashUpdate('vinculado', movementId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error(`[bank] link: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// RESOLVER "no corresponde" (entrante que NO se acredita a nadie) — solo admin general, con motivo.
+app.post('/api/admin/bank/movements/:movementId/resolve', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
+    const movementId = String(req.params.movementId);
+    const note = String((req.body && req.body.note) || '').trim().slice(0, 300);
+    if (note.length < 3) return res.status(400).json({ error: 'Escribí el motivo' });
+    const upd = await BankMovement.findOneAndUpdate(
+      { movementId, matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') } },
+      { $set: { matchStatus: 'ignored', resolution: 'no_corresponde', resolutionNote: note, resolvedBy: req.user.username, resolvedAt: new Date() } },
+      { new: true }
+    );
+    if (!upd) return res.status(409).json({ error: 'Esa transferencia ya no está pendiente.' });
+    logger.warn(`[bank] ${req.user.username} marcó NO CORRESPONDE movimiento ${movementId} ($${upd.amount}): ${note}`);
+    _emitHgcashUpdate('resuelto', movementId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error(`[bank] resolve: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// REABRIR (vuelve a pendiente) — solo admin general.
+app.post('/api/admin/bank/movements/:movementId/reopen', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
+    const movementId = String(req.params.movementId);
+    const upd = await BankMovement.findOneAndUpdate(
+      { movementId, direction: 'Inbound', matchStatus: { $in: ['ignored', 'error', 'needs_review', 'no_match', 'shadow_matched'] } },
+      { $set: { matchStatus: 'pending', resolution: null, resolutionNote: null, resolvedBy: null, resolvedAt: null, chargeError: null } },
+      { new: true }
+    );
+    if (!upd) return res.status(409).json({ error: 'No se puede reabrir (¿ya está acreditada?).' });
+    _emitHgcashUpdate('reabierto', movementId);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error(`[bank] reopen: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// SALDO hgcash para la bandeja (admin general y pagos).
+app.get('/api/admin/bank/balance', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!['admin', 'withdrawer'].includes(req.user.role)) return res.status(403).json({ error: 'Sin permiso' });
+    if (!hgcashPay.isEnabled()) return res.json({ enabled: false, accounts: [] });
+    const now = Date.now();
+    if (_hgcashBalanceCache.accounts && (now - _hgcashBalanceCache.at) < 15000) return res.json({ enabled: true, accounts: _hgcashBalanceCache.accounts, cached: true });
+    const acc = await hgcashPay.getAccounts();
+    if (!acc.ok) return res.status(502).json({ error: 'No se pudo consultar el saldo: ' + (acc.error || 's/detalle') });
+    const accounts = (Array.isArray(acc.data) ? acc.data : []).map(a => ({ id: a.id, name: a.name || null, currency: a.currency || null, balance: a.balance, netBalance: a.netBalance, pendingFees: a.pendingFees, status: a.status || null }));
+    _hgcashBalanceCache = { at: now, accounts };
+    res.json({ enabled: true, accounts });
+  } catch (error) {
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// ── BAJADAS (sweeps) ────────────────────────────────────────────────────────
+// Destinos guardados: Config['sweepDestinations'] = [{ id, label, cbu, name, cuit }]
+app.get('/api/admin/bank/sweep-destinations', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanSweep(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const list = (await getConfig('sweepDestinations')) || [];
+    res.json({ destinations: Array.isArray(list) ? list : [] });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/bank/sweep-destinations', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal edita los destinos' });
+    const raw = Array.isArray(req.body && req.body.destinations) ? req.body.destinations : [];
+    const list = raw.map(d => ({
+      id: String(d.id || uuidv4()).slice(0, 40),
+      label: String(d.label || '').trim().slice(0, 60),
+      cbu: String(d.cbu || '').replace(/\D/g, '').slice(0, 22),
+      name: String(d.name || '').trim().slice(0, 100),
+      cuit: String(d.cuit || '').replace(/\D/g, '').slice(0, 11)
+    })).filter(d => d.label && d.cbu.length === 22);
+    await setConfig('sweepDestinations', list);
+    logger.info(`[bank] ${req.user.username} guardó ${list.length} destino(s) de bajada`);
+    res.json({ success: true, destinations: list });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+app.get('/api/admin/bank/sweeps', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 60));
+    const sweeps = await BankSweep.find({}).sort({ createdAt: -1 }).limit(limit).lean();
+    const agg = await BankSweep.aggregate([{ $match: { status: 'done' } }, { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }]);
+    res.json({ sweeps, totalDone: agg[0] ? agg[0].total : 0, countDone: agg[0] ? agg[0].count : 0, canSweep: _bankCanSweep(req) });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+// Crear una BAJADA: cash-out de hgcash a un CBU externo. Solo admin general o pagos.
+app.post('/api/admin/bank/sweeps', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanSweep(req)) return res.status(403).json({ error: 'Solo el administrador principal o el rol de pagos pueden hacer bajadas' });
+    if (!hgcashPay.isEnabled()) return res.status(503).json({ error: 'hgcash no está configurado (falta HGCASH_API_TOKEN)' });
+    const b = req.body || {};
+    const amount = Number(String(b.amount || '').replace(/[^\d.]/g, ''));
+    if (!(amount > 0)) return res.status(400).json({ error: 'Monto inválido' });
+    let toCBU = String(b.toCBU || '').replace(/\D/g, '');
+    let toName = String(b.toName || '').trim().slice(0, 100);
+    let toCUIT = String(b.toCUIT || '').replace(/\D/g, '').slice(0, 11) || null;
+    let destLabel = String(b.destLabel || '').trim().slice(0, 60) || null;
+    const alias = String(b.alias || '').trim().slice(0, 60) || null;
+    if (b.destinationId) {
+      const list = (await getConfig('sweepDestinations')) || [];
+      const d = (Array.isArray(list) ? list : []).find(x => x.id === String(b.destinationId));
+      if (!d) return res.status(400).json({ error: 'Destino guardado no encontrado' });
+      toCBU = d.cbu; toName = d.name || toName; toCUIT = d.cuit || toCUIT; destLabel = d.label;
+    } else if (!toCBU && alias) {
+      const lk = await hgcashPay.lookupAlias(alias);
+      if (!lk.ok) return res.status(400).json({ error: 'No se pudo resolver el alias: ' + (lk.error || '') });
+      const d = lk.data || {};
+      toCBU = String(d.cvu || d.cbu || '').replace(/\D/g, '');
+      if (!toName) toName = String(d.nombre || d.name || '').slice(0, 100);
+      if (!toCUIT && d.cuit) toCUIT = String(d.cuit).replace(/\D/g, '').slice(0, 11);
+    }
+    if (toCBU.length !== 22) return res.status(400).json({ error: 'CBU/CVU destino inválido (22 dígitos)' });
+    const accountId = await resolveHgcashAccountId();
+    if (!accountId) return res.status(503).json({ error: 'No se pudo resolver la cuenta hgcash' });
+    let balanceBefore = null;
+    try { const acc = await hgcashPay.getAccounts(); const a = acc.ok ? (acc.data || []).find(x => String(x.id) === String(accountId)) : null; if (a) balanceBefore = Number(a.netBalance != null ? a.netBalance : a.balance); } catch (_) {}
+    if (balanceBefore !== null && amount > balanceBefore) return res.status(400).json({ error: `Saldo neto insuficiente en hgcash ($${balanceBefore.toLocaleString('es-AR')}). Recordá que hgcash cobra comisión sobre la salida.` });
+
+    const sweep = await BankSweep.create({
+      id: uuidv4(), amount, toCBU, toName: toName || null, toCUIT, alias, destLabel,
+      concept: `Bajada ${destLabel || toName || ''}`.trim().slice(0, 120), note: String(b.note || '').trim().slice(0, 300) || null,
+      requestedBy: req.user.username, requestedByRole: req.user.role, status: 'pending', accountId: String(accountId), balanceBefore
+    });
+    const webhookUrl = `${req.protocol}://${req.get('host')}/api/hgcash/webhook`;
+    let result = await hgcashPay.createCashOut({ accountId, amount, toCBU, toName: toName || undefined, toCUIT: toCUIT || undefined, concept: sweep.concept, externalID: `sweep-${sweep.id}`, webhookUrl });
+    if (!result.ok && result.httpStatus === 403) {
+      const fresh = await resolveHgcashAccountId({ force: true });
+      if (fresh && String(fresh) !== String(accountId)) result = await hgcashPay.createCashOut({ accountId: fresh, amount, toCBU, toName: toName || undefined, toCUIT: toCUIT || undefined, concept: sweep.concept, externalID: `sweep-${sweep.id}`, webhookUrl });
+    }
+    if (!result.ok) {
+      if (result.httpStatus === 409 && /duplicate/i.test(String(result.error))) {
+        await BankSweep.updateOne({ id: sweep.id }, { $set: { status: 'paying' } });
+      } else {
+        await BankSweep.updateOne({ id: sweep.id }, { $set: { status: 'failed', error: String(result.error).slice(0, 300) } });
+        _emitHgcashUpdate('bajada');
+        return res.status(400).json({ error: 'hgcash rechazó la bajada: ' + result.error });
+      }
+    } else {
+      const hgId = result.data && result.data.id;
+      const hgStatus = String((result.data && result.data.status) || 'PENDING').toUpperCase();
+      await BankSweep.updateOne({ id: sweep.id }, { $set: { hgRequestId: hgId ? String(hgId) : null, hgStatus, status: hgStatus === 'DONE' ? 'done' : 'paying', doneAt: hgStatus === 'DONE' ? new Date() : null } });
+    }
+    logger.warn(`[bank] BAJADA $${amount} → ${toCBU} (${destLabel || toName || 'sin etiqueta'}) pedida por ${req.user.username} (${req.user.role}) sweep=${sweep.id}`);
+    try {
+      if (telegramAlert.isEnabled()) {
+        const e = telegramAlert.esc;
+        await telegramAlert.send(`🏦 <b>${e(_projectLabel())}</b> — BAJADA del banco\n$${Number(amount).toLocaleString('es-AR')} → ${e(destLabel || toName || toCBU)} (CBU …${toCBU.slice(-6)})\nPedida por @${e(req.user.username)} (${e(req.user.role)})${b.note ? '\nNota: ' + e(String(b.note).slice(0, 200)) : ''}`);
+      }
+    } catch (_) {}
+    _emitHgcashUpdate('bajada');
+    const fresh = await BankSweep.findOne({ id: sweep.id }).lean();
+    res.json({ success: true, sweep: fresh });
+  } catch (error) {
+    logger.error(`[bank] sweep: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+// Sincronizar el estado de una bajada con hgcash (por si se perdió el webhook).
+app.post('/api/admin/bank/sweeps/:id/sync', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanSweep(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const sw = await BankSweep.findOne({ id: String(req.params.id) }).lean();
+    if (!sw) return res.status(404).json({ error: 'Bajada no encontrada' });
+    if (!sw.hgRequestId) return res.status(400).json({ error: 'Esta bajada no tiene request en hgcash' });
+    const st = await hgcashPay.getTransactionStatus(sw.hgRequestId);
+    if (!st.ok) return res.status(502).json({ error: 'hgcash no respondió: ' + (st.error || '') });
+    await _handleSweepStatusWebhook({ externalID: `sweep-${sw.id}`, id: sw.hgRequestId, status: st.status }, sw.id);
+    res.json({ success: true, sweep: await BankSweep.findOne({ id: sw.id }).lean() });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+// Webhook de estado (topic TRANSACTION_REQUEST) de una BAJADA.
+async function _handleSweepStatusWebhook(p, sweepId) {
+  try {
+    const status = String(p.status || '').toUpperCase();
+    const sw = await BankSweep.findOne({ id: sweepId });
+    if (!sw) { logger.warn(`[bank] webhook de bajada sin registro local: ${sweepId}`); return; }
+    const set = { hgStatus: status || sw.hgStatus };
+    if (p.id && !sw.hgRequestId) set.hgRequestId = String(p.id);
+    if (p.transactionId && !sw.hgTxId) set.hgTxId = String(p.transactionId);
+    if (status === 'DONE') { set.status = 'done'; set.doneAt = sw.doneAt || new Date(); }
+    else if (status === 'ERROR' || status === 'CANCELLED') { set.status = status === 'ERROR' ? 'failed' : 'cancelled'; set.error = String(p.errorCode || p.error || status).slice(0, 300); }
+    else if (status && sw.status === 'pending') { set.status = 'paying'; }
+    await BankSweep.updateOne({ id: sweepId }, { $set: set });
+    if (set.hgTxId) { BankMovement.updateOne({ movementId: set.hgTxId }, { $set: { outKind: 'sweep', sweepId } }).catch(() => {}); }
+    if (set.status === 'done' || set.status === 'failed') logger.info(`[bank] bajada ${sweepId} → ${set.status}`);
+    _emitHgcashUpdate('bajada');
+  } catch (e) { logger.warn(`[bank] webhook bajada falló: ${e.message}`); }
+}
+
+// ── CIERRE DIARIO ───────────────────────────────────────────────────────────
+app.get('/api/admin/bank/close', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const list = await DailyClose.find({}).sort({ dateKey: -1 }).limit(45).select('dateKey status computedAt unresolvedCount summary.entradas summary.cargas summary.salidas cashier.status cashier.diff').lean();
+    const carry = await DailyClose.aggregate([{ $match: { unresolvedCount: { $gt: 0 } } }, { $group: { _id: null, days: { $sum: 1 }, diffs: { $sum: '$unresolvedCount' } } }]);
+    res.json({ closes: list, unresolved: carry[0] ? { days: carry[0].days, diffs: carry[0].diffs } : { days: 0, diffs: 0 }, today: _artDateKey() });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.get('/api/admin/bank/close/:date', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const dateKey = String(req.params.date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'Fecha inválida' });
+    let close = await DailyClose.findOne({ dateKey }).lean();
+    if (!close || req.query.live === '1') {
+      const cfg = await getHgcashConfig();
+      close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses });
+    }
+    res.json({ close, isToday: dateKey === _artDateKey(), labels: bankClose.TYPE_LABELS });
+  } catch (error) {
+    logger.error(`[bank] close get: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+app.post('/api/admin/bank/close/:date/run', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
+    const dateKey = String(req.params.date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: 'Fecha inválida' });
+    const cfg = await getHgcashConfig();
+    const close = await bankClose.computeDailyClose(dateKey, { computedBy: req.user.username, acceptStatuses: cfg.acceptStatuses });
+    if (req.body && req.body.telegram && telegramAlert.isEnabled()) {
+      await telegramAlert.send(bankClose.formatCloseTelegram(close, telegramAlert.esc, _projectLabel()));
+      await DailyClose.updateOne({ dateKey }, { $set: { notifiedAt: new Date() } });
+    }
+    res.json({ close, labels: bankClose.TYPE_LABELS });
+  } catch (error) {
+    logger.error(`[bank] close run: ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+app.post('/api/admin/bank/close/:date/resolve', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador principal' });
+    const dateKey = String(req.params.date);
+    const key = String((req.body && req.body.key) || '');
+    const note = String((req.body && req.body.note) || '').trim().slice(0, 300);
+    const reopen = !!(req.body && req.body.reopen);
+    if (!key) return res.status(400).json({ error: 'Falta la diferencia' });
+    if (!reopen && note.length < 3) return res.status(400).json({ error: 'Escribí cómo se resolvió' });
+    const close = await bankClose.resolveDiff(dateKey, key, { by: req.user.username, note, reopen });
+    if (!close) return res.status(404).json({ error: 'Diferencia no encontrada' });
+    logger.info(`[bank] ${req.user.username} ${reopen ? 'reabrió' : 'resolvió'} ${key} del cierre ${dateKey}${note ? ': ' + note : ''}`);
+    res.json({ close, labels: bankClose.TYPE_LABELS });
+  } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+// Cron: a las 00:05 ART corre el cierre del día anterior UNA vez por clúster
+// (claim atómico en Config['dailyclose_last']) y lo manda a Telegram.
+async function _runDailyCloseTick() {
+  try {
+    const now = new Date();
+    const hour = _artHour(now);
+    const minute = Number(now.toLocaleString('en-US', { minute: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' }));
+    if (!(hour > 0 || (hour === 0 && minute >= 5))) return;
+    const yesterday = _artDateKey(now.getTime() - 24 * 3600 * 1000);
+    const last = await getConfig('dailyclose_last', null);
+    if (last === yesterday) return;
+    // Claim atómico entre instancias: gana la que cambia el valor.
+    let won = false;
+    try {
+      const r = await Config.findOneAndUpdate({ key: 'dailyclose_last', value: { $ne: yesterday } }, { $set: { value: yesterday } }, { new: true });
+      if (r) won = true;
+      else if (!(await Config.findOne({ key: 'dailyclose_last' }).lean())) { await setConfig('dailyclose_last', yesterday); won = true; }
+    } catch (_) {}
+    if (!won) return;
+    const cfg = await getHgcashConfig();
+    const close = await bankClose.computeDailyClose(yesterday, { computedBy: 'cron', acceptStatuses: cfg.acceptStatuses });
+    logger.info(`[cierre] ${yesterday}: ${close.status} (${close.unresolvedCount} diferencias)`);
+    if (telegramAlert.isEnabled()) {
+      const carry = await DailyClose.aggregate([{ $match: { dateKey: { $lt: yesterday }, unresolvedCount: { $gt: 0 } } }, { $group: { _id: null, days: { $sum: 1 }, diffs: { $sum: '$unresolvedCount' } } }]);
+      let txt = bankClose.formatCloseTelegram(close, telegramAlert.esc, _projectLabel());
+      if (carry[0] && carry[0].diffs) txt += `\n📌 Arrastre: ${carry[0].diffs} diferencia(s) de ${carry[0].days} día(s) anteriores sin resolver`;
+      await telegramAlert.send(txt);
+      await DailyClose.updateOne({ dateKey: yesterday }, { $set: { notifiedAt: new Date() } });
+    }
+    notifyAdmins('bank_close', { dateKey: yesterday, status: close.status, unresolved: close.unresolvedCount });
+  } catch (e) { logger.warn(`[cierre] tick falló: ${e.message}`); }
+}
+setTimeout(() => { _runDailyCloseTick(); }, 2 * 60 * 1000);
+setInterval(() => { _runDailyCloseTick(); }, 5 * 60 * 1000);
 
 // ============================================
 // PAGOS AUTOMÁTICOS (retiros) — el agente verifica y confirma, se paga por hgcash

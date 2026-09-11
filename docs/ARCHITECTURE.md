@@ -108,6 +108,12 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   `monto|origen|cbu|fecha|hora` que EXIGE fecha) + `imageHash` (SHA-256) para detectar
   reutilización. Aviso de duplicado en 3 niveles (imagen / N° / solo datos = "posible").
   `bankMatchStatus` para la auto-carga.
+- **BankSweep** (#155) — BAJADAS: salidas de hgcash a un CBU externo (financiera) para no
+  acumular capital; solo admin general / pagos; externalID `sweep-<id>`; registro permanente.
+- **DailyClose** (#155) — cierre diario por `dateKey` ART: `summary`, `cashier` (cruce con
+  el cajero JUGAYGANA), `bank` (saldo hgcash), `diffs[]` con `key` estable y `resolved`.
+- **CashierSnapshot** (#155) — saldo del cajero de JUGAYGANA tras cada operación de plata
+  (`parent_balance`/100) + `opAmount` con signo; TTL 120 d. Base del cruce sistema↔JUGAYGANA.
 - **HgcashCharge** — candado de idempotencia de la carga automática: índice único por
   `chargeKey` (coelsaCode) — la MISMA transferencia se acredita UNA sola vez entre
   instancias. Si la carga falla en JUGAYGANA, el registro se BORRA para permitir retry.
@@ -299,6 +305,15 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   (`HGCASH_APP_BONUS_SKIP_BALANCE_ARS`; se le avisa con
   `/sys_deposit_no_bonus_saldo`, editable — vaciarlo lo apaga; si la lectura de
   saldo falla, el bono sale igual, fail-open). El 100% NO tiene esta condición.
+  **BANDEJA DEL BANCO (#155):** manda el MOVIMIENTO, no la foto. Todo entrante `done`
+  termina en un estado: cargado auto (foto matcheó) · **asignado** por un agente desde
+  panel→🏦 Banco (`POST /api/admin/bank/movements/:id/assign` → `hgcashAutoCarga` con
+  `assign`, mismo candado/bonos, sin comprobante) · **manual anclado** (el modal Depositar
+  manda `movementId`: monto exacto, claim atómico antes de acreditar, `chargeSource:
+  'manual_link'`) · vinculado a una carga manual ya hecha (`/link`) · "no corresponde"
+  (admin, con motivo). El panel se actualiza por socket `bank_movement` (doc entero) sin
+  recargar. `BankMovement.chargeSource/transactionId` y `Transaction.metadata.{movementId,
+  origin}` son los vínculos en las dos direcciones que el cierre cruza.
   **Anti-multicuenta por BANCO** (#152): antes de los bonos, `_findBankMultiAccount`
   busca si el titular de origen (fromCUIT > fromCBU > fromKey) ya fondeó a OTRA
   cuenta (estados `BANK_IDENTITY_STATES`). Si sí: la carga entra igual, pero SIN
@@ -327,6 +342,17 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   devolver; si se descontó → devolución (split bonus/fichas para pagos legacy).
   `pay-other-bank` = pago manual (descuenta igual). Poller `_pollPayingPayouts` cada
   45s (últimas 2h) cubre webhooks perdidos.
+- **Bajadas** (#155): `POST /api/admin/bank/sweeps` (admin|withdrawer) → cash-out hgcash a
+  un CBU externo (destino guardado en `Config['sweepDestinations']`, CBU o alias resuelto),
+  externalID `sweep-<id>`; el webhook de estado (`_handleSweepStatusWebhook`) y el movimiento
+  saliente (`outKind:'sweep'`) se vinculan solos. Telegram "🏦 BAJADA". Registro en BankSweep.
+- **Cierre diario** (#155, `src/services/bankCloseService.js`): 3 cruces del día ART —
+  banco↔sistema (entrantes sin acreditar / cargas sin transferencia ni origen / salidas sin
+  pago ni bajada; vincula y PERSISTE pares inequívocos usuario+monto ±3 h), cajero JUGAYGANA
+  (Σ opAmount de CashierSnapshot vs delta de saldo, tolerancia $5) y errores (pago sin
+  `debitConfirmed`, pago hgcash sin movimiento, ambiguos 🛑 sin resolver). Cron
+  `_runDailyCloseTick` a las 00:05 ART (claim `Config['dailyclose_last']`) → Telegram con
+  arrastre. Panel→🏦 Banco→Cierre: recalcular, resolver diffs con nota (admin).
 - **Reembolsos** (rangos desde 2026-07-28 #97; el DIARIO volvió el 2026-08-14 #102):
   **DIARIO, semanal y mensual**, los tres con el MISMO % de rango.
   `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis, ventanas de
@@ -476,6 +502,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   futuras configs sensibles sin pasar por SSM. **SMS Masivo usa esta misma clave** (#129;
   `SMS_MASIVO_PASSWORD` de SSM solo es fallback mientras no haya clave definida) y la
   exige del lado server en `bulk-sms` y `bulk-sms/preview` (#130).
+- **🏦 Banco** (#155): nav para admin/depositor/withdrawer (badge = pendientes). Tabs
+  Pendientes/Hoy/Otro día (filas en vivo por socket), Bajadas (modal + destinos guardados;
+  crear solo admin|withdrawer), Cierre (tiles + diffs resolubles). El modal Depositar tiene
+  el bloque "¿De dónde viene la plata?" (transferencia pendiente / otro banco / sin
+  transferencia) que alimenta `movementId`/`origin` de `/api/admin/deposit`.
 - Secciones "Automatización" y "Estrategia de bonos" están marcadas "No se usa" en el
   sidebar pero siguen funcionales (candidatas a limpieza con el owner).
 - La sección "Base de Datos" fue ELIMINADA por completo (2026-07-09): era inalcanzable.
@@ -495,6 +526,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 | Limpieza mensajes >3d | 6 h | activo (red de seguridad del TTL) | deleteMany |
 | `_runChatAuditTick` (auditoría IA de chats quietos, #132) | 5 min | activo si `auditconfig.enabled` | claim `ChatStatus.auditLockAt` + `lastAuditMsgAt` |
 | `_runAuditLearnTick` (aprendizaje diario de chats bien evaluados, #146) | 10 min (dispara 1×/día a `learnHourART`) | activo si `auditconfig.learnEnabled` | `Config['auditlearnlast']` = fecha ART |
+| `_runDailyCloseTick` (cierre diario del banco, #155) | 5 min (corre 1×/día desde las 00:05 ART) | activo | claim `Config['dailyclose_last']` + DailyClose único por dateKey |
 
 Migraciones one-shot: patrón flag en Config (`migration_*_done`) en `initializeData()`.
 El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
@@ -562,6 +594,12 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
   HTML sin pasar por `renderIndexHtml`.
 - **Firebase config duplicada** (index.html + firebase-messaging-sw.js) y VAPID key en
   el inline: cambiar en ambos lados.
+- **Vínculos banco↔carga (#155):** una acreditación por transferencia. Cualquier flujo
+  nuevo que acredite plata que entró por hgcash tiene que dejar `BankMovement.transactionId`
+  + `chargeSource` y `Transaction.metadata.movementId` (o `origin:'otro_banco'`), o el cierre
+  diario lo marca como diferencia. La carga asignada SIEMPRE va por `hgcashAutoCarga`
+  (nunca un `depositToUser` suelto). `_emitHgcashUpdate(kind, movementId)` con movementId
+  para que la bandeja se actualice en vivo.
 - **`X-Token` en royalty-statistics** y **`child_user_id` obligatorio** — cambiarlos
   rompe referidos Y reembolsos.
 - **`_communityRecommendCard` (roulette.js)**: feature pedida por el owner que nunca

@@ -59,7 +59,8 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
 - `jugaygana-movements.js` — endpoint alterno (deposit/withdraw/balance).
 - `src/services/jugayganaService.js` — cliente refactorizado (lo usa referidos).
 - `src/services/jugayganaPublisherSessions.js` — pool de sesiones por publicista.
-- `src/models/` — schemas Mongoose canónicos (fuente de verdad).
+- `src/models/` — schemas Mongoose canónicos (fuente de verdad). Banco: BankMovement,
+  BankSweep (bajadas), DailyClose (cierre), CashierSnapshot (saldo cajero JUGAYGANA).
 - `src/services/` — lógica (referidos, notificaciones, otp, metaCapi, fbAds, hgcash,
   comprobantes IA, analítica publicistas…).
 - `public/` — PWA del cliente (namespace global `window.VIP`, SW único
@@ -95,6 +96,11 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   puede sumar el % de un "Lote con regalo" vía `claimAutoPromoPercent` (reserva
   atómica en PromoBonus). Un flujo de carga nuevo tiene que llamarlo y hacer
   settle/revert; nunca sumar dos bonos automáticos entre sí.
+- **Bandeja del banco / cierre diario (#155):** una transferencia hgcash = UNA acreditación.
+  Toda carga que venga del banco tiene que dejar el vínculo en las dos direcciones
+  (`BankMovement.transactionId`+`chargeSource` y `Transaction.metadata.movementId`), y la
+  carga asignada desde la bandeja va SIEMPRE por `hgcashAutoCarga({assign})`. Si no, el
+  cierre diario (`src/services/bankCloseService.js`, Telegram 00:05 ART) lo marca.
 - **Anti-multicuenta por BANCO (#152):** el titular de origen del movimiento hgcash
   (`BankMovement.fromKey`) es la identidad real. Un flujo de bono automático nuevo
   ligado a una carga tiene que respetar `_findBankMultiAccount` /

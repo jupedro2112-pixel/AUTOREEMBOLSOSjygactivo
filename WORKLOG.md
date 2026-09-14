@@ -8,6 +8,12 @@
 
 ## Sesión 2026-09-14
 
+> **Deploy a EB hecho por el owner el 2026-09-14 (~13:30 UTC)** con #155–#159 (bandeja del
+> banco, aprendizaje con memoria, archivo masivo/cierre 24 h, fix compId, plata sin saldo
+> previo). Proxy recargado a las 12:54 UTC. Verificado: `/api/health` ok.
+> **Operativo pendiente:** 🏦 Banco → Pendientes → "🧹 Archivar todas…" (una vez) y asignar
+> lo acumulado hoy; revisar en JUGAYGANA el reembolso de $151 a atofausto456.
+
 ### 159. Plata: sin saldo previo NO se envía (reintento seguro) + verificación por saldo de ~40 s — menos alertas 🛑 VERIFICAR con el proxy intermitente
 - **Reporte del owner:** tras recargar el proxy (12:54 UTC) siguieron saliendo
   alertas "🛑 VERIFICAR PLATA — Reembolso $151 a @atofausto456" (12:59). Logs

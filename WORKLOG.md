@@ -33,9 +33,14 @@
   enough money" si no hay fondos → se trata como saldo insuficiente: aviso + cierre de
   chat); la respuesta JSON `success` del WithdrawMoney cuenta como confirmación cuando el
   saldo no se pudo leer ni antes ni después.
-- **Validado:** `node --check` OK. Redeploy. Mientras ShowUsers siga en 502 el saldo
-  en vivo de la PWA puede mostrarse "actualizándose", pero cargas, bonos y retiros
-  salen.
+- **Corrección del owner (mismo día):** "que NO haga el pago si no se puede leer el
+  saldo, capaz perdió el saldo que tenía cuando pidió el retiro" → se revirtió el punto
+  (4): sin lectura de saldo el payout queda `failed` sin descontar ni pagar (como #124),
+  aunque haya id guardado. Queda: bypass por id en `withdrawFromUser` (para cuando el
+  saldo sí se lee), y la respuesta JSON `success` del WithdrawMoney cuenta como
+  confirmación solo cuando falla la lectura de DESPUÉS (el saldo previo siempre se leyó).
+- **Validado:** `node --check` OK. Redeploy. Mientras ShowUsers siga en 502: cargas,
+  bonos y reembolsos salen; los retiros esperan a que se pueda leer el saldo.
 
 ### 160. Bandeja: "Archivar todas y arrancar de 0" cuenta TODO lo pendiente (antes solo lo de >24 h)
 - El owner tenía ~2.500 pendientes y el banner solo ofrecía archivar las de más de

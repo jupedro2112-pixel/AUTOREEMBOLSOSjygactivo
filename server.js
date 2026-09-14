@@ -16610,19 +16610,16 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
   const avail = (balRes && balRes.success) ? (Number(balRes.balance) || 0) : null;
   if (avail === null) {
-    // #161: ShowUsers caído no tiene por qué frenar el retiro si tenemos el id guardado:
-    // WithdrawMoney va por id y la API misma rechaza con "not enough money" si no hay
-    // saldo (JSON → reintento seguro). Sin id guardado sí hay que frenar.
+    // Decisión del owner (2026-09-14): sin lectura de saldo NO se descuenta ni se paga,
+    // aunque tengamos el id guardado — el cliente pudo haber perdido el saldo que tenía
+    // al pedir el retiro. El payout queda 'failed' y se reintenta cuando JUGAYGANA responda.
     const why = jugaygana.errToString((balRes && balRes.error) || 'sin detalle');
-    if (!jgId) {
-      await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar: ' + why } });
-      await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente en JUGAYGANA para descontar $${amt.toLocaleString('es-AR')} (3 intentos: ${why}). No se descontó nada. Reintentá el pago en unos minutos.`);
-      return { ok: false, error: 'JUGAYGANA no respondió al leer el saldo del cliente (3 intentos). No se descontó nada. Reintentá en unos minutos.' };
-    }
-    logger.warn(`[payout] ${payout.username}: saldo ilegible (${why}) — se descuenta por id ${jgId}; la API valida los fondos`);
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar: ' + why } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente en JUGAYGANA para descontar $${amt.toLocaleString('es-AR')} (3 intentos: ${why}). No se descontó nada ni se pagó. Reintentá el pago en unos minutos.`);
+    return { ok: false, error: 'JUGAYGANA no respondió al leer el saldo del cliente (3 intentos). No se descontó nada ni se pagó. Reintentá en unos minutos.' };
   }
   // 2) ¿Tiene saldo? Si se jugó las fichas → avisar al cliente, cerrar chat, cancelar.
-  if (avail !== null && avail < amt) {
+  if (avail < amt) {
     await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'cancelled', error: `Saldo insuficiente al confirmar (disponible $${avail})`, balanceBefore: avail, debitConfirmed: false } });
     await _notifyInsufficientAndCloseChat(payout, avail, agentUser);
     await _emitAdminOnlyChatNote(payout.userId, payout.username, `❌ Retiro de $${amt.toLocaleString('es-AR')} NO pagado: saldo insuficiente al confirmar (disponible $${avail.toLocaleString('es-AR')}). Se avisó al cliente y se cerró el chat para que solicite de nuevo.`);
@@ -16652,12 +16649,12 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   let after = null, deducted = false;
   try {
     const a = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
-    if (a && a.success) { after = Number(a.balance) || 0; deducted = avail === null ? true : (avail - after) >= (amt - 1); }
+    if (a && a.success) { after = Number(a.balance) || 0; deducted = (avail - after) >= (amt - 1); }
   } catch (_) {}
-  // #161: si el saldo no se pudo leer (ni antes ni después) pero JUGAYGANA respondió JSON
-  // success al WithdrawMoney, esa respuesta ES la confirmación (la verificación por saldo
-  // existe para los casos HTML/timeout, que ya vienen marcados como `verifiedByBalance`).
-  if (!deducted && (avail === null || after === null) && w.success && !w.verifiedByBalance) deducted = true;
+  // #161: si el saldo DESPUÉS no se pudo leer pero JUGAYGANA respondió JSON success al
+  // WithdrawMoney, esa respuesta ES la confirmación del descuento (la verificación por
+  // saldo existe para los casos HTML/timeout, que vienen marcados `verifiedByBalance`).
+  if (!deducted && after === null && w.success && !w.verifiedByBalance) deducted = true;
   if (!deducted) {
     await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', balanceBefore: avail, balanceAfter: after, debitConfirmed: false, error: 'Descuento no confirmado' } });
     await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ El descuento de $${amt.toLocaleString('es-AR')} NO se pudo confirmar (saldo antes ${avail == null ? '¿?' : '$' + avail.toLocaleString('es-AR')} → después ${after == null ? '¿?' : '$' + Number(after).toLocaleString('es-AR')}). Verificá en JUGAYGANA antes de pagar manual. NO devuelvas a ciegas.`);

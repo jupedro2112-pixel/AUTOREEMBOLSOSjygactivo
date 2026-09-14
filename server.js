@@ -2502,7 +2502,7 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
 // Devuelve { ok, reason|txId } (los callers viejos ignoran el retorno).
 async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
   const shadow = mode !== 'auto' && !assign;
-  const compId = comprobante ? compId : null;
+  const compId = comprobante ? comprobante.id : null;
   const agentLabel = assign ? (assign.agent || 'agente') : 'auto-hgcash';
 
   // 1) Reclamar el movimiento (pending → claiming). Una asignación manual también

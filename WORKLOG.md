@@ -4,7 +4,33 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-11**
+> **Última actualización: 2026-09-14**
+
+## Sesión 2026-09-14
+
+### 158. 🔴 INCIDENTE: "no funciona ruleta, ni cargar, ni retirar, solo mensajes" — DOS causas: proxy sin ancho de banda (402) + bug mío en hgcashAutoCarga (TDZ de compId)
+- **Logs as1/as2 (14/09 03:00–12:33 UTC):**
+  1. **PROXY AGOTADO.** Todos los logins a JUGAYGANA fallan: HTTP **402
+     "Bandwidth limit reached. Please upgrade to continue using the proxy."**
+     (~1.900 intentos fallidos, 0 exitosos en todo el día). Sin sesión: ruleta
+     `credit FAIL … No hay sesión válida`, fueguito, bonos, sync de password,
+     saldo (`/api/balance/live` 400), retiros y cargas. Es la 2ª vez (#99).
+     **Operativo (owner): recargar/upgradear el plan del proxy (webshare) o
+     cambiar `PROXY_URL` en EB.** Nada de código lo arregla. Sospecha: la ola de
+     502 del 10/09 (#154) pudo ser el mismo proxy al borde del límite.
+  2. **BUG MÍO (#155):** en el refactor de `hgcashAutoCarga` el reemplazo global
+     `comprobante.id → compId` pisó también la propia definición:
+     `const compId = comprobante ? compId : null` → `ReferenceError: Cannot
+     access 'compId' before initialization` en CADA match ("match desde
+     comprobante falló", ~15/h por instancia). Efecto: **ninguna auto-carga
+     corrió desde el deploy de #155**; los movimientos quedaron `pending` (no
+     se perdió plata: aparecen en 🏦 Banco → Pendientes para asignar). Fix: la
+     línea correcta `const compId = comprobante ? comprobante.id : null`.
+     Lección: tras un replace global, releer la definición de la variable.
+- **Validado:** `node --check` OK. **Redeploy URGENTE** + recargar el proxy.
+  Después del deploy: los pendientes acumulados se asignan desde la bandeja (o
+  llegan solos si el cliente reenvía la foto). PROBAR: una foto nueva → auto-carga
+  OK y sin "compId" en el log.
 
 ## Sesión 2026-09-11
 

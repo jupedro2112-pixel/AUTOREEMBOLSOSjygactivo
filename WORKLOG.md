@@ -14,6 +14,29 @@
 > **Operativo pendiente:** 🏦 Banco → Pendientes → "🧹 Archivar todas…" (una vez) y asignar
 > lo acumulado hoy; revisar en JUGAYGANA el reembolso de $151 a atofausto456.
 
+### 161. 🔴 "Pagar con la API de hgcash no descuenta las fichas" — ShowUsers en 502 mientras DepositMoney anda: retiro por id guardado + la guardia #159 se relaja
+- **Logs mm1/mm2 (14/09 13:00–13:48, proxy ya recargado):** `withdrawFromUser: no se pudo
+  verificar <user> en JUGAYGANA: Status 502 de la API` en cada pago (`/payouts/:id/pay`
+  → 400) y `⏸️ … no se pudo leer el saldo previo — NO se envía` en cargas/bonos/
+  reembolsos (~25 en 45 min). Pero en el mismo lapso hubo **18 DepositMoney OK**: lo que
+  falla es **ShowUsers** (lookup/saldo; respuesta grande → el proxy la corta con 502),
+  no las operaciones de plata, que van por id.
+- **Efecto del #159 (mío, de hoy):** al exigir el saldo previo, con ShowUsers caído
+  bloqueaba TODA la plata (ruleta, bonos, reembolsos, cargas) aunque DepositMoney
+  anduviera. Y los retiros siempre hacían lookup (sin bypass por id) → "no se pudo
+  verificar el usuario".
+- **Fix:** (1) `_readBalanceForVerify` con 3 intentos (0/1,5/3 s); (2) sin saldo previo
+  **se envía igual** (log ⚠️; un envío que falle sin respuesta queda ambiguo, caso raro);
+  (3) `withdrawFromUser(username, amount, desc, jugayganaUserId)` saltea el lookup con
+  el id guardado (mismo bypass que depositToUser); (4) `_deductChipsAtConfirm`: si no se
+  pudo leer el saldo pero hay id guardado, descuenta igual (la API rechaza con "not
+  enough money" si no hay fondos → se trata como saldo insuficiente: aviso + cierre de
+  chat); la respuesta JSON `success` del WithdrawMoney cuenta como confirmación cuando el
+  saldo no se pudo leer ni antes ni después.
+- **Validado:** `node --check` OK. Redeploy. Mientras ShowUsers siga en 502 el saldo
+  en vivo de la PWA puede mostrarse "actualizándose", pero cargas, bonos y retiros
+  salen.
+
 ### 160. Bandeja: "Archivar todas y arrancar de 0" cuenta TODO lo pendiente (antes solo lo de >24 h)
 - El owner tenía ~2.500 pendientes y el banner solo ofrecía archivar las de más de
   24 h. Ahora `oldCount` = todo lo abierto hasta ahora (desde `startAt` si ya hubo

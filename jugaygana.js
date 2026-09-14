@@ -796,11 +796,17 @@ async function checkClaimedToday(username) {
 //                     está jugando) → NO reintentar: { success:false, ambiguous:true }
 //                     y el caller avisa "VERIFICAR" al agente.
 // ============================================================
-async function _readBalanceForVerify(username) {
-  try {
-    const r = await lookupUserOrError(username);
-    if (r.status === 'found' && r.user && Number.isFinite(Number(r.user.balance))) return Number(r.user.balance);
-  } catch (_) {}
+async function _readBalanceForVerify(username, attempts = 3) {
+  // #161: ShowUsers es la llamada más frágil (502 del proxy con respuestas grandes). Hasta 3
+  // intentos (0 / 1,5 / 3 s) antes de dar el saldo por ilegible.
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 1500 * i));
+    try {
+      const r = await lookupUserOrError(username);
+      if (r.status === 'found' && r.user && Number.isFinite(Number(r.user.balance))) return Number(r.user.balance);
+      if (r.status === 'not_found') return null; // la API respondió: no hay saldo que leer
+    } catch (_) {}
+  }
   return null;
 }
 async function _verifyMoneyByBalance(username, before, expectedDelta, label) {
@@ -868,13 +874,11 @@ async function creditUserBalance(username, amount, jugayganaUserId = null) {
   // rechazó con JSON, o el saldo verificado no se movió). Ante HTML/timeout se
   // verifica por saldo; si no se puede confirmar, se corta con ambiguous:true.
   const before = await _readBalanceForVerify(username);
-  if (before === null) {
-    // #159: sin saldo previo no hay forma de verificar después. JUGAYGANA/proxy ya está
-    // caído en este instante → NO se envía nada (nada que verificar) y el caller puede
-    // reintentar con tranquilidad. Esto era la causa de casi todas las alertas 🛑.
-    console.warn(`⏸️ creditUserBalance(${username}, $${amount}): no se pudo leer el saldo previo — NO se envía (JUGAYGANA/proxy no responde)`);
-    return { success: false, transient: true, error: 'JUGAYGANA no responde en este momento (no se pudo leer el saldo). No se envió nada: reintentá en unos minutos.' };
-  }
+  // #161: si el saldo previo no se pudo leer (ShowUsers caído) se ENVÍA igual: DepositMoney
+  // va por id y suele andar aunque ShowUsers falle (14/09: 18 cargas OK con ShowUsers en
+  // 502). Bloquear acá (#159) dejaba sin ruleta/bonos/reembolsos a todos. Sin `before`, un
+  // envío que falle sin respuesta queda ambiguo (alerta) — es el caso raro, no el común.
+  if (before === null) console.warn(`⚠️ creditUserBalance(${username}, $${amount}): sin saldo previo (ShowUsers no responde) — se envía igual`);
   let lastError = 'desconocido';
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1066,11 +1070,7 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
 
     // #151: saldo ANTES (ya lo trajo el lookup) para verificar ante HTML/timeout.
     const _before = Number.isFinite(Number(userInfo && userInfo.balance)) ? Number(userInfo.balance) : await _readBalanceForVerify(username);
-    if (_before === null) {
-      // #159: sin saldo previo no se envía (ver creditUserBalance). Reintento seguro.
-      console.warn(`⏸️ depositToUser(${username}, $${amount}): no se pudo leer el saldo previo — NO se envía`);
-      return { success: false, transient: true, error: 'JUGAYGANA no responde en este momento (no se pudo leer el saldo). La carga NO se envió: reintentá en unos minutos.' };
-    }
+    if (_before === null) console.warn(`⚠️ depositToUser(${username}, $${amount}): sin saldo previo (ShowUsers no responde) — se envía igual`); // #161
     let resp;
     try {
       resp = await client.post('', body, { headers });
@@ -1137,16 +1137,18 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
 // RETIRO (WithdrawMoney)
 // ============================================
 
-async function withdrawFromUser(username, amount, description = '') {
-  console.log(`💸 Retirando $${amount} de ${username}`);
+async function withdrawFromUser(username, amount, description = '', jugayganaUserId = null) {
+  console.log(`💸 Retirando $${amount} de ${username}${jugayganaUserId ? ` (jgId ${jugayganaUserId})` : ''}`);
 
   const ok = await ensureSession();
   if (!ok) return { success: false, error: 'No hay sesión válida' };
 
-  // Lookup tri-estado: ver depositToUser para el racional. Un retiro sobre un
-  // user que ya existe no tiene por qué disparar CREATEUSER si la API está
-  // intermitente.
-  let lookup = await lookupUserOrError(username);
+  // #161: con el id guardado se saltea el lookup (ShowUsers), igual que depositToUser.
+  // Un ShowUsers en 502 dejaba TODOS los retiros en "no se pudo verificar el usuario".
+  let lookup = jugayganaUserId
+    ? { status: 'found', user: { id: jugayganaUserId } }
+    : await lookupUserOrError(username);
+  if (jugayganaUserId) console.log(`✅ Usando jugayganaUserId guardado (${jugayganaUserId}) — sin lookup`);
 
   if (lookup.status === 'error') {
     console.error(`⚠️  withdrawFromUser: no se pudo verificar ${username} en JUGAYGANA: ${lookup.error}`);
@@ -1251,11 +1253,7 @@ async function withdrawFromUser(username, amount, description = '') {
 
     // #151: saldo ANTES para verificar ante HTML/timeout (retiro = delta negativo).
     const _before = Number.isFinite(Number(userInfo && userInfo.balance)) ? Number(userInfo.balance) : await _readBalanceForVerify(username);
-    if (_before === null) {
-      // #159: sin saldo previo no se envía (ver creditUserBalance). Reintento seguro.
-      console.warn(`⏸️ withdrawFromUser(${username}, $${amount}): no se pudo leer el saldo previo — NO se envía`);
-      return { success: false, transient: true, error: 'JUGAYGANA no responde en este momento (no se pudo leer el saldo). El retiro NO se descontó: reintentá en unos minutos.' };
-    }
+    if (_before === null) console.warn(`⚠️ withdrawFromUser(${username}, $${amount}): sin saldo previo (ShowUsers no responde) — se envía igual`); // #161
     let resp;
     try {
       resp = await client.post('', body, { headers });

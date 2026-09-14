@@ -8,6 +8,24 @@
 
 ## Sesión 2026-09-14
 
+### 159. Plata: sin saldo previo NO se envía (reintento seguro) + verificación por saldo de ~40 s — menos alertas 🛑 VERIFICAR con el proxy intermitente
+- **Reporte del owner:** tras recargar el proxy (12:54 UTC) siguieron saliendo
+  alertas "🛑 VERIFICAR PLATA — Reembolso $151 a @atofausto456" (12:59). Logs
+  pl1/pl2: el 502 del proxy llegó al crédito Y a la lectura de saldo → ambiguo al
+  instante. Son los puntos 1 y 2 de #154 que se habían dejado.
+- **Fix (`jugaygana.js`):** (1) `creditUserBalance`/`depositToUser`/
+  `withdrawFromUser`: si el saldo previo no se puede leer (JUGAYGANA/proxy caído
+  en ese instante) **no se envía nada** y devuelven `{success:false,
+  transient:true, error:'JUGAYGANA no responde… no se envió nada: reintentá'}` →
+  los callers lo tratan como fallo normal (reembolso libera la reserva, hgcash
+  reintenta, el agente ve un error claro) y NO hay alerta 🛑. (2)
+  `_verifyMoneyByBalance`: 6 lecturas en ~40 s con espera creciente (antes 3 en
+  8 s): un corte corto ya no deja la operación ambigua. Las alertas 🛑 quedan
+  solo para el caso real: la plata se envió y no se pudo confirmar en 40 s.
+- Costo: una carga manual puede tardar hasta ~45 s en devolver error cuando
+  JUGAYGANA cae JUSTO después del envío (raro). Sin cambios en callers.
+- **Validado:** `node --check` OK. Redeploy.
+
 ### 158. 🔴 INCIDENTE: "no funciona ruleta, ni cargar, ni retirar, solo mensajes" — DOS causas: proxy sin ancho de banda (402) + bug mío en hgcashAutoCarga (TDZ de compId)
 - **Logs as1/as2 (14/09 03:00–12:33 UTC):**
   1. **PROXY AGOTADO.** Todos los logins a JUGAYGANA fallan: HTTP **402

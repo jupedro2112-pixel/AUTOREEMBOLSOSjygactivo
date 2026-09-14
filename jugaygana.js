@@ -806,8 +806,11 @@ async function _readBalanceForVerify(username) {
 async function _verifyMoneyByBalance(username, before, expectedDelta, label) {
   if (before === null || before === undefined) return 'unknown';
   let stableReads = 0;
-  for (let i = 0; i < 3; i++) {
-    await new Promise(r => setTimeout(r, i === 0 ? 2500 : 3000));
+  // #159: 6 lecturas en ~40 s (2,5 · 3 · 5 · 8 · 10 · 12 s). Con el proxy intermitente, 3
+  // lecturas en 8 s casi siempre caían todas y la operación quedaba "ambigua" sin motivo.
+  const waits = [2500, 3000, 5000, 8000, 10000, 12000];
+  for (let i = 0; i < waits.length; i++) {
+    await new Promise(r => setTimeout(r, waits[i]));
     const after = await _readBalanceForVerify(username);
     if (after === null) continue;
     const delta = after - before;
@@ -865,6 +868,13 @@ async function creditUserBalance(username, amount, jugayganaUserId = null) {
   // rechazó con JSON, o el saldo verificado no se movió). Ante HTML/timeout se
   // verifica por saldo; si no se puede confirmar, se corta con ambiguous:true.
   const before = await _readBalanceForVerify(username);
+  if (before === null) {
+    // #159: sin saldo previo no hay forma de verificar después. JUGAYGANA/proxy ya está
+    // caído en este instante → NO se envía nada (nada que verificar) y el caller puede
+    // reintentar con tranquilidad. Esto era la causa de casi todas las alertas 🛑.
+    console.warn(`⏸️ creditUserBalance(${username}, $${amount}): no se pudo leer el saldo previo — NO se envía (JUGAYGANA/proxy no responde)`);
+    return { success: false, transient: true, error: 'JUGAYGANA no responde en este momento (no se pudo leer el saldo). No se envió nada: reintentá en unos minutos.' };
+  }
   let lastError = 'desconocido';
 
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1056,6 +1066,11 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
 
     // #151: saldo ANTES (ya lo trajo el lookup) para verificar ante HTML/timeout.
     const _before = Number.isFinite(Number(userInfo && userInfo.balance)) ? Number(userInfo.balance) : await _readBalanceForVerify(username);
+    if (_before === null) {
+      // #159: sin saldo previo no se envía (ver creditUserBalance). Reintento seguro.
+      console.warn(`⏸️ depositToUser(${username}, $${amount}): no se pudo leer el saldo previo — NO se envía`);
+      return { success: false, transient: true, error: 'JUGAYGANA no responde en este momento (no se pudo leer el saldo). La carga NO se envió: reintentá en unos minutos.' };
+    }
     let resp;
     try {
       resp = await client.post('', body, { headers });
@@ -1236,6 +1251,11 @@ async function withdrawFromUser(username, amount, description = '') {
 
     // #151: saldo ANTES para verificar ante HTML/timeout (retiro = delta negativo).
     const _before = Number.isFinite(Number(userInfo && userInfo.balance)) ? Number(userInfo.balance) : await _readBalanceForVerify(username);
+    if (_before === null) {
+      // #159: sin saldo previo no se envía (ver creditUserBalance). Reintento seguro.
+      console.warn(`⏸️ withdrawFromUser(${username}, $${amount}): no se pudo leer el saldo previo — NO se envía`);
+      return { success: false, transient: true, error: 'JUGAYGANA no responde en este momento (no se pudo leer el saldo). El retiro NO se descontó: reintentá en unos minutos.' };
+    }
     let resp;
     try {
       resp = await client.post('', body, { headers });

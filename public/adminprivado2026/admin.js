@@ -13462,8 +13462,8 @@ async function loadBankTray() {
         if (ob) {
             if (j.isAdmin && (j.oldCount || 0) > 0) {
                 ob.style.display = '';
-                ob.innerHTML = '🧹 Hay <b>' + Number(j.oldCount).toLocaleString('es-AR') + '</b> transferencias pendientes ' + (j.startAt ? 'anteriores al inicio del control (' + escapeHtml(fmtFechaHoraAR(j.startAt)) + ')' : 'de antes de que existiera la bandeja') + '. No se pueden asignar una por una. ' +
-                    '<button class="btn btn-sm" style="background:#7a1010;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;margin-left:6px;" onclick="bankArchiveOld(' + Number(j.oldCount) + ')">🧹 Archivar todas y arrancar el control desde ahora</button>';
+                ob.innerHTML = '🧹 Hay <b>' + Number(j.oldCount).toLocaleString('es-AR') + '</b> transferencias pendientes acumuladas' + (j.startAt ? ' desde el ' + escapeHtml(fmtFechaHoraAR(j.startAt)) : '') + '. Si querés arrancar de cero, archivalas todas (quedan guardadas, no se acreditan, no tocan plata). ' +
+                    '<button class="btn btn-sm" style="background:#7a1010;color:#fff;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;margin-left:6px;" onclick="bankArchiveOld(' + Number(j.oldCount) + ')">🧹 Archivar todas y arrancar de 0</button>';
             } else if (j.startAt && _bankTab === 'pending') {
                 ob.style.display = ''; ob.style.background = 'rgba(255,255,255,.04)'; ob.style.border = '1px solid rgba(255,255,255,.12)'; ob.style.color = '#aaa';
                 ob.textContent = 'Control activo desde ' + fmtFechaHoraAR(j.startAt) + '. Lo anterior quedó archivado.';
@@ -13475,7 +13475,7 @@ async function loadBankTray() {
     }
 }
 async function bankArchiveOld(n) {
-    if (!confirm('¿Archivar ' + Number(n).toLocaleString('es-AR') + ' transferencias pendientes viejas?\n\nQuedan como "archivado" (no se acreditan, no tocan plata) y el control del banco arranca desde AHORA: la bandeja, el badge y el cierre solo van a mirar lo nuevo. Se puede reabrir una por una si hace falta.')) return;
+    if (!confirm('¿Archivar las ' + Number(n).toLocaleString('es-AR') + ' transferencias pendientes y arrancar de 0?\n\nQuedan como "archivado" (no se acreditan, no tocan plata) y el control del banco arranca desde AHORA: la bandeja, el badge y el cierre solo van a mirar lo que entre de acá en adelante.\n\nOJO: si entre ellas hay transferencias REALES de hoy que todavía nadie cargó, también se archivan. Se puede reabrir una por una desde "Hoy" si hace falta.')) return;
     try {
         const r = await authFetch('/api/admin/bank/movements/archive-old', { method: 'POST', body: JSON.stringify({}) });
         const j = await r.json().catch(() => ({}));

@@ -14,6 +14,13 @@
 > **Operativo pendiente:** 🏦 Banco → Pendientes → "🧹 Archivar todas…" (una vez) y asignar
 > lo acumulado hoy; revisar en JUGAYGANA el reembolso de $151 a atofausto456.
 
+### 160. Bandeja: "Archivar todas y arrancar de 0" cuenta TODO lo pendiente (antes solo lo de >24 h)
+- El owner tenía ~2.500 pendientes y el banner solo ofrecía archivar las de más de
+  24 h. Ahora `oldCount` = todo lo abierto hasta ahora (desde `startAt` si ya hubo
+  un archivo) y el botón archiva todo y fija `startAt` = ahora. El confirm avisa que
+  si hay transferencias reales de hoy sin cargar también se archivan (reabrir desde
+  "Hoy"). admin-sw v40 → v41. Redeploy (back + panel).
+
 ### 159. Plata: sin saldo previo NO se envía (reintento seguro) + verificación por saldo de ~40 s — menos alertas 🛑 VERIFICAR con el proxy intermitente
 - **Reporte del owner:** tras recargar el proxy (12:54 UTC) siguieron saliendo
   alertas "🛑 VERIFICAR PLATA — Reembolso $151 a @atofausto456" (12:59). Logs

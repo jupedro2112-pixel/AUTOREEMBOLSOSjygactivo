@@ -16046,8 +16046,9 @@ app.get('/api/admin/bank/tray', authMiddleware, adminMiddleware, async (req, res
     if (bc.startAt) pendQ.createdAt = { $gte: bc.startAt };
     const pendingCount = await BankMovement.countDocuments(pendQ);
     // Viejos (anteriores al inicio del control, o todos si no hay inicio): para el botón de archivo del admin.
-    const oldQ = { direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') } };
-    oldQ.createdAt = { $lt: bc.startAt || new Date(Date.now() - 24 * 3600 * 1000) };
+    // "Viejos" = TODO lo abierto hasta ahora (el archivo masivo arranca el control de cero).
+    const oldQ = { direction: 'Inbound', matchStatus: { $in: BANK_TRAY_OPEN_STATES.filter(x => x !== 'claiming') }, createdAt: { $lt: new Date() } };
+    if (bc.startAt) oldQ.createdAt.$gte = bc.startAt;
     const oldCount = req.user.role === 'admin' ? await BankMovement.countDocuments(oldQ) : 0;
     res.json({ movements, pendingCount, oldCount, startAt: bc.startAt, hgcashEnabled: !!cfg.enabled, mode: cfg.mode || 'shadow', canAssign: _bankCanAssign(req), canSweep: _bankCanSweep(req), isAdmin: req.user.role === 'admin' });
   } catch (error) {

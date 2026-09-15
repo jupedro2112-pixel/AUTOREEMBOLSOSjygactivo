@@ -2077,7 +2077,7 @@ async function hgcashConsumeOnManualDeposit(userId, username, amount, txId = nul
     // Claim atómico (evita choque con un reintento automático).
     const claimed = await BankMovement.findOneAndUpdate(
       { movementId: target.movementId, matchStatus: { $in: ['pending', 'error', 'needs_review'] } },
-      { $set: { matchStatus: 'manual_charged', chargedAt: new Date(), matchedUserId: userId, matchedUsername: username, transactionId: txId, chargeSource: source } },
+      { $set: { matchStatus: 'manual_charged', chargedAt: new Date(), matchedUserId: userId, matchedUsername: username, transactionId: txId, chargeSource: source, chargeError: null } },
       { new: true }
     );
     if (!claimed) return false;

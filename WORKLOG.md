@@ -4,7 +4,30 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-14**
+> **Última actualización: 2026-09-15**
+
+## Sesión 2026-09-15
+
+### 162. Cierre marcaba "carga sin transferencia" aunque la transferencia SÍ quedó "cargada manual" + reintento automático de la auto-carga tras un 502 verificado
+- **Captura del owner (ArgenMariana975, $8.000):** auto-carga falló con 502 (verificado
+  "NO entró — se puede reintentar") → el agente cargó manual → nota "Transferencia
+  hgcash marcada como CARGADA MANUAL" → y el cierre igual dijo "Carga de $8.000 …
+  sin transferencia vinculada ni origen declarado".
+- **Causa:** `hgcashConsumeOnManualDeposit` corría (fire-and-forget) ANTES del
+  `Transaction.create` de la carga manual → su `Transaction.updateOne(metadata.
+  movementId)` no encontraba la Transaction; el movimiento sí quedó con
+  `transactionId`, pero el cierre solo miraba `metadata.movementId` y su fallback
+  excluía movimientos con `transactionId` ya seteado → diferencia falsa.
+- **Fix:** (1) el consumo corre DESPUÉS de crear la Transaction (await), solo si el
+  agente no eligió movimiento; (2) el cierre reconoce el vínculo desde el lado del
+  movimiento (`BankMovement.transactionId` = id de la carga) y persiste
+  `metadata.movementId`; los cierres ya calculados se corrigen al recalcular.
+  (3) **Reintento automático:** `hgcashHandleChargeFailure` reprograma en 90 s el
+  match/carga del movimiento si no es terminal (3 intentos) — un 502 del proxy
+  verificado como "no entró" ya no obliga a cargar a mano; claims atómicos → si un
+  agente la cargó antes, el reintento no hace nada.
+- **Validado:** `node --check` OK. Redeploy. Para la diferencia ya marcada del 15/09:
+  🏦 Banco → Cierre → Recalcular (se limpia sola).
 
 ## Sesión 2026-09-14
 

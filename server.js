@@ -2015,6 +2015,17 @@ async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc
   await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: terminal ? 'error' : 'pending' } });
   if (comprobante && comprobante.id) await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
   _emitHgcashUpdate('fallo', movement.movementId);
+  // #162 REINTENTO AUTOMÁTICO: si no es terminal, en 90 s se vuelve a intentar el match/carga
+  // del mismo movimiento (JUGAYGANA/proxy intermitente: un 502 verificado como "no entró" no
+  // tiene por qué terminar en carga manual). Claims atómicos → seguro en multi-instancia; si
+  // un agente la asignó/cargó a mano antes, el claim falla y no pasa nada.
+  if (!terminal) {
+    setTimeout(() => {
+      BankMovement.findOne({ movementId: movement.movementId }).lean()
+        .then(fresh => { if (fresh && fresh.matchStatus === 'pending') { logger.info(`[hgcash] reintento automático ${attempts + 1}/${HGCASH_MAX_CHARGE_ATTEMPTS} mov=${movement.movementId}`); return hgcashMatchFromMovement(fresh); } })
+        .catch(() => {});
+    }, 90 * 1000).unref();
+  }
   if (user) {
     const prefijo = terminal ? `Se agotaron los ${HGCASH_MAX_CHARGE_ATTEMPTS} intentos automáticos. ` : '';
     await _emitAdminOnlyChatNote(user.id, user.username,
@@ -9468,9 +9479,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           } });
         } catch (linkErr) { logger.warn(`[bank] no se pudo vincular la carga manual al movimiento ${_bankMovementId}: ${linkErr.message}`); }
         _emitHgcashUpdate('cargado', _bankMovementId);
-      } else {
-        hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount), _depositTxId).catch(() => {});
       }
+      // (#162: sin movimiento elegido, el consumo por monto/titular corre DESPUÉS de crear la
+      // Transaction — ver más abajo — para que el vínculo quede en los dos lados.)
 
       // ROI de las estrategias: si el depósito incluyó bono, marcamos el
       // PromoBonus vigente del usuario como usado y guardamos el monto de
@@ -9790,6 +9801,13 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         ),
         timestamp: new Date()
       });
+      // #162 hgcash: si el agente NO eligió movimiento, buscar la transferencia por monto /
+      // titular y vincularla en los DOS lados (movimiento.transactionId + Transaction.
+      // metadata.movementId). Antes corría antes del Transaction.create y el vínculo del lado
+      // de la carga se perdía → el cierre la marcaba "sin transferencia vinculada".
+      if (!_bankClaimed) {
+        try { await hgcashConsumeOnManualDeposit(user.id, user.username, parseFloat(amount), _depositTxId); } catch (_) {}
+      }
 
       // Registrar bonificación como transacción separada solo si fue acreditada correctamente en JUGAYGANA
       if (parseFloat(bonus) > 0 && bonusJgResult?.success) {

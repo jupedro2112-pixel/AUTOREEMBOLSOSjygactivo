@@ -105,11 +105,25 @@ async function computeDailyClose(dayKey, opts = {}) {
     chargedAt: { $gte: new Date(start.getTime() - LINK_WINDOW_MS), $lt: new Date(end.getTime() + LINK_WINDOW_MS) }
   }).lean();
   const linkedNow = [];
+  // Movimientos que YA apuntan a una carga del día (transactionId) aunque la carga no tenga
+  // metadata.movementId (#162: carreras de escritura): se reconocen y se persiste el vínculo.
+  const byTx = new Map();
+  try {
+    const txIds = bankDeposits.map(t => t.id);
+    if (txIds.length) {
+      const linkedMovs = await BankMovement.find({ transactionId: { $in: txIds } }).select('movementId transactionId').lean();
+      for (const m of linkedMovs) byTx.set(m.transactionId, m.movementId);
+    }
+  } catch (_) {}
   let cargasOtroBanco = [], cargasSinTransferencia = [], cargasVinculadas = 0, sumCargas = 0;
   for (const t of bankDeposits) {
     sumCargas += Number(t.amount || 0);
     const md = t.metadata || {};
     if (md.movementId) { cargasVinculadas++; continue; }
+    if (byTx.has(t.id)) {
+      try { await Transaction.updateOne({ id: t.id }, { $set: { 'metadata.movementId': byTx.get(t.id), 'metadata.linkedByClose': dayKey } }); } catch (_) {}
+      cargasVinculadas++; continue;
+    }
     if (md.origin === 'otro_banco') { cargasOtroBanco.push(t); continue; }
     // Vínculo inequívoco con un movimiento consumido por monto (legacy): mismo usuario + monto + ±3 h.
     const tsMs = new Date(t.timestamp).getTime();

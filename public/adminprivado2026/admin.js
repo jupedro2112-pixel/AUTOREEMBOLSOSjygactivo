@@ -6071,10 +6071,12 @@ async function loadRefundTiers() {
         const t = j.tiers || {};
         const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
         set('tierBronceUpTo', t.bronce && t.bronce.upTo);
-        set('tierBroncePct', t.bronce && t.bronce.percent);
         set('tierPlataUpTo', t.plata && t.plata.upTo);
-        set('tierPlataPct', t.plata && t.plata.percent);
-        set('tierOroPct', t.oro && t.oro.percent);
+        // #163: un % por tipo de reembolso y por rango (compat: `percent` viejo = los tres).
+        ['Bronce', 'Plata', 'Oro'].forEach(k => {
+            const tt = t[k.toLowerCase()] || {};
+            ['daily', 'weekly', 'monthly'].forEach(ty => set('tier' + k + ty.charAt(0).toUpperCase() + ty.slice(1) + 'Pct', tt[ty] != null ? tt[ty] : tt.percent));
+        });
     } catch (e) {
         console.error('Error cargando rangos de reembolso:', e);
     }
@@ -6086,13 +6088,11 @@ async function saveRefundTiers() {
         const el = document.getElementById(id);
         return el ? el.value : '';
     };
-    const body = {
-        bronceUpTo: num('tierBronceUpTo'),
-        broncePct: num('tierBroncePct'),
-        plataUpTo: num('tierPlataUpTo'),
-        plataPct: num('tierPlataPct'),
-        oroPct: num('tierOroPct')
-    };
+    const body = { bronceUpTo: num('tierBronceUpTo'), plataUpTo: num('tierPlataUpTo') };
+    ['bronce', 'plata', 'oro'].forEach(k => ['daily', 'weekly', 'monthly'].forEach(ty => {
+        const T = ty.charAt(0).toUpperCase() + ty.slice(1);
+        body[k + T + 'Pct'] = num('tier' + k.charAt(0).toUpperCase() + k.slice(1) + T + 'Pct');
+    }));
     try {
         const r = await authFetch('/api/admin/refund-tiers', {
             method: 'POST',
@@ -6105,9 +6105,10 @@ async function saveRefundTiers() {
         }
         const t = j.tiers || {};
         const tb = t.bronce || {}, tp = t.plata || {}, to = t.oro || {};
+        const f = (x) => `D ${x.daily}% · S ${x.weekly}% · M ${x.monthly}%`;
         if (msg) {
             msg.style.color = '#00c853';
-            msg.textContent = `✅ Guardado: 🥉 hasta $${tb.upTo} = ${tb.percent}% · 🥈 hasta $${tp.upTo} = ${tp.percent}% · 🥇 ${to.percent}%`;
+            msg.textContent = `✅ Guardado: 🥉 hasta $${tb.upTo} (${f(tb)}) · 🥈 hasta $${tp.upTo} (${f(tp)}) · 🥇 (${f(to)})`;
         }
         showToast('Rangos de reembolso actualizados', 'success');
     } catch (e) {

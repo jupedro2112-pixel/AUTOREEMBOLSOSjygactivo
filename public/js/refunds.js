@@ -61,28 +61,32 @@ VIP.refunds = (function () {
         const badge = document.getElementById('dashTierBadge');
         if (badge) {
             badge.style.display = '';
-            badge.textContent = `TU RANGO: ${t.emoji || ''} ${(t.label || t.key).toUpperCase()} · ${t.percentage}%`;
+            const pc = t.pcts || {};
+            badge.textContent = pc.daily != null
+                ? `TU RANGO: ${t.emoji || ''} ${(t.label || t.key).toUpperCase()} · ${pc.daily}/${pc.weekly}/${pc.monthly}%`
+                : `TU RANGO: ${t.emoji || ''} ${(t.label || t.key).toUpperCase()} · ${t.percentage}%`;
         }
 
         const panel = document.getElementById('unifiedTierPanel');
         if (panel) {
             const tiers = t.tiers || {};
+            const pctsOf = (tt) => tt.daily != null ? `${tt.daily}% · ${tt.weekly}% · ${tt.monthly}%` : `${tt.percent}%`;
             const row = (tt, active) => tt ? `
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-radius:6px;${active ? 'background:rgba(212,175,55,.18);border:1px solid rgba(212,175,55,.6);' : 'opacity:.75;'}">
                     <span style="font-size:12px;color:#fff;">${tt.emoji} ${tt.label}</span>
                     <span style="font-size:11px;color:#aaa;">${tt.upTo ? 'hasta ' + money(tt.upTo) : 'más de ' + money((tiers.plata && tiers.plata.upTo) || 0)}</span>
-                    <span style="font-size:12px;font-weight:900;color:#ffd700;">${tt.percent}%</span>
+                    <span style="font-size:11.5px;font-weight:900;color:#ffd700;white-space:nowrap;">${pctsOf(tt)}</span>
                 </div>` : '';
             const next = t.nextTier ? `
                 <p style="font-size:11px;color:#00ff88;text-align:center;margin:6px 0 0;">
-                    Te faltan <strong>${money(t.nextTier.missing)}</strong> de juego este mes para subir a ${t.nextTier.emoji} ${t.nextTier.label} (${t.nextTier.percent}%)
+                    Te faltan <strong>${money(t.nextTier.missing)}</strong> de juego este mes para subir a ${t.nextTier.emoji} ${t.nextTier.label} (${pctsOf(t.nextTier)})
                 </p>` : `
                 <p style="font-size:11px;color:#ffd700;text-align:center;margin:6px 0 0;">¡Estás en el rango máximo! 🏆</p>`;
             panel.style.display = 'block';
             panel.innerHTML = `
                 <div style="background:linear-gradient(135deg,#2d0052,#1a0033);border:1px solid #d4af37;border-radius:10px;padding:10px;margin-bottom:4px;">
-                    <p style="text-align:center;font-size:13px;font-weight:900;color:#ffd700;margin:0 0 2px;">TU RANGO DEL MES: ${t.emoji} ${(t.label || '').toUpperCase()} — ${t.percentage}%</p>
-                    <p style="text-align:center;font-size:10.5px;color:#aaa;margin:0 0 8px;">Se calcula con tu pérdida (NETWIN) del mes: ${money(t.monthNetLoss)}</p>
+                    <p style="text-align:center;font-size:13px;font-weight:900;color:#ffd700;margin:0 0 2px;">TU RANGO DEL MES: ${t.emoji} ${(t.label || '').toUpperCase()}</p>
+                    <p style="text-align:center;font-size:10.5px;color:#aaa;margin:0 0 8px;">Se calcula con tu pérdida (NETWIN) del mes: ${money(t.monthNetLoss)}<br><span style="color:#ffd700;">📅 diario · 📆 semanal · 🗓️ mensual</span></p>
                     <div style="display:flex;flex-direction:column;gap:4px;">
                         ${row(tiers.bronce, t.key === 'bronce')}
                         ${row(tiers.plata, t.key === 'plata')}
@@ -388,11 +392,12 @@ VIP.refunds = (function () {
         if (userEl) userEl.textContent = (s.user && s.user.username) ? '@' + s.user.username : '';
 
         // Fila de la tabla de rangos; la del rango actual va resaltada.
+        const pctsOf = (tt) => tt.daily != null ? `${tt.daily}% · ${tt.weekly}% · ${tt.monthly}%` : `${tt.percent}%`;
         const tierRow = (tt, active) => tt ? `
             <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:6px 9px;border-radius:7px;${active ? 'background:rgba(212,175,55,.2);border:1px solid rgba(212,175,55,.7);' : 'opacity:.7;'}">
                 <span style="font-size:12px;color:#fff;white-space:nowrap;">${tt.emoji} ${tt.label}${active ? ' <span style="color:#00ff88;font-size:9px;font-weight:900;">◄ VOS</span>' : ''}</span>
                 <span style="font-size:10.5px;color:#aaa;text-align:right;">${tt.upTo ? 'hasta ' + money(tt.upTo) : 'más de ' + money((tiers.plata && tiers.plata.upTo) || 0)}</span>
-                <span style="font-size:13px;font-weight:900;color:#ffd700;">${tt.percent}%</span>
+                <span style="font-size:11.5px;font-weight:900;color:#ffd700;white-space:nowrap;">${pctsOf(tt)}</span>
             </div>` : '';
 
         // Tarjeta por tipo de reembolso, con su monto disponible y su período.
@@ -423,7 +428,7 @@ VIP.refunds = (function () {
         const falta = t.nextTier
             ? `<p style="font-size:11.5px;color:#00ff88;text-align:center;margin:8px 0 0;line-height:1.5;">
                    Te faltan <strong>${money(t.nextTier.missing)}</strong> de pérdida este mes
-                   para subir a ${t.nextTier.emoji} ${t.nextTier.label} y cobrar <strong>${t.nextTier.percent}%</strong>
+                   para subir a ${t.nextTier.emoji} ${t.nextTier.label} y cobrar <strong>${pctsOf(t.nextTier)}</strong>
                </p>`
             : `<p style="font-size:11.5px;color:#ffd700;text-align:center;margin:8px 0 0;">¡Estás en el rango máximo! 🏆</p>`;
 
@@ -431,11 +436,12 @@ VIP.refunds = (function () {
             <div style="background:linear-gradient(135deg,#2d0052,#1a0033);border:1px solid #d4af37;border-radius:12px;padding:12px;margin-bottom:12px;">
                 <p style="text-align:center;font-size:10px;color:#aaa;margin:0 0 2px;letter-spacing:.5px;">TU RANGO DE ESTE MES</p>
                 <p style="text-align:center;font-size:19px;font-weight:900;color:#ffd700;margin:0 0 2px;">${t.emoji || ''} ${(t.label || '').toUpperCase()}</p>
-                <p style="text-align:center;font-size:13px;color:#fff;margin:0 0 8px;">Te reembolsan el <strong style="color:#00ff88;">${t.percentage || 0}%</strong> de lo que perdés</p>
+                <p style="text-align:center;font-size:13px;color:#fff;margin:0 0 8px;">Te reembolsan <strong style="color:#00ff88;">${t.pcts ? t.pcts.daily + '% diario · ' + t.pcts.weekly + '% semanal · ' + t.pcts.monthly + '% mensual' : (t.percentage || 0) + '%'}</strong> de lo que perdés</p>
                 <p style="text-align:center;font-size:10.5px;color:#aaa;margin:0 0 9px;line-height:1.5;">
                     Tu rango sale de tu pérdida real (NETWIN) del mes:<br>
                     <strong style="color:#fff;">${money(t.monthNetLoss)}</strong>
                 </p>
+                <p style="text-align:center;font-size:9.5px;color:#888;margin:0 0 4px;">📅 diario · 📆 semanal · 🗓️ mensual</p>
                 <div style="display:flex;flex-direction:column;gap:5px;">
                     ${tierRow(tiers.bronce, t.key === 'bronce')}
                     ${tierRow(tiers.plata, t.key === 'plata')}

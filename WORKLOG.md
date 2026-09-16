@@ -4,7 +4,34 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-15**
+> **Última actualización: 2026-09-16**
+
+## Sesión 2026-09-16
+
+### 163. Rangos de reembolso: mismo TOPE por rango, pero un % DISTINTO para diario / semanal / mensual
+- **Pedido del owner:** "no puede ser que tenga el mismo porcentaje el diario con el
+  semanal o el mensual; todos sus topes según el rango, pero que varíe el porcentaje
+  de uno al otro; por ser oro no tener el 10% en los 3".
+- **Config `Config['refundTiers']` (nuevo formato):** `{ bronce: { upTo, daily, weekly,
+  monthly }, plata: { upTo, daily, weekly, monthly }, oro: { daily, weekly, monthly } }`.
+  **Compat:** la config vieja `{percent}` se lee como los tres tipos con ese mismo %
+  (`getRefundTiers` normaliza); `percent` sigue saliendo como alias = mensual.
+  **Defaults sin cambio** (3/5/10 en los tres) → hasta que el owner edite, nada cambia.
+- **Backend:** `computeRefundTier(loss, tiers, type)` devuelve el % de ESE tipo (+
+  `pcts` con los tres); los 3 claims pasan su tipo; `/api/refunds/status` calcula
+  cada potencial con su %, y `tier` trae `pcts` y `tiers.{bronce,plata,oro}.
+  {daily,weekly,monthly}`; `POST /api/admin/refund-tiers` acepta `bronceDailyPct`,
+  `bronceWeeklyPct`, …, `oroMonthlyPct` (y el viejo `broncePct` fija los tres) y
+  **vacía el cache del status** (3 min) al guardar. Hechos del sistema para la IA
+  describen los 3 % por rango.
+- **Panel (COMANDOS → 🏅 Rangos):** tabla rango × (tope, diario %, semanal %,
+  mensual %). admin-sw v41 → v42.
+- **PWA:** badge "TU RANGO: 🥇 ORO · 5/8/10%", tabla de rangos y "MI MES" muestran los
+  tres % por rango; los botones/tooltips ya usaban el % por tipo del status. Copys
+  fijos "Bronce 3% · Plata 5% · Oro 10%" reemplazados por texto genérico (no quedan
+  números hardcodeados). **`?v=62` + `CACHE_VERSION='v62'`** (HTML+JS).
+- **Validado:** `node --check` OK en todo; HTML del panel balanceado. Redeploy (back +
+  panel + PWA). **Operativo:** entrar a COMANDOS → Rangos y cargar los 9 porcentajes.
 
 ## Sesión 2026-09-15
 

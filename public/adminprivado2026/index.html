@@ -633,34 +633,30 @@
                         </div>
                         <div class="cbu-form" id="refundTiersForm">
                             <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
-                                El % de reembolso (<b>diario, semanal y mensual</b> — los tres) depende del
-                                <b>rango</b> del cliente, según su <b>pérdida real (NETWIN)</b> del mes.
-                                Bronce: hasta su tope. Plata: hasta su tope. Oro: más que el tope de Plata.
-                                Lo que cambies acá aplica a los tres reembolsos. Solo el admin general puede modificarlos.
+                                El <b>rango</b> del cliente (🥉🥈🥇) sale de su <b>pérdida real (NETWIN) del mes</b>: Bronce hasta su tope,
+                                Plata hasta su tope, Oro más que el tope de Plata. <b>Cada reembolso tiene su propio %</b> dentro del rango
+                                (diario / semanal / mensual), así Oro no tiene por qué dar lo mismo en los tres. Solo el admin general puede modificarlos.
                             </p>
-                            <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
-                                <div class="form-group" style="flex:1;min-width:130px;">
-                                    <label>🥉 Bronce — hasta $</label>
-                                    <input type="number" id="tierBronceUpTo" min="1" step="1000" style="width:100%;">
-                                </div>
-                                <div class="form-group" style="flex:1;min-width:100px;">
-                                    <label>🥉 Bronce %</label>
-                                    <input type="number" id="tierBroncePct" min="0" max="100" step="0.5" style="width:100%;">
-                                </div>
-                                <div class="form-group" style="flex:1;min-width:130px;">
-                                    <label>🥈 Plata — hasta $</label>
-                                    <input type="number" id="tierPlataUpTo" min="1" step="1000" style="width:100%;">
-                                </div>
-                                <div class="form-group" style="flex:1;min-width:100px;">
-                                    <label>🥈 Plata %</label>
-                                    <input type="number" id="tierPlataPct" min="0" max="100" step="0.5" style="width:100%;">
-                                </div>
-                                <div class="form-group" style="flex:1;min-width:100px;">
-                                    <label>🥇 Oro %</label>
-                                    <input type="number" id="tierOroPct" min="0" max="100" step="0.5" style="width:100%;">
-                                </div>
+                            <div style="overflow-x:auto;">
+                                <table class="data-table" style="min-width:640px;">
+                                    <thead><tr><th>Rango</th><th>Pérdida del mes hasta $</th><th>📅 Diario %</th><th>📆 Semanal %</th><th>🗓️ Mensual %</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>🥉 Bronce</td><td><input type="number" id="tierBronceUpTo" min="1" step="1000" style="width:130px;"></td>
+                                            <td><input type="number" id="tierBronceDailyPct" min="0" max="100" step="0.5" style="width:80px;"></td>
+                                            <td><input type="number" id="tierBronceWeeklyPct" min="0" max="100" step="0.5" style="width:80px;"></td>
+                                            <td><input type="number" id="tierBronceMonthlyPct" min="0" max="100" step="0.5" style="width:80px;"></td></tr>
+                                        <tr><td>🥈 Plata</td><td><input type="number" id="tierPlataUpTo" min="1" step="1000" style="width:130px;"></td>
+                                            <td><input type="number" id="tierPlataDailyPct" min="0" max="100" step="0.5" style="width:80px;"></td>
+                                            <td><input type="number" id="tierPlataWeeklyPct" min="0" max="100" step="0.5" style="width:80px;"></td>
+                                            <td><input type="number" id="tierPlataMonthlyPct" min="0" max="100" step="0.5" style="width:80px;"></td></tr>
+                                        <tr><td>🥇 Oro</td><td style="color:#888;font-size:12px;">más que Plata</td>
+                                            <td><input type="number" id="tierOroDailyPct" min="0" max="100" step="0.5" style="width:80px;"></td>
+                                            <td><input type="number" id="tierOroWeeklyPct" min="0" max="100" step="0.5" style="width:80px;"></td>
+                                            <td><input type="number" id="tierOroMonthlyPct" min="0" max="100" step="0.5" style="width:80px;"></td></tr>
+                                    </tbody>
+                                </table>
                             </div>
-                            <button class="btn-primary" onclick="saveRefundTiers()">
+                            <button class="btn-primary" onclick="saveRefundTiers()" style="margin-top:10px;">
                                 <span class="icon icon-save"></span> Guardar rangos
                             </button>
                             <div id="refundTiersMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>

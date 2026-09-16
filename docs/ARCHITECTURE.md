@@ -359,7 +359,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   en la bandeja ni en el badge. Panel→🏦 Banco→Cierre: recalcular, resolver diffs con nota,
   hora/gracia (admin).
 - **Reembolsos** (rangos desde 2026-07-28 #97; el DIARIO volvió el 2026-08-14 #102):
-  **DIARIO, semanal y mensual**, los tres con el MISMO % de rango.
+  **DIARIO, semanal y mensual**. El RANGO (🥉🥈🥇, por pérdida NETWIN del mes) es el mismo
+  para los tres, pero desde #163 **cada tipo tiene su propio %** dentro del rango
+  (`Config['refundTiers'].{bronce,plata,oro}.{daily,weekly,monthly}`; `computeRefundTier(loss,
+  tiers, type)`).
   `POST /api/refunds/claim/{daily|weekly|monthly}` — lock Redis, ventanas de
   `models/refunds.js` (diario: uno por día; semanal: lunes/martes; mensual: desde
   día 7). ⚠️ **Las ventanas se evalúan en día ARGENTINO** (`_artParts` en
@@ -371,7 +374,8 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   del índice único. NETWIN real de
   `referralRevenueService.getUserNetwinForDateRange`. El **% sale del RANGO** del
   cliente (`Config['refundTiers']`, editable panel→COMANDOS, solo admin general;
-  defaults: 🥉 bronce hasta $30.000 = 3%, 🥈 plata hasta $100.000 = 5%, 🥇 oro = 10%),
+  defaults: 🥉 bronce hasta $30.000, 🥈 plata hasta $100.000, 🥇 oro; % por tipo
+  diario/semanal/mensual, defaults 3/3/3, 5/5/5, 10/10/10),
   calculado sobre la pérdida NETWIN mensual: el MENSUAL usa el netwin del propio mes
   reembolsado; el SEMANAL usa el mes al que pertenece el LUNES de la semana (mes en
   curso a hoy, o el mes anterior completo si la semana arrancó allá — decidir por el

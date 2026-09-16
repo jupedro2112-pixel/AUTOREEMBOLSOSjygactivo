@@ -6358,11 +6358,11 @@ async function _systemFactsForAi() {
     const hg = await getHgcashConfig();
     L.push(`- Cargas por transferencia: ${hg.enabled && hg.mode === 'auto' ? 'se acreditan AUTOMÁTICAMENTE cuando el banco confirma y el comprobante coincide' : 'las acredita un agente a mano'}; mínimo de carga $${Number(hg.minChargeARS) > 0 ? hg.minChargeARS : 1500}. Un comprobante repetido o de otro CBU no se carga.`);
     L.push('- Retiros: el cliente los pide desde la app (mínimo $4.999, teléfono verificado por SMS); un agente los confirma y el pago sale por transferencia automática; el aviso "Recibimos tu solicitud… un agente la está procesando" es el paso normal. El pago se hace FUERA del chat.');
-    const tiers = await getConfig('refundTiers', null);
-    if (tiers && Array.isArray(tiers.tiers || tiers)) {
-      const arr = tiers.tiers || tiers;
-      L.push('- Reembolsos sobre la pérdida: diario (todos los días), semanal (lunes y martes) y mensual (desde el día 7), con % según rango: ' + arr.map(t => `${t.name || t.label || ''} ${t.percent != null ? t.percent + '%' : ''}`).join(', ') + '. Se reclaman con un botón en la app; el mensaje "🎁 Reembolso … reclamado" es automático y no requiere respuesta.');
-    } else {
+    try {
+      const rt = await getRefundTiers();
+      const f = (k) => `${REFUND_TIER_META[k].emoji} ${REFUND_TIER_META[k].label}${rt[k].upTo ? ' (pérdida del mes hasta $' + rt[k].upTo.toLocaleString('es-AR') + ')' : ' (más que Plata)'}: diario ${rt[k].daily}% · semanal ${rt[k].weekly}% · mensual ${rt[k].monthly}%`;
+      L.push('- Reembolsos sobre la pérdida real (NETWIN): diario (todos los días, por ayer), semanal (lunes y martes, por la semana pasada) y mensual (desde el día 7, por el mes pasado). El RANGO sale de la pérdida del mes y cada reembolso tiene su % dentro del rango: ' + ['bronce', 'plata', 'oro'].map(f).join('; ') + '. Se reclaman con un botón en la app; el mensaje "🎁 Reembolso … reclamado" es automático y no requiere respuesta.');
+    } catch (_) {
       L.push('- Reembolsos sobre la pérdida: diario, semanal (lunes y martes) y mensual (desde el día 7), % según rango 🥉🥈🥇. Se reclaman con un botón en la app; el mensaje "🎁 Reembolso … reclamado" es automático y no requiere respuesta.');
     }
     L.push('- Fueguito: racha diaria que el cliente reclama en la app; los mensajes "🔥 Día N de racha Fueguito" son automáticos y no requieren respuesta. Ruleta diaria en la app para quienes tienen la app instalada.');
@@ -8326,23 +8326,28 @@ async function getRefundNonDepositCredits(username, fromDate, toDate) {
 // Umbrales y % editables desde el panel (solo admin general) vía
 // Config['refundTiers'] — un solo juego de rangos para los TRES reembolsos.
 // El diario se eliminó el 2026-07-28 y se restauró el 2026-08-14.
+// #163: cada rango tiene su TOPE (pérdida mensual) y TRES porcentajes distintos, uno por
+// tipo de reembolso (daily/weekly/monthly). `percent` se conserva como alias del mensual
+// para lectores viejos (hechos de la IA, logs).
+const REFUND_TYPES = ['daily', 'weekly', 'monthly'];
 const REFUND_TIER_DEFAULTS = {
-  bronce: { upTo: 30000, percent: 3 },
-  plata: { upTo: 100000, percent: 5 },
-  oro: { percent: 10 }
+  bronce: { upTo: 30000, daily: 3, weekly: 3, monthly: 3 },
+  plata: { upTo: 100000, daily: 5, weekly: 5, monthly: 5 },
+  oro: { daily: 10, weekly: 10, monthly: 10 }
 };
 const REFUND_TIER_META = {
   bronce: { label: 'Bronce', emoji: '🥉' },
   plata: { label: 'Plata', emoji: '🥈' },
   oro: { label: 'Oro', emoji: '🥇' }
 };
+function _tierWithAlias(t) { return Object.assign({}, t, { percent: t.monthly }); }
 async function getRefundTiers() {
   // Copia PROFUNDA: si fuera shallow, un caller que mute tiers.bronce.percent
   // envenenaría REFUND_TIER_DEFAULTS para todo el proceso.
   const d = {
-    bronce: { ...REFUND_TIER_DEFAULTS.bronce },
-    plata: { ...REFUND_TIER_DEFAULTS.plata },
-    oro: { ...REFUND_TIER_DEFAULTS.oro }
+    bronce: _tierWithAlias({ ...REFUND_TIER_DEFAULTS.bronce }),
+    plata: _tierWithAlias({ ...REFUND_TIER_DEFAULTS.plata }),
+    oro: _tierWithAlias({ ...REFUND_TIER_DEFAULTS.oro })
   };
   try {
     const cfg = await getConfig('refundTiers', null);
@@ -8355,10 +8360,17 @@ async function getRefundTiers() {
       const n = Number(v);
       return Number.isFinite(n) && n > 0 ? Math.round(n) : def;
     };
+    // Config vieja ({percent}) → los tres tipos con ese mismo %. Config nueva → cada uno.
+    const pcts = (c, def) => {
+      const legacy = c && c.percent != null ? pct(c.percent, null) : null;
+      const o = {};
+      for (const t of REFUND_TYPES) o[t] = pct(c && c[t] != null ? c[t] : legacy, def[t]);
+      return o;
+    };
     const out = {
-      bronce: { upTo: upTo(cfg.bronce && cfg.bronce.upTo, d.bronce.upTo), percent: pct(cfg.bronce && cfg.bronce.percent, d.bronce.percent) },
-      plata: { upTo: upTo(cfg.plata && cfg.plata.upTo, d.plata.upTo), percent: pct(cfg.plata && cfg.plata.percent, d.plata.percent) },
-      oro: { percent: pct(cfg.oro && cfg.oro.percent, d.oro.percent) }
+      bronce: _tierWithAlias(Object.assign({ upTo: upTo(cfg.bronce && cfg.bronce.upTo, d.bronce.upTo) }, pcts(cfg.bronce, d.bronce))),
+      plata: _tierWithAlias(Object.assign({ upTo: upTo(cfg.plata && cfg.plata.upTo, d.plata.upTo) }, pcts(cfg.plata, d.plata))),
+      oro: _tierWithAlias(pcts(cfg.oro, d.oro))
     };
     // Coherencia: los umbrales tienen que ser crecientes; si no, defaults.
     if (out.bronce.upTo >= out.plata.upTo) return d;
@@ -8367,14 +8379,21 @@ async function getRefundTiers() {
     return d;
   }
 }
-// Devuelve el rango que corresponde a una pérdida mensual dada.
-function computeRefundTier(monthNetLoss, tiers) {
+// Devuelve el rango que corresponde a una pérdida mensual dada. `type` (daily|weekly|
+// monthly) elige el % de ese reembolso; `pcts` trae los tres para mostrar.
+function computeRefundTier(monthNetLoss, tiers, type = 'monthly') {
   const loss = Math.max(0, Number(monthNetLoss) || 0);
   let key;
   if (loss <= tiers.bronce.upTo) key = 'bronce';
   else if (loss <= tiers.plata.upTo) key = 'plata';
   else key = 'oro';
-  return { key, label: REFUND_TIER_META[key].label, emoji: REFUND_TIER_META[key].emoji, percent: tiers[key].percent };
+  const t = tiers[key];
+  const pcts = { daily: t.daily, weekly: t.weekly, monthly: t.monthly };
+  return { key, label: REFUND_TIER_META[key].label, emoji: REFUND_TIER_META[key].emoji, percent: pcts[type] != null ? pcts[type] : t.monthly, pcts };
+}
+function _tierPublic(key, tiers) {
+  const t = tiers[key];
+  return { ...REFUND_TIER_META[key], upTo: t.upTo != null ? t.upTo : null, daily: t.daily, weekly: t.weekly, monthly: t.monthly, percent: t.monthly };
 }
 
 // Cache del status de reembolsos por usuario (incidente 2026-08-25): cada
@@ -8468,14 +8487,15 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     //   mes anterior (incluye semanas que cruzan el cambio de mes) → ese mes
     //   completo == monthlyTier. Misma regla que aplica el claim semanal.
     const tiers = await getRefundTiers();
-    const currentTier = computeRefundTier(currentMonthNetLoss, tiers);
-    const monthlyTier = computeRefundTier(monthlyNetLoss, tiers);
+    const currentTier = computeRefundTier(currentMonthNetLoss, tiers, 'monthly');
+    const monthlyTier = computeRefundTier(monthlyNetLoss, tiers, 'monthly');
     const _curMonthKey = currentMonthRange.fromDateStr.slice(0, 7);
-    const weeklyTier = lastWeekRange.fromDateStr.slice(0, 7) === _curMonthKey ? currentTier : monthlyTier;
+    // #163: mismo RANGO (tope por pérdida mensual), pero cada reembolso usa SU %.
+    const weeklyTier = computeRefundTier(lastWeekRange.fromDateStr.slice(0, 7) === _curMonthKey ? currentMonthNetLoss : monthlyNetLoss, tiers, 'weekly');
     // El diario usa el rango del mes al que pertenece AYER. Casi siempre es el mes
     // en curso; el único caso distinto es el día 1, donde ayer cayó en el mes
     // anterior → ahí corresponde el rango de ESE mes (== monthlyTier).
-    const dailyTier = yesterdayRange.dateStr.slice(0, 7) === _curMonthKey ? currentTier : monthlyTier;
+    const dailyTier = computeRefundTier(yesterdayRange.dateStr.slice(0, 7) === _curMonthKey ? currentMonthNetLoss : monthlyNetLoss, tiers, 'daily');
 
     const dailyPotential = Math.round(dailyNetLoss * (dailyTier.percent / 100));
     const weeklyPotential = Math.round(weeklyNetLoss * (weeklyTier.percent / 100));
@@ -8486,9 +8506,9 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     // SUPERAR el tope: missing = upTo - pérdida + 1 (nunca 0 estando en el rango).
     let nextTier = null;
     if (currentTier.key === 'bronce') {
-      nextTier = { key: 'plata', label: REFUND_TIER_META.plata.label, emoji: REFUND_TIER_META.plata.emoji, percent: tiers.plata.percent, missing: Math.max(1, tiers.bronce.upTo - currentMonthNetLoss + 1) };
+      nextTier = { ..._tierPublic('plata', tiers), missing: Math.max(1, tiers.bronce.upTo - currentMonthNetLoss + 1) };
     } else if (currentTier.key === 'plata') {
-      nextTier = { key: 'oro', label: REFUND_TIER_META.oro.label, emoji: REFUND_TIER_META.oro.emoji, percent: tiers.oro.percent, missing: Math.max(1, tiers.plata.upTo - currentMonthNetLoss + 1) };
+      nextTier = { ..._tierPublic('oro', tiers), missing: Math.max(1, tiers.plata.upTo - currentMonthNetLoss + 1) };
     }
 
     res.json({
@@ -8499,14 +8519,15 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
       },
       tier: {
         ...currentTier,
-        percentage: currentTier.percent,
+        percentage: currentTier.percent, // alias legacy = % mensual del rango en vivo
+        pcts: currentTier.pcts,           // #163 { daily, weekly, monthly } del rango en vivo
         monthNetLoss: currentMonthNetLoss,
         period: `${currentMonthRange.fromDateStr} a ${currentMonthRange.toDateStr}`,
         nextTier,
         tiers: {
-          bronce: { ...REFUND_TIER_META.bronce, upTo: tiers.bronce.upTo, percent: tiers.bronce.percent },
-          plata: { ...REFUND_TIER_META.plata, upTo: tiers.plata.upTo, percent: tiers.plata.percent },
-          oro: { ...REFUND_TIER_META.oro, upTo: null, percent: tiers.oro.percent }
+          bronce: _tierPublic('bronce', tiers),
+          plata: _tierPublic('plata', tiers),
+          oro: _tierPublic('oro', tiers)
         }
       },
       // Reembolso DIARIO: restaurado 2026-08-14. Usa el MISMO % del rango que el
@@ -8638,7 +8659,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         return res.json({ success: false, message: 'No pudimos calcular tu rango en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
       }
       const monthNetLoss = Math.max(0, Number(tierRes.totalGgr) || 0);
-      const tier = computeRefundTier(monthNetLoss, tiers);
+      const tier = computeRefundTier(monthNetLoss, tiers, 'daily'); // #163 % del DIARIO del rango
       const dailyPct = tier.percent;
       const refundAmount = Math.round(netLoss * (dailyPct / 100));
 
@@ -8859,7 +8880,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         return res.json({ success: false, message: 'No pudimos calcular tu rango en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
       }
       const monthNetLoss = Math.max(0, Number(tierRes.totalGgr) || 0);
-      const tier = computeRefundTier(monthNetLoss, tiers);
+      const tier = computeRefundTier(monthNetLoss, tiers, 'weekly'); // #163 % del SEMANAL del rango
       const weeklyPct = tier.percent;
       const refundAmount = Math.round(netLoss * (weeklyPct / 100));
 
@@ -9031,7 +9052,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
       // define por la pérdida del propio mes reembolsado (perdiste $X ese mes →
       // ese X define bronce/plata/oro y el % se aplica sobre ese mismo X).
       const tiers = await getRefundTiers();
-      const tier = computeRefundTier(netLoss, tiers);
+      const tier = computeRefundTier(netLoss, tiers, 'monthly'); // #163 % del MENSUAL del rango
       const monthlyPct = tier.percent;
       const refundAmount = Math.round(netLoss * (monthlyPct / 100));
 
@@ -9215,20 +9236,33 @@ app.post('/api/admin/refund-tiers', authMiddleware, adminMiddleware, async (req,
       if (!Number.isFinite(n) || n <= 0) return NaN;
       return Math.round(n);
     };
-    const next = {
-      bronce: { upTo: pickUpTo(b.bronceUpTo, cur.bronce.upTo), percent: pickPct(b.broncePct, cur.bronce.percent) },
-      plata: { upTo: pickUpTo(b.plataUpTo, cur.plata.upTo), percent: pickPct(b.plataPct, cur.plata.percent) },
-      oro: { percent: pickPct(b.oroPct, cur.oro.percent) }
+    // #163: 3 % por rango (daily/weekly/monthly). Compat: `broncePct` (viejo) fija los tres.
+    const pctsOf = (key) => {
+      const o = {};
+      for (const t of REFUND_TYPES) {
+        const v = b[`${key}${t.charAt(0).toUpperCase() + t.slice(1)}Pct`]; // ej. oroDailyPct
+        const legacy = b[`${key}Pct`];
+        o[t] = pickPct(v !== undefined ? v : legacy, cur[key][t]);
+      }
+      return o;
     };
-    if ([next.bronce.upTo, next.bronce.percent, next.plata.upTo, next.plata.percent, next.oro.percent].some(Number.isNaN)) {
+    const next = {
+      bronce: Object.assign({ upTo: pickUpTo(b.bronceUpTo, cur.bronce.upTo) }, pctsOf('bronce')),
+      plata: Object.assign({ upTo: pickUpTo(b.plataUpTo, cur.plata.upTo) }, pctsOf('plata')),
+      oro: pctsOf('oro')
+    };
+    const allNums = [next.bronce.upTo, next.plata.upTo].concat(...['bronce', 'plata', 'oro'].map(k => REFUND_TYPES.map(t => next[k][t])));
+    if (allNums.some(Number.isNaN)) {
       return res.status(400).json({ error: 'Valores inválidos: los topes deben ser montos positivos y los porcentajes números entre 0 y 100.' });
     }
     if (next.bronce.upTo >= next.plata.upTo) {
       return res.status(400).json({ error: 'El tope de Bronce debe ser menor que el de Plata.' });
     }
     await setConfig('refundTiers', next);
-    logger.info(`[refund-tiers] actualizado por ${req.user.username}: bronce hasta $${next.bronce.upTo} = ${next.bronce.percent}% · plata hasta $${next.plata.upTo} = ${next.plata.percent}% · oro = ${next.oro.percent}%`);
-    res.json({ success: true, tiers: next });
+    try { _refundsStatusCache.clear(); } catch (_) {} // el status cacheado (3 min) mostraba los % viejos
+    const fmt = (k) => `${k} ${REFUND_TYPES.map(t => t[0].toUpperCase() + ':' + next[k][t] + '%').join(' ')}`;
+    logger.info(`[refund-tiers] actualizado por ${req.user.username}: bronce hasta $${next.bronce.upTo} · plata hasta $${next.plata.upTo} · ${fmt('bronce')} · ${fmt('plata')} · ${fmt('oro')}`);
+    res.json({ success: true, tiers: await getRefundTiers() });
   } catch (error) {
     console.error('Error guardando rangos de reembolso:', error);
     res.status(500).json({ error: 'Error del servidor' });

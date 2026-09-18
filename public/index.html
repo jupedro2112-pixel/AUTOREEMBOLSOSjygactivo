@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=62">
-    <link rel="stylesheet" href="/css/login.css?v=62">
-    <link rel="stylesheet" href="/css/header.css?v=62">
-    <link rel="stylesheet" href="/css/chat.css?v=62">
-    <link rel="stylesheet" href="/css/modals.css?v=62">
-    <link rel="stylesheet" href="/css/responsive.css?v=62">
+    <link rel="stylesheet" href="/css/base.css?v=63">
+    <link rel="stylesheet" href="/css/login.css?v=63">
+    <link rel="stylesheet" href="/css/header.css?v=63">
+    <link rel="stylesheet" href="/css/chat.css?v=63">
+    <link rel="stylesheet" href="/css/modals.css?v=63">
+    <link rel="stylesheet" href="/css/responsive.css?v=63">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -1023,6 +1023,26 @@
                     <label>Repetir Contraseña *</label>
                     <input type="password" id="registerPasswordConfirm" name="confirm-password" placeholder="Repite tu contraseña" required minlength="6" autocomplete="new-password">
                 </div>
+                <!-- #166 Celular OBLIGATORIO: se verifica por SMS antes de crear la cuenta. -->
+                <div class="input-group">
+                    <label>Celular * <span style="font-size:11px;color:#888;font-weight:400;">(te mandamos un código por SMS)</span></label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="registerPhonePrefix" style="flex-shrink:0; width: 110px; padding: 8px 6px; border-radius: 8px; border: 1px solid rgba(212,175,55,0.3); background: rgba(0,0,0,0.4); color: #fff; font-size: 14px;">
+                            <option value="+54">🇦🇷 +54</option>
+                            <option value="+591">🇧🇴 +591</option>
+                            <option value="+55">🇧🇷 +55</option>
+                            <option value="+56">🇨🇱 +56</option>
+                            <option value="+57">🇨🇴 +57</option>
+                            <option value="+593">🇪🇨 +593</option>
+                            <option value="+52">🇲🇽 +52</option>
+                            <option value="+595">🇵🇾 +595</option>
+                            <option value="+51">🇵🇪 +51</option>
+                            <option value="+598">🇺🇾 +598</option>
+                            <option value="+58">🇻🇪 +58</option>
+                        </select>
+                        <input type="tel" id="registerPhone" name="phone" placeholder="9 11 1234-5678" autocomplete="tel-national" style="flex: 1;" required>
+                    </div>
+                </div>
                 <div class="input-group">
                     <label>Email (opcional)</label>
                     <input type="email" id="registerEmail" name="email" placeholder="tu@email.com" autocomplete="email">
@@ -1034,15 +1054,29 @@
                 </div>
                 <div style="background: rgba(212,175,55,0.10); border: 1px solid rgba(212,175,55,0.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;">
                     <p style="color: #d4af37; margin: 0; font-size: 12px; line-height: 1.4;">
-                        🔒 Para <strong>retirar tus premios</strong> vas a necesitar verificar tu teléfono por SMS. Te lo vamos a pedir al ingresar — es rápido y recomendable hacerlo enseguida para no tener problemas al cobrar.
+                        🔒 Un celular = una cuenta. Al confirmar el código SMS tu cuenta queda verificada y lista para <strong>cargar, jugar y retirar</strong>.
                     </p>
                 </div>
                 <div id="registerError" class="error-message"></div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" id="closeRegisterModal">Cancelar</button>
-                    <button type="button" class="btn btn-primary" id="registerSendOtpBtn">📝 Crear Cuenta</button>
+                    <button type="button" class="btn btn-primary" id="registerSendOtpBtn">📱 Enviar código SMS</button>
                 </div>
             </form>
+            </div>
+            <!-- Paso 2 (#166): código SMS → crear la cuenta -->
+            <div id="registerStep2" style="display:none;">
+                <p id="registerOtpMsg" style="color: #00ff88; text-align: center; margin-bottom: 12px; font-size: 13px;"></p>
+                <div class="input-group">
+                    <label>Código de verificación *</label>
+                    <input type="text" inputmode="numeric" pattern="[0-9]{6}" id="registerOtpCode" placeholder="Código de 6 dígitos" maxlength="6" autocomplete="one-time-code" style="font-size: 22px; text-align: center; letter-spacing: 8px;">
+                </div>
+                <div id="registerOtpError" class="error-message"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="if(window.VIP&&VIP.auth)VIP.auth.registerBackToStep1()">← Volver</button>
+                    <button type="button" class="btn btn-primary" id="registerConfirmBtn" onclick="if(window.VIP&&VIP.auth)VIP.auth.handleRegisterConfirm()">✅ Confirmar y crear cuenta</button>
+                </div>
+                <p style="text-align:center;font-size:11.5px;color:#888;margin:10px 0 0;">¿No llegó? <a href="#" onclick="event.preventDefault(); if(window.VIP&&VIP.auth)VIP.auth.handleRegisterDirect(true);" style="color:#d4af37;">Reenviar código</a></p>
             </div>
         </div>
     </div>
@@ -1929,25 +1963,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=62"></script>
-    <script src="/js/campaign.js?v=62"></script>
-    <script src="/js/meta-pixel.js?v=62"></script>
-    <script src="/js/auth.js?v=62"></script>
-    <script src="/js/socket.js?v=62"></script>
-    <script src="/js/chat.js?v=62"></script>
-    <script src="/js/refunds.js?v=62"></script>
-    <script src="/js/fire.js?v=62"></script>
-    <script src="/js/roulette.js?v=62"></script>
-    <script src="/js/reviews.js?v=62"></script>
-    <script src="/js/promobonus.js?v=62"></script>
-    <script src="/js/notifications.js?v=62"></script>
-    <script src="/js/ui.js?v=62"></script>
-    <script src="/js/withdraw.js?v=62"></script>
-    <script src="/js/installbonus.js?v=62"></script>
-    <script src="/js/notifsurvey.js?v=62"></script>
-    <script src="/js/publisherwelcome.js?v=62"></script>
-    <script src="/js/apptest.js?v=62"></script>
-    <script src="/js/app.js?v=62"></script>
+    <script src="/js/config.js?v=63"></script>
+    <script src="/js/campaign.js?v=63"></script>
+    <script src="/js/meta-pixel.js?v=63"></script>
+    <script src="/js/auth.js?v=63"></script>
+    <script src="/js/socket.js?v=63"></script>
+    <script src="/js/chat.js?v=63"></script>
+    <script src="/js/refunds.js?v=63"></script>
+    <script src="/js/fire.js?v=63"></script>
+    <script src="/js/roulette.js?v=63"></script>
+    <script src="/js/reviews.js?v=63"></script>
+    <script src="/js/promobonus.js?v=63"></script>
+    <script src="/js/notifications.js?v=63"></script>
+    <script src="/js/ui.js?v=63"></script>
+    <script src="/js/withdraw.js?v=63"></script>
+    <script src="/js/installbonus.js?v=63"></script>
+    <script src="/js/notifsurvey.js?v=63"></script>
+    <script src="/js/publisherwelcome.js?v=63"></script>
+    <script src="/js/apptest.js?v=63"></script>
+    <script src="/js/app.js?v=63"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA

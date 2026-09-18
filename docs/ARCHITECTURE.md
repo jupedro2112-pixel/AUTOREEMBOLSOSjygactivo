@@ -215,9 +215,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 
 ## 5. Flujos principales
 
-- **Registro**: `POST /api/auth/register` (user+pass; OTP solo si manda teléfono) o
-  `register-quick` (link de pauta con campaignCode válido, sin SMS,
-  phoneVerificationPending=true → no puede retirar hasta verificar). Crea en JUGAYGANA
+- **Registro**: `POST /api/auth/register` — desde #166 (2026-09-18) **SMS OBLIGATORIO**:
+  `phone` + `otpCode` (de `send-register-otp`), número único por `phoneKey` entre
+  verificados, la cuenta nace `phoneVerified:true`. `register-quick` (sin SMS) responde 410.
+  La atribución de pauta va por `campaignCode` en `/register`. Crea en JUGAYGANA
   PRIMERO; guarda atribución, fbc/fbp, registrationIp. Crea ChatStatus solo el flujo
   público (los usuarios creados por admin/publisher NO — evita chats vacíos).
   - `syncUserToPlatform` usa el lookup TRI-ESTADO y devuelve

@@ -4113,18 +4113,20 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
       return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     }
     
-    // El registro es solo usuario + contraseña: el SMS dejó de ser obligatorio.
-    // Si igualmente llega un teléfono con su OTP (flujo legacy o verificación
-    // opcional), se valida; si no, la cuenta se crea con el teléfono pendiente
-    // de verificar y se le ofrece el SMS al primer ingreso.
+    // #166 (owner 2026-09-18): el SMS vuelve a ser OBLIGATORIO para crear la cuenta.
+    // Sin teléfono verificado no hay cuenta → un celular = una cuenta (phoneKey único
+    // entre verificados) y el retiro ya nace habilitado.
     const hasPhone = !!(phone && phone.trim().length >= 8);
     let normalizedPhone = null;
+    if (!hasPhone) {
+      return res.status(400).json({ error: 'Para crear la cuenta tenés que verificar tu celular por SMS.', code: 'PHONE_REQUIRED' });
+    }
 
     if (hasPhone) {
       normalizedPhone = phone.trim();
 
       if (!otpCode) {
-        return res.status(400).json({ error: 'Se requiere el código de verificación SMS' });
+        return res.status(400).json({ error: 'Se requiere el código de verificación SMS', code: 'OTP_REQUIRED' });
       }
       if (!validateInternationalPhone(normalizedPhone)) {
         return res.status(400).json({ error: 'Número de teléfono inválido. Usa formato internacional con código de país (ej: +5491155551234)' });
@@ -4379,6 +4381,12 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
 // Requiere campaignCode válido y activo para evitar abuso (un atacante no puede
 // crear cuentas sin OTP a discreción — necesita un código real de pauta).
 app.post('/api/auth/register-quick', authLimiter, registerIpLimiter, async (req, res) => {
+  // #166: el registro rápido SIN SMS quedó cerrado (owner 2026-09-18: SMS obligatorio
+  // para todos). La pauta sigue atribuyéndose por `campaignCode` en /api/auth/register.
+  // Se conserva el código de abajo por si se quisiera reabrir; hoy no se alcanza.
+  if (!(req.body && req.body.__legacyQuickEnabled === true && process.env.ALLOW_QUICK_REGISTER === 'true')) {
+    return res.status(410).json({ error: 'Para crear la cuenta tenés que verificar tu celular por SMS.', code: 'PHONE_REQUIRED' });
+  }
   try {
     const { username, password, email, campaignCode, visitorId, utm, metaEventId, fbc, fbp, landingUrl } = req.body || {};
 
@@ -5503,10 +5511,11 @@ app.post('/api/auth/send-register-otp', sensitiveLimiter, smsIpLimiter, async (r
       }
     }
 
-    // Verificar que el teléfono no esté ya registrado y verificado
-    const existingPhone = await User.findOne({ phone: normalizedPhone, phoneVerified: true }).lean();
+    // Verificar que el teléfono no esté ya registrado y verificado (clave NORMALIZADA:
+    // el mismo número con/sin 9 o con/sin 0 es el mismo celular — #166).
+    const existingPhone = await User.findOne({ $or: [{ phoneKey: normalizePhoneKey(normalizedPhone) }, { phone: normalizedPhone }], phoneVerified: true }).lean();
     if (existingPhone) {
-      return res.status(400).json({ error: 'Este número de teléfono ya está registrado' });
+      return res.status(400).json({ error: 'Este número de celular ya tiene una cuenta. Ingresá con esa cuenta o recuperá la contraseña.', code: 'PHONE_TAKEN' });
     }
 
     const result = await generateAndSendOTP(normalizedPhone, 'register');

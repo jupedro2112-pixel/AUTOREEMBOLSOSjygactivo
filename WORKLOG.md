@@ -8,6 +8,34 @@
 
 ## Sesión 2026-09-18
 
+### 166. Registro con SMS OBLIGATORIO (un celular = una cuenta) — registro en 2 pasos, registro rápido sin SMS cerrado
+- **Owner:** "activamos el SMS obligatorio para crear usuarios, que no sea opcional;
+  al ser obligatorio el retiro ya va a estar verificado". Antes (decisión previa) el
+  registro era solo usuario+contraseña y el SMS se ofrecía después; el registro rápido
+  de pauta tampoco pedía SMS. Consecuencia conocida: una persona podía crear N cuentas
+  sin verificar ninguna (no retiraba, pero cargaba y cobraba beneficios).
+- **Backend:** `POST /api/auth/register` exige `phone` + `otpCode` (400
+  `PHONE_REQUIRED` / `OTP_REQUIRED`); el OTP se valida y el número queda verificado
+  al crear la cuenta; unicidad por `phoneKey` normalizada entre verificados (ya
+  existía). `POST /api/auth/send-register-otp` rechaza números ya verificados por
+  clave normalizada (antes comparaba el string exacto) con `PHONE_TAKEN`.
+  `POST /api/auth/register-quick` responde **410** (cerrado; queda el código detrás de
+  `ALLOW_QUICK_REGISTER=true` + flag en body por si se quisiera reabrir). La pauta se
+  sigue atribuyendo por `campaignCode` en `/register` (ya era así en la PWA: nadie
+  llamaba a register-quick).
+- **PWA (`?v=63` + SW v63):** el modal Registrarse pasa a 2 pasos: usuario,
+  contraseña, **celular con prefijo** (obligatorio), email/referido → "📱 Enviar
+  código SMS" → paso 2 con el código de 6 dígitos, "Volver", "Reenviar código" y
+  "✅ Confirmar y crear cuenta" (`handleRegisterDirect` → `send-register-otp`;
+  `handleRegisterConfirm` → `/register` con phone+otpCode y la atribución).
+  Copy: "Un celular = una cuenta… lista para cargar, jugar y retirar".
+  `applyRegisterModalMode` siempre arranca en el paso 1.
+- **Efectos:** las cuentas nuevas nacen con `phoneVerified:true` → retiran sin paso
+  extra; el cartel "Verificá tu teléfono" solo queda para cuentas viejas. ⚠️ Los
+  registros desde webviews de Meta/Instagram vuelven a depender de que llegue el
+  SMS (motivo por el que se había sacado). Rate limits del OTP por IP sin cambios.
+- **Validado:** `node --check` OK; HTML balanceado. Redeploy (back + PWA).
+
 ### 165. Bono app (100% primera carga) AUTOMÁTICO también en la carga MANUAL, marcado usado solo y corrección del bonus del agente
 - **Owner:** "si entra por hgcash se da automático, pero si es manual quiero que
   también se dé automático y que marque usado solo; si el agente pone un bono

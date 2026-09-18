@@ -76,17 +76,31 @@ VIP.auth = (function () {
         banner.style.display = needsVerify ? '' : 'none';
     }
 
-    // Registro directo: solo usuario + contraseña, sin SMS. Si hay una pauta
-    // activa, también manda campaignCode/utm para conservar la atribución.
-    async function handleRegisterDirect() {
+    // #166 Registro en DOS pasos con SMS OBLIGATORIO:
+    //   paso 1 (handleRegisterDirect): valida datos + celular → pide el código
+    //           (POST /api/auth/send-register-otp) → muestra el paso 2.
+    //   paso 2 (handleRegisterConfirm): código → POST /api/auth/register con
+    //           phone + otpCode (+ atribución de pauta si la hay).
+    // Un celular = una cuenta: el server rechaza números ya verificados.
+    let _registerPending = null;
+
+    function _registerPhoneFull() {
+        const prefix = (document.getElementById('registerPhonePrefix') || {}).value || '+54';
+        const raw = ((document.getElementById('registerPhone') || {}).value || '').trim();
+        const digits = raw.replace(/[\s\-().]/g, '');
+        return { raw, full: prefix + digits.replace(/^0+/, ''), digits };
+    }
+
+    async function handleRegisterDirect(resend) {
         const username = document.getElementById('registerUsername').value.trim();
         const password = document.getElementById('registerPassword').value;
         const passwordConfirm = document.getElementById('registerPasswordConfirm').value;
         const emailInput = document.getElementById('registerEmail');
         const email = emailInput ? emailInput.value.trim() : '';
         const referralInput = document.getElementById('registerReferralCode');
-        const errorDiv = document.getElementById('registerError');
+        const errorDiv = document.getElementById(resend ? 'registerOtpError' : 'registerError');
         const btn = document.getElementById('registerSendOtpBtn');
+        const phone = _registerPhoneFull();
 
         errorDiv.classList.remove('show');
 
@@ -105,6 +119,11 @@ VIP.auth = (function () {
             errorDiv.classList.add('show');
             return;
         }
+        if (!phone.digits || phone.digits.replace(/\D/g, '').length < 7) {
+            errorDiv.textContent = 'Ingresá tu número de celular (sin el 0 ni el 15)';
+            errorDiv.classList.add('show');
+            return;
+        }
 
         const attribution = VIP.campaign ? VIP.campaign.getActive() : null;
         // El código de referido solo cuenta si NO vino por una pauta: en el
@@ -112,18 +131,72 @@ VIP.auth = (function () {
         const referralCode = (!attribution && referralInput)
             ? referralInput.value.trim().toUpperCase()
             : null;
+        const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
 
+        if (btn) { btn.textContent = 'Enviando código...'; btn.disabled = true; }
+        try {
+            const response = await fetch(`${VIP.config.API_URL}/api/auth/send-register-otp`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: phone.full, username, metaEventId })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                errorDiv.textContent = data.error || 'No pudimos enviar el código. Revisá el número.';
+                errorDiv.classList.add('show');
+                return;
+            }
+            _registerPending = { username, password, email: email || null, referralCode, phone: phone.full, metaEventId, attribution };
+            const step1 = document.getElementById('registerStep1');
+            const step2 = document.getElementById('registerStep2');
+            if (step1) step1.style.display = 'none';
+            if (step2) step2.style.display = '';
+            const msg = document.getElementById('registerOtpMsg');
+            if (msg) msg.textContent = `✅ Te enviamos un código SMS a ${data.phone || phone.full}. Ingresalo para crear tu cuenta.`;
+            const code = document.getElementById('registerOtpCode');
+            if (code) { code.value = ''; setTimeout(() => code.focus(), 60); }
+        } catch (error) {
+            errorDiv.textContent = 'Error de conexión. Intenta más tarde.';
+            errorDiv.classList.add('show');
+        } finally {
+            if (btn) { btn.textContent = '📱 Enviar código SMS'; btn.disabled = false; }
+        }
+    }
+
+    function registerBackToStep1() {
+        const step1 = document.getElementById('registerStep1');
+        const step2 = document.getElementById('registerStep2');
+        if (step1) step1.style.display = '';
+        if (step2) step2.style.display = 'none';
+    }
+
+    async function handleRegisterConfirm() {
+        const errorDiv = document.getElementById('registerOtpError');
+        const btn = document.getElementById('registerConfirmBtn');
+        const otpCode = ((document.getElementById('registerOtpCode') || {}).value || '').trim();
+        errorDiv.classList.remove('show');
+        if (!_registerPending) { registerBackToStep1(); return; }
+        if (!otpCode || otpCode.length < 6) {
+            errorDiv.textContent = 'Ingresá el código de 6 dígitos que te llegó por SMS';
+            errorDiv.classList.add('show');
+            return;
+        }
+        const p = _registerPending;
+        const attribution = p.attribution;
+        const referralCode = p.referralCode;
+        const metaEventId = p.metaEventId;
         if (btn) { btn.textContent = 'Creando cuenta...'; btn.disabled = true; }
 
         try {
-            const metaEventId = VIP.pixel && VIP.pixel.enabled ? VIP.pixel.newEventId() : null;
             const response = await fetch(`${VIP.config.API_URL}/api/auth/register`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    username,
-                    password,
-                    email: email || null,
+                    username: p.username,
+                    password: p.password,
+                    email: p.email,
+                    phone: p.phone,
+                    otpCode,
                     referralCode: referralCode || undefined,
                     metaEventId,
                     campaignCode: attribution ? attribution.code : undefined,
@@ -148,6 +221,8 @@ VIP.auth = (function () {
                 if (form) form.reset();
                 const checkResult = document.getElementById('usernameCheckResult');
                 if (checkResult) checkResult.textContent = '';
+                _registerPending = null;
+                registerBackToStep1();
 
                 await initializeSession(true);
                 await VIP.notifications.sendFcmTokenAfterLogin();
@@ -158,17 +233,17 @@ VIP.auth = (function () {
                     VIP.campaign ? VIP.campaign.getActiveCustomData() : {}
                 ));
 
-                VIP.ui.showToast('✅ ¡Cuenta creada exitosamente!', 'success');
-                maybeOfferSmsVerification(data.user);
+                VIP.ui.showToast('✅ ¡Cuenta creada y celular verificado!', 'success');
             } else {
                 errorDiv.textContent = data.error || 'Error al crear cuenta';
                 errorDiv.classList.add('show');
+                if (data && data.code === 'PHONE_TAKEN') registerBackToStep1();
             }
         } catch (error) {
             errorDiv.textContent = 'Error de conexión. Intenta más tarde.';
             errorDiv.classList.add('show');
         } finally {
-            if (btn) { btn.textContent = '📝 Crear Cuenta'; btn.disabled = false; }
+            if (btn) { btn.textContent = '✅ Confirmar y crear cuenta'; btn.disabled = false; }
         }
     }
 
@@ -1380,8 +1455,10 @@ VIP.auth = (function () {
         } else {
             if (referralGroup) referralGroup.style.display = '';
         }
-        sendBtn.textContent = '📝 Crear Cuenta';
-        sendBtn.onclick = handleRegisterDirect;
+        sendBtn.textContent = '📱 Enviar código SMS';
+        sendBtn.onclick = () => handleRegisterDirect(false);
+        registerBackToStep1(); // #166 siempre arranca en el paso 1
+        _registerPending = null;
 
         // #142: el usuario de registro arranca VACÍO (antes se precargaba "VIP"; el
         // owner quiere que cada cliente elija libremente su nombre).
@@ -1500,6 +1577,8 @@ VIP.auth = (function () {
         checkUsernameAvailability,
         handleRegister,
         handleRegisterDirect,
+        handleRegisterConfirm,
+        registerBackToStep1,
         maybeOfferSmsVerification,
         refreshVerifyPhoneBanner,
         applyRegisterModalMode,

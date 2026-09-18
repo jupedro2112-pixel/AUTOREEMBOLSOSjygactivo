@@ -73,6 +73,8 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   `require()`. Por eso hay lazy getters en `src/middlewares/auth.js` y rutas.
 - **JUGAYGANA es flaky** (Cloudflare → responde HTML). Hay auto-retry + manejo de HTML
   en los clientes. No asumir respuestas inmediatas; reusar los clientes existentes.
+- **Registro con SMS obligatorio (#166):** `/api/auth/register` exige phone+otpCode; un celular
+  = una cuenta (`phoneKey`). `register-quick` está cerrado (410). No reabrir "sin SMS" sin el owner.
 - **Roles:** `user`, `admin` (todo), `depositor` (solo cargas), `withdrawer` (solo
   retiros), `publisher_admin` (solo crea usuarios de su publicista — lockdown via
   `PUBLISHER_ADMIN_ALLOWED_PATHS`).

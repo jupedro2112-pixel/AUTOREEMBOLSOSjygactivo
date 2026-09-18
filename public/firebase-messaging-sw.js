@@ -34,7 +34,7 @@ try {
 // ============================================
 // CONFIGURACIÓN DE CACHÉ
 // ============================================
-const CACHE_VERSION = 'v62'; // v62: rangos con % por tipo de reembolso (#163) // v61: soporte del login/barra sin link hardcodeado (#153) // v58: modal Mis Referidos con 'cómo funciona' en 3 pasos (#143)
+const CACHE_VERSION = 'v63'; // v63: registro con SMS obligatorio en 2 pasos (#166) // v62: rangos con % por tipo de reembolso (#163) // v61: soporte del login/barra sin link hardcodeado (#153) // v58: modal Mis Referidos con 'cómo funciona' en 3 pasos (#143)
 const CACHE_NAME = 'sala-juegos-fcm-' + CACHE_VERSION;
 
 // Logs por-fetch del SW (corren en CADA request). Apagados por default;

@@ -27,6 +27,10 @@ const spinSchema = new mongoose.Schema({
   // Premio ganado: monto ARS. 0 = sin premio.
   prizeARS: { type: Number, required: true, default: 0, min: 0 },
   prizeLabel: { type: String, default: '' }, // ej. "$10.000", "SIN PREMIO"
+  // #164 premio configurable: 'money' (fichas), 'bonus_pct' (% en la próxima carga → PromoBonus) o 'none'
+  prizeKind: { type: String, enum: ['money', 'bonus_pct', 'none'], default: null },
+  prizePct: { type: Number, default: 0 },
+  promoBonusId: { type: String, default: null },
 
   // Anti-fraude
   ipAddress: { type: String, default: null },

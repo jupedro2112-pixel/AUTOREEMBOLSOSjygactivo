@@ -4,7 +4,48 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-16**
+> **Última actualización: 2026-09-18**
+
+## Sesión 2026-09-18
+
+### 164. Bono 100% de primera carga con TOPE ($5.000) + 20% sobre el excedente · Ruleta con premios EDITABLES (dinero o bono % automático)
+- **Pedido del owner:** (1) "si es un bono de 100%, ajustar el bono automático en las
+  cargas hasta $5.000; más monto, que dé un 20% (automático)"; (2) que la ruleta
+  diaria tenga premios modificables: bonos (que se carguen automático) o dinero, con
+  sus porcentajes ajustables.
+- **(1) Bono 100% con tope (`Config['hgcashAppBonus']`):** campos nuevos
+  `firstCapARS` (default 5000; 0 = sin tope) y `firstExcessPct` (default 20).
+  `_hgcashFirstBonusAmount(amount, cfg)` = min(monto, tope)×100% + (monto−tope)×20%.
+  Ej.: $8.000 → $5.000 + $600 = $5.600, automático en la carga hgcash. Editable en
+  COMANDOS → "🎁 Bonos automáticos hgcash" (tope + % excedente). El aviso interno
+  del modal Depositar (#114) muestra la regla, y el cupón install-100 se consume con
+  un bonus manual ≥ min(monto, tope) (antes ≥ monto). Interpretación tomada: el
+  100% cubre hasta el tope y el resto de la MISMA carga va al 20% (no "20% en vez
+  de 100%" para cargas grandes) — avisar si se quería lo otro.
+- **(2) Ruleta con premios editables (`Config['roulettePrizes']`):** cada casillero
+  `{ kind: money|bonus_pct|none, value, weight, emoji, label }` + `bonusDays`
+  (vigencia del bono, default 7). Prob. = peso/Σpesos (se muestra en el panel).
+  · **money** = fichas: se acreditan solas (igual que antes) y cuentan contra el
+    tope diario (pacing fail-closed sin cambios).
+  · **bonus_pct** = % en la PRÓXIMA carga: se crea un `PromoBonus` con
+    `sourceRuleCode:'ruleta'`, `autoApply:true`, `applyScope:'first'` → se aplica
+    solo en la carga manual sin bonus o hgcash vía `claimAutoPromoPercent` (mismo
+    mecanismo del lote #149; exento del cap 30% de lectura como el lote) y queda
+    usado. NO consume tope diario (no es plata hasta que carga). Nota interna al
+    chat. `DailyRouletteSpin` + `prizeKind`, `prizePct`, `promoBonusId`;
+    status `credited` al activar el bono; el reintento del panel re-activa el
+    PromoBonus. Obligatorio un casillero "SIN PREMIO" (lo usa el tope para frenar).
+  · Endpoints `GET/PUT /api/admin/roulette/prizes` (admin general; cache 30 s).
+    `status`, `spin`, `recent-winners`, `claims-feed` y `test-spin` devuelven
+    `prizeKind`/`prizePct`; sin config guardada rige la tabla vieja
+    ($10.000/2.000/1.000/500/sin premio).
+- **Panel:** card "🎁 PREMIOS DE LA RULETA" (tabla emoji/etiqueta/tipo/valor/peso/
+  probabilidad + vigencia del bono) arriba del tope diario; simulación e historial
+  muestran los bonos. admin-sw v42 → v43.
+- **PWA (solo JS, sin bump de ?v):** ruleta muestra "🎁 +X% de BONO en tu PRÓXIMA
+  carga · se aplica solo"; lista de ganadores y ticker del login idem.
+- **Validado:** `node --check` OK (server.js, modelo, admin.js, admin-sw, roulette.js,
+  app.js); HTML del panel balanceado. Redeploy (back + panel).
 
 ## Sesión 2026-09-16
 

@@ -2319,7 +2319,18 @@ function _bankMovementPublic(m) {
 // allEnabled, allPct }. Los defaults reproducen el pedido original (100% / 20%).
 // La fecha límite del bono "todas las cargas" queda fija en código.
 const HGCASH_APP_BONUS_20_UNTIL = new Date('2026-08-31T23:59:59.999-03:00');
-const HGCASH_APP_BONUS_DEFAULTS = { firstEnabled: true, firstPct: 100, allEnabled: true, allPct: 20 };
+// #164 (owner 2026-09-18): el 100% de primera carga aplica hasta `firstCapARS` ($5.000) y
+// el monto que EXCEDE ese tope se bonifica al `firstExcessPct` (20%). Ej.: carga $8.000 →
+// $5.000 al 100% + $3.000 al 20% = $5.600 de bono. Todo automático y editable en el panel.
+const HGCASH_APP_BONUS_DEFAULTS = { firstEnabled: true, firstPct: 100, firstCapARS: 5000, firstExcessPct: 20, allEnabled: true, allPct: 20 };
+// Bono de primera carga con tope: 100% hasta el tope + excedente al % menor.
+function _hgcashFirstBonusAmount(amount, cfg) {
+  const a = Math.max(0, Number(amount) || 0);
+  const cap = Number(cfg.firstCapARS) > 0 ? Number(cfg.firstCapARS) : Infinity;
+  const base = Math.min(a, cap);
+  const excess = Math.max(0, a - cap);
+  return Math.round(base * (Number(cfg.firstPct) || 0) / 100 + excess * (Number(cfg.firstExcessPct) || 0) / 100);
+}
 // Decisión owner (2026-08-19): si el cliente ya tiene MÁS de este saldo en la
 // cuenta ANTES de la carga, la carga automática entra igual pero SIN el bono
 // del 20% (se le avisa con /sys_deposit_no_bonus_saldo, editable). El 100% de
@@ -2334,9 +2345,13 @@ function _hgcashBonusPct(v, fallback) {
 async function getHgcashAppBonusConfig() {
   try {
     const cfg = (await getConfig('hgcashAppBonus', null)) || {};
+    const capN = Math.round(Number(cfg.firstCapARS));
+    const exN = Math.round(Number(cfg.firstExcessPct));
     return {
       firstEnabled: cfg.firstEnabled !== false,
       firstPct: _hgcashBonusPct(cfg.firstPct, HGCASH_APP_BONUS_DEFAULTS.firstPct),
+      firstCapARS: Number.isFinite(capN) && capN >= 0 ? capN : HGCASH_APP_BONUS_DEFAULTS.firstCapARS, // 0 = sin tope
+      firstExcessPct: Number.isFinite(exN) && exN >= 0 && exN <= 200 ? exN : HGCASH_APP_BONUS_DEFAULTS.firstExcessPct,
       allEnabled: cfg.allEnabled !== false,
       allPct: _hgcashBonusPct(cfg.allPct, HGCASH_APP_BONUS_DEFAULTS.allPct)
     };
@@ -2439,7 +2454,8 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
     }
     if (!pct) return out;
 
-    const bonusAmount = Math.round(Number(amount) * pct / 100);
+    // #164: el 100% de primera carga tiene TOPE; el excedente va al % menor.
+    const bonusAmount = kind === 'install_100' ? _hgcashFirstBonusAmount(amount, cfg) : Math.round(Number(amount) * pct / 100);
     if (!(bonusAmount > 0)) return out;
 
     // Pausa anti rate-limit de JUGAYGANA entre la carga principal y el bonus
@@ -2483,7 +2499,7 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
       username: user.username,
       userId: user.id,
       description: kind === 'install_100'
-        ? `Bono automático ${pct}% primera carga (app instalada) sobre carga de $${Number(amount).toLocaleString('es-AR')}`
+        ? `Bono automático ${pct}% primera carga (app instalada${cfg.firstCapARS > 0 && Number(amount) > cfg.firstCapARS ? `; ${pct}% hasta $${cfg.firstCapARS.toLocaleString('es-AR')} + ${cfg.firstExcessPct}% del resto` : ''}) sobre carga de $${Number(amount).toLocaleString('es-AR')}`
         : `Bono automático ${pct}% por app instalada (hgcash) sobre carga de $${Number(amount).toLocaleString('es-AR')}`,
       adminUsername: 'auto-hgcash',
       adminRole: 'system',
@@ -9558,7 +9574,10 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // doble-100% visto en producción (2026-08-15): el agente lo daba a mano,
       // el cupón seguía "sin usar" y la carga automática después lo volvía a
       // dar. Un bonus menor al 100% (p.ej. 20%) NO consume el cupón.
-      if (bonusActuallyApplied && !_loteClaim && parseFloat(bonus) >= parseFloat(amount)) {
+      // #164: con tope, el "100%" manual equivale a min(monto, tope) → ese umbral consume el cupón.
+      let _cupon100Threshold = parseFloat(amount);
+      try { const _cfgB = await getHgcashAppBonusConfig(); if (_cfgB.firstCapARS > 0) _cupon100Threshold = Math.min(parseFloat(amount), _cfgB.firstCapARS); } catch (_) {}
+      if (bonusActuallyApplied && !_loteClaim && parseFloat(bonus) >= _cupon100Threshold) {
         try {
           const usedBy = `${req.user?.username || 'agente'} (bonus manual ≥100%)`;
           const mark = { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: usedBy };
@@ -12263,6 +12282,8 @@ app.get('/api/admin/users/:userId/app-bonus-hint', authMiddleware, depositorMidd
       hasApp,
       firstAvailable,
       firstPct: cfg.firstPct,
+      firstCapARS: cfg.firstCapARS, // #164
+      firstExcessPct: cfg.firstExcessPct,
       allActive: hasApp && promo20Alive,
       allPct: cfg.allPct,
       firstUsedBy: user.installBonus100UsedBy || null,
@@ -15895,14 +15916,17 @@ app.post('/api/admin/hgcash/app-bonus', authMiddleware, adminMiddleware, async (
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
     const cur = await getHgcashAppBonusConfig();
     const b = req.body || {};
+    const capN = Math.round(Number(b.firstCapARS)); const exN = Math.round(Number(b.firstExcessPct));
     const next = {
       firstEnabled: typeof b.firstEnabled === 'boolean' ? b.firstEnabled : cur.firstEnabled,
       firstPct: _hgcashBonusPct(b.firstPct, cur.firstPct),
+      firstCapARS: Number.isFinite(capN) && capN >= 0 ? capN : cur.firstCapARS,      // #164 0 = sin tope
+      firstExcessPct: Number.isFinite(exN) && exN >= 0 && exN <= 200 ? exN : cur.firstExcessPct,
       allEnabled: typeof b.allEnabled === 'boolean' ? b.allEnabled : cur.allEnabled,
       allPct: _hgcashBonusPct(b.allPct, cur.allPct)
     };
     await setConfig('hgcashAppBonus', next);
-    logger.info(`[hgcash-bonus] config actualizada por ${req.user.username}: primera=${next.firstEnabled ? next.firstPct + '%' : 'OFF'} todas=${next.allEnabled ? next.allPct + '%' : 'OFF'}`);
+    logger.info(`[hgcash-bonus] config actualizada por ${req.user.username}: primera=${next.firstEnabled ? next.firstPct + '% hasta $' + next.firstCapARS + ' + ' + next.firstExcessPct + '% excedente' : 'OFF'} todas=${next.allEnabled ? next.allPct + '%' : 'OFF'}`);
     res.json({ success: true, config: next });
   } catch (error) {
     logger.error(`POST /api/admin/hgcash/app-bonus: ${error.message}`);
@@ -17454,6 +17478,58 @@ const ROULETTE_PRIZES = [
   { value: 500,   weight: 8,  emoji: '🥈', label: '$500' },
   { value: 0,     weight: 80, emoji: '😔', label: 'SIN PREMIO' }
 ];
+// #164 Premios CONFIGURABLES desde el panel (Config['roulettePrizes']): cada premio tiene
+// `kind`: 'money' (fichas, se acreditan solas en JUGAYGANA y cuentan contra el tope
+// diario), 'bonus_pct' (% de bono en la PRÓXIMA carga: se crea un PromoBonus con
+// autoApply → se aplica solo en la carga manual/hgcash como el lote; NO consume tope
+// diario porque no es plata hasta que el cliente carga) o 'none' (SIN PREMIO).
+// `weight` = peso relativo (la prob. es weight/Σweights). `bonusDays` = vigencia del bono.
+const ROULETTE_PRIZE_KINDS = ['money', 'bonus_pct', 'none'];
+let _roulettePrizesCache = { at: 0, cfg: null };
+function _rouletteNormalizePrizes(raw) {
+  const arr = Array.isArray(raw) ? raw : [];
+  const out = [];
+  for (const p of arr) {
+    if (!p) continue;
+    const kind = ROULETTE_PRIZE_KINDS.includes(p.kind) ? p.kind : (Number(p.value) > 0 ? 'money' : 'none');
+    const value = kind === 'none' ? 0 : Math.max(0, Math.round(Number(p.value) || 0));
+    const weight = Math.max(0, Number(p.weight) || 0);
+    if (kind !== 'none' && !(value > 0)) continue;
+    if (!(weight > 0)) continue;
+    const label = String(p.label || (kind === 'money' ? '$' + value.toLocaleString('es-AR') : (kind === 'bonus_pct' ? `+${value}% en tu próxima carga` : 'SIN PREMIO'))).slice(0, 40);
+    out.push({ kind, value, weight, emoji: String(p.emoji || (kind === 'money' ? '💰' : (kind === 'bonus_pct' ? '🎁' : '😔'))).slice(0, 4), label });
+  }
+  return out;
+}
+async function getRoulettePrizesConfig() {
+  const now = Date.now();
+  if (_roulettePrizesCache.cfg && now - _roulettePrizesCache.at < 30000) return _roulettePrizesCache.cfg;
+  let cfg = null;
+  try {
+    const raw = await getConfig('roulettePrizes', null);
+    if (raw && Array.isArray(raw.prizes)) {
+      const prizes = _rouletteNormalizePrizes(raw.prizes);
+      if (prizes.length && prizes.some(p => p.kind === 'none')) {
+        cfg = { prizes, bonusDays: Math.min(60, Math.max(1, Math.round(Number(raw.bonusDays) || 7))), custom: true };
+      }
+    }
+  } catch (e) { logger.warn(`[ROULETTE] config de premios ilegible, uso defaults: ${e.message}`); }
+  if (!cfg) cfg = { prizes: ROULETTE_PRIZES.map(p => ({ kind: p.value > 0 ? 'money' : 'none', value: p.value, weight: p.weight, emoji: p.emoji, label: p.label })), bonusDays: 7, custom: false };
+  _roulettePrizesCache = { at: now, cfg };
+  return cfg;
+}
+// Crea el PromoBonus del premio "bono %": se aplica SOLO en la próxima carga (autoApply,
+// scope first), vence a los `days`. Reemplaza el bono activo anterior (un cartel a la vez).
+async function _activateRoulettePromoBonus(user, pct, days, spinId) {
+  const uname = String(user.username).toLowerCase();
+  await PromoBonus.updateMany({ username: uname, status: 'active' }, { $set: { status: 'expired' } }).catch(() => {});
+  return PromoBonus.create({
+    id: uuidv4(), userId: user.id, username: uname, percent: Number(pct), montoFijoARS: 0,
+    sourceRuleId: spinId || null, sourceRuleCode: 'ruleta', sourceRuleName: 'Ruleta diaria',
+    activatedAt: new Date(), expiresAt: new Date(Date.now() + Math.max(1, Number(days) || 7) * 24 * 3600 * 1000),
+    status: 'active', autoApply: true, applyScope: 'first', applyFromMin: null, applyToMin: null, rolloverX: null
+  });
+}
 
 // dateKey YYYY-MM-DD en hora Argentina (ART, UTC-3).
 function _rouletteDateKeyART(now) {
@@ -17465,14 +17541,19 @@ function _rouletteDateKeyART(now) {
   return formatter.format(d); // "YYYY-MM-DD"
 }
 
-function _rouletteWeightedPick() {
-  const total = ROULETTE_PRIZES.reduce((s, p) => s + p.weight, 0);
+function _rouletteWeightedPick(prizes) {
+  const list = Array.isArray(prizes) && prizes.length ? prizes : ROULETTE_PRIZES;
+  const total = list.reduce((s, p) => s + p.weight, 0);
   let r = Math.random() * total;
-  for (const p of ROULETTE_PRIZES) {
+  for (const p of list) {
     r -= p.weight;
     if (r <= 0) return p;
   }
-  return ROULETTE_PRIZES[ROULETTE_PRIZES.length - 1];
+  return list.find(p => (p.kind || (p.value > 0 ? 'money' : 'none')) === 'none') || list[list.length - 1];
+}
+function _rouletteNoPrize(prizes) {
+  const list = Array.isArray(prizes) && prizes.length ? prizes : ROULETTE_PRIZES;
+  return list.find(p => (p.kind || (p.value > 0 ? 'money' : 'none')) === 'none') || { kind: 'none', value: 0, weight: 1, emoji: '😔', label: 'SIN PREMIO' };
 }
 
 // La ruleta diaria es exclusiva para usuarios con la PWA instalada: detecta
@@ -17532,10 +17613,12 @@ app.get('/api/roulette/status', authMiddleware, async (req, res) => {
       needsActive: appOk && !act.active, // app OK pero no llega a las cargas mínimas
       minCargas: ROULETTE_MIN_CARGAS_30D,
       dateKey,
-      prizes: ROULETTE_PRIZES,
+      prizes: (await getRoulettePrizesConfig()).prizes,
       alreadySpun: !!spin,
       spin: spin ? {
         prizeARS: spin.prizeARS,
+        prizeKind: spin.prizeKind || (spin.prizeARS > 0 ? 'money' : 'none'),
+        prizePct: spin.prizePct || 0,
         prizeLabel: spin.prizeLabel,
         status: spin.status,
         spunAt: spin.spunAt,
@@ -17593,6 +17676,35 @@ app.put('/api/admin/roulette/budget', authMiddleware, adminMiddleware, async (re
   }
 });
 
+// #164 GET/PUT /api/admin/roulette/prizes — tabla de premios configurable.
+app.get('/api/admin/roulette/prizes', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const cfg = await getRoulettePrizesConfig();
+    const total = cfg.prizes.reduce((s, p) => s + p.weight, 0);
+    res.json({ success: true, prizes: cfg.prizes.map(p => Object.assign({}, p, { probability: total > 0 ? Math.round(p.weight / total * 1000) / 10 : 0 })), bonusDays: cfg.bonusDays, custom: cfg.custom, kinds: ROULETTE_PRIZE_KINDS });
+  } catch (err) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.put('/api/admin/roulette/prizes', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {};
+    const prizes = _rouletteNormalizePrizes(b.prizes);
+    if (!prizes.length) return res.status(400).json({ error: 'Cargá al menos un premio' });
+    if (!prizes.some(p => p.kind === 'none')) return res.status(400).json({ error: 'Tiene que haber un casillero "SIN PREMIO" (es el que usa el tope diario para frenar)' });
+    if (prizes.some(p => p.kind === 'bonus_pct' && (p.value < 1 || p.value > 200))) return res.status(400).json({ error: 'Los bonos van de 1% a 200%' });
+    const bonusDays = Math.min(60, Math.max(1, Math.round(Number(b.bonusDays) || 7)));
+    await setConfig('roulettePrizes', { prizes, bonusDays, updatedBy: req.user.username, updatedAt: new Date() });
+    _roulettePrizesCache = { at: 0, cfg: null };
+    const total = prizes.reduce((s, p) => s + p.weight, 0);
+    logger.info(`[ROULETTE] premios actualizados por ${req.user.username}: ${prizes.map(p => `${p.label} (${p.kind}${p.value ? ' ' + p.value : ''}) ${Math.round(p.weight / total * 1000) / 10}%`).join(' · ')} · bono vigente ${bonusDays} d`);
+    res.json({ success: true, prizes, bonusDays });
+  } catch (err) {
+    logger.error(`PUT /api/admin/roulette/prizes: ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // POST /api/admin/roulette/reset-daily — borra los giros de HOY para que
 // todos los que ya giraron puedan volver a girar. Lo usa el owner cuando
 // quiere reabrir la ruleta en el día. Los premios ya acreditados quedan
@@ -17639,11 +17751,11 @@ app.get('/api/roulette/recent-winners', authMiddleware, async (req, res) => {
     const dateKey = _rouletteDateKeyART();
     const winners = await DailyRouletteSpin.find({
       dateKey,
-      prizeARS: { $gt: 0 }
+      $or: [{ prizeARS: { $gt: 0 } }, { prizeKind: 'bonus_pct' }]
     })
       .sort({ spunAt: -1 })
       .limit(limit)
-      .select('username prizeARS spunAt')
+      .select('username prizeARS prizeKind prizePct prizeLabel spunAt')
       .lean();
     // Tapa ~70% del username. Visible: últimas 2 letras del nombre + todos
     // los números finales. Ej: "lalodj777" → "****dj777", "atojoaquin" → "********in",
@@ -17668,6 +17780,9 @@ app.get('/api/roulette/recent-winners', authMiddleware, async (req, res) => {
       return {
         username: isMe ? w.username : _mask(w.username),
         prizeARS: w.prizeARS,
+        prizeKind: w.prizeKind || 'money',
+        prizePct: w.prizePct || 0,
+        prizeLabel: w.prizeLabel || null,
         spunAt: w.spunAt,
         minutesAgo,
         isMe
@@ -17735,8 +17850,8 @@ app.get('/api/claims-feed', async (req, res) => {
   try {
     const out = [];
     const [spins, refunds, bonusUsers] = await Promise.all([
-      DailyRouletteSpin.find({ prizeARS: { $gt: 0 } })
-        .sort({ spunAt: -1 }).limit(35).select('username prizeARS spunAt').lean(),
+      DailyRouletteSpin.find({ $or: [{ prizeARS: { $gt: 0 } }, { prizeKind: 'bonus_pct' }] })
+        .sort({ spunAt: -1 }).limit(35).select('username prizeARS prizeKind prizePct spunAt').lean(),
       RefundClaim.find({ amount: { $gt: 0 } })
         .sort({ claimedAt: -1 }).limit(35).select('username type amount claimedAt').lean(),
       // Solo reclamos LEGACY del regalo de $5.000 (el ticker viejo muestra un
@@ -17746,7 +17861,7 @@ app.get('/api/claims-feed', async (req, res) => {
         .sort({ installBonusClaimedAt: -1 }).limit(20).select('username installBonusClaimedAt').lean()
     ]);
     spins.forEach(function (s) {
-      out.push({ kind: 'ruleta', name: _claimsMaskName(s.username), amount: s.prizeARS, refundType: null, ts: s.spunAt });
+      out.push({ kind: 'ruleta', name: _claimsMaskName(s.username), amount: s.prizeARS, bonusPct: s.prizeKind === 'bonus_pct' ? s.prizePct : null, refundType: null, ts: s.spunAt });
     });
     refunds.forEach(function (r) {
       out.push({ kind: 'reembolso', name: _claimsMaskName(r.username), amount: r.amount, refundType: r.type, ts: r.claimedAt });
@@ -17786,18 +17901,22 @@ app.post('/api/admin/roulette/test-spin', authMiddleware, adminMiddleware, async
     if (!u) {
       return res.status(404).json({ error: `Usuario "${username}" no encontrado` });
     }
-    const pick = _rouletteWeightedPick();
+    const _rcfg = await getRoulettePrizesConfig();
+    const pick = _rouletteWeightedPick(_rcfg.prizes);
+    const kind = pick.kind || (Number(pick.value) > 0 ? 'money' : 'none');
     res.json({
       success: true,
       simulation: true,
       username: u.username,
       prize: {
-        prizeARS: Number(pick.value) || 0,
+        prizeARS: kind === 'money' ? (Number(pick.value) || 0) : 0,
+        prizeKind: kind,
+        prizePct: kind === 'bonus_pct' ? (Number(pick.value) || 0) : 0,
         prizeLabel: pick.label,
         emoji: pick.emoji,
         weight: pick.weight
       },
-      prizes: ROULETTE_PRIZES,
+      prizes: _rcfg.prizes,
       note: 'Esto es solo simulación — no se escribió nada ni se acreditó plata.'
     });
   } catch (err) {
@@ -17847,8 +17966,11 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     }
 
     // Pick + insert (status='won' o 'no_prize') con unique index protegiendo race.
-    let pick = _rouletteWeightedPick();
-    let prizeARS = Number(pick.value) || 0;
+    const _rcfg = await getRoulettePrizesConfig();
+    let pick = _rouletteWeightedPick(_rcfg.prizes);
+    let prizeKind = pick.kind || (Number(pick.value) > 0 ? 'money' : 'none');
+    let prizeARS = prizeKind === 'money' ? (Number(pick.value) || 0) : 0;
+    const prizePct = prizeKind === 'bonus_pct' ? (Number(pick.value) || 0) : 0;
 
     // PACING DE BUDGET DIARIO: si la admin config tiene un budget, evitamos
     // gastar más de lo que toca a esta hora. Distribuimos el budget bien
@@ -17865,11 +17987,8 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
       const budgetEnabled = !!(cfg && cfg.enabled !== false && budgetARS > 0);
       if (prizeARS > 0 && !budgetEnabled) {
         logger.info(`[ROULETTE] SIN TOPE configurado — forzando SIN PREMIO para ${username} (activá el tope diario en el panel para que la ruleta reparta premios)`);
-        const noPrize = ROULETTE_PRIZES.find(p => Number(p.value) === 0);
-        if (noPrize) {
-          pick = noPrize;
-          prizeARS = 0;
-        }
+        const noPrize = _rouletteNoPrize(_rcfg.prizes);
+        if (noPrize) { pick = noPrize; prizeARS = 0; prizeKind = 'none'; }
       } else if (budgetEnabled && prizeARS > 0) {
         const agg = await DailyRouletteSpin.aggregate([
           { $match: { dateKey, status: { $in: ['credited', 'won'] }, prizeARS: { $gt: 0 } } },
@@ -17887,26 +18006,18 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         const targetSpent = budgetARS * dayProgress;
         if ((spentToday + prizeARS) > targetSpent) {
           logger.info(`[ROULETTE] BUDGET PACING — forzando SIN PREMIO para ${username} (gastado $${spentToday}+$${prizeARS} > target $${Math.round(targetSpent)} a las ${h}:${m})`);
-          // Elegir el "SIN PREMIO" del pool — siempre es el value:0
-          const noPrize = ROULETTE_PRIZES.find(p => Number(p.value) === 0);
-          if (noPrize) {
-            pick = noPrize;
-            prizeARS = 0;
-          }
+          const noPrize = _rouletteNoPrize(_rcfg.prizes);
+          if (noPrize) { pick = noPrize; prizeARS = 0; prizeKind = 'none'; }
         }
       }
     } catch (e) {
       // Fail-closed también ante un error de DB: mejor un giro sin premio que
       // regalar por encima del tope (la ruleta está abierta a toda la base).
       logger.warn(`[ROULETTE] budget-pacing falló — forzando SIN PREMIO: ${e.message}`);
-      const noPrize = ROULETTE_PRIZES.find(p => Number(p.value) === 0);
-      if (noPrize) {
-        pick = noPrize;
-        prizeARS = 0;
-      }
+      if (prizeKind === 'money') { const noPrize = _rouletteNoPrize(_rcfg.prizes); if (noPrize) { pick = noPrize; prizeARS = 0; prizeKind = 'none'; } }
     }
 
-    const initialStatus = prizeARS > 0 ? 'won' : 'no_prize';
+    const initialStatus = (prizeARS > 0 || prizeKind === 'bonus_pct') ? 'won' : 'no_prize';
     let spinDoc;
     try {
       spinDoc = await DailyRouletteSpin.create({
@@ -17916,6 +18027,8 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         dateKey,
         spunAt: new Date(),
         prizeARS,
+        prizeKind,
+        prizePct: prizeKind === 'bonus_pct' ? prizePct : 0,
         prizeLabel: pick.label,
         ipAddress: (req.ip || '').slice(0, 60),
         userAgent: String(req.headers['user-agent'] || '').slice(0, 200),
@@ -17939,12 +18052,28 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     }
 
     // Si no hay premio, devolvemos el resultado y terminamos.
-    if (prizeARS === 0) {
+    if (prizeKind === 'none') {
       logger.info(`[ROULETTE] ${username} → SIN PREMIO (${dateKey})`);
       return res.json({
         success: true,
-        prize: { prizeARS: 0, prizeLabel: pick.label, emoji: pick.emoji, status: 'no_prize' }
+        prize: { prizeARS: 0, prizeKind: 'none', prizePct: 0, prizeLabel: pick.label, emoji: pick.emoji, status: 'no_prize' }
       });
+    }
+    // #164 Premio BONO %: se activa un PromoBonus automático para la próxima carga (no toca
+    // JUGAYGANA ahora; el % se acredita solo cuando el cliente cargue, como el lote).
+    if (prizeKind === 'bonus_pct') {
+      try {
+        const userDoc = await User.findOne({ id: userId }).select('id username').lean();
+        const pb = await _activateRoulettePromoBonus(userDoc || { id: userId, username }, prizePct, _rcfg.bonusDays, spinDoc.id);
+        await DailyRouletteSpin.updateOne({ id: spinDoc.id }, { $set: { status: 'credited', promoBonusId: pb.id, creditedAt: new Date() }, $inc: { creditAttempts: 1 } }).catch(() => {});
+        try { await _emitAdminOnlyChatNote(userId, username, `🎰 Ruleta diaria: ganó 🎁 +${prizePct}% en su PRÓXIMA carga (vigente ${_rcfg.bonusDays} días). Se aplica SOLO al cargar (manual sin bonus o hgcash) y queda usado. No hay que marcar nada.`); } catch (_) {}
+        logger.info(`[ROULETTE] ${username} → BONO +${prizePct}% próxima carga (promo ${pb.id})`);
+        return res.json({ success: true, prize: { prizeARS: 0, prizeKind: 'bonus_pct', prizePct, prizeLabel: pick.label, emoji: pick.emoji, status: 'credited', bonusDays: _rcfg.bonusDays } });
+      } catch (e) {
+        await DailyRouletteSpin.updateOne({ id: spinDoc.id }, { $set: { status: 'credit_failed', creditError: String(e.message || 'promo').slice(0, 280) }, $inc: { creditAttempts: 1 } }).catch(() => {});
+        logger.error(`[ROULETTE] bono FAIL ${username} +${prizePct}%: ${e.message}`);
+        return res.status(503).json({ success: false, prize: { prizeARS: 0, prizeKind: 'bonus_pct', prizePct, prizeLabel: pick.label, emoji: pick.emoji, status: 'credit_failed' }, error: 'Ganaste pero hubo un problema al activar el bono. Avisanos por WhatsApp y lo resolvemos.' });
+      }
     }
 
     // Hay premio → auto-credit jugaygana.
@@ -17974,7 +18103,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
       logger.error(`[ROULETTE] credit FAIL ${username} $${prizeARS}: ${(credit && credit.error) || 'unknown'}`);
       return res.status(503).json({
         success: false,
-        prize: { prizeARS, prizeLabel: pick.label, emoji: pick.emoji, status: 'credit_failed' },
+        prize: { prizeARS, prizeKind: 'money', prizePct: 0, prizeLabel: pick.label, emoji: pick.emoji, status: 'credit_failed' },
         error: 'Ganaste pero hubo un problema al acreditar. Avisanos por WhatsApp y lo resolvemos.'
       });
     }
@@ -18087,6 +18216,14 @@ app.post('/api/admin/roulette/:id/retry-credit', authMiddleware, adminMiddleware
     const spin = await DailyRouletteSpin.findOne({ id: req.params.id });
     if (!spin) return res.status(404).json({ error: 'Spin no encontrado' });
     if (spin.status === 'credited') return res.json({ success: true, alreadyCredited: true });
+    if (spin.prizeKind === 'bonus_pct' && spin.prizePct > 0) {
+      // #164: reintento del premio BONO = volver a activar el PromoBonus.
+      const _rcfg = await getRoulettePrizesConfig();
+      const userDoc = await User.findOne({ id: spin.userId }).select('id username').lean();
+      const pb = await _activateRoulettePromoBonus(userDoc || { id: spin.userId, username: spin.username }, spin.prizePct, _rcfg.bonusDays, spin.id);
+      await DailyRouletteSpin.updateOne({ id: spin.id }, { $set: { status: 'credited', promoBonusId: pb.id, creditedAt: new Date(), creditError: null }, $inc: { creditAttempts: 1 } });
+      return res.json({ success: true, promoBonusId: pb.id });
+    }
     if (spin.prizeARS <= 0) return res.status(400).json({ error: 'Este spin no tiene premio.' });
     // #151: si el crédito anterior quedó AMBIGUO, no reintentar sin confirmación explícita.
     if (String(spin.creditError || '').startsWith('VERIFICAR') && !(req.body && req.body.force === true)) {
@@ -18898,7 +19035,7 @@ async function _getActivePromoBonus(username, opts = {}) {
   // Tope de LECTURA (decisión owner 2026-07-08): los bonos AUTOMÁTICOS están
   // capeados a 30%. Los bonos de LOTE (sourceRuleCode 'lote') están EXENTOS:
   // los configura un agente a mano.
-  if (b.sourceRuleCode !== 'lote' && Number(b.percent) > 30) b.percent = 30;
+  if (!['lote', 'ruleta'].includes(b.sourceRuleCode) && Number(b.percent) > 30) b.percent = 30;
   return b;
 }
 

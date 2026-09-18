@@ -3143,7 +3143,7 @@ async function loadDepositAppBonusHint() {
         if (h.firstAvailable) {
             el.style.cssText = base + 'background:rgba(212,175,55,.12);border:1px solid rgba(212,175,55,.55);color:#f0e6c8;';
             el.innerHTML = tag +
-                `💥 Este cliente tiene la <b>APP con notificaciones</b> y <b>NUNCA usó su bono de primera carga</b> → le corresponde <b>+${h.firstPct}%</b>.<br>` +
+                `💥 Este cliente tiene la <b>APP con notificaciones</b> y <b>NUNCA usó su bono de primera carga</b> → le corresponde <b>+${h.firstPct}%</b>${h.firstCapARS > 0 ? ` hasta $${Number(h.firstCapARS).toLocaleString('es-AR')} (+${h.firstExcessPct}% sobre lo que exceda)` : ''}.<br>` +
                 'Aplicáselo en "Bonificación extra": al acreditarse queda <b>marcado como usado automáticamente</b> (no se puede repetir).';
         } else if (h.allActive) {
             el.style.cssText = base + 'background:rgba(40,167,69,.12);border:1px solid rgba(40,167,69,.55);color:#cdeed7;';
@@ -4564,7 +4564,7 @@ function switchSection(section) {
     if (section === 'datos') loadDatos();
     if (section === 'notifications') loadNotificationsPanel();
     if (section === 'referrals') loadAdminReferralSummary();
-    if (section === 'roulette') loadRouletteAdmin();
+    if (section === 'roulette') { loadRouletteAdmin(); loadRoulettePrizes(); }
     if (section === 'automations') loadAutomations();
     if (section === 'bonusStrategy') loadBonusStrategy();
     if (section === 'encuesta') loadEncuesta();
@@ -5884,6 +5884,8 @@ async function loadHgAppBonus() {
         const ap = document.getElementById('hgAppBonusAllPct');
         if (fe) fe.checked = c.firstEnabled !== false;
         if (fp) fp.value = c.firstPct || 100;
+        const fc = document.getElementById('hgAppBonusFirstCap'); if (fc) fc.value = c.firstCapARS != null ? c.firstCapARS : 5000;
+        const fx = document.getElementById('hgAppBonusFirstExcess'); if (fx) fx.value = c.firstExcessPct != null ? c.firstExcessPct : 20;
         if (ae) ae.checked = c.allEnabled !== false;
         if (ap) ap.value = c.allPct || 20;
         const until = document.getElementById('hgAppBonusUntil');
@@ -5906,6 +5908,8 @@ async function saveHgAppBonus() {
     const body = {
         firstEnabled: !!(document.getElementById('hgAppBonusFirstEnabled') || {}).checked,
         firstPct: pct('hgAppBonusFirstPct', 100),
+        firstCapARS: Math.max(0, Math.round(Number((document.getElementById('hgAppBonusFirstCap') || {}).value) || 0)),
+        firstExcessPct: Math.max(0, Math.min(200, Math.round(Number((document.getElementById('hgAppBonusFirstExcess') || {}).value) || 0))),
         allEnabled: !!(document.getElementById('hgAppBonusAllEnabled') || {}).checked,
         allPct: pct('hgAppBonusAllPct', 20)
     };
@@ -5920,7 +5924,7 @@ async function saveHgAppBonus() {
         const c = j.config || body;
         if (msg) {
             msg.style.color = '#28a745';
-            msg.textContent = `✅ Guardado — Primera carga: ${c.firstEnabled ? c.firstPct + '%' : 'APAGADO'} · Todas las cargas: ${c.allEnabled ? c.allPct + '%' : 'APAGADO'}`;
+            msg.textContent = `✅ Guardado — Primera carga: ${c.firstEnabled ? c.firstPct + '%' + (c.firstCapARS > 0 ? ' hasta $' + Number(c.firstCapARS).toLocaleString('es-AR') + ' + ' + c.firstExcessPct + '% del excedente' : '') : 'APAGADO'} · Todas las cargas: ${c.allEnabled ? c.allPct + '%' : 'APAGADO'}`;
         }
         showToast('Bonos automáticos guardados', 'success');
         loadHgAppBonus();
@@ -9597,7 +9601,7 @@ async function rouletteTestSpin() {
             if (box) box.innerHTML = '<div style="color:#ff8080;padding:6px;font-size:12px;">❌ ' + escapeHtml(d.error || 'Error') + '</div>';
             return;
         }
-        const won = (d.prize.prizeARS || 0) > 0;
+        const won = (d.prize.prizeARS || 0) > 0 || d.prize.prizeKind === 'bonus_pct';
         const color = won ? '#ffd700' : '#888';
         const bg = won ? 'rgba(255,215,0,0.10)' : 'rgba(255,255,255,0.04)';
         const border = won ? '#ffd700' : 'rgba(255,255,255,0.18)';
@@ -9606,7 +9610,7 @@ async function rouletteTestSpin() {
                 '<div style="background:' + bg + ';border:1.5px solid ' + border + ';border-radius:9px;padding:10px 12px;display:flex;align-items:center;gap:10px;">' +
                     '<div style="font-size:30px;line-height:1;">' + (d.prize.emoji || '🎲') + '</div>' +
                     '<div style="flex:1;">' +
-                        '<div style="color:' + color + ';font-weight:900;font-size:14px;">' + escapeHtml(d.prize.prizeLabel) + (won ? ' · $' + Number(d.prize.prizeARS).toLocaleString('es-AR') : '') + '</div>' +
+                        '<div style="color:' + color + ';font-weight:900;font-size:14px;">' + escapeHtml(d.prize.prizeLabel) + (d.prize.prizeKind === 'bonus_pct' ? ' · 🎁 bono +' + d.prize.prizePct + '% próxima carga' : (won ? ' · $' + Number(d.prize.prizeARS).toLocaleString('es-AR') : '')) + '</div>' +
                         '<div style="color:#aaa;font-size:11px;">A nombre de <strong>@' + escapeHtml(d.username) + '</strong> · peso ' + d.prize.weight + ' · simulación, no afecta nada real.</div>' +
                     '</div>' +
                 '</div>';
@@ -9727,7 +9731,7 @@ async function loadRouletteAdmin() {
                 html += '<tr style="border-top:1px solid rgba(255,255,255,0.05);">';
                 html += '<td style="padding:7px 10px;color:#aaa;font-size:10.5px;white-space:nowrap;">' + escapeHtml(when) + '</td>';
                 html += '<td style="padding:7px 10px;color:#fff;font-weight:700;">' + escapeHtml(it.username || '?') + '</td>';
-                html += '<td style="padding:7px 10px;text-align:right;color:' + (it.prizeARS >= 10000 ? '#ffd700' : (it.prizeARS >= 1000 ? '#ff8c5a' : (it.prizeARS > 0 ? '#aaffaa' : '#888'))) + ';font-weight:800;">' + (it.prizeARS > 0 ? fmtMoney(it.prizeARS) : '—') + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:' + (it.prizeKind === 'bonus_pct' ? '#c98bff' : (it.prizeARS >= 10000 ? '#ffd700' : (it.prizeARS >= 1000 ? '#ff8c5a' : (it.prizeARS > 0 ? '#aaffaa' : '#888')))) + ';font-weight:800;">' + (it.prizeKind === 'bonus_pct' ? '🎁 +' + it.prizePct + '%' : (it.prizeARS > 0 ? fmtMoney(it.prizeARS) : '—')) + '</td>';
                 html += '<td style="padding:7px 10px;text-align:center;">' + statusBadge + '</td>';
                 html += '<td style="padding:7px 10px;color:#888;font-size:10px;font-family:monospace;">';
                 if (it.status === 'credited' && it.creditTxId) {
@@ -13990,3 +13994,58 @@ window.bankSweepDestChanged = bankSweepDestChanged; window.syncSweep = syncSweep
 window.addSweepDestRow = addSweepDestRow; window.saveSweepDestinations = saveSweepDestinations; window.openBankClose = openBankClose;
 window.bankCloseRun = bankCloseRun; window.bankCloseResolve = bankCloseResolve; window.bankGoToMovement = bankGoToMovement; window.setDepositOrigin = setDepositOrigin;
 window.bankArchiveOld = bankArchiveOld; window.saveBankControl = saveBankControl;
+
+
+// ── #164 Premios configurables de la ruleta ─────────────────────────────────
+function _rpRow(p) {
+    p = p || {};
+    const v = (x) => escapeHtml(String(x == null ? '' : x));
+    const kind = p.kind || 'money';
+    return '<tr class="rp-row">' +
+        '<td><input type="text" class="rp-emoji" value="' + v(p.emoji || '💰') + '" maxlength="4" style="width:52px;text-align:center;"></td>' +
+        '<td><input type="text" class="rp-label" value="' + v(p.label || '') + '" maxlength="40" style="width:170px;" placeholder="$1.000 / +20% próxima carga"></td>' +
+        '<td><select class="rp-kind" onchange="rouletteRecalcProb()" style="background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,.2);color:#fff;padding:5px;border-radius:6px;">' +
+            '<option value="money"' + (kind === 'money' ? ' selected' : '') + '>💰 Dinero (fichas)</option>' +
+            '<option value="bonus_pct"' + (kind === 'bonus_pct' ? ' selected' : '') + '>🎁 Bono % próxima carga</option>' +
+            '<option value="none"' + (kind === 'none' ? ' selected' : '') + '>😔 Sin premio</option></select></td>' +
+        '<td><input type="number" class="rp-value" value="' + v(p.value != null ? p.value : '') + '" min="0" style="width:100px;"></td>' +
+        '<td><input type="number" class="rp-weight" value="' + v(p.weight != null ? p.weight : 1) + '" min="0" step="0.5" oninput="rouletteRecalcProb()" style="width:80px;"></td>' +
+        '<td class="rp-prob" style="color:#ffd700;font-weight:800;">—</td>' +
+        '<td><button class="btn btn-sm" style="background:#dc3545;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;" onclick="this.closest(\'.rp-row\').remove();rouletteRecalcProb()">🗑️</button></td></tr>';
+}
+function addRoulettePrizeRow(p) {
+    const b = document.getElementById('roulettePrizesBody'); if (!b) return;
+    b.insertAdjacentHTML('beforeend', _rpRow(p)); rouletteRecalcProb();
+}
+function rouletteRecalcProb() {
+    const rows = Array.from(document.querySelectorAll('#roulettePrizesBody .rp-row'));
+    const total = rows.reduce((s, r) => s + (Number(r.querySelector('.rp-weight').value) || 0), 0);
+    rows.forEach(r => { const w = Number(r.querySelector('.rp-weight').value) || 0; r.querySelector('.rp-prob').textContent = total > 0 ? (Math.round(w / total * 1000) / 10) + '%' : '—'; });
+}
+async function loadRoulettePrizes() {
+    const b = document.getElementById('roulettePrizesBody'); if (!b) return;
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/prizes');
+        const d = await r.json();
+        if (!r.ok || !d.success) { b.innerHTML = '<tr><td colspan="7" style="color:#888;">Solo el admin general edita los premios</td></tr>'; return; }
+        b.innerHTML = '';
+        (d.prizes || []).forEach(p => addRoulettePrizeRow(p));
+        const bd = document.getElementById('rouletteBonusDays'); if (bd) bd.value = d.bonusDays || 7;
+        const m = document.getElementById('roulettePrizesMsg'); if (m) m.textContent = d.custom ? '' : 'Tabla por defecto (todavía no guardaste premios propios).';
+    } catch (_) {}
+}
+async function saveRoulettePrizes() {
+    const rows = Array.from(document.querySelectorAll('#roulettePrizesBody .rp-row'));
+    const prizes = rows.map(r => ({ emoji: r.querySelector('.rp-emoji').value, label: r.querySelector('.rp-label').value, kind: r.querySelector('.rp-kind').value, value: Number(r.querySelector('.rp-value').value) || 0, weight: Number(r.querySelector('.rp-weight').value) || 0 }));
+    const bonusDays = Number((document.getElementById('rouletteBonusDays') || {}).value) || 7;
+    const m = document.getElementById('roulettePrizesMsg');
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/prizes', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prizes, bonusDays }) });
+        const d = await r.json();
+        if (!r.ok || !d.success) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (d.error || 'No se pudo guardar'); } return; }
+        if (m) { m.style.color = '#66ff99'; m.textContent = '✅ Premios guardados (' + d.prizes.length + ' casilleros · bono vigente ' + d.bonusDays + ' días). Aplica a los próximos giros.'; }
+        showToast('Premios de la ruleta guardados', 'success');
+        loadRoulettePrizes();
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error'; } }
+}
+window.addRoulettePrizeRow = addRoulettePrizeRow; window.rouletteRecalcProb = rouletteRecalcProb; window.loadRoulettePrizes = loadRoulettePrizes; window.saveRoulettePrizes = saveRoulettePrizes;

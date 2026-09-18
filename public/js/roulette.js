@@ -57,9 +57,10 @@
         // (avatar dorado + etiqueta + estado). Tap → modal de spin.
         let subText;
         if (_state.alreadySpun && spin) {
-            const won = Number(spin.prizeARS || 0) > 0;
+            const isBonus = spin.prizeKind === 'bonus_pct';
+            const won = Number(spin.prizeARS || 0) > 0 || isBonus;
             if (won && spin.status === 'credited') {
-                subText = 'Ganaste $' + _fmt(spin.prizeARS);
+                subText = isBonus ? 'Ganaste +' + spin.prizePct + '% 🎁' : 'Ganaste $' + _fmt(spin.prizeARS);
             } else if (won && spin.status === 'credit_failed') {
                 subText = 'Escribinos';
             } else {
@@ -194,14 +195,21 @@
 
         if (alreadySpun) {
             // Estado: ya giró hoy.
-            const won = Number(spin.prizeARS || 0) > 0;
+            const isBonus = spin.prizeKind === 'bonus_pct';
+            const won = Number(spin.prizeARS || 0) > 0 || isBonus;
             if (won && spin.status === 'credited') {
                 html += '<div id="rouletteResultBox" style="background:linear-gradient(135deg,rgba(102,255,102,0.10),rgba(255,215,0,0.10));border:2px solid #66ff66;border-radius:14px;padding:24px 16px;text-align:center;margin-bottom:12px;">';
-                html += '<div style="font-size:60px;line-height:1;margin-bottom:8px;">🎉</div>';
+                html += '<div style="font-size:60px;line-height:1;margin-bottom:8px;">' + (isBonus ? '🎁' : '🎉') + '</div>';
                 html += '<div style="color:#66ff66;font-size:13px;font-weight:900;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">¡GANASTE!</div>';
-                html += '<div style="color:#fff;font-size:32px;font-weight:900;margin-bottom:6px;">$' + _fmt(spin.prizeARS) + '</div>';
-                html += '<div style="background:rgba(102,255,102,0.20);border:1px solid #66ff66;border-radius:8px;padding:9px 12px;margin-top:10px;color:#fff;font-size:13px;font-weight:800;">✅ Acreditado a tu saldo automáticamente</div>';
-                if (spin.creditTxId) html += '<div style="color:#888;font-size:10px;margin-top:6px;font-family:monospace;">tx: ' + _esc(spin.creditTxId) + '</div>';
+                if (isBonus) {
+                    html += '<div style="color:#fff;font-size:30px;font-weight:900;margin-bottom:6px;">+' + _esc(spin.prizePct) + '%</div>';
+                    html += '<div style="color:#ffd700;font-size:13px;font-weight:800;margin-bottom:4px;">de BONO en tu PRÓXIMA carga</div>';
+                    html += '<div style="background:rgba(102,255,102,0.20);border:1px solid #66ff66;border-radius:8px;padding:9px 12px;margin-top:10px;color:#fff;font-size:12.5px;font-weight:700;line-height:1.5;">✅ Se aplica solo cuando cargues' + (spin.bonusDays ? ' (vale ' + _esc(spin.bonusDays) + ' días)' : '') + '. No tenés que pedir nada.</div>';
+                } else {
+                    html += '<div style="color:#fff;font-size:32px;font-weight:900;margin-bottom:6px;">$' + _fmt(spin.prizeARS) + '</div>';
+                    html += '<div style="background:rgba(102,255,102,0.20);border:1px solid #66ff66;border-radius:8px;padding:9px 12px;margin-top:10px;color:#fff;font-size:13px;font-weight:800;">✅ Acreditado a tu saldo automáticamente</div>';
+                    if (spin.creditTxId) html += '<div style="color:#888;font-size:10px;margin-top:6px;font-family:monospace;">tx: ' + _esc(spin.creditTxId) + '</div>';
+                }
                 html += '</div>';
 
                 // CTA comunidad — el owner pidió que recomendemos entrar al
@@ -212,7 +220,7 @@
                 html += '<div style="background:rgba(255,170,102,0.10);border:2px solid #ffaa66;border-radius:14px;padding:20px 16px;text-align:center;margin-bottom:12px;">';
                 html += '<div style="font-size:48px;margin-bottom:6px;">⚠️</div>';
                 html += '<div style="color:#ffaa66;font-size:13px;font-weight:900;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:4px;">PREMIO PENDIENTE</div>';
-                html += '<div style="color:#fff;font-size:24px;font-weight:900;margin-bottom:6px;">$' + _fmt(spin.prizeARS) + '</div>';
+                html += '<div style="color:#fff;font-size:24px;font-weight:900;margin-bottom:6px;">' + (isBonus ? '+' + _esc(spin.prizePct) + '% próxima carga' : '$' + _fmt(spin.prizeARS)) + '</div>';
                 html += '<div style="color:#ffd0a0;font-size:12px;margin-top:8px;">Ganaste pero la acreditación automática falló. Escribinos por WhatsApp al número principal y te lo cargamos.</div>';
                 html += '</div>';
             } else {
@@ -308,6 +316,9 @@
             _state.alreadySpun = true;
             _state.spin = {
                 prizeARS: d.prize.prizeARS,
+                prizeKind: d.prize.prizeKind || (d.prize.prizeARS > 0 ? 'money' : 'none'),
+                prizePct: d.prize.prizePct || 0,
+                bonusDays: d.prize.bonusDays || null,
                 prizeLabel: d.prize.prizeLabel,
                 status: d.prize.status,
                 spunAt: new Date().toISOString(),
@@ -347,7 +358,7 @@
             } catch (_) { hhmm = ''; }
             html += '<div class="winner-row' + (w.isMe ? ' is-me' : '') + '">';
             html += '<span class="winner-user">👤 ' + _esc(w.username) + '</span>';
-            html += '<span class="winner-prize">+$' + _fmt(w.prizeARS) + '</span>';
+            html += '<span class="winner-prize">' + (w.prizeKind === 'bonus_pct' ? '🎁 +' + _esc(w.prizePct) + '% bono' : '+$' + _fmt(w.prizeARS)) + '</span>';
             html += '<span class="winner-time">' + hhmm + '</span>';
             html += '</div>';
         }

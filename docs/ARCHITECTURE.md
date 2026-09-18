@@ -299,8 +299,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   que la carga anterior esté ligada a OTRA transferencia — #131) →
   lectura del saldo PREVIO (sólo si el 20% está en juego) →
   `depositToUser` → Transaction + mensaje + SLA. Fallo → reintentable hasta 3 veces.
-  **Bono automático app+notifs** (`_hgcashApplyAppBonus`): 100% primera carga /
-  20% todas (config panel, hasta 31/08). ⚠️ Desde 2026-08-19 el 20% NO se da si el
+  **Bono automático app+notifs** (`_hgcashApplyAppBonus`): 100% primera carga
+  **hasta `firstCapARS` ($5.000) + `firstExcessPct` (20%) sobre el excedente** (#164,
+  `_hgcashFirstBonusAmount`) / 20% todas (config panel, hasta 31/08). ⚠️ Desde 2026-08-19 el 20% NO se da si el
   cliente tenía **más de $500 de saldo ANTES de la carga**
   (`HGCASH_APP_BONUS_SKIP_BALANCE_ARS`; se le avisa con
   `/sys_deposit_no_bonus_saldo`, editable — vaciarlo lo apaga; si la lectura de
@@ -392,7 +393,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   (reemplazó a refund-percents).
 - **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
   payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas.
-- **Ruleta diaria**: requiere PWA instalada (token FCM standalone). El gate de
+- **Ruleta diaria**: requiere PWA instalada (token FCM standalone). **Premios editables
+  (#164, `Config['roulettePrizes']`)**: `money` (fichas, auto-crédito, cuenta contra el tope),
+  `bonus_pct` (% en la próxima carga → PromoBonus `sourceRuleCode:'ruleta'` autoApply, se
+  aplica solo al cargar; no consume tope) o `none`; sin config rige la tabla por defecto. El gate de
   "cliente activo" (>10 cargas reales/30d, #71) está **APAGADO** desde 2026-08-20
   (`ROULETTE_ACTIVE_GATE_DISABLED=true`, owner: para TODOS los que tengan la app).
   Pick ponderado + **budget pacing** (distribuye el presupuesto diario por hora

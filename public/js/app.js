@@ -219,7 +219,7 @@ function setupEventListeners() {
         const _vipRefundLabel = { daily: 'diario', weekly: 'semanal', monthly: 'mensual' };
         function _vipClaimText(it) {
             const name = it.name || '***';
-            if (it.kind === 'ruleta') return '🎰 ' + name + ' ganó ' + _vipFmtMoney(it.amount) + ' en la ruleta diaria';
+            if (it.kind === 'ruleta') return '🎰 ' + name + ' ganó ' + (it.bonusPct ? '+' + it.bonusPct + '% de bono para su próxima carga' : _vipFmtMoney(it.amount)) + ' en la ruleta diaria';
             if (it.kind === 'bono') return '🎁 ' + name + ' reclamó un regalo de ' + _vipFmtMoney(it.amount);
             return '💸 ' + name + ' reclamó ' + _vipFmtMoney(it.amount) + ' de reembolso ' + (_vipRefundLabel[it.refundType] || '');
         }

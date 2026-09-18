@@ -715,10 +715,21 @@
                                     <input type="checkbox" id="hgAppBonusFirstEnabled" style="width:auto;">
                                     💥 Bono de PRIMERA carga (una sola vez por cliente)
                                 </label>
-                                <div class="form-group" style="margin-top:8px;">
-                                    <label for="hgAppBonusFirstPct">Porcentaje (1–200)</label>
-                                    <input type="number" id="hgAppBonusFirstPct" min="1" max="200" step="1" placeholder="100">
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                                    <div class="form-group" style="flex:1;min-width:120px;margin:0;">
+                                        <label for="hgAppBonusFirstPct">Porcentaje (1–200)</label>
+                                        <input type="number" id="hgAppBonusFirstPct" min="1" max="200" step="1" placeholder="100">
+                                    </div>
+                                    <div class="form-group" style="flex:1;min-width:140px;margin:0;">
+                                        <label for="hgAppBonusFirstCap">Aplica hasta $ (0 = sin tope)</label>
+                                        <input type="number" id="hgAppBonusFirstCap" min="0" step="500" placeholder="5000">
+                                    </div>
+                                    <div class="form-group" style="flex:1;min-width:140px;margin:0;">
+                                        <label for="hgAppBonusFirstExcess">% sobre lo que excede el tope</label>
+                                        <input type="number" id="hgAppBonusFirstExcess" min="0" max="200" step="1" placeholder="20">
+                                    </div>
                                 </div>
+                                <p style="font-size:11px;color:#888;margin:6px 0 0;">Ej.: 100% hasta $5.000 y 20% del resto → una carga de $8.000 recibe $5.000 + $600 = $5.600 de bono, automático.</p>
                             </div>
                             <div style="background:rgba(212,175,55,.08);border:1px solid rgba(212,175,55,.35);border-radius:8px;padding:10px;margin-bottom:10px;">
                                 <label style="display:flex;align-items:center;gap:8px;font-weight:700;cursor:pointer;">
@@ -1708,6 +1719,25 @@
                         <button class="refresh-btn" onclick="loadRouletteAdmin()" title="Actualizar">🔄</button>
                     </div>
                 </div>
+                <!-- #164 Premios configurables: dinero (se acredita solo) o bono % en la próxima carga (se aplica solo). -->
+                <div style="background:linear-gradient(135deg,rgba(155,48,255,0.12),rgba(0,212,255,0.06));border:1.5px solid rgba(155,48,255,0.55);border-radius:11px;padding:13px 14px;margin-bottom:14px;">
+                    <div style="color:#c98bff;font-weight:900;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;">🎁 PREMIOS DE LA RULETA (editables)</div>
+                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">Cada casillero tiene un tipo: <b>💰 Dinero</b> (fichas que se acreditan solas y cuentan contra el tope diario), <b>🎁 Bono %</b> (un % extra en la PRÓXIMA carga: se aplica solo al cargar, manual sin bonus o automática, y queda usado; no gasta tope) o <b>😔 Sin premio</b>. El <b>peso</b> define la probabilidad (peso ÷ suma de pesos). Tiene que haber al menos un casillero "Sin premio".</div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" style="min-width:760px;">
+                            <thead><tr><th>Emoji</th><th>Etiqueta</th><th>Tipo</th><th>Valor ($ o %)</th><th>Peso</th><th>Probabilidad</th><th></th></tr></thead>
+                            <tbody id="roulettePrizesBody"></tbody>
+                        </table>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+                        <button class="btn btn-secondary btn-sm" onclick="addRoulettePrizeRow()">➕ Agregar premio</button>
+                        <span style="font-size:12px;color:#aaa;margin-left:8px;">Vigencia del bono %:</span>
+                        <input type="number" id="rouletteBonusDays" min="1" max="60" value="7" style="width:64px;background:rgba(0,0,0,0.45);border:1px solid rgba(155,48,255,0.5);color:#fff;padding:5px 8px;border-radius:6px;"> <span style="font-size:12px;color:#aaa;">días</span>
+                        <button onclick="saveRoulettePrizes()" style="margin-left:auto;background:linear-gradient(135deg,#c98bff,#7c00cc);color:#fff;border:none;padding:8px 14px;border-radius:7px;font-weight:900;font-size:12px;cursor:pointer;">💾 Guardar premios</button>
+                    </div>
+                    <div id="roulettePrizesMsg" style="font-size:11.5px;color:#aaa;margin-top:8px;"></div>
+                </div>
+
                 <!-- Budget diario: monto máximo a regalar por día, distribuido
                      a lo largo de las 24h. Si el pool de la hora ya se gastó,
                      se fuerza SIN PREMIO automáticamente. -->

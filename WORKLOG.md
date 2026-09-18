@@ -44,6 +44,11 @@
   muestran los bonos. admin-sw v42 → v43.
 - **PWA (solo JS, sin bump de ?v):** ruleta muestra "🎁 +X% de BONO en tu PRÓXIMA
   carga · se aplica solo"; lista de ganadores y ticker del login idem.
+- **Cartel verde "BONO APP" del chat** (pedido posterior del owner): ahora dice "100% en
+  la próxima carga (hasta $5.000)" y explica cómo funciona con un ejemplo calculado
+  con la config real (100% sobre los primeros $X + Y% del excedente; hgcash lo aplica
+  solo / a mano poner ese bono y marcar usado). Lee la config del endpoint
+  `app-bonus-hint` (cache 5 min en el panel). admin-sw v43 → v44.
 - **Validado:** `node --check` OK (server.js, modelo, admin.js, admin-sw, roulette.js,
   app.js); HTML del panel balanceado. Redeploy (back + panel).
 

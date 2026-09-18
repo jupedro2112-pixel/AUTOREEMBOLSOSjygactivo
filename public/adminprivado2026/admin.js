@@ -2848,12 +2848,37 @@ function renderInstallBonus100Banner(user) {
     el.style.fontSize = '12px';
     el.style.borderBottom = '1px solid rgba(0,0,0,0.30)';
     el.style.background = 'linear-gradient(90deg,#1a8200,#0f4c00)';
-    el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
-        '<span style="font-size:18px;">🎁</span>' +
-        '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">BONO APP: 100% en la próxima carga</strong>' +
-        '<div style="font-size:11px;opacity:0.9;">Por instalar la app — aplicá el +100% en la carga y marcalo como usado.</div></div>' +
-        '<button onclick="applyInstallBonus100(\'' + escapeHtml(String(user.id)) + '\')" style="background:#fff;color:#0f4c00;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✓ Marcar usado</button>' +
-        '</div>';
+    const paint = (cfg) => {
+        const pct = (cfg && cfg.firstPct) || 100;
+        const cap = cfg ? Number(cfg.firstCapARS || 0) : 0;
+        const ex = cfg ? Number(cfg.firstExcessPct || 0) : 0;
+        const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+        let titulo = 'BONO APP: ' + pct + '% en la próxima carga' + (cap > 0 ? ' (hasta ' + money(cap) + ')' : '');
+        let como;
+        if (cap > 0) {
+            const ej = Math.round(cap * 1.6 / 1000) * 1000; // ejemplo: una carga 60% mayor al tope
+            const bonoEj = Math.round(Math.min(ej, cap) * pct / 100 + Math.max(0, ej - cap) * ex / 100);
+            como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre los primeros <b>' + money(cap) + '</b> de la carga y lo que excede ese tope va al <b>' + ex + '%</b>. ' +
+                   'Ej.: carga ' + money(ej) + ' → bono ' + money(Math.min(ej, cap) * pct / 100) + ' + ' + money(Math.max(0, ej - cap) * ex / 100) + ' = <b>' + money(bonoEj) + '</b>. ' +
+                   'Si la carga entra por hgcash se aplica solo; si cargás a mano, poné ese bono en "Bonificación extra" y marcalo usado.';
+        } else {
+            como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre toda la carga. Si entra por hgcash se aplica solo; si cargás a mano, aplicá el +' + pct + '% y marcalo usado.';
+        }
+        el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
+            '<span style="font-size:18px;">🎁</span>' +
+            '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">' + titulo + '</strong>' +
+            '<div style="font-size:11px;opacity:0.92;line-height:1.45;">' + como + '</div></div>' +
+            '<button onclick="applyInstallBonus100(\'' + escapeHtml(String(user.id)) + '\')" style="background:#fff;color:#0f4c00;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✓ Marcar usado</button>' +
+            '</div>';
+    };
+    // Pinta ya con lo genérico y después con la config real (tope + % excedente, #164).
+    paint(window._hgBonusCfgCache || null);
+    if (!window._hgBonusCfgCache || (Date.now() - (window._hgBonusCfgAt || 0)) > 5 * 60 * 1000) {
+        authFetch('/api/admin/users/' + encodeURIComponent(user.id) + '/app-bonus-hint')
+            .then(r => r.ok ? r.json() : null)
+            .then(h => { if (h && h.firstPct) { window._hgBonusCfgCache = { firstPct: h.firstPct, firstCapARS: h.firstCapARS, firstExcessPct: h.firstExcessPct }; window._hgBonusCfgAt = Date.now(); if (el.style.display !== 'none') paint(window._hgBonusCfgCache); } })
+            .catch(() => {});
+    }
 }
 
 async function applyInstallBonus100(userId) {

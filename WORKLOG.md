@@ -8,6 +8,28 @@
 
 ## Sesión 2026-09-18
 
+### 165. Bono app (100% primera carga) AUTOMÁTICO también en la carga MANUAL, marcado usado solo y corrección del bonus del agente
+- **Owner:** "si entra por hgcash se da automático, pero si es manual quiero que
+  también se dé automático y que marque usado solo; si el agente pone un bono
+  distinto al que tenía que ser, se lo corrige, se marca usado y en interno se le
+  explica".
+- **`/api/admin/deposit`:** antes de acreditar el bonus, si el cliente tiene la app
+  con notifs y `firstEnabled` y NO hay multicuenta por banco (#152): reserva atómica
+  del cupón (pendiente → usado; o nunca reclamado + dispositivo libre → otorgado y
+  usado, `installBonus100UsedBy = '<agente> (auto en carga manual)'`), calcula el
+  bono con la misma fórmula que hgcash (`_hgcashFirstBonusAmount`: 100% hasta el
+  tope + % del excedente) y **pisa el bonus del agente** (`bonus = esperado`). Si el
+  crédito falla, la marca del cupón se revierte y una nota lo dice. Nota interna
+  siempre: monto, fórmula desglosada, y "coincide / el agente había puesto $X → se
+  corrigió / no habías puesto bonus → se aplicó solo. Cupón USADO". Transaction del
+  bono con `metadata.source:'auto_app_bonus_manual'` y `agentBonus`. El lote
+  automático no se suma (bonusRequested queda true). `_dupBankManual` se calcula
+  una sola vez (antes solo si no había bonus).
+- **Panel:** cartel BONO APP y aviso del modal Depositar dicen que se aplica solo en
+  cualquier carga y que si se pone otro bonus el sistema lo corrige. admin-sw v44 → v45.
+- No cambia: el 20% "todas las cargas" sigue siendo solo hgcash (#110).
+- **Validado:** `node --check` OK. Redeploy (back + panel).
+
 ### 164. Bono 100% de primera carga con TOPE ($5.000) + 20% sobre el excedente · Ruleta con premios EDITABLES (dinero o bono % automático)
 - **Pedido del owner:** (1) "si es un bono de 100%, ajustar el bono automático en las
   cargas hasta $5.000; más monto, que dé un 20% (automático)"; (2) que la ruleta

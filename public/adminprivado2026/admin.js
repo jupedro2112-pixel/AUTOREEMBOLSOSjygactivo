@@ -2860,9 +2860,9 @@ function renderInstallBonus100Banner(user) {
             const bonoEj = Math.round(Math.min(ej, cap) * pct / 100 + Math.max(0, ej - cap) * ex / 100);
             como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre los primeros <b>' + money(cap) + '</b> de la carga y lo que excede ese tope va al <b>' + ex + '%</b>. ' +
                    'Ej.: carga ' + money(ej) + ' → bono ' + money(Math.min(ej, cap) * pct / 100) + ' + ' + money(Math.max(0, ej - cap) * ex / 100) + ' = <b>' + money(bonoEj) + '</b>. ' +
-                   'Si la carga entra por hgcash se aplica solo; si cargás a mano, poné ese bono en "Bonificación extra" y marcalo usado.';
+                   'Se aplica SOLO en cualquier carga (hgcash o manual) y queda marcado usado: no hace falta poner el bonus ni marcar nada. Si ponés otro bonus, el sistema lo corrige y te lo explica en una nota.';
         } else {
-            como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre toda la carga. Si entra por hgcash se aplica solo; si cargás a mano, aplicá el +' + pct + '% y marcalo usado.';
+            como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre toda la carga, SOLO, en cualquier carga (hgcash o manual), y queda marcado usado.';
         }
         el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
             '<span style="font-size:18px;">🎁</span>' +
@@ -3169,7 +3169,7 @@ async function loadDepositAppBonusHint() {
             el.style.cssText = base + 'background:rgba(212,175,55,.12);border:1px solid rgba(212,175,55,.55);color:#f0e6c8;';
             el.innerHTML = tag +
                 `💥 Este cliente tiene la <b>APP con notificaciones</b> y <b>NUNCA usó su bono de primera carga</b> → le corresponde <b>+${h.firstPct}%</b>${h.firstCapARS > 0 ? ` hasta $${Number(h.firstCapARS).toLocaleString('es-AR')} (+${h.firstExcessPct}% sobre lo que exceda)` : ''}.<br>` +
-                'Aplicáselo en "Bonificación extra": al acreditarse queda <b>marcado como usado automáticamente</b> (no se puede repetir).';
+                'No hace falta que lo pongas: <b>se aplica solo al confirmar la carga</b> y queda marcado usado (si ponés otro bonus, el sistema lo corrige y te lo explica en una nota).';
         } else if (h.allActive) {
             el.style.cssText = base + 'background:rgba(40,167,69,.12);border:1px solid rgba(40,167,69,.55);color:#cdeed7;';
             el.innerHTML = tag +

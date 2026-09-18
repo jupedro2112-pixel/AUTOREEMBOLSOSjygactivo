@@ -9448,6 +9448,42 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       let bonusJgResult = null;
       let bonusActuallyApplied = false;
 
+      // #165 BONO APP (100% primera carga) AUTOMÁTICO también en la carga MANUAL (owner
+      // 2026-09-18): si el cliente tiene la app con notifs y el cupón pendiente (o nunca lo
+      // reclamó y el dispositivo está libre), el sistema calcula el bono (100% hasta el
+      // tope + % del excedente), PISA lo que haya puesto el agente, lo acredita, lo marca
+      // usado y explica en una nota interna. Mismas reglas que la auto-carga hgcash:
+      // no se da con multicuenta confirmada por banco (#152).
+      const _dupBankManual = await _bankMultiAccountForUser(user.id);
+      let _appFirst = null; // { branch, expected, agentBonus }
+      if (!_dupBankManual) {
+        try {
+          const cfgB = await getHgcashAppBonusConfig();
+          if (cfgB.firstEnabled && _rouletteHasAppInstalled(user)) {
+            const usedByLbl = `${req.user.username || 'agente'} (auto en carga manual)`;
+            let branch = null;
+            const usedPending = await User.findOneAndUpdate(
+              { id: user.id, installBonus100Pending: true },
+              { $set: { installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: usedByLbl } }
+            );
+            if (usedPending) branch = 'pending';
+            else if (user.installBonusClaimed !== true && await _installBonusDeviceFree(user)) {
+              const granted = await User.findOneAndUpdate(
+                { id: user.id, installBonusClaimed: { $ne: true } },
+                { $set: { installBonusClaimed: true, installBonusClaimedAt: new Date(), installBonus100GrantedAt: new Date(), installBonus100Pending: false, installBonus100UsedAt: new Date(), installBonus100UsedBy: usedByLbl } }
+              );
+              if (granted) branch = 'auto_grant';
+            }
+            if (branch) {
+              const expected = _hgcashFirstBonusAmount(parseFloat(amount), cfgB);
+              _appFirst = { branch, expected, agentBonus: parseFloat(bonus) || 0, cfg: cfgB, usedByLbl };
+              bonus = String(expected);
+              bonusRequested = expected > 0;
+            }
+          }
+        } catch (e) { logger.warn(`[deposit] bono app automático (manual) falló el chequeo: ${e.message}`); }
+      }
+
       if (bonusRequested) {
         await new Promise(r => setTimeout(r, 700));
         // Pasamos jugayganaUserId si lo tenemos guardado: bypasea el lookup en
@@ -9474,11 +9510,35 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // franja horaria incluidos), se reserva ATÓMICO, se acredita como
       // individual_bonus y, si el crédito falla, se libera para la próxima.
       // Si el agente ya cargó un bonus a mano, va el suyo (el lote NO se suma).
+      // #165: resultado del bono app automático en la carga manual → nota interna que
+      // explica qué se dio y por qué (y revierte la marca del cupón si el crédito falló).
+      if (_appFirst) {
+        const cB = _appFirst.cfg; const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+        const formula = cB.firstCapARS > 0
+          ? `${cB.firstPct}% sobre los primeros ${money(cB.firstCapARS)}${parseFloat(amount) > cB.firstCapARS ? ` + ${cB.firstExcessPct}% sobre los ${money(parseFloat(amount) - cB.firstCapARS)} que exceden el tope` : ''}`
+          : `${cB.firstPct}% sobre toda la carga`;
+        if (bonusActuallyApplied) {
+          const cual = _appFirst.agentBonus === _appFirst.expected
+            ? 'coincide con lo que pusiste'
+            : (_appFirst.agentBonus > 0 ? `el agente había puesto ${money(_appFirst.agentBonus)} → SE CORRIGIÓ al bono que corresponde` : 'no habías puesto bonus → se aplicó solo');
+          await _emitAdminOnlyChatNote(user.id, user.username,
+            `🎁 BONO APP (primera carga) aplicado AUTOMÁTICO en esta carga manual: ${money(_appFirst.expected)} = ${formula} sobre ${money(parseFloat(amount))}. ${cual}. El cupón quedó marcado USADO (no se repite). No hay que marcar nada.`);
+          logger.info(`[deposit] bono app auto (manual) user=${user.username} amount=$${amount} bono=$${_appFirst.expected} agentPuso=$${_appFirst.agentBonus} by=${req.user.username}`);
+        } else {
+          // Deshacer la marca del cupón para que el cliente no lo pierda sin cobrarlo.
+          try {
+            if (_appFirst.branch === 'pending') await User.updateOne({ id: user.id, installBonus100UsedBy: _appFirst.usedByLbl }, { $set: { installBonus100Pending: true }, $unset: { installBonus100UsedAt: 1, installBonus100UsedBy: 1 } });
+            else await User.updateOne({ id: user.id, installBonus100UsedBy: _appFirst.usedByLbl }, { $unset: { installBonusClaimed: 1, installBonusClaimedAt: 1, installBonus100GrantedAt: 1, installBonus100Pending: 1, installBonus100UsedAt: 1, installBonus100UsedBy: 1 } });
+          } catch (_) {}
+          await _emitAdminOnlyChatNote(user.id, user.username,
+            `🎁 ⚠️ El BONO APP automático de ${money(_appFirst.expected)} (${formula}) NO se pudo acreditar (${jugaygana.errToString((bonusJgResult && bonusJgResult.error) || 'sin respuesta')}). El cupón volvió a quedar pendiente: aplicalo con el botón Bonus cuando JUGAYGANA responda.`);
+        }
+      }
+
       // #152: con multicuenta confirmada por banco (otra cuenta fondeada por el mismo
       // titular que ya fondeó a ésta) el lote automático NO se aplica; el bonus
       // que el agente cargue a mano sí va (es su decisión — el modal se lo avisa).
-      const _dupBankManual = !bonusRequested ? await _bankMultiAccountForUser(user.id) : null;
-      if (_dupBankManual) {
+      if (_dupBankManual && !bonusRequested) {
         await _emitAdminOnlyChatNote(user.id, user.username,
           `🚨 MULTICUENTA CONFIRMADA POR BANCO: ${_dupBankManual.holders.join(' / ')} también cargó en ${_dupBankManual.accounts.map(a => '@' + a.username).join(', ')}. Esta carga manual entró SIN bono de lote automático. Verificá y bloqueá si corresponde.`);
       }
@@ -9870,11 +9930,12 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           amount: parseFloat(bonus),
           username: user.username,
           userId: user.id,
-          description: `Bonificación incluida en depósito de $${amount}`,
+          description: _appFirst ? `Bono app primera carga (automático en carga manual) sobre depósito de $${amount}` : `Bonificación incluida en depósito de $${amount}`,
           adminId: req.user?.userId,
           adminUsername: req.user?.username,
           adminRole: req.user?.role || 'admin',
           transactionId: bonusJgResult.data?.transfer_id,
+          metadata: _appFirst ? { source: 'auto_app_bonus_manual', kind: 'install_100', agentBonus: _appFirst.agentBonus } : null,
           timestamp: new Date()
         });
       }

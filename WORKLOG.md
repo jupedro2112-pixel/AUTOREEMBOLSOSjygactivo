@@ -8,6 +8,23 @@
 
 ## Sesión 2026-09-18
 
+### 167. Cartel del BONO 100% con la regla completa (tope + % excedente + ejemplo + "lo aplica el sistema solo") en panel y en la app
+- **Owner (captura del hermano):** que el cartel diga "BONO 100% PENDIENTE (instalar
+  app) — El 100% aplica hasta $5.000 de carga; sobre lo que cargues de más te damos el
+  20%. Ejemplo: cargás $10.000 → $6.000 de bono. Lo aplica el SISTEMA solo en su
+  próxima carga (hgcash o manual, aunque cargues sin bono) y queda marcado como
+  usado", y que el cliente lo vea igual de claro.
+- **Panel:** cartel verde del chat con ese texto exacto, números desde la config
+  (ejemplo = 2× el tope). admin-sw v45 → v46.
+- **App:** `GET /api/install-bonus/status` devuelve `rules` {firstPct, firstCapARS,
+  firstExcessPct, exampleAmount, exampleBonus}; `installbonus.js` pinta la regla con
+  ejemplo en el cartel dorado (antes de reclamar) y en el verde "BONO ACTIVO" (que ya
+  no dice "avisale al cajero": "se aplica SOLO cuando cargues"). Mensaje
+  `/sys_install_bonus_100` (default + variables nuevas `${tope}`, `{pctExcedente}`,
+  `${ejemploCarga}`, `${ejemploBono}`) explica lo mismo al desbloquear el cupón —
+  si el owner ya lo editó en COMANDOS, queda el suyo. **`?v=64` + SW v64.**
+- **Validado:** `node --check` OK. Redeploy (back + panel + PWA).
+
 ### 166. Registro con SMS OBLIGATORIO (un celular = una cuenta) — registro en 2 pasos, registro rápido sin SMS cerrado
 - **Owner:** "activamos el SMS obligatorio para crear usuarios, que no sea opcional;
   al ser obligatorio el retiro ya va a estar verificado". Antes (decisión previa) el

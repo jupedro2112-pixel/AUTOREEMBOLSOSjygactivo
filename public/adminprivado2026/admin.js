@@ -2853,16 +2853,15 @@ function renderInstallBonus100Banner(user) {
         const cap = cfg ? Number(cfg.firstCapARS || 0) : 0;
         const ex = cfg ? Number(cfg.firstExcessPct || 0) : 0;
         const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
-        let titulo = 'BONO APP: ' + pct + '% en la próxima carga' + (cap > 0 ? ' (hasta ' + money(cap) + ')' : '');
+        let titulo = 'BONO ' + pct + '% PENDIENTE (instalar app)';
         let como;
         if (cap > 0) {
-            const ej = Math.round(cap * 1.6 / 1000) * 1000; // ejemplo: una carga 60% mayor al tope
+            const ej = cap * 2;
             const bonoEj = Math.round(Math.min(ej, cap) * pct / 100 + Math.max(0, ej - cap) * ex / 100);
-            como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre los primeros <b>' + money(cap) + '</b> de la carga y lo que excede ese tope va al <b>' + ex + '%</b>. ' +
-                   'Ej.: carga ' + money(ej) + ' → bono ' + money(Math.min(ej, cap) * pct / 100) + ' + ' + money(Math.max(0, ej - cap) * ex / 100) + ' = <b>' + money(bonoEj) + '</b>. ' +
-                   'Se aplica SOLO en cualquier carga (hgcash o manual) y queda marcado usado: no hace falta poner el bonus ni marcar nada. Si ponés otro bonus, el sistema lo corrige y te lo explica en una nota.';
+            como = 'El ' + pct + '% aplica hasta <b>' + money(cap) + '</b> de carga; sobre lo que cargue de más le damos el <b>' + ex + '%</b>. Ejemplo: carga ' + money(ej) + ' → <b>' + money(bonoEj) + '</b> de bono. ' +
+                   'Lo aplica el <b>SISTEMA solo</b> en su próxima carga (hgcash o manual, aunque cargues sin bono) y queda marcado como usado.';
         } else {
-            como = 'Cómo funciona: el <b>' + pct + '%</b> se aplica sobre toda la carga, SOLO, en cualquier carga (hgcash o manual), y queda marcado usado.';
+            como = 'El ' + pct + '% aplica sobre toda la carga. Lo aplica el <b>SISTEMA solo</b> en su próxima carga (hgcash o manual, aunque cargues sin bono) y queda marcado como usado.';
         }
         el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
             '<span style="font-size:18px;">🎁</span>' +

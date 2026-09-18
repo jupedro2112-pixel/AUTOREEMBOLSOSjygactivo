@@ -11716,9 +11716,9 @@ async function initializeData() {
     },
     {
       name: '/sys_install_bonus_100',
-      description: 'Mensaje de felicitación cuando el usuario desbloquea el cupón 100% próxima carga por instalar la app. Variables: {username}',
+      description: 'Mensaje de felicitación cuando el usuario desbloquea el cupón 100% próxima carga por instalar la app. Variables: {username}, ${tope}, {pctExcedente}, ${ejemploCarga}, ${ejemploBono}',
       type: 'message',
-      response: '🎁 ¡Felicitaciones {username}! Por instalar la app desbloqueaste un BONO del 100% EXTRA en tu PRÓXIMA CARGA. 🚀 Avisale al cajero cuando cargues para que te lo aplique. 🥳'
+      response: '🎁 ¡Felicitaciones {username}! Por instalar la app desbloqueaste un BONO del 100% EXTRA en tu PRÓXIMA CARGA. 🚀\n\n📌 Cómo funciona: el 100% aplica hasta ${tope} de carga; sobre lo que cargues de más te damos el {pctExcedente}%. Ejemplo: cargás ${ejemploCarga} → ${ejemploBono} de bono.\n\n✅ Se aplica SOLO en tu próxima carga, no tenés que avisar nada. 🥳'
     },
     {
       name: '/sys_deposit_no_app_20',
@@ -12168,10 +12168,18 @@ app.get('/api/install-bonus/status', authMiddleware, async (req, res) => {
   try {
     const user = await User.findOne({ id: req.user.userId }).lean();
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    // #167: reglas del bono (tope + % excedente) para que la app explique cómo funciona.
+    let rules = null;
+    try {
+      const c = await getHgcashAppBonusConfig();
+      const ex = c.firstCapARS > 0 ? c.firstCapARS * 2 : 10000;
+      rules = { firstPct: c.firstPct, firstCapARS: c.firstCapARS, firstExcessPct: c.firstExcessPct, exampleAmount: ex, exampleBonus: _hgcashFirstBonusAmount(ex, c) };
+    } catch (_) {}
     res.json({
       claimed: user.installBonusClaimed === true,
       pending: user.installBonus100Pending === true,
       bonusType: 'next_load_100',
+      rules,
       // Campo legacy: PWAs viejas cacheadas lo leen para armar su copy de $5.000.
       amount: INSTALL_BONUS_AMOUNT
     });
@@ -12266,10 +12274,16 @@ app.post('/api/install-bonus/claim', authMiddleware, async (req, res) => {
     // Mensaje de confirmación en el chat (editable desde COMANDOS
     // /sys_install_bonus_100 — comando NUEVO: el viejo /sys_install_bonus
     // hablaba de los $5.000 acreditados y quedó obsoleto).
+    let _ibVars = { username: user.username, tope: '5.000', pctExcedente: 20, ejemploCarga: '10.000', ejemploBono: '6.000' };
+    try {
+      const c = await getHgcashAppBonusConfig();
+      const ex = c.firstCapARS > 0 ? c.firstCapARS * 2 : 10000;
+      _ibVars = { username: user.username, tope: Number(c.firstCapARS).toLocaleString('es-AR'), pctExcedente: c.firstExcessPct, ejemploCarga: ex.toLocaleString('es-AR'), ejemploBono: _hgcashFirstBonusAmount(ex, c).toLocaleString('es-AR') };
+    } catch (_) {}
     const installBonusContent = await renderSystemCommand(
       '/sys_install_bonus_100',
-      '🎁 ¡Felicitaciones {username}! Por instalar la app desbloqueaste un BONO del 100% EXTRA en tu PRÓXIMA CARGA. 🚀 Avisale al cajero cuando cargues para que te lo aplique. 🥳',
-      { username: user.username }
+      '🎁 ¡Felicitaciones {username}! Por instalar la app desbloqueaste un BONO del 100% EXTRA en tu PRÓXIMA CARGA. 🚀\n\n📌 Cómo funciona: el 100% aplica hasta ${tope} de carga; sobre lo que cargues de más te damos el {pctExcedente}%. Ejemplo: cargás ${ejemploCarga} → ${ejemploBono} de bono.\n\n✅ Se aplica SOLO en tu próxima carga, no tenés que avisar nada. 🥳',
+      _ibVars
     );
     if (installBonusContent) await Message.create({ // null = comando vaciado → no enviar
       id: uuidv4(),

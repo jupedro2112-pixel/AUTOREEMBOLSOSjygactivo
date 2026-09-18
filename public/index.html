@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=63">
-    <link rel="stylesheet" href="/css/login.css?v=63">
-    <link rel="stylesheet" href="/css/header.css?v=63">
-    <link rel="stylesheet" href="/css/chat.css?v=63">
-    <link rel="stylesheet" href="/css/modals.css?v=63">
-    <link rel="stylesheet" href="/css/responsive.css?v=63">
+    <link rel="stylesheet" href="/css/base.css?v=64">
+    <link rel="stylesheet" href="/css/login.css?v=64">
+    <link rel="stylesheet" href="/css/header.css?v=64">
+    <link rel="stylesheet" href="/css/chat.css?v=64">
+    <link rel="stylesheet" href="/css/modals.css?v=64">
+    <link rel="stylesheet" href="/css/responsive.css?v=64">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -806,7 +806,7 @@
                     <span style="font-size: 21px;">🎁</span>
                     <div style="flex: 1; min-width: 110px; line-height: 1.3;">
                         <strong style="font-size: 12.5px; display: block;">¡100% EXTRA en tu próxima carga por instalar la app!</strong>
-                        <span style="font-size: 10.5px; opacity: 0.8;">Reclamalo desde la app instalada.</span>
+                        <span id="installBonusRulesText" style="font-size: 10.5px; opacity: 0.85; display:block; line-height:1.35;">Reclamalo desde la app instalada.</span>
                     </div>
                     <button id="installBonusClaimBtn" style="background: #000; color: #ffd700; border: none; border-radius: 9px; padding: 8px 13px; font-weight: 800; font-size: 12px; cursor: pointer; flex-shrink: 0;">🎁 Reclamar mi 100%</button>
                 </div>
@@ -825,7 +825,7 @@
                     <span style="font-size: 20px;">🎁</span>
                     <div style="flex: 1; min-width: 110px; line-height: 1.3;">
                         <strong style="font-size: 12.5px; display: block; color: #00ff88;">BONO ACTIVO: 100% EXTRA en tu próxima carga</strong>
-                        <span style="font-size: 10.5px; opacity: 0.9;">Avisale al cajero cuando cargues para que te lo aplique. 💬</span>
+                        <span id="installBonusActiveText" style="font-size: 10.5px; opacity: 0.92; display:block; line-height:1.35;">Se aplica solo cuando cargues. No tenés que avisar nada. ✅</span>
                     </div>
                 </div>
             </div>
@@ -1963,25 +1963,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=63"></script>
-    <script src="/js/campaign.js?v=63"></script>
-    <script src="/js/meta-pixel.js?v=63"></script>
-    <script src="/js/auth.js?v=63"></script>
-    <script src="/js/socket.js?v=63"></script>
-    <script src="/js/chat.js?v=63"></script>
-    <script src="/js/refunds.js?v=63"></script>
-    <script src="/js/fire.js?v=63"></script>
-    <script src="/js/roulette.js?v=63"></script>
-    <script src="/js/reviews.js?v=63"></script>
-    <script src="/js/promobonus.js?v=63"></script>
-    <script src="/js/notifications.js?v=63"></script>
-    <script src="/js/ui.js?v=63"></script>
-    <script src="/js/withdraw.js?v=63"></script>
-    <script src="/js/installbonus.js?v=63"></script>
-    <script src="/js/notifsurvey.js?v=63"></script>
-    <script src="/js/publisherwelcome.js?v=63"></script>
-    <script src="/js/apptest.js?v=63"></script>
-    <script src="/js/app.js?v=63"></script>
+    <script src="/js/config.js?v=64"></script>
+    <script src="/js/campaign.js?v=64"></script>
+    <script src="/js/meta-pixel.js?v=64"></script>
+    <script src="/js/auth.js?v=64"></script>
+    <script src="/js/socket.js?v=64"></script>
+    <script src="/js/chat.js?v=64"></script>
+    <script src="/js/refunds.js?v=64"></script>
+    <script src="/js/fire.js?v=64"></script>
+    <script src="/js/roulette.js?v=64"></script>
+    <script src="/js/reviews.js?v=64"></script>
+    <script src="/js/promobonus.js?v=64"></script>
+    <script src="/js/notifications.js?v=64"></script>
+    <script src="/js/ui.js?v=64"></script>
+    <script src="/js/withdraw.js?v=64"></script>
+    <script src="/js/installbonus.js?v=64"></script>
+    <script src="/js/notifsurvey.js?v=64"></script>
+    <script src="/js/publisherwelcome.js?v=64"></script>
+    <script src="/js/apptest.js?v=64"></script>
+    <script src="/js/app.js?v=64"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA

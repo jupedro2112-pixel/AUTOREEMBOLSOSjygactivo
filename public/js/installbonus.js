@@ -14,6 +14,24 @@ VIP.installBonus = (function () {
 
     let _claimed = true; // por defecto no mostramos el cartel hasta confirmar con el server
     let _pending = false; // cupón 100% desbloqueado y todavía sin usar
+    let _rules = null;    // #167 { firstPct, firstCapARS, firstExcessPct, exampleAmount, exampleBonus }
+
+    function _money(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); }
+    // Texto que explica la regla del bono (tope + % excedente) con un ejemplo.
+    function _rulesText(prefix) {
+        if (!_rules || !_rules.firstPct) return '';
+        if (_rules.firstCapARS > 0) {
+            return (prefix || '') + 'El ' + _rules.firstPct + '% aplica hasta ' + _money(_rules.firstCapARS) + ' de carga; sobre lo que cargues de más te damos el ' + _rules.firstExcessPct + '%. ' +
+                   'Ejemplo: cargás ' + _money(_rules.exampleAmount) + ' → ' + _money(_rules.exampleBonus) + ' de bono.';
+        }
+        return (prefix || '') + 'El ' + _rules.firstPct + '% aplica sobre toda tu próxima carga.';
+    }
+    function _renderRules() {
+        const t1 = _el('installBonusRulesText');
+        if (t1 && _rules) t1.textContent = _rulesText('') + ' Reclamalo desde la app instalada.';
+        const t2 = _el('installBonusActiveText');
+        if (t2 && _rules) t2.textContent = _rulesText('') + ' Se aplica SOLO cuando cargues (no tenés que avisar nada). ✅';
+    }
 
     function _el(id) { return document.getElementById(id); }
 
@@ -45,8 +63,10 @@ VIP.installBonus = (function () {
                 const data = await res.json();
                 _claimed = data.claimed === true;
                 _pending = data.pending === true;
+                if (data.rules) _rules = data.rules;
             }
         } catch (e) { /* si falla, dejamos los carteles ocultos */ }
+        _renderRules();
         _renderBanners();
 
         VIP.ui.adjustLayout();
@@ -79,7 +99,7 @@ VIP.installBonus = (function () {
                 localStorage.removeItem('installBonusFailedAttempts');
                 _renderBanners();
                 VIP.ui.adjustLayout();
-                VIP.ui.showToast('🎁 ¡Desbloqueaste un 100% EXTRA en tu próxima carga!', 'success');
+                VIP.ui.showToast('🎁 ¡Desbloqueaste un 100% EXTRA en tu próxima carga! Se aplica solo cuando cargues.', 'success');
                 setTimeout(() => VIP.chat.loadMessages(), 800);
             } else if (data.code === 'NOT_STANDALONE') {
                 _showHelp();

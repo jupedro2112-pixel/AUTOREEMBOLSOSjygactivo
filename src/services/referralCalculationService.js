@@ -5,7 +5,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { User, ReferralCommission, ReferralPayout } = require('../models');
 const referralRevenueService = require('./referralRevenueService');
-const { getReferralRateForUser } = require('../utils/referralRate');
+const referralTierService = require('./referralTierService'); // #171 % por nivel de referidos activos
 const logger = require('../utils/logger');
 
 /**
@@ -111,7 +111,11 @@ async function calculateCommissionsForPeriod(periodKey, options = {}) {
       continue;
     }
 
-    const referralRate = getReferralRateForUser(referrer);
+    // #171: la tasa depende de cuántos referidos ACTIVOS tiene el referidor (niveles editables en
+    // el panel). Se resuelve una vez por referidor y se guarda en cada ReferralCommission.referralRate.
+    const rateInfo = await referralTierService.resolveReferralRate(referrer);
+    const referralRate = rateInfo.rate;
+    logger.info(`[ReferralCalc] tasa ${referrer.username}: ${rateInfo.pct}% (${rateInfo.mode}${rateInfo.active != null ? ', activos=' + rateInfo.active : ''}) period=${periodKey}`);
 
     // ── Load authoritative settlement state from payout history ──────────────
     // ReferralPayout documents are the source of truth for what was already paid.

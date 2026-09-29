@@ -8,6 +8,40 @@
 
 ## Sesión 2026-09-29
 
+### 171. Premios por referidos en PLATA → NIVELES de % de comisión según referidos activos (anti-estafa)
+- **Owner:** "3 × 3 es 9 mil y se puede retirar 10 mil": con los hitos de #168 (3 referidos que
+  cargaron $3.000 → $10.000 en fichas) alguien con 3 celulares ponía $9.000, cobraba $10.000 y
+  retiraba todo. Decisión: nada de plata directa. El premio por cantidad de referidos activos
+  es el **% de comisión sobre el netwin**: 3 activos → 1%, 5 → 2%, 10 → 3% (máximo). Sin pérdida
+  real de los referidos no hay nada que cobrar, así que las cuentas falsas no generan premio.
+- **Backend:** nuevo `src/services/referralTierService.js` (`getReferralTiersConfig` con cache
+  60 s, `depositsByReferred`, `countActiveReferrals`, `levelForCount`, **`resolveReferralRate(user)`**
+  → { rate, pct, mode: override|tiers|flat, active, tier, nextTier, missing, maxPct }).
+  Prioridad: override por usuario > niveles (si enabled) > % plano `Config['referralRate']` (#169).
+  `Config['referralMilestones']` pasa a { enabled, minChargedARS, basePct (0), tiers:[{count, pct}] };
+  el formato viejo (amountARS) se ignora y caen los defaults.
+  · `referralCalculationService`: la tasa del referidor sale de `resolveReferralRate` (1 aggregate
+    por referidor) y queda grabada en `ReferralCommission.referralRate` como siempre.
+  · `referralController.getMyReferralInfo` y `GET /api/referrals/dashboard`: idem. El dashboard
+    devuelve `level` { enabled, mode, minChargedARS, basePct, active, pct, maxPct, tiers[{count,
+    pct, reached, current}], currentTier, nextTier{count,pct,missing}, maxCount } en lugar de
+    `milestones`. `POST /api/referrals/milestones/claim` → **410** (apps viejas cacheadas).
+    `ReferralMilestoneClaim` se conserva sólo como historial.
+  · `GET/POST /api/admin/referrals/milestones-config`: valida % 0–50, sin cantidades repetidas,
+    % no decreciente, base ≤ primer nivel; invalida el cache al guardar.
+- **PWA (`?v=70` + SW v70):** popup y header del modal dicen "Cobrá **hasta** el X%" (máximo del
+  último nivel, `.referralRatePct`) y el header muestra "Tu % actual" (`.referralMyPct`). Tablero:
+  bloque "🏆 TU NIVEL DE COMISIÓN" (% actual grande, cuántos faltan para el siguiente, barra,
+  tiles por nivel con ⭐ actual / ✅ alcanzado / 🔒 te faltan N). Card del home: "cobrá hasta el
+  X%", barra por activos, pasos con %, "Te faltan N para el Y%". Texto de invitación sin el %.
+  Se eliminó `claimReferralMilestone`.
+- **Panel (admin-sw v49):** card "🏆 Niveles de comisión por referidos activos" (activo/mínimo/%
+  base + tabla cantidad → %). La card "🤝 Comisión de referidos" (#169) aclara que sólo rige con
+  los niveles apagados.
+- **Ojo:** la cantidad de referidos activos se cuenta al momento de calcular (cargas reales
+  acumuladas ≥ mínimo, sin regalos), no por mes. Cambiar los niveles afecta el próximo cálculo
+  mensual; las comisiones ya calculadas conservan su tasa.
+
 ### 170. Botón "Invitar a tus amigos": copia el link y ofrece WhatsApp / Telegram / otras apps
 - `shareReferralLink` (ui.js) ahora copia el link al portapapeles SIEMPRE y abre un chooser
   (hoja inferior) con: 💬 WhatsApp (`wa.me/?text=`), ✈️ Telegram (`t.me/share/url`),

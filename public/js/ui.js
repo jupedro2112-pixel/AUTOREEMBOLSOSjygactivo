@@ -380,7 +380,10 @@ VIP.ui = (function () {
     let _refData = null;
     let _refLoadedAt = 0;
     const _refMoney = (n) => '$' + new Intl.NumberFormat('es-AR').format(Math.round(Number(n) || 0));
-    function _refPct(rate) { const n = Number(rate); return (Math.round((Number.isFinite(n) ? n : 0.03) * 1000) / 10) + '%'; }
+    function _refPct(rate) { return _refPctNum(_refPctOf(rate)); }
+    function _refPctOf(rate) { const n = Number(rate); return Math.round((Number.isFinite(n) ? n : 0) * 10000) / 100; }
+    function _refPctNum(p) { const n = Number(p) || 0; return (Number.isInteger(n) ? n : n.toFixed(n * 10 % 1 ? 2 : 1)) + '%'; }
+    function _refMaxPct(d) { const lv = (d && d.level) || {}; return _refPctNum(lv.maxPct != null ? lv.maxPct : _refPctOf(d && d.rate)); }
     function _refAgo(d) {
         if (!d) return '';
         const ms = Date.now() - new Date(d).getTime();
@@ -399,7 +402,10 @@ VIP.ui = (function () {
         const d = await r.json();
         _refData = d; _refLoadedAt = Date.now();
         VIP.state.referralData = d;
-        document.querySelectorAll('.referralRatePct').forEach(el => { el.textContent = _refPct(d.rate); });
+        // #171 el cartel promocional muestra el MÁXIMO alcanzable ("hasta el 3%"); el % propio va en el tablero.
+        const lv = d.level || {};
+        document.querySelectorAll('.referralRatePct').forEach(el => { el.textContent = _refPctNum(lv.maxPct != null ? lv.maxPct : _refPctOf(d.rate)); });
+        document.querySelectorAll('.referralMyPct').forEach(el => { el.textContent = _refPctNum(lv.pct != null ? lv.pct : _refPctOf(d.rate)); });
         return d;
     }
 
@@ -421,29 +427,28 @@ VIP.ui = (function () {
         }
     }
 
-    function _refTierHtml(t, ms) {
-        const on = t.unlocked;
-        const claimed = t.claimed && t.claimStatus !== 'failed';
+    // #171 tile de un NIVEL de comisión (cantidad de referidos activos → %).
+    function _refTierHtml(t, lv) {
+        const on = t.reached, cur = t.current;
         let foot;
-        if (claimed) foot = '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.5);">✅ Cobrado</span>';
-        else if (t.claimable) foot = '<button onclick="VIP.ui.claimReferralMilestone(' + t.count + ')" style="background:linear-gradient(135deg,#ffd700,#f7931e);color:#000;border:none;border-radius:8px;padding:6px 10px;font-weight:900;font-size:10.5px;cursor:pointer;">🎁 Cobrar ahora</button>';
-        else if (on) foot = '<span class="ref-pill" style="background:rgba(255,215,0,.12);color:#ffd700;border:1px solid rgba(255,215,0,.5);">🔓 Desbloqueado · se cobra desde el día ' + ms.payDay + '</span>';
-        else foot = '<span class="ref-pill" style="background:rgba(255,255,255,.06);color:#999;border:1px solid rgba(255,255,255,.15);">🔒 Por alcanzar</span>';
-        return '<div style="flex:1;min-width:96px;text-align:center;padding:9px 6px;border-radius:10px;background:' + (on ? 'rgba(255,215,0,.08)' : 'rgba(255,255,255,.03)') + ';border:1px solid ' + (on ? 'rgba(255,215,0,.55)' : 'rgba(255,255,255,.12)') + ';">' +
-            '<div style="font-size:24px;line-height:1;">' + (claimed ? '🏆' : (on ? '🎁' : '🎁')) + '</div>' +
-            '<div style="font-size:11px;font-weight:900;color:#fff;margin-top:4px;">' + t.count + ' REFERIDOS</div>' +
-            '<div style="font-size:15px;font-weight:900;color:#ffd700;">' + _refMoney(t.amountARS) + '</div>' +
-            '<div style="font-size:9.5px;color:#aaa;margin-bottom:6px;">extra</div>' + foot + '</div>';
+        if (cur) foot = '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.5);">⭐ Tu nivel actual</span>';
+        else if (on) foot = '<span class="ref-pill" style="background:rgba(255,215,0,.12);color:#ffd700;border:1px solid rgba(255,215,0,.5);">✅ Alcanzado</span>';
+        else foot = '<span class="ref-pill" style="background:rgba(255,255,255,.06);color:#999;border:1px solid rgba(255,255,255,.15);">🔒 Te faltan ' + Math.max(0, t.count - (lv.active || 0)) + '</span>';
+        return '<div style="flex:1;min-width:96px;text-align:center;padding:9px 6px;border-radius:10px;background:' + (cur ? 'rgba(0,255,136,.07)' : (on ? 'rgba(255,215,0,.08)' : 'rgba(255,255,255,.03)')) + ';border:1px solid ' + (cur ? 'rgba(0,255,136,.55)' : (on ? 'rgba(255,215,0,.55)' : 'rgba(255,255,255,.12)')) + ';">' +
+            '<div style="font-size:11px;font-weight:900;color:#fff;margin-top:2px;">' + t.count + ' ACTIVOS</div>' +
+            '<div style="font-size:22px;font-weight:900;color:' + (on ? '#ffd700' : '#bbb') + ';line-height:1.15;">' + _refPctNum(t.pct) + '</div>' +
+            '<div style="font-size:9.5px;color:#aaa;margin-bottom:6px;">de la pérdida neta</div>' + foot + '</div>';
     }
 
     function renderReferralModal(d) {
         const c = document.getElementById('referralContent');
         if (!c || !d) return;
-        const t = d.totals || {}, ms = d.milestones || {}, per = d.period || {};
+        const t = d.totals || {}, lv = d.level || {}, per = d.period || {};
         const pct = _refPct(d.rate);
-        const tiers = ms.tiers || [];
-        const maxCount = ms.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
-        const prog = Math.min(100, Math.round((ms.qualified || 0) / Math.max(1, maxCount) * 100));
+        const tiers = lv.tiers || [];
+        const maxCount = lv.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
+        const prog = Math.min(100, Math.round((lv.active || 0) / Math.max(1, maxCount) * 100));
+        const tiersOn = lv.enabled !== false && lv.mode === 'tiers' && tiers.length;
         const netInfoId = 'refNetInfo';
         let html = '';
         // Link (solo el link: más directo que el código)
@@ -458,8 +463,8 @@ VIP.ui = (function () {
             '</div>';
         // Tiles
         html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">' +
-            '<div class="ref-modal-tile" style="border-color:rgba(0,255,136,.35);"><span class="v" style="color:#00ff88;">👥 ' + (t.active || 0) + '</span><span class="l">Referidos activos<br><span style="color:#777;">(los que cargaron)</span></span></div>' +
-            '<div class="ref-modal-tile" style="border-color:rgba(255,215,0,.45);"><span class="v" style="color:#ffd700;">💰 ' + _refMoney(t.commissionMonth) + '</span><span class="l">Tu comisión acumulada<br><span style="color:#777;">(' + pct + ' de la pérdida neta de este mes)</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(0,255,136,.35);"><span class="v" style="color:#00ff88;">👥 ' + (tiersOn ? (lv.active || 0) : (t.active || 0)) + '</span><span class="l">Referidos activos<br><span style="color:#777;">(' + (tiersOn ? 'cargaron al menos ' + _refMoney(lv.minChargedARS) : 'los que cargaron') + ')</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(255,215,0,.45);"><span class="v" style="color:#ffd700;">💰 ' + _refMoney(t.commissionMonth) + '</span><span class="l">Tu comisión acumulada<br><span style="color:#777;">(' + pct + ' de la pérdida neta de este mes' + (tiersOn ? ' · tu nivel' : '') + ')</span></span></div>' +
             '<div class="ref-modal-tile" style="border-color:rgba(255,80,80,.4);cursor:pointer;" onclick="VIP.ui.toggleReferralNetLossInfo()"><span class="v" style="color:#ff6b6b;">📉 ' + _refMoney(t.netLossMonth) + '</span><span class="l">Pérdida neta de tus referidos<br><span style="color:#ff9a9a;">ℹ️ tocá: es un monto variable</span></span></div>' +
             '<div class="ref-modal-tile" style="border-color:rgba(0,170,255,.4);"><span class="v" style="color:#4fc3ff;">📊 ' + _refMoney(t.totalCharged) + '</span><span class="l">Total cargado por<br>tus referidos</span></div>' +
             '</div>';
@@ -481,19 +486,24 @@ VIP.ui = (function () {
                 const st = r.active ? '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;">Activo</span>' : '<span class="ref-pill" style="background:rgba(255,80,80,.15);color:#ff8080;">Sin carga</span>';
                 const net = r.netLossMonth === null ? '<span style="color:#777;">…</span>' : _refMoney(Math.max(0, r.netLossMonth));
                 const com = r.commissionMonth === null ? '<span style="color:#777;">…</span>' : '<b style="color:#00ff88;">' + _refMoney(r.commissionMonth) + '</b>';
-                html += '<tr><td><b style="color:#fff;">' + _esc(r.username) + '</b><br><span style="color:#888;font-size:9.5px;">Se registró ' + _refAgo(r.registeredAt) + (r.qualified ? ' · ✔ cuenta para premios' : '') + '</span></td>' +
+                html += '<tr><td><b style="color:#fff;">' + _esc(r.username) + '</b><br><span style="color:#888;font-size:9.5px;">Se registró ' + _refAgo(r.registeredAt) + (r.qualified ? ' · ✔ activo para tu nivel' : (r.active ? ' · cargó menos de ' + _refMoney(lv.minChargedARS) : '')) + '</span></td>' +
                     '<td>' + st + '</td><td style="text-align:right;">' + _refMoney(r.totalCharged) + '</td><td style="text-align:right;color:#ff9a9a;">' + net + '</td><td style="text-align:right;">' + com + '</td></tr>';
             });
             html += '</tbody></table></div>';
         }
         html += '</div>';
-        // Progreso / premios
-        if (ms.enabled !== false && tiers.length) {
+        // #171 Nivel de comisión según referidos activos
+        if (tiersOn) {
+            const next = lv.nextTier;
             html += '<div style="background:linear-gradient(135deg,#2d0052,#1a0033);border:1.5px solid #ffd700;border-radius:12px;padding:12px;margin-bottom:12px;">' +
-                '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;"><span style="font-size:13px;font-weight:900;color:#ffd700;">🎁 PROGRESO DE TUS REFERIDOS</span><span style="font-size:12px;color:#fff;font-weight:900;">' + (ms.qualified || 0) + ' / ' + maxCount + ' <span style="font-size:9.5px;color:#aaa;font-weight:400;">referidos que cargaron</span></span></div>' +
-                '<div style="font-size:10.5px;color:#bbb;margin:2px 0 6px;">Invitá más amigos y desbloqueá premios EXTRA (aparte de tu ' + pct + '). Cuenta cada referido que cargó al menos <b style="color:#fff;">' + _refMoney(ms.minChargedARS) + '</b>. Cada premio se cobra una sola vez, en fichas, sin condiciones' + (ms.payDay > 0 ? ', a partir del día <b style="color:#fff;">' + ms.payDay + '</b> de cada mes' : '') + '.</div>' +
+                '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;"><span style="font-size:13px;font-weight:900;color:#ffd700;">🏆 TU NIVEL DE COMISIÓN</span><span style="font-size:12px;color:#fff;font-weight:900;">' + (lv.active || 0) + ' / ' + maxCount + ' <span style="font-size:9.5px;color:#aaa;font-weight:400;">referidos activos</span></span></div>' +
+                '<div style="display:flex;align-items:center;gap:10px;margin:8px 0 6px;">' +
+                '<div style="font-size:34px;font-weight:900;color:#00ff88;line-height:1;">' + _refPctNum(lv.pct) + '</div>' +
+                '<div style="font-size:11px;color:#ddd;line-height:1.45;">' + (lv.currentTier ? 'Estás en el nivel de <b style="color:#fff;">' + lv.currentTier.count + ' referidos activos</b>. ' : 'Todavía no llegaste al primer nivel. ') +
+                (next ? 'Con <b style="color:#ffd700;">' + next.missing + ' más</b> pasás al <b style="color:#ffd700;">' + _refPctNum(next.pct) + '</b>.' : '¡Estás en el <b style="color:#ffd700;">máximo</b>!') + '</div></div>' +
+                '<div style="font-size:10.5px;color:#bbb;margin:0 0 6px;">Cuantos más amigos activos traés, mayor es el % que cobrás de la pérdida neta de TODOS tus referidos, todos los meses. Referido activo = cargó al menos <b style="color:#fff;">' + _refMoney(lv.minChargedARS) + '</b> en total.</div>' +
                 '<div class="dash-ref-bar" style="height:11px;"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
-                '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' + tiers.map(x => _refTierHtml(x, ms)).join('') + '</div>' +
+                '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' + tiers.map(x => _refTierHtml(x, lv)).join('') + '</div>' +
                 (t.historicalMilestones > 0 ? '<div style="font-size:10.5px;color:#00ff88;margin-top:8px;text-align:center;">Ya cobraste ' + _refMoney(t.historicalMilestones) + ' en premios por referidos 🏆</div>' : '') +
                 '</div>';
         }
@@ -506,20 +516,21 @@ VIP.ui = (function () {
         if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
     }
 
-    // Card del home: progreso hacia el próximo premio + INVITAR AHORA.
+    // Card del home: nivel actual + progreso al próximo % + INVITAR AHORA (#171).
     function renderReferralHomeCard(d) {
         const c = document.getElementById('referralHomeCard');
         if (!c) return;
         if (!d) { c.style.display = 'none'; return; }
-        const ms = d.milestones || {}, tiers = ms.tiers || [];
-        const maxCount = ms.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
-        const prog = Math.min(100, Math.round((ms.qualified || 0) / Math.max(1, maxCount) * 100));
-        const steps = tiers.slice(0, 4).map(t => '<div class="dash-ref-step' + (t.unlocked ? ' on' : '') + '"><b>' + (t.claimed ? '🏆' : (t.unlocked ? '🎁' : '🎁')) + '</b>' + t.count + ' amigos<br>' + _refMoney(t.amountARS) + '</div>').join('');
-        const claimable = tiers.find(t => t.claimable);
+        const lv = d.level || {}, tiers = lv.tiers || [];
+        const tiersOn = lv.enabled !== false && lv.mode === 'tiers' && tiers.length;
+        const maxCount = lv.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
+        const prog = Math.min(100, Math.round((lv.active || 0) / Math.max(1, maxCount) * 100));
+        const steps = tiers.slice(0, 4).map(t => '<div class="dash-ref-step' + (t.reached ? ' on' : '') + '"><b>' + (t.current ? '⭐' : (t.reached ? '✅' : '🔒')) + '</b>' + t.count + ' activos<br>' + _refPctNum(t.pct) + '</div>').join('');
+        const next = lv.nextTier;
         c.innerHTML = '<div class="dash-ref">' +
-            '<div class="dash-ref-head"><span style="font-size:18px;">👥</span><span class="dash-ref-title">INVITÁ A TUS AMIGOS · cobrá el ' + _refPct(d.rate) + '</span><button class="dash-ref-cta" onclick="VIP.ui.openReferralModal()">VER PREMIOS ›</button></div>' +
-            (ms.enabled !== false && tiers.length ? ('<div class="dash-ref-bar"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:9.5px;color:#bbb;margin-bottom:4px;"><span>' + (ms.qualified || 0) + ' / ' + maxCount + ' referidos que cargaron</span><span style="color:#ffd700;">' + (claimable ? '🎁 ¡Tenés un premio para cobrar!' : (ms.nextTier ? 'Te faltan ' + Math.max(0, ms.nextTier.count - (ms.qualified || 0)) + ' para ' + _refMoney(ms.nextTier.amountARS) : '¡Máximo alcanzado!')) + '</span></div>' +
+            '<div class="dash-ref-head"><span style="font-size:18px;">👥</span><span class="dash-ref-title">INVITÁ A TUS AMIGOS · cobrá hasta el ' + _refMaxPct(d) + '</span><button class="dash-ref-cta" onclick="VIP.ui.openReferralModal()">VER NIVELES ›</button></div>' +
+            (tiersOn ? ('<div class="dash-ref-bar"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:9.5px;color:#bbb;margin-bottom:4px;"><span>' + (lv.active || 0) + ' / ' + maxCount + ' referidos activos · cobrás <b style="color:#00ff88;">' + _refPctNum(lv.pct) + '</b></span><span style="color:#ffd700;">' + (next ? 'Te faltan ' + next.missing + ' para el ' + _refPctNum(next.pct) : '¡Nivel máximo!') + '</span></div>' +
             '<div class="dash-ref-steps">' + steps + '</div>') : '') +
             '<button class="dash-ref-invite" onclick="VIP.ui.shareReferralLink()">🔗 INVITAR AHORA</button>' +
             '</div>';
@@ -561,8 +572,8 @@ VIP.ui = (function () {
             try {
                 const d = await fetchReferralDashboard(false);
                 const ex = document.getElementById('referralPromoExtra');
-                const ms = d.milestones || {};
-                if (ex && ms.enabled !== false && ms.tiers && ms.tiers.length) ex.textContent = '+ premios extra: ' + ms.tiers.map(t => t.count + ' amigos = ' + _refMoney(t.amountARS)).join(' · ');
+                const lv = d.level || {};
+                if (ex && lv.enabled !== false && lv.mode === 'tiers' && lv.tiers && lv.tiers.length) ex.textContent = 'Tu % sube con tus amigos activos: ' + lv.tiers.map(t => t.count + ' amigos = ' + _refPctNum(t.pct)).join(' · ');
             } catch (_) {}
             try { localStorage.setItem('vip_refPromoAt', String(Date.now())); } catch (_) {}
             console.info('[ref-promo] mostrando');
@@ -576,8 +587,8 @@ VIP.ui = (function () {
         let link = (_refData && _refData.referralLink) || null;
         if (!link) { try { link = (await fetchReferralDashboard(false)).referralLink; } catch (_) {} }
         if (!link) { showToast('No pudimos generar tu link. Probá de nuevo.', 'error'); return; }
-        const pct = _refPct(_refData && _refData.rate);
-        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Yo cobro el ' + pct + ' de tu actividad, vos jugás igual 😉\n' + link;
+        const pct = _refMaxPct(_refData);
+        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Registrate con mi link y jugamos juntos 😉\n' + link;
         let copied = false;
         try { await navigator.clipboard.writeText(link); copied = true; } catch (_) { try { fallbackCopy(link); copied = true; } catch (_) {} }
         const old = document.getElementById('referralShareChooser'); if (old) old.remove();
@@ -597,7 +608,7 @@ VIP.ui = (function () {
             '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;">' +
             '<span style="flex-shrink:0;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#d4af37,#ffd700);display:flex;align-items:center;justify-content:center;font-size:20px;">🔗</span>' +
             '<div style="flex:1;min-width:0;"><div style="font-weight:900;font-size:16px;letter-spacing:.2px;">Invitá a tus amigos</div>' +
-            '<div style="font-size:12px;color:#aab;margin-top:2px;">Cobrás el <b style="color:#ffd700;">' + pct + '</b> de la pérdida neta de cada amigo que se registre con tu link.</div></div>' +
+            '<div style="font-size:12px;color:#aab;margin-top:2px;">Cobrás hasta el <b style="color:#ffd700;">' + pct + '</b> de la pérdida neta de tus amigos: cuantos más activos, mayor tu %.</div></div>' +
             '<button onclick="document.getElementById(\'referralShareChooser\').remove()" aria-label="Cerrar" style="flex-shrink:0;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#ccc;font-size:16px;cursor:pointer;">✕</button></div>' +
             '<div style="background:rgba(0,0,0,.35);border:1px dashed rgba(255,215,0,.35);border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:8px;">' +
             '<span style="flex:1;min-width:0;font-size:11.5px;color:#9ff2c7;word-break:break-all;font-family:ui-monospace,Menlo,monospace;">' + _esc(link) + '</span>' +
@@ -612,8 +623,7 @@ VIP.ui = (function () {
     }
     async function shareReferralNative() {
         const link = (_refData && _refData.referralLink) || '';
-        const pct = _refPct(_refData && _refData.rate);
-        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Yo cobro el ' + pct + ' de tu actividad, vos jugás igual 😉\n' + link;
+        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Registrate con mi link y jugamos juntos 😉\n' + link;
         try { await navigator.share({ title: 'Invitación', text }); const ov = document.getElementById('referralShareChooser'); if (ov) ov.remove(); } catch (e) { /* cancelado */ }
     }
     function copyReferralLink() {
@@ -621,19 +631,6 @@ VIP.ui = (function () {
         if (link && link !== '—') navigator.clipboard.writeText(link).then(() => showToast('✅ Link copiado', 'success')).catch(() => fallbackCopy(link));
     }
     function copyReferralCode() { copyReferralLink(); } // legacy: el código ya no se muestra suelto
-
-    async function claimReferralMilestone(count) {
-        try {
-            const r = await fetch(`${VIP.config.API_URL}/api/referrals/milestones/claim`, {
-                method: 'POST', headers: { 'Authorization': `Bearer ${VIP.state.currentToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ count })
-            });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok) { showToast(d.error || 'No se pudo cobrar el premio', d.verify ? 'info' : 'error'); await loadReferralData(true); return; }
-            showToast('🏆 ¡Cobraste ' + _refMoney(d.amountARS) + ' por tus ' + d.count + ' referidos! Ya está en tu saldo.', 'success');
-            try { if (VIP.ui && VIP.ui.syncBalance) VIP.ui.syncBalance(); } catch (_) {}
-            await loadReferralData(true);
-        } catch (_) { showToast('Error de conexión', 'error'); }
-    }
 
     // ---- Canal informativo (delegated from chat module) ----
 
@@ -909,7 +906,6 @@ VIP.ui = (function () {
         maybeShowReferralPromo,
         shareReferralLink,
         shareReferralNative,
-        claimReferralMilestone,
         toggleReferralNetLossInfo,
         fetchReferralDashboard,
         loadCanalInformativoUrl,

@@ -84,6 +84,7 @@ const bankClose = require('./src/services/bankCloseService');  // #155 cruces de
 const ReferralMilestoneClaim = require('./src/models/ReferralMilestoneClaim'); // #168 premios por cantidad de referidos
 const _periodKey = require('./src/utils/periodKey');
 const { getReferralRateForUser, setGlobalReferralRate, getGlobalReferralRate } = require('./src/utils/referralRate'); // #168/#169 % del referidor (global editable)
+const referralTiers = require('./src/services/referralTierService'); // #171 niveles de % por cantidad de referidos activos
 const hgcashPay = require('./src/services/hgcashService');
 const pdfImage = require('./src/services/pdfImageService');
 const { generateReferralCode } = require('./src/utils/referralCode');
@@ -16701,23 +16702,13 @@ setInterval(() => { _runDailyCloseTick(); }, 5 * 60 * 1000);
 // pérdida neta y la comisión que va a cobrar, y un premio EXTRA por cantidad de
 // referidos que cargaron (3/5/10…), cobrable en fichas sin condiciones, en su propia
 // fecha (no la del reembolso mensual). Total transparencia: montos variables explicados.
-const REFERRAL_MILESTONES_DEFAULTS = { enabled: true, minChargedARS: 3000, payDay: 15, tiers: [{ count: 3, amountARS: 10000 }, { count: 5, amountARS: 20000 }, { count: 10, amountARS: 50000 }] };
-const REFERRAL_NON_BANK_SOURCES = ['install_bonus', 'welcome_gift', 'payout_refund', 'notif_batch', 'notif_batch_auto', 'auto_hgcash_bonus'];
-async function getReferralMilestonesConfig() {
-  try {
-    const c = (await getConfig('referralMilestones', null)) || {};
-    const tiers = (Array.isArray(c.tiers) ? c.tiers : REFERRAL_MILESTONES_DEFAULTS.tiers)
-      .map(t => ({ count: Math.max(1, Math.round(Number(t.count) || 0)), amountARS: Math.max(0, Math.round(Number(t.amountARS) || 0)) }))
-      .filter(t => t.count > 0 && t.amountARS > 0)
-      .sort((a, b) => a.count - b.count);
-    return {
-      enabled: c.enabled !== false,
-      minChargedARS: Number(c.minChargedARS) >= 0 ? Math.round(Number(c.minChargedARS)) : REFERRAL_MILESTONES_DEFAULTS.minChargedARS,
-      payDay: Number.isFinite(Number(c.payDay)) ? Math.min(28, Math.max(0, Math.round(Number(c.payDay)))) : REFERRAL_MILESTONES_DEFAULTS.payDay,
-      tiers: tiers.length ? tiers : REFERRAL_MILESTONES_DEFAULTS.tiers
-    };
-  } catch (_) { return Object.assign({}, REFERRAL_MILESTONES_DEFAULTS); }
-}
+// #171 (owner 2026-09-29): los premios en PLATA por cantidad de referidos (#168) se
+// reemplazan por NIVELES de % de comisión sobre el netwin: 3 activos → 1%, 5 → 2%, 10 → 3%
+// (máximo), editable en el panel. Motivo: 3 cuentas × $3.000 puestos = $10.000 retirables
+// (estafa directa). Con % del netwin, sin pérdida real no hay premio. Lógica en
+// src/services/referralTierService.js (la usan el cálculo mensual, el dashboard y el controller).
+const REFERRAL_NON_BANK_SOURCES = referralTiers.NON_BANK_SOURCES;
+async function getReferralMilestonesConfig() { return referralTiers.getReferralTiersConfig(); }
 // Cache del NETWIN del mes por referido (1 llamada a JUGAYGANA por referido con cargas).
 const _refNetwinCache = new Map(); // key userId → { at, ggr }
 const REF_NETWIN_TTL_MS = 15 * 60 * 1000;
@@ -16756,21 +16747,18 @@ async function _ensureReferralCode(user) {
 }
 function _artDayOfMonth() { return Number(new Date().toLocaleString('en-US', { day: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' })); }
 
-// Tablero del referidor: link, totales, tabla por referido y progreso de premios.
+// Tablero del referidor: link, totales, tabla por referido y NIVEL de comisión (#171).
 app.get('/api/referrals/dashboard', authMiddleware, async (req, res) => {
   try {
     const user = await User.findOne({ id: req.user.userId }).lean();
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
     const code = await _ensureReferralCode(user);
-    const rate = getReferralRateForUser(user);
     const cfg = await getReferralMilestonesConfig();
     const refs = await User.find({ referredByUserId: user.id }).sort({ createdAt: -1 }).select('id username createdAt jugayganaUserId isBlocked').lean();
-    const ids = refs.map(r => r.id);
-    const depAgg = ids.length ? await Transaction.aggregate([
-      { $match: { userId: { $in: ids }, type: 'deposit', status: 'completed', 'metadata.source': { $nin: REFERRAL_NON_BANK_SOURCES } } },
-      { $group: { _id: '$userId', total: { $sum: '$amount' }, count: { $sum: 1 }, last: { $max: '$timestamp' } } }
-    ]) : [];
-    const depBy = new Map(depAgg.map(d => [d._id, d]));
+    const depBy = await referralTiers.depositsByReferred(user.id);
+    const activeCount = Array.from(depBy.values()).filter(v => v.total >= cfg.minChargedARS).length;
+    const lv = await referralTiers.resolveReferralRate(user, { activeCount });
+    const rate = lv.rate;
     const range = jugaygana.getCurrentMonthToDateRangeArgentinaEpoch();
     const monthRange = { from: new Date(range.fromEpoch * 1000), to: new Date(range.toEpoch * 1000) };
     // NETWIN del mes solo para los que cargaron (los demás no tienen juego). Concurrencia 4, tope 60.
@@ -16783,7 +16771,7 @@ app.get('/api/referrals/dashboard', authMiddleware, async (req, res) => {
     }
     const rows = refs.map(r => {
       const d = depBy.get(r.id);
-      const total = d ? Number(d.total) || 0 : 0;
+      const total = d ? d.total : 0;
       const net = netBy.has(r.id) ? netBy.get(r.id) : (d ? null : 0);
       const netPos = net === null ? null : Math.max(0, net);
       return {
@@ -16793,35 +16781,27 @@ app.get('/api/referrals/dashboard', authMiddleware, async (req, res) => {
         netLossMonth: net, commissionMonth: netPos === null ? null : Math.round(netPos * rate)
       };
     });
-    const qualified = rows.filter(r => r.qualified).length;
-    const claims = await ReferralMilestoneClaim.find({ userId: user.id }).lean();
-    const claimBy = new Map(claims.map(c => [c.count, c]));
-    const day = _artDayOfMonth();
-    const payWindowOpen = cfg.payDay === 0 || day >= cfg.payDay;
-    const tiers = cfg.tiers.map(t => {
-      const c = claimBy.get(t.count);
-      const unlocked = qualified >= t.count;
-      return { count: t.count, amountARS: t.amountARS, unlocked, claimed: !!c && c.status !== 'failed', claimStatus: c ? c.status : null, claimedAt: c ? c.claimedAt : null,
-        claimable: unlocked && !(c && c.status !== 'failed') && cfg.enabled && payWindowOpen };
-    });
-    const nextTier = tiers.find(t => !t.unlocked) || null;
     const sumNet = rows.reduce((a, r) => a + (r.netLossMonth === null ? 0 : Math.max(0, r.netLossMonth)), 0);
     const periodKey = _periodKey.getCurrentPeriodKey();
-    // Total histórico acreditado por comisiones + premios.
+    // Total histórico acreditado por comisiones (+ premios viejos #168 si los hubo).
     const credited = await Transaction.aggregate([
       { $match: { userId: user.id, status: 'completed', $or: [{ type: 'referral_commission' }, { type: 'bonus', 'metadata.source': 'referral_milestone' }] } },
       { $group: { _id: '$type', total: { $sum: '$amount' } } }
     ]);
     const hist = {}; for (const c of credited) hist[c._id] = c.total;
+    const tiers = cfg.tiers.map(t => ({ count: t.count, pct: t.pct, reached: activeCount >= t.count, current: !!(lv.tier && lv.tier.count === t.count) }));
     res.json({
       success: true,
       referralCode: code, referralLink: code ? _referralLinkFor(code) : null, rate,
       period: { key: periodKey, label: _periodKey.getPeriodLabel(periodKey), nextCredit: `Primer día hábil de ${_periodKey.getNextPeriodLabel(periodKey)}` },
-      totals: { referred: rows.length, active: rows.filter(r => r.active).length, qualified, totalCharged: rows.reduce((a, r) => a + r.totalCharged, 0),
+      totals: { referred: rows.length, active: rows.filter(r => r.active).length, qualified: activeCount, totalCharged: rows.reduce((a, r) => a + r.totalCharged, 0),
         netLossMonth: Math.round(sumNet), commissionMonth: Math.round(sumNet * rate), netwinPartial: rows.some(r => r.active && r.netLossMonth === null),
         historicalCommission: Math.round(hist.referral_commission || 0), historicalMilestones: Math.round(hist.bonus || 0) },
       referrals: rows,
-      milestones: { enabled: cfg.enabled, minChargedARS: cfg.minChargedARS, payDay: cfg.payDay, payWindowOpen, qualified, tiers, nextTier, maxCount: cfg.tiers.length ? cfg.tiers[cfg.tiers.length - 1].count : 0 }
+      // #171 nivel de comisión según referidos activos (cargaron ≥ minChargedARS).
+      level: { enabled: cfg.enabled, mode: lv.mode, minChargedARS: cfg.minChargedARS, basePct: cfg.basePct, active: activeCount, pct: lv.pct, maxPct: lv.maxPct,
+        tiers, currentTier: lv.tier ? { count: lv.tier.count, pct: lv.tier.pct } : null, nextTier: lv.nextTier ? { count: lv.nextTier.count, pct: lv.nextTier.pct, missing: lv.missing } : null,
+        maxCount: cfg.tiers.length ? cfg.tiers[cfg.tiers.length - 1].count : 0 }
     });
   } catch (error) {
     logger.error(`[referrals] dashboard: ${error.message}`);
@@ -16829,81 +16809,43 @@ app.get('/api/referrals/dashboard', authMiddleware, async (req, res) => {
   }
 });
 
-// Reclamar un premio por cantidad de referidos (fichas, sin condiciones, una vez por hito).
+// #171: los premios en plata por hitos se discontinuaron (eran estafables). El endpoint queda
+// cerrado para clientes con la app vieja cacheada. El historial en ReferralMilestoneClaim se conserva.
 app.post('/api/referrals/milestones/claim', authMiddleware, sensitiveLimiter, async (req, res) => {
-  try {
-    const user = await User.findOne({ id: req.user.userId }).lean();
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-    if (user.isBlocked) return res.status(403).json({ error: 'Cuenta bloqueada' });
-    const count = Math.round(Number(req.body && req.body.count));
-    const cfg = await getReferralMilestonesConfig();
-    if (!cfg.enabled) return res.status(400).json({ error: 'Los premios por referidos están pausados por ahora.' });
-    const tier = cfg.tiers.find(t => t.count === count);
-    if (!tier) return res.status(400).json({ error: 'Premio inválido' });
-    const day = _artDayOfMonth();
-    if (cfg.payDay > 0 && day < cfg.payDay) return res.status(400).json({ error: `Este premio se cobra a partir del día ${cfg.payDay} de cada mes. ¡Ya casi!`, payDay: cfg.payDay });
-    // Referidos calificados (cargaron al menos el mínimo).
-    const refs = await User.find({ referredByUserId: user.id }).select('id').lean();
-    const ids = refs.map(r => r.id);
-    const agg = ids.length ? await Transaction.aggregate([
-      { $match: { userId: { $in: ids }, type: 'deposit', status: 'completed', 'metadata.source': { $nin: REFERRAL_NON_BANK_SOURCES } } },
-      { $group: { _id: '$userId', total: { $sum: '$amount' } } }
-    ]) : [];
-    const qualified = agg.filter(a => Number(a.total) >= cfg.minChargedARS).length;
-    if (qualified < tier.count) return res.status(400).json({ error: `Todavía no llegaste: tenés ${qualified} referido(s) que cargaron al menos $${cfg.minChargedARS.toLocaleString('es-AR')} y este premio pide ${tier.count}.`, qualified });
-    // Reserva atómica (índice único userId+count).
-    let claim;
-    try {
-      claim = await ReferralMilestoneClaim.create({ id: uuidv4(), userId: user.id, username: user.username, count: tier.count, amountARS: tier.amountARS, qualifiedAtClaim: qualified, status: 'pending' });
-    } catch (e) {
-      if (e && e.code === 11000) {
-        const prev = await ReferralMilestoneClaim.findOne({ userId: user.id, count: tier.count }).lean();
-        if (prev && prev.status === 'failed') {
-          await ReferralMilestoneClaim.updateOne({ id: prev.id }, { $set: { status: 'pending', error: null, claimedAt: new Date() } });
-          claim = await ReferralMilestoneClaim.findOne({ id: prev.id }).lean();
-        } else return res.status(409).json({ error: 'Este premio ya fue cobrado.' });
-      } else throw e;
-    }
-    const credit = await jugaygana.creditUserBalance(user.username, tier.amountARS, user.jugayganaUserId || null).catch(e => ({ success: false, error: e.message }));
-    if (credit && credit.ambiguous) {
-      await ReferralMilestoneClaim.updateOne({ id: claim.id }, { $set: { status: 'verify', error: String(credit.error || '').slice(0, 280) } });
-      await _alertMoneyAmbiguous(`Premio por ${tier.count} referidos`, user.id, user.username, tier.amountARS, credit.error);
-      return res.status(502).json({ error: 'Tu premio quedó en verificación (la plataforma no confirmó). No hace falta reclamar de nuevo: se resuelve solo o te avisamos.', verify: true });
-    }
-    if (!credit || !credit.success) {
-      await ReferralMilestoneClaim.updateOne({ id: claim.id }, { $set: { status: 'failed', error: jugaygana.errToString((credit && credit.error) || 'sin respuesta').slice(0, 280) } });
-      return res.status(503).json({ error: 'La plataforma no respondió. Probá de nuevo en unos minutos.' });
-    }
-    const txId = uuidv4();
-    await Transaction.create({ id: txId, type: 'bonus', amount: tier.amountARS, username: user.username, userId: user.id,
-      description: `Premio por ${tier.count} referidos que cargaron (extra a la comisión)`, adminUsername: 'sistema', adminRole: 'system',
-      transactionId: credit.data?.transfer_id || credit.data?.transferId || null, metadata: { source: 'referral_milestone', count: tier.count, qualified }, timestamp: new Date() });
-    await ReferralMilestoneClaim.updateOne({ id: claim.id }, { $set: { status: 'credited', txId, creditedAt: new Date(), error: null } });
-    try { await _emitAdminOnlyChatNote(user.id, user.username, `🎁 Premio por referidos: cobró $${tier.amountARS.toLocaleString('es-AR')} por ${tier.count} referidos que cargaron (calificados: ${qualified}). Acreditado automático.`); } catch (_) {}
-    logger.info(`[referrals] ${user.username} cobró premio hito ${tier.count} = $${tier.amountARS} (calificados ${qualified})`);
-    res.json({ success: true, amountARS: tier.amountARS, count: tier.count });
-  } catch (error) {
-    logger.error(`[referrals] milestone claim: ${error.message}`);
-    res.status(500).json({ error: 'Error del servidor' });
-  }
+  res.status(410).json({ error: 'Los premios en plata por referidos se reemplazaron por niveles de comisión: cuantos más referidos activos, más % cobrás. Actualizá la app.' });
 });
 
-// Config de premios por referidos (admin general).
+// Config de niveles de comisión por referidos activos (admin general) — #171.
 app.get('/api/admin/referrals/milestones-config', authMiddleware, adminMiddleware, async (req, res) => {
-  try { if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' }); res.json(await getReferralMilestonesConfig()); } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const cfg = await referralTiers.getReferralTiersConfig({ force: true });
+    res.json(Object.assign({}, cfg, { flatPct: Math.round(getGlobalReferralRate() * 10000) / 100 }));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.post('/api/admin/referrals/milestones-config', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
     const b = req.body || {};
-    const tiers = (Array.isArray(b.tiers) ? b.tiers : []).map(t => ({ count: Math.round(Number(t.count) || 0), amountARS: Math.round(Number(t.amountARS) || 0) })).filter(t => t.count > 0 && t.amountARS > 0).sort((a, b2) => a.count - b2.count);
-    if (!tiers.length) return res.status(400).json({ error: 'Cargá al menos un hito (cantidad + premio)' });
-    const seen = new Set(); for (const t of tiers) { if (seen.has(t.count)) return res.status(400).json({ error: `Hito repetido: ${t.count}` }); seen.add(t.count); }
-    const next = { enabled: b.enabled !== false, minChargedARS: Math.max(0, Math.round(Number(b.minChargedARS) || 0)), payDay: Math.min(28, Math.max(0, Math.round(Number(b.payDay) || 0))), tiers, updatedBy: req.user.username, updatedAt: new Date() };
+    const rawTiers = Array.isArray(b.tiers) ? b.tiers : [];
+    for (const t of rawTiers) {
+      const pct = Number(t && t.pct);
+      if (!(Number.isFinite(pct) && pct > 0 && pct <= 50)) return res.status(400).json({ error: 'Cada nivel necesita un % entre 0,01 y 50' });
+    }
+    const tiers = referralTiers.normalizeTiers(rawTiers);
+    if (!tiers.length) return res.status(400).json({ error: 'Cargá al menos un nivel (cantidad de referidos activos + %)' });
+    const counts = rawTiers.map(t => Math.round(Number(t.count) || 0)).filter(c => c > 0);
+    if (new Set(counts).size !== counts.length) return res.status(400).json({ error: 'Hay una cantidad de referidos repetida' });
+    for (let i = 1; i < tiers.length; i++) if (tiers[i].pct < tiers[i - 1].pct) return res.status(400).json({ error: 'El % tiene que subir (o mantenerse) con más referidos' });
+    const basePct = Number(b.basePct);
+    if (!(Number.isFinite(basePct) && basePct >= 0 && basePct <= 50)) return res.status(400).json({ error: '% base inválido (0 a 50)' });
+    if (basePct > tiers[0].pct) return res.status(400).json({ error: 'El % base no puede superar al del primer nivel' });
+    const next = { enabled: b.enabled !== false, minChargedARS: Math.max(0, Math.round(Number(b.minChargedARS) || 0)), basePct: Math.round(basePct * 100) / 100, tiers, updatedBy: req.user.username, updatedAt: new Date() };
     await setConfig('referralMilestones', next);
-    logger.info(`[referrals] premios por referidos actualizados por ${req.user.username}: ${tiers.map(t => t.count + '→$' + t.amountARS).join(', ')} · mínimo $${next.minChargedARS} · día ${next.payDay}`);
-    res.json(await getReferralMilestonesConfig());
-  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+    referralTiers.invalidateCache();
+    logger.info(`[referrals] niveles de comisión actualizados por ${req.user.username}: base ${next.basePct}% · ${tiers.map(t => t.count + '→' + t.pct + '%').join(', ')} · activo = cargó ≥ $${next.minChargedARS} · ${next.enabled ? 'ON' : 'OFF'}`);
+    res.json(Object.assign({}, await referralTiers.getReferralTiersConfig({ force: true }), { flatPct: Math.round(getGlobalReferralRate() * 10000) / 100 }));
+  } catch (e) { logger.warn(`[referrals] milestones-config POST: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 
 // ============================================

@@ -36,7 +36,9 @@ El sistema VIPCARGAS:
   tres con el % del **rango** 🥉🥈🥇 según la pérdida del mes; el diario se eliminó el
   2026-07-28 y se restauró el 2026-08-14), **ruleta diaria**,
   **fueguito** (racha), **bono instalación** (cupón 100% próxima carga; antes $5.000),
-  **referidos** (3% desde #169, editable en panel→COMANDOS `Config['referralRate']`; antes 7%) y
+  **referidos** (% por NIVEL según referidos activos desde #171: 3→1%, 5→2%, 10→3%, editable en
+  panel→COMANDOS `Config['referralMilestones']`; `Config['referralRate']` es el % plano que rige
+  sólo con los niveles apagados; antes 7% fijo) y
   **campañas/publicistas** con sub-atribución
   por influencer.
 - El "saldo real" del jugador vive en JUGAYGANA; VIPCARGAS guarda atribución, bonos,
@@ -396,10 +398,13 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
   payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas. **#168:** tablero vivo
   `GET /api/referrals/dashboard` (server.js; NETWIN del mes por referido con cache 15 min),
-  premios EXTRA por cantidad de referidos que cargaron (`Config['referralMilestones']`,
-  `ReferralMilestoneClaim` con índice único userId+count, `POST /api/referrals/milestones/claim`),
   popup + card del home en la PWA, link `PUBLIC_BASE_URL/?ref=` (`/linkreferido` redirige),
-  código de referido fijo si vino por link.
+  código de referido fijo si vino por link. **#171:** la tasa del referidor la resuelve
+  `src/services/referralTierService.resolveReferralRate(user)` (override > niveles por cantidad
+  de referidos activos = cargas reales ≥ `minChargedARS` > % plano). La usan el cálculo mensual
+  (`referralCalculationService`), el dashboard (`level{}`) y el controller. Los premios en plata
+  por hitos (#168) se discontinuaron: `POST /api/referrals/milestones/claim` → 410;
+  `ReferralMilestoneClaim` es sólo historial.
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone). **Premios editables
   (#164, `Config['roulettePrizes']`)**: `money` (fichas, auto-crédito, cuenta contra el tope),
   `bonus_pct` (% en la próxima carga → PromoBonus `sourceRuleCode:'ruleta'` autoApply, se

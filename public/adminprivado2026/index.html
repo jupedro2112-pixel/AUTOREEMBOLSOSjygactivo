@@ -632,8 +632,9 @@
                         </div>
                         <div class="cbu-form" id="referralRateForm">
                             <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
-                                Porcentaje de la <b>pérdida neta mensual</b> de sus referidos que cobra el referidor. Se refleja al instante en
-                                la app (popup, card del home, menú de referidos) y en el próximo cálculo mensual de comisiones.
+                                % <b>plano</b> de la pérdida neta mensual de sus referidos que cobra el referidor. <b>Solo rige si los
+                                "Niveles de comisión por referidos activos" (más abajo) están apagados</b>; con los niveles activos, el % de cada
+                                referidor sale de cuántos referidos activos tiene (#171). El override por usuario siempre manda.
                             </p>
                             <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
                                 <div class="form-group" style="margin:0;"><label for="referralRatePct">% de comisión</label><input type="number" id="referralRatePct" min="0" max="50" step="0.5" style="width:120px;"></div>
@@ -1946,21 +1947,23 @@
 
                     <!-- ── #168 PREMIOS POR CANTIDAD DE REFERIDOS ── -->
                     <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,215,0,0.35);border-radius:12px;padding:18px;">
-                        <h3 style="margin-bottom:8px;color:#ffd700;font-size:15px;">🎁 Premios por cantidad de referidos (extra a la comisión)</h3>
+                        <h3 style="margin-bottom:8px;color:#ffd700;font-size:15px;">🏆 Niveles de comisión por referidos activos</h3>
                         <p style="font-size:12px;color:#b0b0b0;line-height:1.55;margin:0 0 12px;">
-                            El cliente ve en la app una barra de progreso y cobra un premio en fichas (sin condiciones) al llegar a cada hito.
-                            Cuenta solo el referido que <b>cargó al menos el mínimo</b>. Cada hito se cobra <b>una sola vez</b>, desde el <b>día de cobro</b> de cada mes
-                            (distinto al reembolso mensual para no juntar pagos). La comisión del 7% sigue aparte.
+                            El % de comisión que cobra el referidor sobre la <b>pérdida neta</b> (netwin) de TODOS sus referidos depende de cuántos
+                            referidos <b>activos</b> tiene (activo = cargó al menos el mínimo, sumando sus cargas reales). Ej.: 3 activos → 1%, 5 → 2%,
+                            10 → 3% (máximo). Reemplaza a los premios en plata por cantidad (#168), que se podían estafar con cuentas falsas:
+                            sin pérdida real no hay comisión. Con menos referidos que el primer nivel cobra el <b>% base</b> (0 = nada).
+                            Si está <b>apagado</b>, se usa el % plano de la card de arriba para todos.
                         </p>
                         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
-                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#fff;cursor:pointer;"><input type="checkbox" id="refMsEnabled" style="width:auto;"> Activo</label>
-                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Mínimo cargado por referido ($)</label><input type="number" id="refMsMin" min="0" step="500" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:130px;"></div>
-                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Día de cobro (1–28, 0 = cualquier día)</label><input type="number" id="refMsPayDay" min="0" max="28" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:90px;"></div>
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#fff;cursor:pointer;"><input type="checkbox" id="refMsEnabled" style="width:auto;"> Niveles activos</label>
+                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Mínimo cargado para ser "activo" ($)</label><input type="number" id="refMsMin" min="0" step="500" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:130px;"></div>
+                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">% base (menos referidos que el 1er nivel)</label><input type="number" id="refMsBasePct" min="0" max="50" step="0.5" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:90px;"></div>
                         </div>
-                        <table class="data-table" style="max-width:520px;"><thead><tr><th>Referidos que cargaron</th><th>Premio ($ fichas)</th><th></th></tr></thead><tbody id="refMsTiers"></tbody></table>
+                        <table class="data-table" style="max-width:520px;"><thead><tr><th>Referidos activos (desde)</th><th>% de comisión</th><th></th></tr></thead><tbody id="refMsTiers"></tbody></table>
                         <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
-                            <button class="btn btn-secondary btn-sm" onclick="addRefMsTier()">➕ Agregar hito</button>
-                            <button class="btn-primary" onclick="saveReferralMilestones()">💾 Guardar premios</button>
+                            <button class="btn btn-secondary btn-sm" onclick="addRefMsTier()">➕ Agregar nivel</button>
+                            <button class="btn-primary" onclick="saveReferralMilestones()">💾 Guardar niveles</button>
                             <span id="refMsMsg" style="font-size:12px;color:#aaa;align-self:center;"></span>
                         </div>
                     </div>

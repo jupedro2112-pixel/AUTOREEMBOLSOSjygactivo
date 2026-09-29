@@ -121,6 +121,11 @@ nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112
   (exportado por `jugaygana.js`) antes de concatenar/loguear, o sale `[object Object]`.
   Para decidir "existe / no existe" usar `lookupUserOrError` (tri-estado), nunca
   `getUserInfoByName` (colapsa "falló la API" con "no existe").
+- **% de referidos por NIVEL (#171):** la tasa de un referidor NO es fija: sale de
+  `referralTierService.resolveReferralRate(user)` (override > niveles por referidos activos >
+  % plano). Todo cálculo/copy nuevo que muestre o pague comisión usa ESE resolver, no
+  `getReferralRateForUser` (sync, sólo conoce el % plano). Nada de premios en plata por
+  cantidad de referidos: se estafaban con cuentas falsas (owner 2026-09-29).
 - **Bonos automáticos APAGADOS por flags** (owner 2026-06-24): `INACTIVIDAD_DISABLED`
   y `BONUS_STRATEGY_DISABLED` (server.js) + `CHARGE_BONUSES_DISABLED`
   (notificationRulesService) + bonos de encuesta con `bDays=[]`. Tope 30% en TODO lo

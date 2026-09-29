@@ -60,6 +60,19 @@ document.addEventListener('DOMContentLoaded', () => {
             registerBtn.style.background = 'linear-gradient(135deg, #d4af37 0%, #b8860b 100%)';
             registerBtn.textContent = '🤝 Registrarse con código de referido';
         }
+        // #171: si LLEGÓ por el link de referido (?ref= en la URL de esta carga) y no tiene
+        // sesión, se abre solo el registro con el código ya puesto. Quien entra por un link de
+        // invitación viene a crearse la cuenta, no a loguearse. Si ya había sesión, no molesta.
+        if (urlParams.get('ref') && !VIP.state.currentToken) {
+            setTimeout(() => {
+                if (VIP.state.currentToken || VIP.state.currentUser) return;
+                const open = Array.from(document.querySelectorAll('.modal')).find(m => !m.classList.contains('hidden'));
+                if (open && open.id !== 'registerModal') return; // el welcome de publicista u otro modal manda
+                if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
+                VIP.ui.showModal('registerModal');
+                try { const u = document.getElementById('registerUsername'); if (u) u.focus(); } catch (_) {}
+            }, 500);
+        }
     }
 
     // NOTA: el viejo adServiceModal ("Información del Servicio") se auto-abría

@@ -74,6 +74,9 @@
   usan `PUBLIC_BASE_URL` si está seteada y, si no, el host del request (`x-forwarded-proto` +
   host, mismo criterio que `_publicBaseUrlFromRequest`). En Render NO hay que setear
   PUBLIC_BASE_URL (o el link vuelve a apuntar a prod); en EB queda como env property.
+- **El link de referido abre el REGISTRO solo (video del owner):** si la URL de esta carga trae
+  `?ref=` y no hay sesión, `app.js` abre `registerModal` a los 500 ms con el código fijo (respeta
+  un welcome de publicista u otro modal ya abierto). Solo JS, sin bump.
 
 ### 170. Botón "Invitar a tus amigos": copia el link y ofrece WhatsApp / Telegram / otras apps
 - `shareReferralLink` (ui.js) ahora copia el link al portapapeles SIEMPRE y abre un chooser

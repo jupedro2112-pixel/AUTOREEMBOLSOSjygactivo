@@ -375,154 +375,215 @@ VIP.ui = (function () {
     }
     function escapeHtml(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
-    // ---- Referrals ----
+    // ---- Referrals (#168: tablero vivo, premios por cantidad, popup y card del home) ----
+    function _esc(v) { const d = document.createElement('div'); d.textContent = String(v == null ? '' : v); return d.innerHTML; }
+    let _refData = null;
+    let _refLoadedAt = 0;
+    const _refMoney = (n) => '$' + new Intl.NumberFormat('es-AR').format(Math.round(Number(n) || 0));
+    function _refPct(rate) { return (Math.round((Number(rate) || 0.07) * 1000) / 10) + '%'; }
+    function _refAgo(d) {
+        if (!d) return '';
+        const ms = Date.now() - new Date(d).getTime();
+        const dias = Math.floor(ms / 86400000);
+        if (dias <= 0) return 'hoy';
+        if (dias === 1) return 'hace 1 día';
+        if (dias < 30) return 'hace ' + dias + ' días';
+        const m = Math.floor(dias / 30);
+        return m === 1 ? 'hace 1 mes' : 'hace ' + m + ' meses';
+    }
+
+    async function fetchReferralDashboard(force) {
+        if (!force && _refData && Date.now() - _refLoadedAt < 60000) return _refData;
+        const r = await fetch(`${VIP.config.API_URL}/api/referrals/dashboard`, { headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` } });
+        if (!r.ok) throw new Error('dashboard ' + r.status);
+        const d = await r.json();
+        _refData = d; _refLoadedAt = Date.now();
+        VIP.state.referralData = d;
+        document.querySelectorAll('.referralRatePct').forEach(el => { el.textContent = _refPct(d.rate); });
+        return d;
+    }
 
     async function openReferralModal() {
         showModal('referralModal');
-        await loadReferralData();
+        await loadReferralData(true);
     }
 
-    async function loadReferralData() {
-        const histContainer = document.getElementById('referralPayoutHistory');
-        if (histContainer) histContainer.innerHTML = '<span style="color:#888;font-size:12px;">Cargando...</span>';
-
+    async function loadReferralData(force) {
+        const c = document.getElementById('referralContent');
+        if (c && !_refData) c.innerHTML = '<span style="color:#888;font-size:12px;">Cargando tus referidos…</span>';
         try {
-            const [meRes, histRes] = await Promise.all([
-                fetch(`${VIP.config.API_URL}/api/referrals/me`, {
-                    headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
-                }),
-                fetch(`${VIP.config.API_URL}/api/referrals/history?limit=20`, {
-                    headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
-                })
-            ]);
-
-            if (!meRes.ok) {
-                if (histContainer) histContainer.innerHTML = '<span style="color:#ff4444;font-size:12px;">No se pudieron cargar tus datos de referidos. Reintentá.</span>';
-                return;
-            }
-            const meData = await meRes.json();
-            const me = meData.data;
-
-            document.getElementById('myReferralCode').textContent = me.referralCode || '—';
-            // #143: el % real del referidor (default 7%; puede tener override) en el copy del modal
-            if (typeof me.referralRate === 'number' && me.referralRate > 0) {
-                const pct = Math.round(me.referralRate * 1000) / 10;
-                document.querySelectorAll('.referralRatePct').forEach(el => { el.textContent = pct + '%'; });
-                document.querySelectorAll('.referralRateExample').forEach(el => { el.textContent = new Intl.NumberFormat('es-AR').format(Math.round(100000 * me.referralRate)); });
-            }
-            document.getElementById('myReferralLink').textContent = me.referralLink || '—';
-            const activeCountEl = document.getElementById('referralActiveCount');
-            if (activeCountEl) activeCountEl.textContent = me.activeReferred != null ? me.activeReferred : (me.totalReferred || 0);
-            document.getElementById('referralHistoricalTotal').textContent =
-                '$' + new Intl.NumberFormat('es-AR').format(Math.round(me.historicalTotalCredited || 0));
-            document.getElementById('referralCurrentPeriod').textContent = me.currentPeriodLabel || me.currentPeriod || '—';
-
-            VIP.state.referralData = me;
-
-            try {
-                const sumRes = await fetch(`${VIP.config.API_URL}/api/referrals/summary`, {
-                    headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` }
-                });
-                if (sumRes.ok) {
-                    const sumData = await sumRes.json();
-                    const sum = sumData.data;
-                    document.getElementById('referralPendingAmount').textContent =
-                        '$' + new Intl.NumberFormat('es-AR').format(Math.round(sum.pendingEstimatedAmount || 0));
-                    document.getElementById('referralCreditDate').textContent =
-                        sum.estimatedCreditDate || 'Inicio del próximo mes';
-                    const lastPayoutEl = document.getElementById('referralLastPayoutAmount');
-                    if (lastPayoutEl) {
-                        if (sum.lastPayout && sum.lastPayout.amount > 0) {
-                            lastPayoutEl.textContent = '$' + new Intl.NumberFormat('es-AR').format(Math.round(sum.lastPayout.amount));
-                            lastPayoutEl.title = sum.lastPayout.periodLabel || sum.lastPayout.periodKey || '';
-                        } else {
-                            lastPayoutEl.textContent = '—';
-                        }
-                    }
-                }
-            } catch (e) { /* ignorar */ }
-
-            const EMPTY_HISTORY_HTML = '<span style="color:#888;font-size:12px;">Todavía no tenés pagos por referidos.</span>';
-
-            if (histRes.ok) {
-                const histData = await histRes.json();
-                const payouts  = histData.data?.payouts || [];
-                if (payouts.length === 0) {
-                    histContainer.innerHTML = EMPTY_HISTORY_HTML;
-                } else {
-                    const byPeriod = new Map();
-                    for (const p of payouts) {
-                        const key = p.periodKey || '?';
-                        if (!byPeriod.has(key)) byPeriod.set(key, []);
-                        byPeriod.get(key).push(p);
-                    }
-
-                    const statusBadgeHtml = (status) => {
-                        if (status === 'paid')
-                            return '<span style="background:rgba(0,255,136,0.12);border:1px solid rgba(0,255,136,0.4);color:#00ff88;font-size:10px;border-radius:4px;padding:2px 6px;">✅ Pagado</span>';
-                        if (status === 'failed')
-                            return '<span style="background:rgba(255,68,68,0.12);border:1px solid rgba(255,68,68,0.4);color:#ff4444;font-size:10px;border-radius:4px;padding:2px 6px;">❌ Fallido</span>';
-                        if (status === 'cancelled')
-                            return '<span style="background:rgba(136,136,136,0.12);border:1px solid rgba(136,136,136,0.4);color:#888;font-size:10px;border-radius:4px;padding:2px 6px;">🚫 Cancelado</span>';
-                        return '<span style="background:rgba(247,147,30,0.12);border:1px solid rgba(247,147,30,0.4);color:#f7931e;font-size:10px;border-radius:4px;padding:2px 6px;">⏳ Pendiente</span>';
-                    };
-
-                    let html = '';
-                    for (const [pk, periodPayouts] of byPeriod) {
-                        const label    = periodPayouts[0].periodLabel || pk;
-                        const paidTotal = periodPayouts
-                            .filter(p => p.status === 'paid')
-                            .reduce((s, p) => s + (p.totalCommissionAmount || 0), 0);
-                        const hasMultiple = periodPayouts.length > 1;
-
-                        html += `<div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.05);">`;
-                        html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">`;
-                        html += `<span style="font-size:12px;color:#d4af37;font-weight:600;">📅 ${label}</span>`;
-                        if (paidTotal > 0)
-                            html += `<span style="font-size:12px;color:#00ff88;font-weight:bold;">$${new Intl.NumberFormat('es-AR').format(Math.round(paidTotal))}</span>`;
-                        html += `</div>`;
-
-                        for (const p of periodPayouts) {
-                            const isDelta = p.isDelta || (p.payoutIndex || 1) > 1;
-                            const amount  = p.totalCommissionAmount || 0;
-                            html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;${hasMultiple ? 'padding-left:8px;' : ''}">`;
-                            html += `<div style="display:flex;align-items:center;gap:6px;">`;
-                            if (isDelta)
-                                html += `<span style="background:rgba(212,175,55,0.12);border:1px solid rgba(212,175,55,0.35);color:#d4af37;font-size:10px;border-radius:4px;padding:1px 5px;">Δ delta</span>`;
-                            html += `${statusBadgeHtml(p.status)}`;
-                            html += `</div>`;
-                            html += `<span style="font-size:13px;color:${p.status === 'paid' ? '#d4af37' : '#888'};font-weight:${p.status === 'paid' ? '600' : 'normal'};">$${new Intl.NumberFormat('es-AR').format(Math.round(amount))}</span>`;
-                            html += `</div>`;
-                        }
-                        html += `</div>`;
-                    }
-                    histContainer.innerHTML = html;
-                }
-            } else {
-                histContainer.innerHTML = EMPTY_HISTORY_HTML;
-            }
+            const d = await fetchReferralDashboard(force);
+            renderReferralModal(d);
+            renderReferralHomeCard(d);
         } catch (err) {
             console.error('[Referrals] Error cargando datos:', err);
-            if (histContainer) histContainer.innerHTML = '<span style="color:#ff4444;font-size:12px;">No se pudieron cargar tus datos de referidos. Reintentá.</span>';
+            if (c) c.innerHTML = '<span style="color:#ff4444;font-size:12px;">No se pudieron cargar tus datos de referidos. Reintentá.</span>';
         }
     }
 
-    function copyReferralCode() {
-        const code = document.getElementById('myReferralCode').textContent;
-        if (code && code !== '—') {
-            navigator.clipboard.writeText(code).then(() => {
-                showToast('✅ Código copiado', 'success');
-            }).catch(() => { fallbackCopy(code); });
-        }
+    function _refTierHtml(t, ms) {
+        const on = t.unlocked;
+        const claimed = t.claimed && t.claimStatus !== 'failed';
+        let foot;
+        if (claimed) foot = '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.5);">✅ Cobrado</span>';
+        else if (t.claimable) foot = '<button onclick="VIP.ui.claimReferralMilestone(' + t.count + ')" style="background:linear-gradient(135deg,#ffd700,#f7931e);color:#000;border:none;border-radius:8px;padding:6px 10px;font-weight:900;font-size:10.5px;cursor:pointer;">🎁 Cobrar ahora</button>';
+        else if (on) foot = '<span class="ref-pill" style="background:rgba(255,215,0,.12);color:#ffd700;border:1px solid rgba(255,215,0,.5);">🔓 Desbloqueado · se cobra desde el día ' + ms.payDay + '</span>';
+        else foot = '<span class="ref-pill" style="background:rgba(255,255,255,.06);color:#999;border:1px solid rgba(255,255,255,.15);">🔒 Por alcanzar</span>';
+        return '<div style="flex:1;min-width:96px;text-align:center;padding:9px 6px;border-radius:10px;background:' + (on ? 'rgba(255,215,0,.08)' : 'rgba(255,255,255,.03)') + ';border:1px solid ' + (on ? 'rgba(255,215,0,.55)' : 'rgba(255,255,255,.12)') + ';">' +
+            '<div style="font-size:24px;line-height:1;">' + (claimed ? '🏆' : (on ? '🎁' : '🎁')) + '</div>' +
+            '<div style="font-size:11px;font-weight:900;color:#fff;margin-top:4px;">' + t.count + ' REFERIDOS</div>' +
+            '<div style="font-size:15px;font-weight:900;color:#ffd700;">' + _refMoney(t.amountARS) + '</div>' +
+            '<div style="font-size:9.5px;color:#aaa;margin-bottom:6px;">extra</div>' + foot + '</div>';
     }
 
+    function renderReferralModal(d) {
+        const c = document.getElementById('referralContent');
+        if (!c || !d) return;
+        const t = d.totals || {}, ms = d.milestones || {}, per = d.period || {};
+        const pct = _refPct(d.rate);
+        const tiers = ms.tiers || [];
+        const maxCount = ms.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
+        const prog = Math.min(100, Math.round((ms.qualified || 0) / Math.max(1, maxCount) * 100));
+        const netInfoId = 'refNetInfo';
+        let html = '';
+        // Link (solo el link: más directo que el código)
+        html += '<div style="background:rgba(255,255,255,.05);border:1px solid #d4af37;border-radius:12px;padding:12px;margin-bottom:12px;">' +
+            '<span style="color:#b0b0b0;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:5px;">Tu link de referido</span>' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+            '<span id="myReferralLink" style="font-size:12px;color:#00ff88;word-break:break-all;flex:1;min-width:0;">' + _esc(d.referralLink || '—') + '</span>' +
+            '<button onclick="VIP.ui.copyReferralLink()" style="background:rgba(0,255,136,.1);border:1px solid #00ff88;color:#00ff88;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;">📋 Copiar</button>' +
+            '</div>' +
+            '<button onclick="VIP.ui.shareReferralLink()" style="width:100%;margin-top:9px;background:linear-gradient(135deg,#ffd700,#f7931e);color:#000;border:none;border-radius:10px;padding:10px;font-weight:900;font-size:13px;cursor:pointer;">🔗 INVITAR A TUS AMIGOS</button>' +
+            '<div style="font-size:10px;color:#888;margin-top:6px;text-align:center;">Tu amigo entra por el link, se registra y queda vinculado a vos para siempre. Código: <b style="color:#d4af37;letter-spacing:1px;">' + _esc(d.referralCode || '') + '</b></div>' +
+            '</div>';
+        // Tiles
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">' +
+            '<div class="ref-modal-tile" style="border-color:rgba(0,255,136,.35);"><span class="v" style="color:#00ff88;">👥 ' + (t.active || 0) + '</span><span class="l">Referidos activos<br><span style="color:#777;">(los que cargaron)</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(255,215,0,.45);"><span class="v" style="color:#ffd700;">💰 ' + _refMoney(t.commissionMonth) + '</span><span class="l">Tu comisión acumulada<br><span style="color:#777;">(' + pct + ' de la pérdida neta de este mes)</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(255,80,80,.4);cursor:pointer;" onclick="VIP.ui.toggleReferralNetLossInfo()"><span class="v" style="color:#ff6b6b;">📉 ' + _refMoney(t.netLossMonth) + '</span><span class="l">Pérdida neta de tus referidos<br><span style="color:#ff9a9a;">ℹ️ tocá: es un monto variable</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(0,170,255,.4);"><span class="v" style="color:#4fc3ff;">📊 ' + _refMoney(t.totalCharged) + '</span><span class="l">Total cargado por<br>tus referidos</span></div>' +
+            '</div>';
+        html += '<div id="' + netInfoId + '" style="display:none;background:rgba(255,80,80,.08);border:1px solid rgba(255,80,80,.4);border-radius:10px;padding:10px;margin-bottom:10px;font-size:11.5px;line-height:1.55;color:#eee;">' +
+            '<b style="color:#ff9a9a;">¿Por qué cambia este número?</b> La pérdida neta es lo que tus referidos apostaron menos lo que ganaron, sumado en el mes. Si un referido gana, su pérdida neta BAJA (y tu comisión también); si pierde, SUBE. Por eso puede subir o bajar día a día. Lo que cobrás se calcula con el número final del mes, el primer día hábil del mes siguiente.' +
+            (t.netwinPartial ? '<br><span style="color:#ffb347;">⚠️ Ahora mismo no pudimos leer la actividad de algún referido (la plataforma está demorada): el total puede estar incompleto por unos minutos.</span>' : '') + '</div>';
+        html += '<div style="background:rgba(255,255,255,.03);border-radius:10px;padding:9px 11px;margin-bottom:12px;font-size:11.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">' +
+            '<span style="color:#b0b0b0;">Período actual: <b style="color:#fff;">' + _esc(per.label || per.key || '—') + '</b></span>' +
+            '<span style="color:#b0b0b0;">Próxima acreditación: <b style="color:#fff;">' + _esc(per.nextCredit || '—') + '</b></span></div>';
+        // Tabla de referidos
+        const rows = d.referrals || [];
+        html += '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(212,175,55,.35);border-radius:12px;padding:10px;margin-bottom:12px;">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><span style="font-size:13px;font-weight:900;color:#ffd700;">👥 MIS REFERIDOS (' + rows.length + ')</span></div>';
+        if (!rows.length) {
+            html += '<div style="color:#888;font-size:12px;padding:8px 0;">Todavía no tenés referidos. Compartí tu link y empezá a cobrar.</div>';
+        } else {
+            html += '<div style="overflow-x:auto;"><table class="ref-table"><thead><tr><th>Usuario</th><th>Estado</th><th style="text-align:right;">Cargado</th><th style="text-align:right;">Pérdida neta</th><th style="text-align:right;">Tu ' + pct + '</th></tr></thead><tbody>';
+            rows.forEach(r => {
+                const st = r.active ? '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;">Activo</span>' : '<span class="ref-pill" style="background:rgba(255,80,80,.15);color:#ff8080;">Sin carga</span>';
+                const net = r.netLossMonth === null ? '<span style="color:#777;">…</span>' : _refMoney(Math.max(0, r.netLossMonth));
+                const com = r.commissionMonth === null ? '<span style="color:#777;">…</span>' : '<b style="color:#00ff88;">' + _refMoney(r.commissionMonth) + '</b>';
+                html += '<tr><td><b style="color:#fff;">' + _esc(r.username) + '</b><br><span style="color:#888;font-size:9.5px;">Se registró ' + _refAgo(r.registeredAt) + (r.qualified ? ' · ✔ cuenta para premios' : '') + '</span></td>' +
+                    '<td>' + st + '</td><td style="text-align:right;">' + _refMoney(r.totalCharged) + '</td><td style="text-align:right;color:#ff9a9a;">' + net + '</td><td style="text-align:right;">' + com + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+        html += '</div>';
+        // Progreso / premios
+        if (ms.enabled !== false && tiers.length) {
+            html += '<div style="background:linear-gradient(135deg,#2d0052,#1a0033);border:1.5px solid #ffd700;border-radius:12px;padding:12px;margin-bottom:12px;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;"><span style="font-size:13px;font-weight:900;color:#ffd700;">🎁 PROGRESO DE TUS REFERIDOS</span><span style="font-size:12px;color:#fff;font-weight:900;">' + (ms.qualified || 0) + ' / ' + maxCount + ' <span style="font-size:9.5px;color:#aaa;font-weight:400;">referidos que cargaron</span></span></div>' +
+                '<div style="font-size:10.5px;color:#bbb;margin:2px 0 6px;">Invitá más amigos y desbloqueá premios EXTRA (aparte de tu ' + pct + '). Cuenta cada referido que cargó al menos <b style="color:#fff;">' + _refMoney(ms.minChargedARS) + '</b>. Cada premio se cobra una sola vez, en fichas, sin condiciones' + (ms.payDay > 0 ? ', a partir del día <b style="color:#fff;">' + ms.payDay + '</b> de cada mes' : '') + '.</div>' +
+                '<div class="dash-ref-bar" style="height:11px;"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
+                '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' + tiers.map(x => _refTierHtml(x, ms)).join('') + '</div>' +
+                (t.historicalMilestones > 0 ? '<div style="font-size:10.5px;color:#00ff88;margin-top:8px;text-align:center;">Ya cobraste ' + _refMoney(t.historicalMilestones) + ' en premios por referidos 🏆</div>' : '') +
+                '</div>';
+        }
+        html += '<div style="font-size:10.5px;color:#888;text-align:center;line-height:1.5;">Total cobrado en comisiones: <b style="color:#d4af37;">' + _refMoney(t.historicalCommission) + '</b>. La comisión del mes se calcula sobre la pérdida neta final y se acredita sola el primer día hábil del mes siguiente. Sin límite de referidos ni de ganancia.</div>';
+        c.innerHTML = html;
+    }
+
+    function toggleReferralNetLossInfo() {
+        const el = document.getElementById('refNetInfo');
+        if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+    }
+
+    // Card del home: progreso hacia el próximo premio + INVITAR AHORA.
+    function renderReferralHomeCard(d) {
+        const c = document.getElementById('referralHomeCard');
+        if (!c) return;
+        if (!d) { c.style.display = 'none'; return; }
+        const ms = d.milestones || {}, tiers = ms.tiers || [];
+        const maxCount = ms.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
+        const prog = Math.min(100, Math.round((ms.qualified || 0) / Math.max(1, maxCount) * 100));
+        const steps = tiers.slice(0, 4).map(t => '<div class="dash-ref-step' + (t.unlocked ? ' on' : '') + '"><b>' + (t.claimed ? '🏆' : (t.unlocked ? '🎁' : '🎁')) + '</b>' + t.count + ' amigos<br>' + _refMoney(t.amountARS) + '</div>').join('');
+        const claimable = tiers.find(t => t.claimable);
+        c.innerHTML = '<div class="dash-ref">' +
+            '<div class="dash-ref-head"><span style="font-size:18px;">👥</span><span class="dash-ref-title">INVITÁ A TUS AMIGOS · cobrá el ' + _refPct(d.rate) + '</span><button class="dash-ref-cta" onclick="VIP.ui.openReferralModal()">VER PREMIOS ›</button></div>' +
+            (ms.enabled !== false && tiers.length ? ('<div class="dash-ref-bar"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:9.5px;color:#bbb;margin-bottom:4px;"><span>' + (ms.qualified || 0) + ' / ' + maxCount + ' referidos que cargaron</span><span style="color:#ffd700;">' + (claimable ? '🎁 ¡Tenés un premio para cobrar!' : (ms.nextTier ? 'Te faltan ' + Math.max(0, ms.nextTier.count - (ms.qualified || 0)) + ' para ' + _refMoney(ms.nextTier.amountARS) : '¡Máximo alcanzado!')) + '</span></div>' +
+            '<div class="dash-ref-steps">' + steps + '</div>') : '') +
+            '<button class="dash-ref-invite" onclick="VIP.ui.shareReferralLink()">🔗 INVITAR AHORA</button>' +
+            '</div>';
+        c.style.display = '';
+        try { adjustLayout(); } catch (_) {}
+    }
+    async function loadReferralHomeCard() {
+        if (!VIP.state || !VIP.state.currentToken) return;
+        const u = VIP.state.currentUser;
+        if (u && u.role && u.role !== 'user') return;
+        try { renderReferralHomeCard(await fetchReferralDashboard(false)); } catch (_) {}
+    }
+
+    // Popup promocional: una vez por apertura de la app (sessionStorage), solo clientes.
+    function maybeShowReferralPromo() {
+        try {
+            const u = VIP.state.currentUser;
+            if (!u || (u.role && u.role !== 'user')) return;
+            if (u.mustChangePassword === true) return;
+            if (sessionStorage.getItem('vip_refPromoShown')) return;
+            sessionStorage.setItem('vip_refPromoShown', '1');
+        } catch (_) { /* sin sessionStorage: igual se muestra */ }
+        setTimeout(async () => {
+            try {
+                const d = await fetchReferralDashboard(false);
+                const ex = document.getElementById('referralPromoExtra');
+                const ms = d.milestones || {};
+                if (ex && ms.enabled !== false && ms.tiers && ms.tiers.length) ex.textContent = '+ premios extra: ' + ms.tiers.map(t => t.count + ' amigos = ' + _refMoney(t.amountARS)).join(' · ');
+            } catch (_) {}
+            const open = document.querySelector('.modal:not(.hidden)');
+            if (open && open.id !== 'referralPromoModal') return; // no pisar otro modal (cambio de clave, bienvenida…)
+            showModal('referralPromoModal');
+        }, 1800);
+    }
+
+    async function shareReferralLink() {
+        let link = (_refData && _refData.referralLink) || null;
+        if (!link) { try { link = (await fetchReferralDashboard(false)).referralLink; } catch (_) {} }
+        if (!link) { showToast('No pudimos generar tu link. Probá de nuevo.', 'error'); return; }
+        const pct = _refPct(_refData && _refData.rate);
+        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Yo cobro el ' + pct + ' de tu actividad, vos jugás igual 😉\n' + link;
+        if (navigator.share) {
+            try { await navigator.share({ title: 'Invitación', text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+        }
+        try { await navigator.clipboard.writeText(text); showToast('✅ Link copiado. Pegalo en WhatsApp o Telegram.', 'success'); }
+        catch (_) { fallbackCopy(link); }
+    }
     function copyReferralLink() {
-        const link = document.getElementById('myReferralLink').textContent;
-        if (link && link !== '—') {
-            navigator.clipboard.writeText(link).then(() => {
-                showToast('✅ Link copiado', 'success');
-            }).catch(() => { fallbackCopy(link); });
-        }
+        const link = (_refData && _refData.referralLink) || (document.getElementById('myReferralLink') || {}).textContent || '';
+        if (link && link !== '—') navigator.clipboard.writeText(link).then(() => showToast('✅ Link copiado', 'success')).catch(() => fallbackCopy(link));
+    }
+    function copyReferralCode() { copyReferralLink(); } // legacy: el código ya no se muestra suelto
+
+    async function claimReferralMilestone(count) {
+        try {
+            const r = await fetch(`${VIP.config.API_URL}/api/referrals/milestones/claim`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${VIP.state.currentToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ count })
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { showToast(d.error || 'No se pudo cobrar el premio', d.verify ? 'info' : 'error'); await loadReferralData(true); return; }
+            showToast('🏆 ¡Cobraste ' + _refMoney(d.amountARS) + ' por tus ' + d.count + ' referidos! Ya está en tu saldo.', 'success');
+            try { if (VIP.ui && VIP.ui.syncBalance) VIP.ui.syncBalance(); } catch (_) {}
+            await loadReferralData(true);
+        } catch (_) { showToast('Error de conexión', 'error'); }
     }
 
     // ---- Canal informativo (delegated from chat module) ----
@@ -795,6 +856,12 @@ VIP.ui = (function () {
         loadReferralData,
         copyReferralCode,
         copyReferralLink,
+        loadReferralHomeCard,
+        maybeShowReferralPromo,
+        shareReferralLink,
+        claimReferralMilestone,
+        toggleReferralNetLossInfo,
+        fetchReferralDashboard,
         loadCanalInformativoUrl,
         loadCommunityLinks,
         installApp,

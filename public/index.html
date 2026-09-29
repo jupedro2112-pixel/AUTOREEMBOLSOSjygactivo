@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=64">
-    <link rel="stylesheet" href="/css/login.css?v=64">
-    <link rel="stylesheet" href="/css/header.css?v=64">
-    <link rel="stylesheet" href="/css/chat.css?v=64">
-    <link rel="stylesheet" href="/css/modals.css?v=64">
-    <link rel="stylesheet" href="/css/responsive.css?v=64">
+    <link rel="stylesheet" href="/css/base.css?v=65">
+    <link rel="stylesheet" href="/css/login.css?v=65">
+    <link rel="stylesheet" href="/css/header.css?v=65">
+    <link rel="stylesheet" href="/css/chat.css?v=65">
+    <link rel="stylesheet" href="/css/modals.css?v=65">
+    <link rel="stylesheet" href="/css/responsive.css?v=65">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -686,6 +686,36 @@
                 }
                 .dash-balance-label { font-size:10px; color:#aaffcc; font-weight:800; white-space:nowrap; }
                 .dash-balance-amount { font-size:15px; font-weight:900; color:#00ff88; white-space:nowrap; }
+                /* #168 Card INVITÁ A TUS AMIGOS (home) */
+                .dash-ref { background:linear-gradient(135deg,#1a0033,#2d0052); border:1.5px solid #d4af37; border-radius:13px; padding:9px 11px; color:#fff; box-shadow:0 3px 12px rgba(212,175,55,.35); }
+                .dash-ref-head { display:flex; align-items:center; gap:8px; }
+                .dash-ref-title { font-size:12.5px; font-weight:900; color:#ffd700; letter-spacing:.5px; flex:1; }
+                .dash-ref-cta { font-size:9px; font-weight:900; color:#1a0033; background:linear-gradient(135deg,#d4af37,#ffd700); border-radius:999px; padding:4px 8px; border:none; cursor:pointer; white-space:nowrap; }
+                .dash-ref-bar { position:relative; height:9px; background:rgba(255,255,255,.12); border-radius:999px; margin:9px 0 6px; overflow:hidden; }
+                .dash-ref-fill { height:100%; background:linear-gradient(90deg,#d4af37,#ffd700); border-radius:999px; transition:width .5s ease; }
+                .dash-ref-steps { display:flex; justify-content:space-between; gap:4px; }
+                .dash-ref-step { flex:1; text-align:center; font-size:9px; color:#bbb; line-height:1.25; }
+                .dash-ref-step b { display:block; font-size:16px; line-height:1; }
+                .dash-ref-step.on { color:#00ff88; }
+                .dash-ref-invite { width:100%; margin-top:8px; background:linear-gradient(135deg,#ffd700,#f7931e); color:#000; border:none; border-radius:10px; padding:9px; font-weight:900; font-size:12px; cursor:pointer; letter-spacing:.4px; }
+                /* Popup promocional */
+                .ref-promo { background:linear-gradient(180deg,#2d0052 0%,#1a0033 70%,#0a001a 100%); border:2.5px solid #ffd700; border-radius:18px; padding:20px 16px 16px; color:#fff; max-width:420px; width:100%; margin:18px auto; position:relative; text-align:center; box-shadow:0 0 40px rgba(255,215,0,.35); overflow:hidden; }
+                .ref-promo-title { font-size:34px; font-weight:900; line-height:.95; letter-spacing:1px; margin:6px 0 2px; color:#ffd700; text-shadow:0 3px 0 #7a5a00, 0 6px 16px rgba(0,0,0,.6); }
+                .ref-promo-title span { display:block; color:#fff; font-size:22px; text-shadow:0 2px 0 #4a0080; }
+                .ref-promo-title em { font-style:normal; color:#c98bff; }
+                .ref-promo-badge { display:inline-block; margin:10px auto 8px; background:rgba(0,0,0,.45); border:1.5px solid #ffd700; border-radius:12px; padding:8px 14px; font-size:14px; font-weight:800; }
+                .ref-promo-badge b { color:#ffd700; font-size:20px; }
+                .ref-promo-gift { font-size:64px; line-height:1; margin:4px 0 10px; filter:drop-shadow(0 6px 14px rgba(255,215,0,.35)); }
+                .ref-promo-btn { width:100%; background:linear-gradient(135deg,#ffd700,#f7931e); color:#000; border:none; border-radius:12px; padding:14px; font-weight:900; font-size:15px; cursor:pointer; letter-spacing:.6px; box-shadow:0 4px 16px rgba(255,215,0,.45); }
+                .ref-promo-link { width:100%; margin-top:8px; background:rgba(255,255,255,.06); color:#fff; border:1px solid rgba(255,255,255,.25); border-radius:12px; padding:11px; font-weight:800; font-size:12.5px; cursor:pointer; }
+                .ref-promo-x { position:absolute; top:10px; right:10px; width:34px; height:34px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid #ffd700; color:#ffd700; font-size:18px; cursor:pointer; display:flex; align-items:center; justify-content:center; line-height:1; }
+                .ref-modal-tile { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.14); border-radius:10px; padding:10px; }
+                .ref-modal-tile .v { font-size:20px; font-weight:900; }
+                .ref-modal-tile .l { display:block; font-size:10.5px; color:#bbb; margin-top:2px; line-height:1.3; }
+                .ref-table { width:100%; border-collapse:collapse; font-size:11px; }
+                .ref-table th { color:#aaa; font-weight:700; text-align:left; padding:6px 4px; border-bottom:1px solid rgba(255,255,255,.12); font-size:10px; }
+                .ref-table td { padding:6px 4px; border-bottom:1px solid rgba(255,255,255,.06); vertical-align:middle; }
+                .ref-pill { display:inline-block; border-radius:999px; padding:2px 7px; font-size:9.5px; font-weight:800; }
                 .chat-section .chat-container { min-height:0; }
                 /* Panel del home colapsable: "subir" el menú agranda el chat. */
                 #homePanel { overflow:hidden; transition:max-height .3s ease; }
@@ -771,6 +801,10 @@
                         <span class="dash-balance-amount" id="userBalance">$0</span>
                     </div>
                 </div>
+
+                <!-- #168 INVITÁ A TUS AMIGOS: progreso de premios por referidos, en el home.
+                     Lo pinta VIP.ui.loadReferralHomeCard() desde initializeSession. -->
+                <div id="referralHomeCard" style="display:none;"></div>
 
                 <!-- Canales de Telegram. Las URLs salen de la DB (Config
                      `communityConfig`), editables en el panel → COMANDOS.
@@ -1050,7 +1084,7 @@
                 <div class="input-group" id="registerReferralGroup">
                     <label>Código de Referido (opcional)</label>
                     <input type="text" id="registerReferralCode" name="referralCode" placeholder="Ej: VIP3X7" autocomplete="off" maxlength="12" style="text-transform:uppercase;letter-spacing:2px;">
-                    <span style="font-size: 11px; color: #888;">Si te invitó alguien, ingresá su código para vincularte.</span>
+                    <span id="registerReferralHint" style="font-size: 11px; color: #888;">Si te invitó alguien, ingresá su código para vincularte.</span>
                 </div>
                 <div style="background: rgba(212,175,55,0.10); border: 1px solid rgba(212,175,55,0.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px;">
                     <p style="color: #d4af37; margin: 0; font-size: 12px; line-height: 1.4;">
@@ -1963,25 +1997,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=64"></script>
-    <script src="/js/campaign.js?v=64"></script>
-    <script src="/js/meta-pixel.js?v=64"></script>
-    <script src="/js/auth.js?v=64"></script>
-    <script src="/js/socket.js?v=64"></script>
-    <script src="/js/chat.js?v=64"></script>
-    <script src="/js/refunds.js?v=64"></script>
-    <script src="/js/fire.js?v=64"></script>
-    <script src="/js/roulette.js?v=64"></script>
-    <script src="/js/reviews.js?v=64"></script>
-    <script src="/js/promobonus.js?v=64"></script>
-    <script src="/js/notifications.js?v=64"></script>
-    <script src="/js/ui.js?v=64"></script>
-    <script src="/js/withdraw.js?v=64"></script>
-    <script src="/js/installbonus.js?v=64"></script>
-    <script src="/js/notifsurvey.js?v=64"></script>
-    <script src="/js/publisherwelcome.js?v=64"></script>
-    <script src="/js/apptest.js?v=64"></script>
-    <script src="/js/app.js?v=64"></script>
+    <script src="/js/config.js?v=65"></script>
+    <script src="/js/campaign.js?v=65"></script>
+    <script src="/js/meta-pixel.js?v=65"></script>
+    <script src="/js/auth.js?v=65"></script>
+    <script src="/js/socket.js?v=65"></script>
+    <script src="/js/chat.js?v=65"></script>
+    <script src="/js/refunds.js?v=65"></script>
+    <script src="/js/fire.js?v=65"></script>
+    <script src="/js/roulette.js?v=65"></script>
+    <script src="/js/reviews.js?v=65"></script>
+    <script src="/js/promobonus.js?v=65"></script>
+    <script src="/js/notifications.js?v=65"></script>
+    <script src="/js/ui.js?v=65"></script>
+    <script src="/js/withdraw.js?v=65"></script>
+    <script src="/js/installbonus.js?v=65"></script>
+    <script src="/js/notifsurvey.js?v=65"></script>
+    <script src="/js/publisherwelcome.js?v=65"></script>
+    <script src="/js/apptest.js?v=65"></script>
+    <script src="/js/app.js?v=65"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA
@@ -3868,88 +3902,30 @@
         </div>
     </div>
 
+    <!-- #168 Popup promocional de referidos: se muestra cada vez que se abre la app (una vez por
+         apertura). Botones: compartir el link / ver el progreso. -->
+    <div id="referralPromoModal" class="modal hidden" onclick="if(event.target===this)hideModal('referralPromoModal')">
+        <div class="ref-promo">
+            <button class="ref-promo-x" onclick="hideModal('referralPromoModal')">✕</button>
+            <div style="font-size:30px;line-height:1;">👥➕</div>
+            <div class="ref-promo-title">INVITÁ<span>A TUS <em>AMIGOS</em></span></div>
+            <div class="ref-promo-badge">Cobrá el <b><span class="referralRatePct">7%</span></b> de la pérdida neta<br>de tus referidos</div>
+            <div class="ref-promo-gift">🎁💰</div>
+            <div id="referralPromoExtra" style="font-size:12px;color:#ffd700;font-weight:800;margin:-4px 0 10px;"></div>
+            <button class="ref-promo-btn" onclick="VIP.ui.shareReferralLink()">🔗 INVITAR A TUS AMIGOS ›</button>
+            <button class="ref-promo-link" onclick="hideModal('referralPromoModal'); VIP.ui.openReferralModal();">📊 Mirá el progreso de tus referidos aquí ›</button>
+        </div>
+    </div>
+
+    <!-- #168 Modal de referidos: link + tablero en vivo + tabla por referido + premios. Render en ui.js. -->
     <div id="referralModal" class="modal hidden" onclick="if(event.target===this)hideModal('referralModal')">
-        <div class="modal-content" style="position:relative;max-width:500px;max-height:90vh;overflow-y:auto;">
-            <button onclick="hideModal('referralModal')" style="position:absolute;top:15px;right:15px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>
-            <div class="modal-header">
-                <h2>🤝 Mis Referidos</h2>
-                <p>Invitá amigos y cobrá <strong style="color:#d4af37;">todos los meses el <span class="referralRatePct">7%</span></strong> de su actividad — sin límite de referidos</p>
+        <div class="modal-content" style="position:relative;max-width:560px;max-height:92vh;overflow-y:auto;padding:16px 14px;">
+            <button onclick="hideModal('referralModal')" style="position:absolute;top:12px;right:12px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>
+            <div class="modal-header" style="margin-bottom:10px;">
+                <h2 style="margin:0;">🤝 Mis Referidos</h2>
+                <p style="margin:4px 0 0;">Cobrás el <strong style="color:#d4af37;"><span class="referralRatePct">7%</span></strong> de la pérdida neta de tus referidos, todos los meses</p>
             </div>
-            <div id="referralContent">
-                <!-- #143: cómo funciona (3 pasos), arriba del código -->
-                <div style="background:rgba(212,175,55,0.05);border:1px solid rgba(212,175,55,0.25);border-radius:12px;padding:14px 16px;margin-bottom:16px;">
-                    <p style="color:#d4af37;font-weight:700;font-size:14px;margin:0 0 10px 0;">💡 ¿Cómo funciona? Así de simple:</p>
-                    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;">
-                        <span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:#d4af37;color:#1a0b2e;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center;">1</span>
-                        <p style="margin:0;font-size:13px;line-height:1.5;color:#e8e8e8;"><strong>Compartí tu código o tu link</strong> (los tenés acá abajo) con tus amigos por WhatsApp, Telegram o donde quieras.</p>
-                    </div>
-                    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;">
-                        <span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:#d4af37;color:#1a0b2e;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center;">2</span>
-                        <p style="margin:0;font-size:13px;line-height:1.5;color:#e8e8e8;"><strong>Tu amigo se registra con tu código</strong> (o entrando por tu link) y juega normalmente en la sala. Queda vinculado a vos para siempre.</p>
-                    </div>
-                    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:12px;">
-                        <span style="flex-shrink:0;width:24px;height:24px;border-radius:50%;background:#d4af37;color:#1a0b2e;font-weight:900;font-size:13px;display:flex;align-items:center;justify-content:center;">3</span>
-                        <p style="margin:0;font-size:13px;line-height:1.5;color:#e8e8e8;"><strong style="color:#00ff88;">Cobrás el <span class="referralRatePct">7%</span> de lo que tus referidos dejan en la sala</strong> (su pérdida neta jugando), todos los meses, en fichas directo a tu cuenta. Mientras sigan jugando, vos seguís cobrando — <strong>de por vida</strong>.</p>
-                    </div>
-                    <div style="border-top:1px solid rgba(212,175,55,0.2);padding-top:10px;">
-                        <p style="margin:0;font-size:11.5px;line-height:1.55;color:#b0b0b0;">📌 La comisión se calcula al inicio de cada mes sobre la actividad del mes anterior y se acredita sola. Ejemplo: si tus referidos pierden $100.000 en el mes, vos cobrás <strong style="color:#d4af37;">$<span class="referralRateExample">7.000</span></strong>. No hay límite de referidos ni de ganancia.</p>
-                    </div>
-                </div>
-                <!-- Código y link -->
-                <div style="background:rgba(255,255,255,0.05);border:1px solid #d4af37;border-radius:12px;padding:16px;margin-bottom:16px;">
-                    <div style="margin-bottom:12px;">
-                        <span style="color:#b0b0b0;font-size:11px;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;">Tu código de referido</span>
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <span id="myReferralCode" style="font-size:24px;font-weight:bold;color:#d4af37;letter-spacing:5px;">—</span>
-                            <button onclick="copyReferralCode()" style="background:rgba(212,175,55,0.2);border:1px solid #d4af37;color:#d4af37;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;">📋 Copiar</button>
-                        </div>
-                    </div>
-                    <div>
-                        <span style="color:#b0b0b0;font-size:11px;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:6px;">Tu link de referido</span>
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                            <span id="myReferralLink" style="font-size:11px;color:#00ff88;word-break:break-all;flex:1;min-width:0;">—</span>
-                            <button onclick="copyReferralLink()" style="background:rgba(0,255,136,0.1);border:1px solid #00ff88;color:#00ff88;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0;">📋 Copiar</button>
-                        </div>
-                    </div>
-                </div>
-                <!-- Stats (4 tarjetas 2x2) -->
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-                    <div style="background:rgba(0,255,136,0.05);border:1px solid rgba(0,255,136,0.2);border-radius:10px;padding:12px;text-align:center;">
-                        <span style="font-size:22px;font-weight:bold;color:#00ff88;" id="referralActiveCount">0</span>
-                        <span style="display:block;font-size:11px;color:#b0b0b0;margin-top:4px;">Referidos activos</span>
-                    </div>
-                    <div style="background:rgba(212,175,55,0.05);border:1px solid rgba(212,175,55,0.2);border-radius:10px;padding:12px;text-align:center;">
-                        <span style="font-size:22px;font-weight:bold;color:#d4af37;" id="referralHistoricalTotal">$0</span>
-                        <span style="display:block;font-size:11px;color:#b0b0b0;margin-top:4px;">Total acreditado</span>
-                    </div>
-                    <div style="background:rgba(247,147,30,0.05);border:1px solid rgba(247,147,30,0.2);border-radius:10px;padding:12px;text-align:center;">
-                        <span style="font-size:22px;font-weight:bold;color:#f7931e;" id="referralPendingAmount">$0</span>
-                        <span style="display:block;font-size:11px;color:#b0b0b0;margin-top:4px;">Pendiente del período</span>
-                    </div>
-                    <div style="background:rgba(136,136,136,0.05);border:1px solid rgba(136,136,136,0.2);border-radius:10px;padding:12px;text-align:center;">
-                        <span style="font-size:16px;font-weight:bold;color:#b0b0b0;" id="referralLastPayoutAmount">—</span>
-                        <span style="display:block;font-size:11px;color:#888;margin-top:4px;">Último pago acreditado</span>
-                    </div>
-                </div>
-                <!-- Período actual -->
-                <div style="background:rgba(255,255,255,0.03);border-radius:10px;padding:12px;margin-bottom:16px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                        <span style="color:#b0b0b0;font-size:12px;">Período actual:</span>
-                        <span id="referralCurrentPeriod" style="color:#fff;font-size:12px;font-weight:600;">—</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;">
-                        <span style="color:#b0b0b0;font-size:12px;">Próxima acreditación:</span>
-                        <span id="referralCreditDate" style="color:#888;font-size:11px;">—</span>
-                    </div>
-                </div>
-                <!-- Historial agrupado por período -->
-                <div>
-                    <span style="color:#b0b0b0;font-size:12px;font-weight:600;display:block;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">Historial de pagos</span>
-                    <div id="referralPayoutHistory" style="max-height:220px;overflow-y:auto;">
-                        <span style="color:#888;font-size:12px;">Cargando...</span>
-                    </div>
-                </div>
-            </div>
+            <div id="referralContent"><span style="color:#888;font-size:12px;">Cargando...</span></div>
         </div>
     </div>
 </body>

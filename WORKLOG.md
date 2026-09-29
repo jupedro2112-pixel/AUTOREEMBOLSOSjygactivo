@@ -4,7 +4,50 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-18**
+> **Última actualización: 2026-09-29**
+
+## Sesión 2026-09-29
+
+### 168. REFERIDOS VISIBLES (estrategia del encargado): popup al entrar, card en el home, tablero en vivo por referido, premios EXTRA por cantidad y link con dominio propio
+- **Pedido (Telegram "Sector estrategias", 28/09):** los referidos estaban en una esquina
+  (🤝 de la barra) y nadie los veía. Quieren: (1) popup tipo videojuego al abrir la app
+  "INVITÁ A TUS AMIGOS · cobrá el 7% de la pérdida neta" con botón invitar y "mirá tu
+  progreso"; (2) card en el home con barra de progreso 3/5/10 e INVITAR AHORA; (3) el
+  menú de referidos sin el choclo de explicación arriba, solo el LINK (no el código),
+  con tiles: referidos activos (los que cargaron), comisión acumulada (7% de la pérdida
+  neta del mes, variable), pérdida neta (tocable → explica que sube y baja), total
+  cargado; tabla MIS REFERIDOS (usuario, estado, cargado, pérdida neta, tu 7%, "se
+  registró hace X"); progreso con premios EXTRA por cantidad de referidos que
+  cargaron (3→$10.000, 5→$20.000, 10→$50.000), cobrables una vez, en fichas sin
+  condiciones, en SU fecha (no la del reembolso mensual); (4) el registro por link
+  con el código FIJO y no editable (un solo invitador).
+- **Descubierto de paso:** el link de referido se armaba con
+  `https://vipcargas.com/linkreferido` (dominio del hermano + ruta inexistente). Ahora
+  sale de `PUBLIC_BASE_URL` (`/?ref=CODE`) y `GET /linkreferido` redirige por compat.
+  `referralStatus:'active'` nunca se seteaba → "activos" ahora = referidos con ≥1 carga.
+- **Backend (server.js, bloque "#168 REFERIDOS", antes de PAGOS AUTOMÁTICOS):**
+  · `GET /api/referrals/dashboard`: link, % real, período, tiles, `referrals[]` (cargas y
+    total por Transaction deposit sin regalos; NETWIN del mes por referido vía
+    royalty-statistics con cache 15 min, concurrencia 4, tope 60; `commissionMonth` =
+    % × max(0, netwin)), `milestones` (config + calificados + tiers con
+    unlocked/claimed/claimable + `payWindowOpen`), históricos.
+  · `POST /api/referrals/milestones/claim {count}`: calificados = referidos con cargas ≥
+    `minChargedARS`; ventana desde `payDay`; reserva atómica en **`ReferralMilestoneClaim`**
+    (índice único userId+count) → `creditUserBalance` → Transaction `bonus`
+    `source:'referral_milestone'`; ambiguo → `verify` + 🛑; fallo → `failed` (re-reclamable).
+  · `GET/POST /api/admin/referrals/milestones-config` (admin): `Config['referralMilestones']`
+    = { enabled, minChargedARS (3000), payDay (15; 0 = cualquier día), tiers[] }.
+- **PWA (`?v=65` + SW v65):** `#referralPromoModal` (1× por apertura, sessionStorage; no
+  pisa otro modal abierto), `#referralHomeCard` (barra + hitos + INVITAR AHORA;
+  `navigator.share` con fallback a copiar), modal de referidos re-hecho (render en
+  `ui.js`: `renderReferralModal`, `renderReferralHomeCard`, `shareReferralLink`,
+  `claimReferralMilestone`, `toggleReferralNetLossInfo`, `maybeShowReferralPromo`).
+  Registro: `?ref=` se guarda 30 días (`localStorage vip_ref`), el campo queda readOnly
+  con "Viniste invitado con este código" y tiene prioridad sobre la pauta.
+- **Panel:** Referidos → card "🎁 Premios por cantidad de referidos" (activo, mínimo, día
+  de cobro, hitos). admin-sw v46 → v47.
+- **Validado:** `node --check` OK en todo; HTML balanceado. Redeploy (back + panel + PWA).
+  Moneda: acá es $ (ARS); los mockups del encargado eran del hermano (Gs.).
 
 ## Sesión 2026-09-18
 

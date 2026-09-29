@@ -43,12 +43,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 100);
     }
 
-    // Auto-fill referral code from URL ?ref=CODE
+    // Auto-fill referral code from URL ?ref=CODE. #168: el código se guarda 30 días y queda
+    // FIJO en el registro (un solo invitador por cuenta; el cliente no lo puede cambiar).
     const urlParams = new URLSearchParams(window.location.search);
-    const refCode   = urlParams.get('ref');
+    let refCode = (urlParams.get('ref') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 12);
+    try {
+        if (refCode) localStorage.setItem('vip_ref', JSON.stringify({ code: refCode, at: Date.now() }));
+        else { const saved = JSON.parse(localStorage.getItem('vip_ref') || 'null'); if (saved && saved.code && Date.now() - saved.at < 30 * 86400000) refCode = saved.code; }
+    } catch (_) {}
     if (refCode) {
+        window._vipRefLocked = refCode;
         const refInput = document.getElementById('registerReferralCode');
-        if (refInput) refInput.value = refCode.toUpperCase();
+        if (refInput) { refInput.value = refCode; refInput.readOnly = true; }
         const registerBtn = document.getElementById('registerBtn');
         if (registerBtn) {
             registerBtn.style.background = 'linear-gradient(135deg, #d4af37 0%, #b8860b 100%)';

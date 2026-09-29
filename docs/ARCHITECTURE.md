@@ -393,7 +393,12 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   ver #96). RefundClaim guarda `tier`. Config admin: `GET/POST /api/admin/refund-tiers`
   (reemplazó a refund-percents).
 - **Referidos**: preview/calculate (delta incremental sobre ledger de payouts) /
-  payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas.
+  payout (acredita con `jugayganaService.bonus`). Ver §4 y gotchas. **#168:** tablero vivo
+  `GET /api/referrals/dashboard` (server.js; NETWIN del mes por referido con cache 15 min),
+  premios EXTRA por cantidad de referidos que cargaron (`Config['referralMilestones']`,
+  `ReferralMilestoneClaim` con índice único userId+count, `POST /api/referrals/milestones/claim`),
+  popup + card del home en la PWA, link `PUBLIC_BASE_URL/?ref=` (`/linkreferido` redirige),
+  código de referido fijo si vino por link.
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone). **Premios editables
   (#164, `Config['roulettePrizes']`)**: `money` (fichas, auto-crédito, cuenta contra el tope),
   `bonus_pct` (% en la próxima carga → PromoBonus `sourceRuleCode:'ruleta'` autoApply, se

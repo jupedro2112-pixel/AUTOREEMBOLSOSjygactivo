@@ -7814,6 +7814,7 @@ async function loadAdminReferralSummary() {
     container.innerHTML = '<span style="color:#888;">Cargando...</span>';
     // Always load payouts independently
     loadAdminReferralPayouts();
+    loadReferralMilestones(); // #168
     try {
         const res = await fetch(`${API_URL}/api/referrals/admin/summary`, {
             headers: { 'Authorization': `Bearer ${currentToken}` }
@@ -14073,3 +14074,38 @@ async function saveRoulettePrizes() {
     } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error'; } }
 }
 window.addRoulettePrizeRow = addRoulettePrizeRow; window.rouletteRecalcProb = rouletteRecalcProb; window.loadRoulettePrizes = loadRoulettePrizes; window.saveRoulettePrizes = saveRoulettePrizes;
+
+
+// ── #168 Premios por cantidad de referidos ──────────────────────────────────
+function addRefMsTier(t) {
+    const b = document.getElementById('refMsTiers'); if (!b) return;
+    t = t || {};
+    b.insertAdjacentHTML('beforeend', '<tr class="refms-row"><td><input type="number" class="refms-count" min="1" value="' + (t.count || '') + '" style="width:90px;"></td>' +
+        '<td><input type="number" class="refms-amount" min="1" step="500" value="' + (t.amountARS || '') + '" style="width:120px;"></td>' +
+        '<td><button class="btn btn-sm" style="background:#dc3545;color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;" onclick="this.closest(\'.refms-row\').remove()">🗑️</button></td></tr>');
+}
+async function loadReferralMilestones() {
+    const b = document.getElementById('refMsTiers'); if (!b) return;
+    try {
+        const r = await authFetch('/api/admin/referrals/milestones-config');
+        if (!r.ok) { b.closest('div').style.display = 'none'; return; }
+        const c = await r.json();
+        const en = document.getElementById('refMsEnabled'); if (en) en.checked = c.enabled !== false;
+        const mn = document.getElementById('refMsMin'); if (mn) mn.value = c.minChargedARS;
+        const pd = document.getElementById('refMsPayDay'); if (pd) pd.value = c.payDay;
+        b.innerHTML = ''; (c.tiers || []).forEach(t => addRefMsTier(t));
+    } catch (_) {}
+}
+async function saveReferralMilestones() {
+    const tiers = Array.from(document.querySelectorAll('#refMsTiers .refms-row')).map(r => ({ count: Number(r.querySelector('.refms-count').value), amountARS: Number(r.querySelector('.refms-amount').value) }));
+    const body = { enabled: !!(document.getElementById('refMsEnabled') || {}).checked, minChargedARS: Number((document.getElementById('refMsMin') || {}).value), payDay: Number((document.getElementById('refMsPayDay') || {}).value), tiers };
+    const m = document.getElementById('refMsMsg');
+    try {
+        const r = await authFetch('/api/admin/referrals/milestones-config', { method: 'POST', body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo guardar'); } return; }
+        if (m) { m.style.color = '#66ff99'; m.textContent = '✅ Guardado: ' + (j.tiers || []).map(t => t.count + ' → $' + Number(t.amountARS).toLocaleString('es-AR')).join(' · ') + ' · mínimo $' + Number(j.minChargedARS).toLocaleString('es-AR') + ' · día ' + j.payDay; }
+        showToast('Premios por referidos guardados', 'success');
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error'; } }
+}
+window.addRefMsTier = addRefMsTier; window.loadReferralMilestones = loadReferralMilestones; window.saveReferralMilestones = saveReferralMilestones;

@@ -1928,6 +1928,27 @@
                         <div id="referralActionResult" style="font-size:12px;color:#b0b0b0;max-height:420px;overflow-y:auto;border-top:1px solid rgba(255,255,255,0.06);padding-top:10px;"></div>
                     </div>
 
+                    <!-- ── #168 PREMIOS POR CANTIDAD DE REFERIDOS ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,215,0,0.35);border-radius:12px;padding:18px;">
+                        <h3 style="margin-bottom:8px;color:#ffd700;font-size:15px;">🎁 Premios por cantidad de referidos (extra a la comisión)</h3>
+                        <p style="font-size:12px;color:#b0b0b0;line-height:1.55;margin:0 0 12px;">
+                            El cliente ve en la app una barra de progreso y cobra un premio en fichas (sin condiciones) al llegar a cada hito.
+                            Cuenta solo el referido que <b>cargó al menos el mínimo</b>. Cada hito se cobra <b>una sola vez</b>, desde el <b>día de cobro</b> de cada mes
+                            (distinto al reembolso mensual para no juntar pagos). La comisión del 7% sigue aparte.
+                        </p>
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#fff;cursor:pointer;"><input type="checkbox" id="refMsEnabled" style="width:auto;"> Activo</label>
+                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Mínimo cargado por referido ($)</label><input type="number" id="refMsMin" min="0" step="500" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:130px;"></div>
+                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Día de cobro (1–28, 0 = cualquier día)</label><input type="number" id="refMsPayDay" min="0" max="28" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:90px;"></div>
+                        </div>
+                        <table class="data-table" style="max-width:520px;"><thead><tr><th>Referidos que cargaron</th><th>Premio ($ fichas)</th><th></th></tr></thead><tbody id="refMsTiers"></tbody></table>
+                        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                            <button class="btn btn-secondary btn-sm" onclick="addRefMsTier()">➕ Agregar hito</button>
+                            <button class="btn-primary" onclick="saveReferralMilestones()">💾 Guardar premios</button>
+                            <span id="refMsMsg" style="font-size:12px;color:#aaa;align-self:center;"></span>
+                        </div>
+                    </div>
+
                     <!-- ── REFERIDORES ACTIVOS ── -->
                     <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">

@@ -17,7 +17,9 @@ const PERIOD_KEY_REGEX = /^\d{4}-\d{2}$/;
 // Allowed status values for payout queries
 const VALID_PAYOUT_STATUSES = ['pending', 'paid', 'failed', 'cancelled'];
 // Brand domain used for referral links shown to end users
-const REFERRAL_BASE_URL = 'https://vipcargas.com/linkreferido';
+// #168: el link sale del dominio PROPIO (antes apuntaba a vipcargas.com, el hermano). La PWA
+// lee ?ref= en la raíz; /linkreferido redirige por compatibilidad.
+const REFERRAL_BASE_URL = (String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '') || 'https://autoreembolsos.com') + '/';
 
 /**
  * Sanitize a string for use as a plain-string query filter (no operators)

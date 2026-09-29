@@ -8,6 +8,23 @@
 
 ## Sesión 2026-09-29
 
+### 169. Comisión de referidos 7% → 3%, editable en COMANDOS y reflejada en el popup
+- **Owner:** bajar de 7% a 3% y que se pueda modificar desde el panel; si cambia, que
+  cambie también el cartel del popup.
+- **Backend:** `src/utils/referralRate.js` — `DEFAULT_REFERRAL_RATE` 0.03 +
+  `setGlobalReferralRate/getGlobalReferralRate` (tasa global en memoria);
+  `getReferralRateForUser` la usa (el override por usuario sigue mandando).
+  `Config['referralRate'] = { rate }` se carga en `_loadAiConfigIntoService` (arranque +
+  cada 60 s, multi-instancia). `GET/POST /api/admin/referral-rate` (admin general;
+  `percent` 0–50). Aplica al cálculo mensual (`referralCalculationService`) y al tablero.
+- **Panel:** COMANDOS → card "🤝 Comisión de referidos" (solo admin general). admin-sw v47 → v48.
+- **PWA (`?v=69` + SW v69):** el arte del popup se partió en dos imágenes
+  (`/img/referidos-promo-top.jpg` y `-bottom.jpg`) y el cartel "Cobrá el X% de la
+  pérdida neta" es HTML con `.referralRatePct` → toma el % real del
+  `/api/referrals/dashboard`. Todos los copys con % ya eran dinámicos; el fallback
+  del front pasa a 3%.
+- **Validado:** `node --check` OK. Redeploy (back + panel + PWA).
+
 ### 168. REFERIDOS VISIBLES (estrategia del encargado): popup al entrar, card en el home, tablero en vivo por referido, premios EXTRA por cantidad y link con dominio propio
 - **Pedido (Telegram "Sector estrategias", 28/09):** los referidos estaban en una esquina
   (🤝 de la barra) y nadie los veía. Quieren: (1) popup tipo videojuego al abrir la app

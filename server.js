@@ -83,7 +83,7 @@ const CashierSnapshot = require('./src/models/CashierSnapshot'); // #155 saldo d
 const bankClose = require('./src/services/bankCloseService');  // #155 cruces del cierre
 const ReferralMilestoneClaim = require('./src/models/ReferralMilestoneClaim'); // #168 premios por cantidad de referidos
 const _periodKey = require('./src/utils/periodKey');
-const { getReferralRateForUser } = require('./src/utils/referralRate'); // #168 % real del referidor
+const { getReferralRateForUser, setGlobalReferralRate, getGlobalReferralRate } = require('./src/utils/referralRate'); // #168/#169 % del referidor (global editable)
 const hgcashPay = require('./src/services/hgcashService');
 const pdfImage = require('./src/services/pdfImageService');
 const { generateReferralCode } = require('./src/utils/referralCode');
@@ -6194,6 +6194,8 @@ async function _loadAiConfigIntoService() {
     chatAuditAi.applyConfig({ enabled: audit.enabled, model: audit.model, effort: audit.effort, apiKey: cfg.apiKey || '', extraRules: audit.extraRules || '',
       learnedDoc: audit.learnEnabled === false ? '' : (learned.doc || ''), systemFacts: facts });
     telegramAlert.applyConfig(audit.telegram);
+    // #169: % de comisión de referidos editable en COMANDOS (Config['referralRate'] = { rate }).
+    try { const rr = (await getConfig('referralRate', null)) || {}; setGlobalReferralRate(rr.rate != null ? rr.rate : null); } catch (_) {}
   } catch (e) {
     logger.warn(`[ai-config] no se pudo cargar la config de IA/auditoría: ${e.message}`);
   }
@@ -9239,6 +9241,26 @@ app.get('/api/refunds/all', authMiddleware, adminMiddleware, async (req, res) =>
 // con el reembolso diario; rollback: git revert).
 // adminMiddleware deja entrar a depositor/withdrawer/comunidad, por eso se
 // re-chequea role==='admin' explícito: SOLO el admin general puede ver/editar.
+// #169 % de comisión de referidos (global). GET admin general; POST admin general.
+app.get('/api/admin/referral-rate', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    res.json({ rate: getGlobalReferralRate(), percent: Math.round(getGlobalReferralRate() * 1000) / 10 });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/referral-rate', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const pct = Number(req.body && req.body.percent);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 50) return res.status(400).json({ error: 'El porcentaje tiene que ser un número entre 0 y 50' });
+    const rate = Math.round(pct * 10) / 1000;
+    await setConfig('referralRate', { rate, updatedBy: req.user.username, updatedAt: new Date() });
+    setGlobalReferralRate(rate);
+    logger.info(`[referrals] % de comisión cambiado a ${pct}% por ${req.user.username}`);
+    res.json({ rate, percent: Math.round(rate * 1000) / 10 });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
 app.get('/api/admin/refund-tiers', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') {

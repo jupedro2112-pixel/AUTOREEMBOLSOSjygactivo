@@ -380,7 +380,7 @@ VIP.ui = (function () {
     let _refData = null;
     let _refLoadedAt = 0;
     const _refMoney = (n) => '$' + new Intl.NumberFormat('es-AR').format(Math.round(Number(n) || 0));
-    function _refPct(rate) { return (Math.round((Number(rate) || 0.07) * 1000) / 10) + '%'; }
+    function _refPct(rate) { const n = Number(rate); return (Math.round((Number.isFinite(n) ? n : 0.03) * 1000) / 10) + '%'; }
     function _refAgo(d) {
         if (!d) return '';
         const ms = Date.now() - new Date(d).getTime();

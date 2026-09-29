@@ -5876,6 +5876,8 @@ async function loadCBUConfig() {
     loadHgcashConfig();
     // Cargar los rangos de reembolso (solo admin general)
     loadRefundTiers();
+    // #169 % de comisión de referidos (solo admin general)
+    loadReferralRate();
     // Cargar los equipos por prefijo de usuario (solo admin general)
     loadTeams();
     // Cargar los bonos automáticos de las cargas hgcash (solo admin general)
@@ -14109,3 +14111,28 @@ async function saveReferralMilestones() {
     } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error'; } }
 }
 window.addRefMsTier = addRefMsTier; window.loadReferralMilestones = loadReferralMilestones; window.saveReferralMilestones = saveReferralMilestones;
+
+
+// ── #169 % de comisión de referidos ─────────────────────────────────────────
+async function loadReferralRate() {
+    const form = document.getElementById('referralRateForm'), header = document.getElementById('referralRateHeader');
+    try {
+        const r = await authFetch('/api/admin/referral-rate');
+        if (!r.ok) { if (form) form.style.display = 'none'; if (header) header.style.display = 'none'; return; }
+        if (form) form.style.display = ''; if (header) header.style.display = '';
+        const j = await r.json();
+        const el = document.getElementById('referralRatePct'); if (el) el.value = j.percent;
+    } catch (_) {}
+}
+async function saveReferralRate() {
+    const m = document.getElementById('referralRateMsg');
+    const pct = Number((document.getElementById('referralRatePct') || {}).value);
+    try {
+        const r = await authFetch('/api/admin/referral-rate', { method: 'POST', body: JSON.stringify({ percent: pct }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo guardar'); } return; }
+        if (m) { m.style.color = '#66ff99'; m.textContent = '✅ Comisión de referidos: ' + j.percent + '%'; }
+        showToast('Comisión de referidos: ' + j.percent + '%', 'success');
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error'; } }
+}
+window.loadReferralRate = loadReferralRate; window.saveReferralRate = saveReferralRate;

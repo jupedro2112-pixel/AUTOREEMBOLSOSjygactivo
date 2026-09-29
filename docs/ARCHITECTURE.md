@@ -36,7 +36,8 @@ El sistema VIPCARGAS:
   tres con el % del **rango** 🥉🥈🥇 según la pérdida del mes; el diario se eliminó el
   2026-07-28 y se restauró el 2026-08-14), **ruleta diaria**,
   **fueguito** (racha), **bono instalación** (cupón 100% próxima carga; antes $5.000),
-  **referidos** (7% del owner-revenue) y **campañas/publicistas** con sub-atribución
+  **referidos** (3% desde #169, editable en panel→COMANDOS `Config['referralRate']`; antes 7%) y
+  **campañas/publicistas** con sub-atribución
   por influencer.
 - El "saldo real" del jugador vive en JUGAYGANA; VIPCARGAS guarda atribución, bonos,
   reclamos y el registro permanente de transacciones.

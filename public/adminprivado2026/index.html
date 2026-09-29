@@ -626,6 +626,22 @@
                                 <span class="icon icon-save"></span> Guardar soporte del login
                             </button>
                         </div>
+                        <!-- #169 % de comisión de referidos (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="referralRateHeader">
+                            <h3>🤝 Comisión de referidos</h3>
+                        </div>
+                        <div class="cbu-form" id="referralRateForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Porcentaje de la <b>pérdida neta mensual</b> de sus referidos que cobra el referidor. Se refleja al instante en
+                                la app (popup, card del home, menú de referidos) y en el próximo cálculo mensual de comisiones.
+                            </p>
+                            <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+                                <div class="form-group" style="margin:0;"><label for="referralRatePct">% de comisión</label><input type="number" id="referralRatePct" min="0" max="50" step="0.5" style="width:120px;"></div>
+                                <button class="btn-primary" onclick="saveReferralRate()">💾 Guardar %</button>
+                                <span id="referralRateMsg" style="font-size:12px;color:#aaa;"></span>
+                            </div>
+                        </div>
+
                         <!-- Rangos de reembolso bronce/plata/oro (solo admin general).
                              Reemplaza a los % fijos diario/semanal/mensual (2026-07-28). -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="refundTiersHeader">

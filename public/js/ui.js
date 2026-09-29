@@ -534,25 +534,33 @@ VIP.ui = (function () {
     }
 
     // Popup promocional: una vez por apertura de la app (sessionStorage), solo clientes.
+    // Si hay otro modal abierto (cambio de clave, bienvenida, instalación…) espera a que se
+    // cierre (reintenta hasta ~2 min) y recién ahí marca "mostrado".
+    let _refPromoTimer = null;
     function maybeShowReferralPromo() {
-        try {
-            const u = VIP.state.currentUser;
-            if (!u || (u.role && u.role !== 'user')) return;
-            if (u.mustChangePassword === true) return;
-            if (sessionStorage.getItem('vip_refPromoShown')) return;
-            sessionStorage.setItem('vip_refPromoShown', '1');
-        } catch (_) { /* sin sessionStorage: igual se muestra */ }
-        setTimeout(async () => {
+        const u = VIP.state.currentUser;
+        if (!u || (u.role && u.role !== 'user')) return;
+        try { if (sessionStorage.getItem('vip_refPromoShown')) return; } catch (_) {}
+        if (_refPromoTimer) return;
+        let tries = 0;
+        const attempt = async () => {
+            _refPromoTimer = null;
+            tries++;
+            const cur = VIP.state.currentUser;
+            if (!cur || !VIP.state.currentToken) return;
+            if (cur.mustChangePassword === true || VIP.state.passwordChangePending) { if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
+            const open = Array.from(document.querySelectorAll('.modal')).find(m => !m.classList.contains('hidden') && m.id !== 'referralPromoModal');
+            if (open) { if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
             try {
                 const d = await fetchReferralDashboard(false);
                 const ex = document.getElementById('referralPromoExtra');
                 const ms = d.milestones || {};
                 if (ex && ms.enabled !== false && ms.tiers && ms.tiers.length) ex.textContent = '+ premios extra: ' + ms.tiers.map(t => t.count + ' amigos = ' + _refMoney(t.amountARS)).join(' · ');
             } catch (_) {}
-            const open = document.querySelector('.modal:not(.hidden)');
-            if (open && open.id !== 'referralPromoModal') return; // no pisar otro modal (cambio de clave, bienvenida…)
+            try { sessionStorage.setItem('vip_refPromoShown', '1'); } catch (_) {}
             showModal('referralPromoModal');
-        }, 1800);
+        };
+        _refPromoTimer = setTimeout(attempt, 1800);
     }
 
     async function shareReferralLink() {

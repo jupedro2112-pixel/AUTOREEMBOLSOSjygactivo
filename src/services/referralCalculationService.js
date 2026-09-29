@@ -376,7 +376,15 @@ async function calculateCommissionsForPeriod(periodKey, options = {}) {
         continue;
       }
 
-      const { totalOwnerRevenue, totalBets, totalWins, totalGgr, providers } = revenueResult;
+      const { totalBets, totalWins, totalGgr, providers } = revenueResult;
+      // #171 (owner 2026-09-29): la comisión se paga sobre el NETWIN del referido (GGR =
+      // apuestas − premios, `total_ggr` de royalty-statistics), que es lo que la app muestra y
+      // promete ("% de la pérdida neta"). Antes se usaba el "owner revenue" (GGR × owner_commission
+      // por proveedor, la parte del agente tras la regalía), que es menor y no coincidía con el
+      // tablero. Se conserva el nombre del campo (totalOwnerRevenue / settledOwnerRevenue) para no
+      // romper el ledger de payouts ni el delta incremental; el breakdown por proveedor sigue
+      // informativo. Netwin negativo (el referido ganó) = base 0, nunca comisión negativa.
+      const totalOwnerRevenue = Math.max(0, Number(totalGgr) || 0);
 
       // ── Incremental settlement: delta calculation ─────────────────────────────
       // Primary source: payout history ledger (paidPayoutsForReferrer, built above).

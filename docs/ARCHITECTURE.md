@@ -404,7 +404,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   de referidos activos = cargas reales ≥ `minChargedARS` > % plano). La usan el cálculo mensual
   (`referralCalculationService`), el dashboard (`level{}`) y el controller. Los premios en plata
   por hitos (#168) se discontinuaron: `POST /api/referrals/milestones/claim` → 410;
-  `ReferralMilestoneClaim` es sólo historial.
+  `ReferralMilestoneClaim` es sólo historial. **Base de la comisión (#171): NETWIN** =
+  `total_ggr` de royalty-statistics (apuestas − premios), igual que muestra el tablero; el campo
+  `totalOwnerRevenue` de ReferralCommission/ReferralPayout guarda ese netwin (nombre heredado de
+  cuando se pagaba sobre GGR × owner_commission).
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone). **Premios editables
   (#164, `Config['roulettePrizes']`)**: `money` (fichas, auto-crédito, cuenta contra el tope),
   `bonus_pct` (% en la próxima carga → PromoBonus `sourceRuleCode:'ruleta'` autoApply, se

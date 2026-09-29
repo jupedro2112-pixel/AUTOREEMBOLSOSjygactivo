@@ -41,6 +41,15 @@
 - **Ojo:** la cantidad de referidos activos se cuenta al momento de calcular (cargas reales
   acumuladas ≥ mínimo, sin regalos), no por mes. Cambiar los niveles afecta el próximo cálculo
   mensual; las comisiones ya calculadas conservan su tasa.
+- **Base de la comisión = NETWIN (owner, mismo día):** al revisar "¿es sobre el netwin real?" se
+  vio que el tablero mostraba % × GGR (`total_ggr` de royalty-statistics = apuestas − premios)
+  pero el cobro mensual (`referralCalculationService`) pagaba % × "owner revenue" (GGR ×
+  `owner_commission` por proveedor, la parte del agente tras la regalía), o sea MENOS de lo
+  prometido. Owner eligió pagar sobre el netwin. Cambio: `totalOwnerRevenue = max(0, totalGgr)`
+  al parsear cada referido; el nombre del campo se conserva (ledger de payouts y delta
+  incremental intactos), el breakdown por proveedor queda informativo. Rige desde el próximo
+  cálculo (septiembre 2026 todavía no se pagó). El caché del netwin en el tablero queda en 15 min
+  (owner: "es visual, el 1 cobran sobre lo que es").
 
 ### 170. Botón "Invitar a tus amigos": copia el link y ofrece WhatsApp / Telegram / otras apps
 - `shareReferralLink` (ui.js) ahora copia el link al portapapeles SIEMPRE y abre un chooser

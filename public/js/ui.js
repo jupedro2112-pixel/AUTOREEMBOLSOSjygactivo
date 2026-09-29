@@ -537,10 +537,17 @@ VIP.ui = (function () {
     // Si hay otro modal abierto (cambio de clave, bienvenida, instalación…) espera a que se
     // cierre (reintenta hasta ~2 min) y recién ahí marca "mostrado".
     let _refPromoTimer = null;
+    const REF_PROMO_COOLDOWN_MS = 30 * 60 * 1000; // "cada vez que abren la app": si pasaron 30 min, otra vez
     function maybeShowReferralPromo() {
         const u = VIP.state.currentUser;
-        if (!u || (u.role && u.role !== 'user')) return;
-        try { if (sessionStorage.getItem('vip_refPromoShown')) return; } catch (_) {}
+        if (!u || (u.role && u.role !== 'user')) { console.info('[ref-promo] no se muestra: cuenta de staff o usuario no cargado'); return; }
+        // localStorage con cooldown (no sessionStorage: iOS/Chrome restauran la pestaña y el
+        // "una vez por apertura" no se disparaba nunca más). ?refpromo=1 fuerza mostrarlo.
+        const force = /[?&]refpromo=1/.test(location.search || '');
+        try {
+            const last = Number(localStorage.getItem('vip_refPromoAt') || 0);
+            if (!force && last && Date.now() - last < REF_PROMO_COOLDOWN_MS) { console.info('[ref-promo] ya mostrado hace ' + Math.round((Date.now() - last) / 60000) + ' min'); return; }
+        } catch (_) {}
         if (_refPromoTimer) return;
         let tries = 0;
         const attempt = async () => {
@@ -550,14 +557,15 @@ VIP.ui = (function () {
             if (!cur || !VIP.state.currentToken) return;
             if (cur.mustChangePassword === true || VIP.state.passwordChangePending) { if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
             const open = Array.from(document.querySelectorAll('.modal')).find(m => !m.classList.contains('hidden') && m.id !== 'referralPromoModal');
-            if (open) { if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
+            if (open) { console.info('[ref-promo] espera: modal abierto ' + open.id); if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
             try {
                 const d = await fetchReferralDashboard(false);
                 const ex = document.getElementById('referralPromoExtra');
                 const ms = d.milestones || {};
                 if (ex && ms.enabled !== false && ms.tiers && ms.tiers.length) ex.textContent = '+ premios extra: ' + ms.tiers.map(t => t.count + ' amigos = ' + _refMoney(t.amountARS)).join(' · ');
             } catch (_) {}
-            try { sessionStorage.setItem('vip_refPromoShown', '1'); } catch (_) {}
+            try { localStorage.setItem('vip_refPromoAt', String(Date.now())); } catch (_) {}
+            console.info('[ref-promo] mostrando');
             showModal('referralPromoModal');
         };
         _refPromoTimer = setTimeout(attempt, 1800);

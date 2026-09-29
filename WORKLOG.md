@@ -28,6 +28,8 @@
   (carga $X · bono $Y · quién lo aplicó) / activo · vence … / venció sin usar / cancelado".
 - **Ojo:** el vencimiento de PromoBonus es lazy (se marca 'expired' al consultarlo); el detalle
   del lote lo fuerza. Los lotes viejos sin `useHours` se comportan como 24 h en canjes nuevos.
+- **Réplica para el hermano (1girox):** `docs/replicas/README-2026-09-29-lotes.md` + patch
+  `2026-09-29-lotes-tope-24h-resumen.patch` (prompt listo para pegar, cubre #172 y #173).
 
 ### 172. El % de LOTE respeta el tope del bono app (100% hasta $5.000 + 20% del resto) · franja horaria con minuto final inclusive
 - **Owner:** probó un lote 100% automático con una carga > $10.000 y el sistema dio el 100% de

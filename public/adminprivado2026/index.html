@@ -1604,6 +1604,10 @@
                             <label class="form-label" style="display:block;margin-bottom:.3rem">Vigencia (horas)</label>
                             <input type="number" id="giftBatchHours" class="form-input" min="1" max="168" step="1" value="24" style="width:110px" />
                         </div>
+                        <div id="giftBatchUseHoursWrap">
+                            <label class="form-label" style="display:block;margin-bottom:.3rem" title="Cuando el cliente canjea el código, tiene estas horas para USAR el bono en una carga. Pasado el plazo, el bono vence solo (aunque el lote siga vigente para canjear).">⏱ Horas para usarlo tras canjear</label>
+                            <input type="number" id="giftBatchUseHours" class="form-input" min="1" max="168" step="1" value="24" style="width:110px" />
+                        </div>
                         <div id="giftBatchCodeWrap">
                             <label class="form-label" style="display:block;margin-bottom:.3rem">Código del lote</label>
                             <div style="display:flex;gap:.4rem">

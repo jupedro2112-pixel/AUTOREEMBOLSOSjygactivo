@@ -408,6 +408,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `total_ggr` de royalty-statistics (apuestas − premios), igual que muestra el tablero; el campo
   `totalOwnerRevenue` de ReferralCommission/ReferralPayout guarda ese netwin (nombre heredado de
   cuando se pagaba sobre GGR × owner_commission).
+- **Lotes con código (#173):** el PromoBonus creado al canjear vence a `canje + NotifBatch.useHours`
+  (24 h default), independiente de la vigencia del lote; el detalle del lote (`/:id`) devuelve
+  `outcome` por destinatario y `summary` (canjearon / usaron / activos / vencidos).
 - **Lotes con regalo (% automático):** el monto del bono sale de `_loteBonusAmount` con el tope
   del bono app (`Config['hgcashAppBonus'].firstCapARS/firstExcessPct`, #172): % del lote hasta el
   tope + excedente al % menor. Franja horaria diaria en hora ART con minuto final inclusive.

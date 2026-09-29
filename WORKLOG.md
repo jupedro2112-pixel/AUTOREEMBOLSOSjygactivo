@@ -8,6 +8,27 @@
 
 ## Sesión 2026-09-29
 
+### 173. Lotes con código: el bono canjeado vence a las 24 h (editable) + resumen canjeó / cargó / venció
+- **Owner:** "si un lote de bono es canjeado, que tenga máximo 24 hs para usarlo, si no queda
+  vencido… y que diga de ese lote quién reclamó, quién cargó después con ese bono y quién
+  venció a las 24 hs".
+- **Backend:** `NotifBatch.useHours` (default 24, 1–168; el panel lo manda en `useHours`, solo
+  aplica a modo código con %). `_activateBatchPromoBonus`: en modo `code` el PromoBonus vence a
+  `canje + useHours` (antes: hasta que venciera el LOTE, que puede ser 7 días); en modo `window`
+  sigue la vigencia del lote. El mensaje de canje dice "Válido hasta" con la fecha real del bono
+  y la notificación del código aclara "una vez canjeado tenés Xhs para usarlo".
+  `GET /api/admin/notif-batches` suma por lote `usados / activos / vencidos / bonoTotal`
+  (aggregate sobre PromoBonus por `sourceRuleId`). `GET /api/admin/notif-batches/:id` vence en
+  DB los bonos del lote que pasaron su plazo, devuelve por destinatario `outcome`
+  (used | active | expired | cancelled), `bonusExpiresAt`, `usedAt`, `cargaMonto`,
+  `usesTotalBonus`, y un `summary` { canjearon, usaron, activos, vencidos, cancelados, bonoTotal }.
+- **Panel (admin-sw v51):** campo "⏱ Horas para usarlo tras canjear" (visible con código + %);
+  la fila del lote muestra "N cargaron ($X) · N activos · N vencidos sin usar · ⏱ 24hs para usar";
+  "Ver lote" arranca con el resumen y cada fila dice "canjeó dd/mm hh:mm · cargó con el bono
+  (carga $X · bono $Y · quién lo aplicó) / activo · vence … / venció sin usar / cancelado".
+- **Ojo:** el vencimiento de PromoBonus es lazy (se marca 'expired' al consultarlo); el detalle
+  del lote lo fuerza. Los lotes viejos sin `useHours` se comportan como 24 h en canjes nuevos.
+
 ### 172. El % de LOTE respeta el tope del bono app (100% hasta $5.000 + 20% del resto) · franja horaria con minuto final inclusive
 - **Owner:** probó un lote 100% automático con una carga > $10.000 y el sistema dio el 100% de
   TODO ($10.000 de bono) en vez de limitar como el bono app (#164).

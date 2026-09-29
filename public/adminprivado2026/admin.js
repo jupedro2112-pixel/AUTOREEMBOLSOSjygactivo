@@ -10977,7 +10977,7 @@ async function loadChatPromoBonus(username) {
             el.style.background = 'linear-gradient(90deg,#0b6e8f,#084d66)';
             el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
                 '<span style="font-size:18px;">⚡</span>' +
-                '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">BONO AUTOMÁTICO: +' + b.percent + '% ' + alcance + '</strong>' +
+                '<div style="flex:1;min-width:120px;"><strong style="font-size:13px;">BONO AUTOMÁTICO: +' + b.percent + '% ' + alcance + escapeHtml(b.capTxt || '') + '</strong>' +
                 '<div style="font-size:11px;opacity:0.9;">Se suma SOLO al cargar (transferencia automática o carga manual sin bonus) — NO hay que marcar nada · ' + (b.rolloverX != null ? (b.rolloverX > 0 ? 'rollover x' + b.rolloverX : 'sin rollover') : 'rollover global') + ' · Vence en ' + minsTxt + ' · ' + origen + '</div></div>' +
                 '<button onclick="markChatPromoBonusUsed(\'' + b.id + '\', true)" style="background:rgba(255,255,255,0.85);color:#7a1f1f;border:none;border-radius:7px;padding:6px 11px;font-weight:800;font-size:11.5px;cursor:pointer;">✕ Cancelar bono</button>' +
                 '</div>';
@@ -10985,7 +10985,7 @@ async function loadChatPromoBonus(username) {
         }
         const tituloBono = esFijo
             ? 'REGALO PENDIENTE: $' + Number(b.montoFijoARS).toLocaleString('es-AR') + ' — sumáselo en su próxima carga'
-            : 'BONO VIGENTE: ' + b.percent + '% en la carga';
+            : 'BONO VIGENTE: ' + b.percent + '% en la carga' + escapeHtml(b.capTxt || '');
         el.style.background = 'linear-gradient(90deg,#0f8a2f,#0a6b25)';
         el.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:#fff;">' +
             '<span style="font-size:18px;">🎁</span>' +

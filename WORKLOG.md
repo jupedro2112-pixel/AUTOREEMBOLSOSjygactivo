@@ -8,6 +8,25 @@
 
 ## Sesión 2026-09-29
 
+### 172. El % de LOTE respeta el tope del bono app (100% hasta $5.000 + 20% del resto) · franja horaria con minuto final inclusive
+- **Owner:** probó un lote 100% automático con una carga > $10.000 y el sistema dio el 100% de
+  TODO ($10.000 de bono) en vez de limitar como el bono app (#164).
+- **Fix (server.js):** `_loteBonusAmount(amount, pct, cfg)` = `min(carga, firstCapARS) × pct%`
+  + `excedente × min(pct, firstExcessPct)%`, con el MISMO `Config['hgcashAppBonus']` del bono
+  app (editable en el panel: tope y % excedente; tope 0 = sin tope). Se usa en la carga manual
+  (`_lc`) y en la hgcash (`_lcH`). Ej.: 100% y $10.000 → $6.000; 50% y $10.000 → $3.500;
+  20% → 20% de todo (el tope no lo afecta). `_loteCapTxt(pct)` agrega "(100% hasta $5.000, el
+  resto al 20%)" en la nota interna, en el texto del regalo al cliente (`_giftLabelOf`, sólo %
+  automático) y en el cartel del panel (`capTxt` en `GET /api/admin/promo-bonus`, admin-sw v50).
+  `getHgcashAppBonusConfig` deja la última config en `_hgcashAppBonusCfgCache` para textos sync.
+  El % en modo AGENTE (cartel verde) no se toca: el agente escribe el bonus a mano.
+- **Lotes cortos:** la vigencia mínima sigue en 1 h (panel y backend). Lo que sí cambió:
+  `_inDailyWindow` ahora incluye el minuto HASTA ("de 18:50 a 18:52" vale todo el 18:52; antes
+  cortaba al empezar el 18:52). Y el canje por código de un lote con lista de destinatarios,
+  cuando el usuario NO está en la lista, ya no dice "código no válido" sino "Este código no es
+  para tu cuenta: el lote se envió a otros usuarios" (era la causa más probable de las pruebas
+  con otra cuenta). La hora de la franja es ART (`_argMinuteOfDay`), no la del reloj de Tails (GMT).
+
 ### 171. Premios por referidos en PLATA → NIVELES de % de comisión según referidos activos (anti-estafa)
 - **Owner:** "3 × 3 es 9 mil y se puede retirar 10 mil": con los hitos de #168 (3 referidos que
   cargaron $3.000 → $10.000 en fichas) alguien con 3 celulares ponía $9.000, cobraba $10.000 y

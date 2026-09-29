@@ -2343,6 +2343,24 @@ function _hgcashFirstBonusAmount(amount, cfg) {
   const excess = Math.max(0, a - cap);
   return Math.round(base * (Number(cfg.firstPct) || 0) / 100 + excess * (Number(cfg.firstExcessPct) || 0) / 100);
 }
+// #172 (owner 2026-09-29): el % de un LOTE respeta el MISMO tope que el bono app: el % del
+// lote aplica hasta `firstCapARS` ($5.000) y el excedente de la carga se bonifica al
+// `firstExcessPct` (20%), nunca más que el % del lote. Ej.: lote 100%, carga $10.000 →
+// $5.000 al 100% + $5.000 al 20% = $6.000 (antes daba $10.000). Lote 20% → 20% de todo.
+function _loteBonusAmount(amount, pct, cfg) {
+  const a = Math.max(0, Number(amount) || 0), p = Math.max(0, Number(pct) || 0);
+  const cap = Number(cfg && cfg.firstCapARS) > 0 ? Number(cfg.firstCapARS) : Infinity;
+  const exPct = Math.min(p, Number(cfg && cfg.firstExcessPct) || 0);
+  return Math.round(Math.min(a, cap) * p / 100 + Math.max(0, a - cap) * exPct / 100);
+}
+// Texto corto de la regla del tope para un % de lote ('' si el tope no lo afecta).
+function _loteCapTxt(pct, cfg) {
+  const c = cfg || _hgcashAppBonusCfgCache;
+  const p = Number(pct) || 0, cap = Number(c.firstCapARS) || 0, ex = Number(c.firstExcessPct) || 0;
+  if (!(cap > 0) || p <= ex) return '';
+  return ` (${p}% hasta $${cap.toLocaleString('es-AR')}, el resto al ${ex}%)`;
+}
+let _hgcashAppBonusCfgCache = Object.assign({}, HGCASH_APP_BONUS_DEFAULTS); // última config leída (para textos sync)
 // Decisión owner (2026-08-19): si el cliente ya tiene MÁS de este saldo en la
 // cuenta ANTES de la carga, la carga automática entra igual pero SIN el bono
 // del 20% (se le avisa con /sys_deposit_no_bonus_saldo, editable). El 100% de
@@ -2359,14 +2377,14 @@ async function getHgcashAppBonusConfig() {
     const cfg = (await getConfig('hgcashAppBonus', null)) || {};
     const capN = Math.round(Number(cfg.firstCapARS));
     const exN = Math.round(Number(cfg.firstExcessPct));
-    return {
+    return (_hgcashAppBonusCfgCache = {
       firstEnabled: cfg.firstEnabled !== false,
       firstPct: _hgcashBonusPct(cfg.firstPct, HGCASH_APP_BONUS_DEFAULTS.firstPct),
       firstCapARS: Number.isFinite(capN) && capN >= 0 ? capN : HGCASH_APP_BONUS_DEFAULTS.firstCapARS, // 0 = sin tope
       firstExcessPct: Number.isFinite(exN) && exN >= 0 && exN <= 200 ? exN : HGCASH_APP_BONUS_DEFAULTS.firstExcessPct,
       allEnabled: cfg.allEnabled !== false,
       allPct: _hgcashBonusPct(cfg.allPct, HGCASH_APP_BONUS_DEFAULTS.allPct)
-    };
+    });
   } catch (e) {
     logger.warn(`[hgcash-bonus] no se pudo leer la config (uso defaults): ${e.message}`);
     return Object.assign({}, HGCASH_APP_BONUS_DEFAULTS);
@@ -2792,7 +2810,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
     if (!appBonus.applied && !_dupBank) {
       const _lcH = await claimAutoPromoPercent(user, 'auto-hgcash');
       if (_lcH.claimed) {
-        const _lcAmt = Math.round(Number(amount) * _lcH.pct / 100);
+        const _lcAmt = _loteBonusAmount(Number(amount), _lcH.pct, await getHgcashAppBonusConfig()); // #172 tope
         await new Promise(r => setTimeout(r, 700));
         const _lcRes = _lcAmt > 0 ? await jugaygana.creditUserBalance(user.username, _lcAmt, user.jugayganaUserId || null).catch(() => null) : null;
         if (_lcRes && _lcRes.success) {
@@ -9588,7 +9606,9 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       if (!bonusRequested && !_dupBankManual) {
         const _lc = await claimAutoPromoPercent(user, req.user.username || 'agente');
         if (_lc.claimed) {
-          const _loteAmt = Math.round(parseFloat(amount) * _lc.pct / 100);
+          const _loteCfg = await getHgcashAppBonusConfig();
+          const _loteAmt = _loteBonusAmount(parseFloat(amount), _lc.pct, _loteCfg); // #172 tope
+          const _loteCapNote = _loteCapTxt(_lc.pct, _loteCfg);
           await new Promise(r => setTimeout(r, 700));
           const _lcRes = await jugaygana.creditUserBalance(user.username, _loteAmt, user.jugayganaUserId || null).catch(() => null);
           if (_lcRes && _lcRes.success && _loteAmt > 0) {
@@ -9605,7 +9625,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
               });
             } catch (_) {}
             await _emitAdminOnlyChatNote(user.id, user.username,
-              `⚡ BONO DE LOTE AUTOMÁTICO aplicado en esta carga: +${_lc.pct}% = $${_loteAmt.toLocaleString('es-AR')} (${_lc.label}). ` +
+              `⚡ BONO DE LOTE AUTOMÁTICO aplicado en esta carga: +${_lc.pct}%${_loteCapNote} = $${_loteAmt.toLocaleString('es-AR')} (${_lc.label}). ` +
               (_lc.scope === 'first' ? 'El bono quedó USADO (era por una sola carga).' : 'El bono sigue vigente para sus próximas cargas.') + ' No hay que marcar nada.');
           } else if (_lcRes && _lcRes.ambiguous) {
             // #151: puede haber entrado → el bono queda consumido (no se revierte) y se verifica a mano.
@@ -19352,7 +19372,9 @@ app.get('/api/admin/promo-bonus', authMiddleware, adminMiddleware, async (req, r
         applyScope: b.applyScope || 'first',
         applyFromMin: b.applyFromMin == null ? null : b.applyFromMin,
         applyToMin: b.applyToMin == null ? null : b.applyToMin,
-        usesCount: b.usesCount || 0
+        usesCount: b.usesCount || 0,
+        rolloverX: b.rolloverX == null ? null : b.rolloverX,
+        capTxt: Number(b.percent) > 0 ? _loteCapTxt(b.percent, await getHgcashAppBonusConfig()) : '' // #172
       }
     });
   } catch (err) {
@@ -19414,7 +19436,8 @@ function _inDailyWindow(fromMin, toMin, date) {
   if (fromMin == null || toMin == null) return true;
   const m = _argMinuteOfDay(date);
   if (fromMin === toMin) return true; // franja de 24h
-  return fromMin < toMin ? (m >= fromMin && m < toMin) : (m >= fromMin || m < toMin);
+  // #172: el minuto HASTA es inclusive ("de 18:50 a 18:52" vale durante todo el 18:52).
+  return fromMin < toMin ? (m >= fromMin && m <= toMin) : (m >= fromMin || m <= toMin);
 }
 function _fmtMinOfDay(min) {
   const h = Math.floor(min / 60), m = min % 60;
@@ -19957,10 +19980,11 @@ function _giftLabelOf(batch) {
   if (batch.giftType !== 'percent') {
     return `regalo de $${Number(batch.amount).toLocaleString('es-AR')} en tu próxima carga`;
   }
+  const capTxt = batch.applyMode === 'auto' ? _loteCapTxt(batch.amount) : ''; // #172
   if (batch.applyMode === 'auto' && batch.applyScope === 'all') {
-    return `+${batch.amount}% EXTRA en TODAS tus cargas${_batchWindowTxt(batch)}`;
+    return `+${batch.amount}% EXTRA en TODAS tus cargas${_batchWindowTxt(batch)}${capTxt}`;
   }
-  return `+${batch.amount}% EXTRA en tu próxima carga${batch.applyMode === 'auto' ? _batchWindowTxt(batch) : ''}`;
+  return `+${batch.amount}% EXTRA en tu próxima carga${batch.applyMode === 'auto' ? _batchWindowTxt(batch) : ''}${capTxt}`;
 }
 
 // Canje de un código de LOTE. Devuelve null si el código no corresponde a
@@ -19983,7 +20007,7 @@ async function _tryClaimNotifBatchCode(reqUser, attempt) {
     // Lote con destinatarios: EXCLUSIVO de los que están en la lista.
     if (!rec) {
       logger.warn(`[notif-batch] ${reqUser.username} intentó canjear el código ${codeUp} sin estar en el lote ${batch.id}`);
-      return { http: 400, body: { error: 'El código no es válido. Fijate bien cómo aparece en la Comunidad.' } };
+      return { http: 400, body: { error: 'Este código no es para tu cuenta: el lote se envió a otros usuarios.' } };
     }
     if (rec.claimedAt) {
       return { http: 400, body: { error: 'Ya canjeaste este código. Tu bono te lo aplica el agente en tu próxima carga (si todavía no venció).' } };

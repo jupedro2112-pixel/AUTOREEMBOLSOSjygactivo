@@ -408,6 +408,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `total_ggr` de royalty-statistics (apuestas − premios), igual que muestra el tablero; el campo
   `totalOwnerRevenue` de ReferralCommission/ReferralPayout guarda ese netwin (nombre heredado de
   cuando se pagaba sobre GGR × owner_commission).
+- **Lotes con regalo (% automático):** el monto del bono sale de `_loteBonusAmount` con el tope
+  del bono app (`Config['hgcashAppBonus'].firstCapARS/firstExcessPct`, #172): % del lote hasta el
+  tope + excedente al % menor. Franja horaria diaria en hora ART con minuto final inclusive.
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone). **Premios editables
   (#164, `Config['roulettePrizes']`)**: `money` (fichas, auto-crédito, cuenta contra el tope),
   `bonus_pct` (% en la próxima carga → PromoBonus `sourceRuleCode:'ruleta'` autoApply, se

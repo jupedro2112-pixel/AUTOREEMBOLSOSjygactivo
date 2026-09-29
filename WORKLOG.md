@@ -50,6 +50,11 @@
   incremental intactos), el breakdown por proveedor queda informativo. Rige desde el próximo
   cálculo (septiembre 2026 todavía no se pagó). El caché del netwin en el tablero queda en 15 min
   (owner: "es visual, el 1 cobran sobre lo que es").
+- **Link de referido por dominio del request:** en Render el link salía con el dominio de
+  producción. `_referralLinkFor(code, req)` (server.js) y `referralBaseUrl(req)` (controller)
+  usan `PUBLIC_BASE_URL` si está seteada y, si no, el host del request (`x-forwarded-proto` +
+  host, mismo criterio que `_publicBaseUrlFromRequest`). En Render NO hay que setear
+  PUBLIC_BASE_URL (o el link vuelve a apuntar a prod); en EB queda como env property.
 
 ### 170. Botón "Invitar a tus amigos": copia el link y ofrece WhatsApp / Telegram / otras apps
 - `shareReferralLink` (ui.js) ahora copia el link al portapapeles SIEMPRE y abre un chooser

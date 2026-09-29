@@ -16729,9 +16729,13 @@ async function _referralNetwinMonth(u, range) {
 }
 setInterval(() => { const now = Date.now(); for (const [k, v] of _refNetwinCache) if (now - v.at > REF_NETWIN_TTL_MS * 2) _refNetwinCache.delete(k); }, 10 * 60 * 1000).unref();
 
-function _referralLinkFor(code) {
-  const base = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-  return (base || 'https://autoreembolsos.com') + '/?ref=' + encodeURIComponent(code);
+// Dominio del link: PUBLIC_BASE_URL si está seteada; si no, el host del request (así en Render
+// el link apunta a Render y en EB a autoreembolsos.com, sin tocar config). Ver _publicBaseUrlFromRequest.
+function _referralLinkFor(code, req) {
+  let base = '';
+  try { base = req ? _publicBaseUrlFromRequest(req) : ''; } catch (_) {}
+  if (!base) base = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '') || 'https://autoreembolsos.com';
+  return base + '/?ref=' + encodeURIComponent(code);
 }
 async function _ensureReferralCode(user) {
   if (user.referralCode) return user.referralCode;
@@ -16792,7 +16796,7 @@ app.get('/api/referrals/dashboard', authMiddleware, async (req, res) => {
     const tiers = cfg.tiers.map(t => ({ count: t.count, pct: t.pct, reached: activeCount >= t.count, current: !!(lv.tier && lv.tier.count === t.count) }));
     res.json({
       success: true,
-      referralCode: code, referralLink: code ? _referralLinkFor(code) : null, rate,
+      referralCode: code, referralLink: code ? _referralLinkFor(code, req) : null, rate,
       period: { key: periodKey, label: _periodKey.getPeriodLabel(periodKey), nextCredit: `Primer día hábil de ${_periodKey.getNextPeriodLabel(periodKey)}` },
       totals: { referred: rows.length, active: rows.filter(r => r.active).length, qualified: activeCount, totalCharged: rows.reduce((a, r) => a + r.totalCharged, 0),
         netLossMonth: Math.round(sumNet), commissionMonth: Math.round(sumNet * rate), netwinPartial: rows.some(r => r.active && r.netLossMonth === null),

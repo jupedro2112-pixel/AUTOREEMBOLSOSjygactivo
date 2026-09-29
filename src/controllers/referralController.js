@@ -19,7 +19,18 @@ const VALID_PAYOUT_STATUSES = ['pending', 'paid', 'failed', 'cancelled'];
 // Brand domain used for referral links shown to end users
 // #168: el link sale del dominio PROPIO (antes apuntaba a vipcargas.com, el hermano). La PWA
 // lee ?ref= en la raíz; /linkreferido redirige por compatibilidad.
-const REFERRAL_BASE_URL = (String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '') || 'https://autoreembolsos.com') + '/';
+// Base del link: PUBLIC_BASE_URL si está seteada; si no, el host del request (Render de pruebas
+// → link de Render; EB → autoreembolsos.com). Mismo criterio que _publicBaseUrlFromRequest en server.js.
+function referralBaseUrl(req) {
+  const fromEnv = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
+  if (fromEnv) return fromEnv + '/';
+  const host = req && req.get && req.get('host');
+  if (host) {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+    return `${proto}://${host}/`;
+  }
+  return 'https://autoreembolsos.com/';
+}
 
 /**
  * Sanitize a string for use as a plain-string query filter (no operators)
@@ -87,7 +98,7 @@ const getMyReferralInfo = asyncHandler(async (req, res) => {
   }
 
   const referralLink = user.referralCode
-    ? `${REFERRAL_BASE_URL}?ref=${encodeURIComponent(user.referralCode)}`
+    ? `${referralBaseUrl(req)}?ref=${encodeURIComponent(user.referralCode)}`
     : null;
 
   // Contar referidos
@@ -573,7 +584,7 @@ const adminGetUserReferrals = asyncHandler(async (req, res) => {
         id: user.id,
         username: user.username,
         referralCode: user.referralCode,
-        referralLink: user.referralCode ? `${REFERRAL_BASE_URL}?ref=${encodeURIComponent(user.referralCode)}` : null,
+        referralLink: user.referralCode ? `${referralBaseUrl(req)}?ref=${encodeURIComponent(user.referralCode)}` : null,
         referralTier: user.referralTier,
         referralRateOverride: user.referralRateOverride,
         excludedFromReferral: user.excludedFromReferral

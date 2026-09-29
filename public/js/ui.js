@@ -571,17 +571,39 @@ VIP.ui = (function () {
         _refPromoTimer = setTimeout(attempt, 1800);
     }
 
+    // #170 Invitar: copia el link SIEMPRE y abre un chooser con WhatsApp, Telegram, otras apps y copiar.
     async function shareReferralLink() {
         let link = (_refData && _refData.referralLink) || null;
         if (!link) { try { link = (await fetchReferralDashboard(false)).referralLink; } catch (_) {} }
         if (!link) { showToast('No pudimos generar tu link. Probá de nuevo.', 'error'); return; }
         const pct = _refPct(_refData && _refData.rate);
         const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Yo cobro el ' + pct + ' de tu actividad, vos jugás igual 😉\n' + link;
-        if (navigator.share) {
-            try { await navigator.share({ title: 'Invitación', text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
-        }
-        try { await navigator.clipboard.writeText(text); showToast('✅ Link copiado. Pegalo en WhatsApp o Telegram.', 'success'); }
-        catch (_) { fallbackCopy(link); }
+        let copied = false;
+        try { await navigator.clipboard.writeText(link); copied = true; } catch (_) { try { fallbackCopy(link); copied = true; } catch (_) {} }
+        const old = document.getElementById('referralShareChooser'); if (old) old.remove();
+        const ov = document.createElement('div');
+        ov.id = 'referralShareChooser';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:99999;display:flex;align-items:flex-end;justify-content:center;padding:12px;';
+        ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+        const enc = encodeURIComponent(text);
+        const btn = (bg, color, label, onclick) => '<button onclick="' + onclick + '" style="width:100%;display:flex;align-items:center;gap:12px;background:' + bg + ';color:' + color + ';border:none;border-radius:12px;padding:13px 14px;font-weight:900;font-size:14px;cursor:pointer;margin-top:8px;text-align:left;">' + label + '</button>';
+        ov.innerHTML = '<div style="background:linear-gradient(180deg,#2a0048,#12002a);border:2px solid #ffd700;border-radius:16px;padding:14px;max-width:440px;width:100%;color:#fff;box-shadow:0 0 30px rgba(255,215,0,.3);">' +
+            '<div style="display:flex;align-items:center;gap:8px;"><span style="font-size:20px;">🔗</span><div style="flex:1;"><div style="font-weight:900;font-size:14px;color:#ffd700;">Invitá a tus amigos</div>' +
+            '<div style="font-size:11px;color:' + (copied ? '#00ff88' : '#bbb') + ';">' + (copied ? '✅ Tu link ya quedó copiado. Elegí por dónde mandarlo:' : 'Elegí por dónde mandar tu link:') + '</div></div>' +
+            '<button onclick="document.getElementById(\'referralShareChooser\').remove()" style="background:none;border:none;color:#888;font-size:22px;cursor:pointer;">✕</button></div>' +
+            '<div style="font-size:11px;color:#00ff88;word-break:break-all;background:rgba(0,0,0,.35);border:1px solid rgba(0,255,136,.3);border-radius:8px;padding:7px 9px;margin-top:8px;">' + _esc(link) + '</div>' +
+            btn('#25d366', '#fff', '<span style="font-size:20px;">💬</span> Enviar por WhatsApp', 'window.open(\'https://wa.me/?text=' + enc + '\',\'_blank\')') +
+            btn('#229ed9', '#fff', '<span style="font-size:20px;">✈️</span> Enviar por Telegram', 'window.open(\'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(text.replace(link, '').trim()) + '\',\'_blank\')') +
+            (navigator.share ? btn('rgba(255,255,255,.08)', '#fff', '<span style="font-size:20px;">📤</span> Otras apps (Instagram, SMS, Messenger…)', 'VIP.ui.shareReferralNative()') : '') +
+            btn('rgba(255,215,0,.12)', '#ffd700', '<span style="font-size:20px;">📋</span> Copiar el link de nuevo', 'VIP.ui.copyReferralLink()') +
+            '</div>';
+        document.body.appendChild(ov);
+    }
+    async function shareReferralNative() {
+        const link = (_refData && _refData.referralLink) || '';
+        const pct = _refPct(_refData && _refData.rate);
+        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Yo cobro el ' + pct + ' de tu actividad, vos jugás igual 😉\n' + link;
+        try { await navigator.share({ title: 'Invitación', text }); const ov = document.getElementById('referralShareChooser'); if (ov) ov.remove(); } catch (e) { /* cancelado */ }
     }
     function copyReferralLink() {
         const link = (_refData && _refData.referralLink) || (document.getElementById('myReferralLink') || {}).textContent || '';
@@ -875,6 +897,7 @@ VIP.ui = (function () {
         loadReferralHomeCard,
         maybeShowReferralPromo,
         shareReferralLink,
+        shareReferralNative,
         claimReferralMilestone,
         toggleReferralNetLossInfo,
         fetchReferralDashboard,

@@ -8,6 +8,12 @@
 
 ## Sesión 2026-09-29
 
+### 170. Botón "Invitar a tus amigos": copia el link y ofrece WhatsApp / Telegram / otras apps
+- `shareReferralLink` (ui.js) ahora copia el link al portapapeles SIEMPRE y abre un chooser
+  (hoja inferior) con: 💬 WhatsApp (`wa.me/?text=`), ✈️ Telegram (`t.me/share/url`),
+  📤 Otras apps (`navigator.share`, solo si existe) y 📋 Copiar de nuevo. Mismo texto de
+  invitación con el % real. Solo JS (sin bump de ?v).
+
 ### 169. Comisión de referidos 7% → 3%, editable en COMANDOS y reflejada en el popup
 - **Owner:** bajar de 7% a 3% y que se pueda modificar desde el panel; si cambia, que
   cambie también el cartel del popup.

@@ -207,12 +207,12 @@
     <noscript><img height="1" width="1" style="display:none"
         src="https://www.facebook.com/tr?id=__META_PIXEL_ID_PLACEHOLDER__&ev=PageView&noscript=1"/></noscript>
 
-    <link rel="stylesheet" href="/css/base.css?v=67">
-    <link rel="stylesheet" href="/css/login.css?v=67">
-    <link rel="stylesheet" href="/css/header.css?v=67">
-    <link rel="stylesheet" href="/css/chat.css?v=67">
-    <link rel="stylesheet" href="/css/modals.css?v=67">
-    <link rel="stylesheet" href="/css/responsive.css?v=67">
+    <link rel="stylesheet" href="/css/base.css?v=68">
+    <link rel="stylesheet" href="/css/login.css?v=68">
+    <link rel="stylesheet" href="/css/header.css?v=68">
+    <link rel="stylesheet" href="/css/chat.css?v=68">
+    <link rel="stylesheet" href="/css/modals.css?v=68">
+    <link rel="stylesheet" href="/css/responsive.css?v=68">
     <style>
         /* In-app notification banner (foreground PWA) */
         .in-app-notification-banner {
@@ -1997,25 +1997,25 @@
          /css/, así que sin la query un deploy corre UNA carga con HTML nuevo + JS
          viejo cacheado (TypeError si el HTML cambió el DOM). Al cambiar HTML y JS
          JUNTOS, bumpear ?v acá y CACHE_VERSION del SW al mismo número. -->
-    <script src="/js/config.js?v=67"></script>
-    <script src="/js/campaign.js?v=67"></script>
-    <script src="/js/meta-pixel.js?v=67"></script>
-    <script src="/js/auth.js?v=67"></script>
-    <script src="/js/socket.js?v=67"></script>
-    <script src="/js/chat.js?v=67"></script>
-    <script src="/js/refunds.js?v=67"></script>
-    <script src="/js/fire.js?v=67"></script>
-    <script src="/js/roulette.js?v=67"></script>
-    <script src="/js/reviews.js?v=67"></script>
-    <script src="/js/promobonus.js?v=67"></script>
-    <script src="/js/notifications.js?v=67"></script>
-    <script src="/js/ui.js?v=67"></script>
-    <script src="/js/withdraw.js?v=67"></script>
-    <script src="/js/installbonus.js?v=67"></script>
-    <script src="/js/notifsurvey.js?v=67"></script>
-    <script src="/js/publisherwelcome.js?v=67"></script>
-    <script src="/js/apptest.js?v=67"></script>
-    <script src="/js/app.js?v=67"></script>
+    <script src="/js/config.js?v=68"></script>
+    <script src="/js/campaign.js?v=68"></script>
+    <script src="/js/meta-pixel.js?v=68"></script>
+    <script src="/js/auth.js?v=68"></script>
+    <script src="/js/socket.js?v=68"></script>
+    <script src="/js/chat.js?v=68"></script>
+    <script src="/js/refunds.js?v=68"></script>
+    <script src="/js/fire.js?v=68"></script>
+    <script src="/js/roulette.js?v=68"></script>
+    <script src="/js/reviews.js?v=68"></script>
+    <script src="/js/promobonus.js?v=68"></script>
+    <script src="/js/notifications.js?v=68"></script>
+    <script src="/js/ui.js?v=68"></script>
+    <script src="/js/withdraw.js?v=68"></script>
+    <script src="/js/installbonus.js?v=68"></script>
+    <script src="/js/notifsurvey.js?v=68"></script>
+    <script src="/js/publisherwelcome.js?v=68"></script>
+    <script src="/js/apptest.js?v=68"></script>
+    <script src="/js/app.js?v=68"></script>
     
     <!-- ============================================
          FIREBASE CLOUD MESSAGING & PWA
@@ -3905,15 +3905,17 @@
     <!-- #168 Popup promocional de referidos: se muestra cada vez que se abre la app (una vez por
          apertura). Botones: compartir el link / ver el progreso. -->
     <div id="referralPromoModal" class="modal hidden" onclick="if(event.target===this)hideModal('referralPromoModal')">
-        <div class="ref-promo">
-            <button class="ref-promo-x" onclick="hideModal('referralPromoModal')">✕</button>
-            <div style="font-size:30px;line-height:1;">👥➕</div>
-            <div class="ref-promo-title">INVITÁ<span>A TUS <em>AMIGOS</em></span></div>
-            <div class="ref-promo-badge">Cobrá el <b><span class="referralRatePct">7%</span></b> de la pérdida neta<br>de tus referidos</div>
-            <div class="ref-promo-gift">🎁💰</div>
-            <div id="referralPromoExtra" style="font-size:12px;color:#ffd700;font-weight:800;margin:-4px 0 10px;"></div>
-            <button class="ref-promo-btn" onclick="VIP.ui.shareReferralLink()">🔗 INVITAR A TUS AMIGOS ›</button>
-            <button class="ref-promo-link" onclick="hideModal('referralPromoModal'); VIP.ui.openReferralModal();">📊 Mirá el progreso de tus referidos aquí ›</button>
+        <div class="ref-promo" style="padding:0;overflow:hidden;">
+            <button class="ref-promo-x" onclick="hideModal('referralPromoModal')" style="top:8px;right:8px;">✕</button>
+            <!-- Arte del mockup del encargado (recorte). El 7% viene impreso en la imagen. -->
+            <img src="/img/referidos-promo.jpg" alt="Invitá a tus amigos" style="display:block;width:100%;height:auto;">
+            <div style="padding:10px 14px 16px;background:linear-gradient(180deg,#2a0048 0%,#12002a 100%);">
+                <div id="referralPromoExtra" style="font-size:11.5px;color:#ffd700;font-weight:800;margin:0 0 10px;line-height:1.4;"></div>
+                <button class="ref-promo-btn" onclick="VIP.ui.shareReferralLink()" style="border-radius:999px;font-size:16px;padding:15px;">
+                    <span style="display:inline-flex;align-items:center;gap:10px;"><span style="font-size:18px;">🔗</span> INVITAR A TUS AMIGOS <span style="font-size:18px;">›</span></span>
+                </button>
+                <button class="ref-promo-link" onclick="hideModal('referralPromoModal'); VIP.ui.openReferralModal();" style="border-radius:999px;border-color:rgba(201,139,255,.6);">📊 Mirá el progreso de tus referidos aquí ›</button>
+            </div>
         </div>
     </div>
 

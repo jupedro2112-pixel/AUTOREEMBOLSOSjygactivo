@@ -13,6 +13,13 @@
   (hoja inferior) con: 💬 WhatsApp (`wa.me/?text=`), ✈️ Telegram (`t.me/share/url`),
   📤 Otras apps (`navigator.share`, solo si existe) y 📋 Copiar de nuevo. Mismo texto de
   invitación con el % real. Solo JS (sin bump de ?v).
+- **Rediseño "más profesional" (owner, mismo día, commit `1e5be3f`):** tarjeta centrada
+  (fondo #14062b, borde dorado fino, blur detrás), header con ícono 🔗 dorado + título
+  "Invitá a tus amigos" + subtítulo con el % real + botón ✕; chip del link en monoespacio
+  con "✓ Copiado" en verde; rótulo "ENVIAR POR" y filas uniformes con badge de color
+  (logo SVG real de WhatsApp y Telegram, tomados del index.html), título + subtítulo y
+  chevrón. Comportamiento igual (copia al abrir, wa.me / t.me/share/url, share nativo,
+  copiar). Todo inline en ui.js, sin CSS nuevo en index.html → sigue sin bump de ?v.
 
 ### 169. Comisión de referidos 7% → 3%, editable en COMANDOS y reflejada en el popup
 - **Owner:** bajar de 7% a 3% y que se pueda modificar desde el panel; si cambia, que

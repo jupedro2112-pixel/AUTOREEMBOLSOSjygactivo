@@ -1,14 +1,21 @@
 /* Login Screen */
 /* min-height (no height fija): si el contenido es más alto que la pantalla,
    el recuadro crece y la página scrollea en vez de cortarse abajo. */
+/* #171: el body es height:100dvh + overflow:hidden, así que un min-height acá crecía por
+   debajo del body y quedaba CORTADO sin scroll (iPhone dentro de WhatsApp). El scroll tiene
+   que vivir en ESTE contenedor: altura fija + overflow-y:auto. El centrado vertical lo hace
+   el margin:auto de .login-box (con align-items:center, un contenido más alto que la
+   pantalla se cortaba por ARRIBA y no se podía alcanzar). */
 .login-screen {
-    min-height: 100vh;
-    min-height: 100dvh;
+    height: 100vh;
+    height: 100dvh;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     padding: 6px;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
 }
 
 .login-box {

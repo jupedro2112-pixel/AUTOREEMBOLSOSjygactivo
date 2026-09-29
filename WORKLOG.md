@@ -77,6 +77,11 @@
 - **El link de referido abre el REGISTRO solo (video del owner):** si la URL de esta carga trae
   `?ref=` y no hay sesión, `app.js` abre `registerModal` a los 500 ms con el código fijo (respeta
   un welcome de publicista u otro modal ya abierto). Solo JS, sin bump.
+- **Login sin scroll en iPhone (WhatsApp in-app):** con el bloque de referido + verificación de
+  teléfono el recuadro ya no entra en la pantalla, y `.login-screen` tenía `min-height` dentro
+  de un body `height:100dvh; overflow:hidden` → se cortaba abajo sin poder bajar. Ahora
+  `.login-screen` es `height:100dvh; overflow-y:auto; align-items:flex-start` (el centrado lo
+  hace el `margin:auto` de `.login-box`). `?v=71` + SW v71.
 
 ### 170. Botón "Invitar a tus amigos": copia el link y ofrece WhatsApp / Telegram / otras apps
 - `shareReferralLink` (ui.js) ahora copia el link al portapapeles SIEMPRE y abre un chooser

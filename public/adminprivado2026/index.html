@@ -1926,6 +1926,26 @@
                     <!-- ── DASHBOARD GLOBAL ── -->
                     <div id="referralGlobalSummary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;"></div>
 
+                    <!-- ── #174 ACTIVIDAD Y EVOLUCIÓN ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(0,255,136,0.3);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                            <h3 style="color:#00ff88;font-size:15px;margin:0;">📈 Actividad y evolución de los referidos</h3>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                                <label style="font-size:11px;color:#888;">Meses</label>
+                                <select id="referralActivityMonths" onchange="loadReferralActivity()" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;">
+                                    <option value="3">3</option><option value="6" selected>6</option><option value="12">12</option>
+                                </select>
+                                <button onclick="loadReferralActivity()" style="background:rgba(0,255,136,0.1);border:1px solid #00ff88;color:#00ff88;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button>
+                            </div>
+                        </div>
+                        <p style="font-size:12px;color:#b0b0b0;line-height:1.5;margin:0 0 12px;">
+                            Cuántos referidos hay, cuántos <b>cargaron</b> y cuántos son <b>activos</b> (cargas reales acumuladas ≥ el mínimo del nivel),
+                            cuántos entraron en los últimos 7 y 30 días contra el período anterior, y la evolución mes a mes. Sale de la base propia
+                            (registros y cargas reales, sin regalos); no consulta JUGAYGANA, así que carga al instante.
+                        </p>
+                        <div id="referralActivityBody" style="font-size:13px;color:#b0b0b0;">Cargando...</div>
+                    </div>
+
                     <!-- ── CÁLCULO Y PAGO MENSUAL ── -->
                     <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px;">
                         <h3 style="margin-bottom:14px;color:#d4af37;font-size:15px;">⚙️ Cálculo y Pago Mensual</h3>
@@ -1981,6 +2001,8 @@
                                 <button id="referralFilterAll" onclick="filterReferrersTable('all')" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">Todos</button>
                                 <button id="referralFilterPending" onclick="filterReferrersTable('pending')" style="background:rgba(247,147,30,0.1);border:1px solid rgba(247,147,30,0.3);color:#f7931e;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">⏳ Con pendiente</button>
                                 <button id="referralFilterFailed" onclick="filterReferrersTable('failed')" style="background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);color:#ff8080;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">❌ Último fallido</button>
+                                <button id="referralFilterActive" onclick="filterReferrersTable('active')" title="Referidores con al menos un referido activo (cargó ≥ el mínimo del nivel)" style="background:rgba(255,215,0,0.1);border:1px solid rgba(255,215,0,0.3);color:#ffd700;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">⭐ Con activos</button>
+                                <button id="referralFilterNew30" onclick="filterReferrersTable('new30')" title="Referidores que trajeron referidos nuevos en los últimos 30 días" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:#00ff88;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">🚀 Nuevos 30d</button>
                                 <button onclick="loadAdminReferralSummary()" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button>
                             </div>
                         </div>

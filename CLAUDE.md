@@ -42,8 +42,9 @@ para multi-instancia en AWS EB) · Firebase Admin (FCM) · AWS SNS (SMS OTP).
 ⚠️ Las vars que se leen al `require()` (**`PROXY_URL`, `PUBLIC_BASE_URL`**) NO pueden ir en
 SSM: se leen ANTES del bootstrap async. En EB van como *environment properties*.
 
-Git remote: `github.com/jupedro2112-pixel/VIPCARGASANTINOactivo` (el repo se renombró; el
-nombre viejo `VIPCARGASANTINObackupviejo` sólo redirige). Git user: jupedro2112-pixel.
+Git remote de ESTE clon: `github.com/jupedro2112-pixel/AUTOREEMBOLSOSjygactivo` (gemelo de
+vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, ex
+`VIPCARGASANTINObackupviejo`). Confirmar con `git remote -v`. Git user: jupedro2112-pixel.
 
 ## Estructura
 

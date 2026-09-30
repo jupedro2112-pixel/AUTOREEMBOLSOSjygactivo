@@ -30,6 +30,9 @@ router.get('/pending', authenticate, referralController.getMyPendingCommissions)
 // GET /api/referrals/admin/summary - resumen de todos los referidores
 router.get('/admin/summary', authenticate, authorize('admin'), referralController.adminGetReferralsSummary);
 
+// GET /api/referrals/admin/activity - actividad y evolución (referidos nuevos, activos, por mes) — #174
+router.get('/admin/activity', authenticate, authorize('admin'), referralController.adminGetReferralActivity);
+
 // GET /api/referrals/admin/payouts - historial de todos los pagos
 router.get('/admin/payouts', authenticate, authorize('admin'), referralController.adminGetPayouts);
 

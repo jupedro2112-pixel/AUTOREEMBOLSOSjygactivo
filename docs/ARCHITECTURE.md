@@ -407,7 +407,17 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `ReferralMilestoneClaim` es sólo historial. **Base de la comisión (#171): NETWIN** =
   `total_ggr` de royalty-statistics (apuestas − premios), igual que muestra el tablero; el campo
   `totalOwnerRevenue` de ReferralCommission/ReferralPayout guarda ese netwin (nombre heredado de
-  cuando se pagaba sobre GGR × owner_commission).
+  cuando se pagaba sobre GGR × owner_commission). **#174 (admin):** `GET /api/referrals/admin/activity
+  ?months=N` (`referralController.adminGetReferralActivity`) = actividad y evolución SIN JUGAYGANA:
+  totales (referidos / con carga / activos ≥ `minChargedARS` / sin carga / referidores / por nivel),
+  ventanas 7 y 30 días vs. la anterior, serie diaria (30 d), tabla mensual (nuevos referidos, nuevos
+  referidores, primeras cargas, cargaron en el mes, $ cargado, con netwin y comisión de
+  ReferralCommission, pagado de ReferralPayout), `referrers[]` con activos/nivel/nuevos 30 d y
+  `trend` up|flat|down|none. Día argentino = UTC-3 fijo (`_artDayKey`, y en los aggregates
+  `$dateToString` sobre `timestamp − 3 h`). El panel (card "📈 Actividad y evolución") lo usa
+  también para las columnas Con carga / Activos / Nivel / Nuevos 30d de la tabla de referidores.
+  `GET /api/referrals/admin/users/:id` suma por referido `charges/totalCharged/lastChargeAt/qualified`
+  y un bloque `activity` (activos, nivel hoy).
 - **Lotes con código (#173):** el PromoBonus creado al canjear vence a `canje + NotifBatch.useHours`
   (24 h default), independiente de la vigencia del lote; el detalle del lote (`/:id`) devuelve
   `outcome` por destinatario y `summary` (canjearon / usaron / activos / vencidos).

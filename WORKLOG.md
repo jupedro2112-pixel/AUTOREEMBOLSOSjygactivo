@@ -4,7 +4,51 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-29**
+> **Última actualización: 2026-09-30**
+
+## Sesión 2026-09-30
+
+### 174. Referidos en el panel: ACTIVIDAD y EVOLUCIÓN (cuántos hay, cuántos activos, nuevos 7/30 días, mes a mes) — antes sólo se veía la plata a pagar
+- **Owner:** "no se ve si hay gente activa, si van subiendo los referidos; solo se ve al final
+  del mes cuánto hay que pagar, pero no cuántos son, si hay muchos nuevos, si hay mejora o no".
+- **Backend:** `GET /api/referrals/admin/activity?months=6` (1–24; admin general;
+  `referralController.adminGetReferralActivity`, ruta en `referralRoutes.js`). Sale de la base
+  propia (User con `referredByUserId` + Transaction deposit reales sin regalos —mismo
+  `NON_BANK_SOURCES` del nivel— + ReferralCommission/ReferralPayout); NO consulta JUGAYGANA, así
+  que responde al instante. Devuelve: `totals` (referidos, con carga, activos = cargas
+  acumuladas ≥ `minChargedARS`, sin carga, bloqueados, referidores, con ≥1 activo, con nivel
+  > 0%, distribución por nivel, $ cargado), `windows.last7/last30` (referidos nuevos, primeras
+  cargas, $ y cantidad de cargas: ahora vs. la ventana anterior con % de variación), `daily[30]`,
+  `trend` (up si nuevos + 2×primeras cargas de 30 d ≥ +15% vs los 30 anteriores; down ≤ −15%;
+  flat; none sin actividad en 60 d), `monthly[]` (referidos nuevos, referidores nuevos = primer
+  referido en el mes, primeras cargas, referidos distintos que cargaron, $ cargado, con netwin y
+  comisión pagada+pendiente del cálculo, pagado; variación vs mes anterior), `referrers[]` (por
+  referidor: referidos, con carga, activos, nuevos 30 d, último referido, $ cargado, % de hoy
+  por `levelForCount` / override / plano, próximo nivel) y `movers[]` (top 10 por nuevos 30 d).
+  Día argentino = UTC-3 fijo (`_artDayKey`; en Mongo `$dateToString` sobre `timestamp − 3 h`).
+  `GET /api/referrals/admin/users/:id` suma por referido `charges / totalCharged / lastChargeAt /
+  qualified` (vía `referralTierService.depositsByReferred`) y `activity` {active, charged,
+  totalCharged, pct, mode, nextTier}.
+- **Panel (admin-sw v51 → v52):** card nueva "📈 Actividad y evolución de los referidos" arriba
+  de Cálculo y Pago: veredicto (📈 hay mejora / ➡️ sin cambios / 📉 bajó / 💤 sin actividad) con
+  los números de 30 d, tiles (totales, con carga, activos, nunca cargaron, referidores, con nivel,
+  $ cargado), dos cuadros 7 d y 30 d vs. anterior con ▲/▼ %, barras por día (referidos nuevos y
+  primeras cargas, CSS puro), tabla mes a mes (selector 3/6/12 meses), chips por nivel y
+  "quiénes trajeron gente" (clic → detalle). La tabla 👑 Referidores suma columnas **Con carga /
+  Activos / Nivel (con "faltan N p/ X%") / Nuevos 30d / Último ref.** y filtros "⭐ Con activos" y
+  "🚀 Nuevos 30d". El detalle del referidor muestra por referido ⭐ Activo / 💰 Cargó / Sin carga,
+  cargas, total cargado y última carga, y arriba "NIVEL HOY" + "cargado por sus referidos". La
+  card vieja "Referidores activos" pasa a decir "Referidores (con ≥1 referido)" (eso es lo que
+  contaba).
+- **Ojo:** "Comisión" y "Con netwin" del mes sólo existen para períodos que pasaron por Calcular;
+  el resto de la card no depende del cálculo mensual. Los referidos viejos sin `referredAt` se
+  fechan por `createdAt`.
+- **Validado:** `node --check` OK (controller, rutas, admin.js, admin-sw); HTML del panel 756/756
+  divs, 27/27 sections, ids únicos; helpers de fecha/variación probados a mano. Sin rutas nuevas
+  en server.js (sin riesgo TDZ). Redeploy (back + panel). **PROBAR:** abrir Referidos → la card
+  carga sola; cambiar meses; los filtros nuevos; "Ver detalle" de un referidor con cargas.
+- **De paso:** CLAUDE.md decía que el remote era VIPCARGASANTINOactivo; este clon es
+  `AUTOREEMBOLSOSjygactivo` (corregido).
 
 ## Sesión 2026-09-29
 

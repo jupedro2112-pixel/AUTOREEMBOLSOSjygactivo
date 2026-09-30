@@ -516,14 +516,22 @@ const adminGetUserReferrals = asyncHandler(async (req, res) => {
   // #174: cargas reales por referido (sin regalos) + si califica como "activo" para el nivel.
   const tierCfg = await referralTierService.getReferralTiersConfig();
   const depBy = await referralTierService.depositsByReferred(safeUserId);
+  // #175 netwin HISTÓRICO por referido según los cálculos mensuales ya hechos (ReferralCommission).
+  const histAgg = await ReferralCommission.aggregate([
+    { $match: { referrerUserId: safeUserId } },
+    { $group: { _id: '$referredUserId', netwin: { $sum: '$totalOwnerRevenue' }, commission: { $sum: { $add: [{ $ifNull: ['$settledCommissionAmount', 0] }, { $cond: [{ $gt: ['$commissionAmount', 0] }, '$commissionAmount', 0] }] } }, periods: { $sum: 1 }, lastPeriod: { $max: '$periodKey' } } }
+  ]);
+  const histBy = new Map(histAgg.map(h => [h._id, h]));
   const referredUsers = referredUsersRaw.map(ru => {
     const d = depBy.get(ru.id);
+    const h = histBy.get(ru.id);
     return Object.assign({}, ru, {
       referredAt: ru.referredAt || ru.createdAt,
       charges: d ? d.count : 0, totalCharged: d ? Math.round(d.total) : 0, lastChargeAt: d ? d.last : null,
-      qualified: !!(d && d.total >= tierCfg.minChargedARS)
+      qualified: !!(d && d.total >= tierCfg.minChargedARS),
+      netwinHist: h ? Math.round(h.netwin) : 0, commissionHist: h ? Math.round(h.commission) : 0, periodsCalculated: h ? h.periods : 0, lastPeriodCalculated: h ? h.lastPeriod : null
     });
-  }).sort((a, b) => new Date(b.referredAt || 0) - new Date(a.referredAt || 0));
+  }).sort((a, b) => (b.netwinHist - a.netwinHist) || (b.totalCharged - a.totalCharged) || (new Date(b.referredAt || 0) - new Date(a.referredAt || 0)));
   const activeCount = referredUsers.filter(r => r.qualified).length;
   const level = await referralTierService.resolveReferralRate(user, { activeCount });
 
@@ -607,6 +615,7 @@ const adminGetUserReferrals = asyncHandler(async (req, res) => {
       // #174 actividad del referidor: activos (≥ mínimo), con carga, nivel actual.
       activity: { minChargedARS: tierCfg.minChargedARS, active: activeCount, charged: referredUsers.filter(r => r.charges > 0).length,
         totalCharged: referredUsers.reduce((a, r) => a + r.totalCharged, 0), pct: level.pct, mode: level.mode,
+        netwinHist: referredUsers.reduce((a, r) => a + r.netwinHist, 0), commissionHist: referredUsers.reduce((a, r) => a + r.commissionHist, 0),
         nextTier: level.nextTier ? { count: level.nextTier.count, pct: level.nextTier.pct, missing: level.missing } : null },
       commissions: enrichedCommissions,
       payouts: payouts.map(p => ({
@@ -1009,6 +1018,14 @@ const adminGetReferralActivity = asyncHandler(async (req, res) => {
   }
   const referrerIds = Array.from(byReferrer.keys());
   const referrerDocs = referrerIds.length ? await User.find({ id: { $in: referrerIds } }).select('id username referralRateOverride excludedFromReferral').lean() : [];
+  // #175 ranking: netwin y comisión históricos (todos los cálculos) + del período en curso si ya se calculó.
+  const histByReferrer = new Map((await ReferralCommission.aggregate([
+    { $match: { referrerUserId: { $in: referrerIds } } },
+    { $group: { _id: '$referrerUserId', netwin: { $sum: '$totalOwnerRevenue' },
+      commission: { $sum: { $add: [{ $ifNull: ['$settledCommissionAmount', 0] }, { $cond: [{ $gt: ['$commissionAmount', 0] }, '$commissionAmount', 0] }] } },
+      netwinCurrent: { $sum: { $cond: [{ $eq: ['$periodKey', thisMonth] }, '$totalOwnerRevenue', 0] } },
+      withNetwin: { $sum: { $cond: [{ $gt: ['$totalOwnerRevenue', 0] }, 1, 0] } } } }
+  ])).map(h => [h._id, h]));
   const referrerDoc = new Map(referrerDocs.map(u => [u.id, u]));
   const referrers = [];
   for (const [rid, s] of byReferrer) {
@@ -1018,8 +1035,10 @@ const adminGetReferralActivity = asyncHandler(async (req, res) => {
     else if (cfg.enabled) { pct = referralTierService.levelForCount(cfg, s.active).pct; }
     else { pct = Math.round(getGlobalReferralRate() * 10000) / 100; mode = 'flat'; }
     const lv = cfg.enabled ? referralTierService.levelForCount(cfg, s.active) : null;
+    const h = histByReferrer.get(rid);
     referrers.push(Object.assign({ id: rid, username: u ? u.username : '(no encontrado)', excluded: !!(u && u.excludedFromReferral), pct, mode,
-      nextTier: lv && lv.nextTier ? { count: lv.nextTier.count, pct: lv.nextTier.pct, missing: lv.missing } : null }, s));
+      nextTier: lv && lv.nextTier ? { count: lv.nextTier.count, pct: lv.nextTier.pct, missing: lv.missing } : null,
+      netwinHist: h ? Math.round(h.netwin) : 0, commissionHist: h ? Math.round(h.commission) : 0, netwinCurrent: h ? Math.round(h.netwinCurrent) : 0, referredWithNetwin: h ? h.withNetwin : 0 }, s));
   }
   referrers.sort((a, b) => (b.active - a.active) || (b.charged - a.charged) || (b.referred - a.referred));
   const movers = referrers.filter(r => r.new30 > 0).sort((a, b) => b.new30 - a.new30).slice(0, 10)

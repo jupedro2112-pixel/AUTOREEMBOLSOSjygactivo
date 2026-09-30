@@ -16872,6 +16872,45 @@ app.post('/api/admin/referrals/milestones-config', authMiddleware, adminMiddlewa
   } catch (e) { logger.warn(`[referrals] milestones-config POST: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 
+// #175 Netwin del MES EN VIVO de cada referido de un referidor (admin). Misma fuente y mismo
+// cache (15 min) que el tablero del cliente (_referralNetwinMonth → royalty-statistics). Sólo
+// consulta a los referidos con cargas reales (los demás no tienen juego); concurrencia 4, tope 80.
+// Va separado del detalle (referralController.adminGetUserReferrals) para que el detalle cargue
+// al instante y el netwin llegue después, aunque JUGAYGANA esté lento.
+app.get('/api/admin/referrals/:userId/netwin', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const referrer = await User.findOne({ id: String(req.params.userId || '') }).lean();
+    if (!referrer) return res.status(404).json({ error: 'Referidor no encontrado' });
+    const cfg = await getReferralMilestonesConfig();
+    const refs = await User.find({ referredByUserId: referrer.id }).select('id username jugayganaUserId').lean();
+    const depBy = await referralTiers.depositsByReferred(referrer.id);
+    const activeCount = Array.from(depBy.values()).filter(v => v.total >= cfg.minChargedARS).length;
+    const lv = await referralTiers.resolveReferralRate(referrer, { activeCount });
+    const range = jugaygana.getCurrentMonthToDateRangeArgentinaEpoch();
+    const monthRange = { from: new Date(range.fromEpoch * 1000), to: new Date(range.toEpoch * 1000) };
+    const withDeposits = refs.filter(r => depBy.has(r.id)).slice(0, 80);
+    const netBy = new Map();
+    for (let i = 0; i < withDeposits.length; i += 4) {
+      const chunk = withDeposits.slice(i, i + 4);
+      const vals = await Promise.all(chunk.map(u => _referralNetwinMonth(u, monthRange)));
+      chunk.forEach((u, k) => netBy.set(u.id, vals[k]));
+    }
+    const rows = refs.map(r => {
+      const has = depBy.has(r.id);
+      const net = netBy.has(r.id) ? netBy.get(r.id) : (has ? null : 0); // null = no se pudo leer
+      return { userId: r.id, username: r.username, netwinMonth: net, commissionMonth: net === null ? null : Math.round(Math.max(0, net) * lv.rate) };
+    });
+    const sumNet = rows.reduce((a, r) => a + (r.netwinMonth === null ? 0 : Math.max(0, r.netwinMonth)), 0);
+    res.json({ success: true, period: { key: _periodKey.getCurrentPeriodKey(), label: _periodKey.getPeriodLabel(_periodKey.getCurrentPeriodKey()) },
+      rate: lv.rate, pct: lv.pct, mode: lv.mode, active: activeCount,
+      totals: { netwinMonth: Math.round(sumNet), commissionMonth: Math.round(sumNet * lv.rate), partial: rows.some(r => r.netwinMonth === null), skipped: Math.max(0, refs.filter(r => depBy.has(r.id)).length - withDeposits.length) },
+      referrals: rows });
+  } catch (e) {
+    logger.warn(`[referrals] admin netwin ${req.params.userId}: ${e.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
 // ============================================
 // PAGOS AUTOMÁTICOS (retiros) — el agente verifica y confirma, se paga por hgcash
 // ============================================

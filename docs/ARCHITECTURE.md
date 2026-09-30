@@ -417,7 +417,12 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `$dateToString` sobre `timestamp − 3 h`). El panel (card "📈 Actividad y evolución") lo usa
   también para las columnas Con carga / Activos / Nivel / Nuevos 30d de la tabla de referidores.
   `GET /api/referrals/admin/users/:id` suma por referido `charges/totalCharged/lastChargeAt/qualified`
-  y un bloque `activity` (activos, nivel hoy).
+  + `netwinHist/commissionHist/periodsCalculated` (ReferralCommission) y un bloque `activity`
+  (activos, nivel hoy, netwin/comisión históricos). **#175:** `referrers[]` de /activity trae
+  `netwinHist/commissionHist/netwinCurrent` para el ranking "🏆 Mejores referidores" del panel;
+  `GET /api/admin/referrals/:userId/netwin` (server.js, admin) = netwin del mes EN VIVO por
+  referido vía `_referralNetwinMonth` (cache 15 min, concurrencia 4, tope 80), que el panel pide
+  después de pintar el detalle y rellena en la tabla de referidos.
 - **Lotes con código (#173):** el PromoBonus creado al canjear vence a `canje + NotifBatch.useHours`
   (24 h default), independiente de la vigencia del lote; el detalle del lote (`/:id`) devuelve
   `outcome` por destinatario y `summary` (canjearon / usaron / activos / vencidos).

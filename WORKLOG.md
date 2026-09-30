@@ -8,6 +8,39 @@
 
 ## Sesión 2026-09-30
 
+### 175. Ranking de MEJORES REFERIDORES + netwin de CADA REFERIDO dentro del detalle (en vivo y calculado)
+- **Owner:** "ver una lista de los mejores referidores y ver dentro de esos referidores a sus
+  referidos y cuánto netwin tiene cada referido".
+- **Backend:**
+  · `GET /api/referrals/admin/activity` (#174) suma por referidor `netwinHist` / `commissionHist`
+    (Σ `totalOwnerRevenue` y Σ pagado+pendiente de ReferralCommission, todos los períodos),
+    `netwinCurrent` (el del período en curso si ya se calculó) y `referredWithNetwin`.
+  · `GET /api/referrals/admin/users/:id`: cada referido trae `netwinHist`, `commissionHist`,
+    `periodsCalculated`, `lastPeriodCalculated` (aggregate de ReferralCommission por
+    `referredUserId`); la lista va ordenada por netwin calculado; `activity` suma `netwinHist` y
+    `commissionHist` del referidor.
+  · **Nuevo `GET /api/admin/referrals/:userId/netwin`** (server.js, junto a milestones-config;
+    admin): netwin del MES EN VIVO por referido, misma fuente y cache de 15 min que el tablero
+    del cliente (`_referralNetwinMonth` → royalty-statistics), sólo referidos con cargas reales,
+    concurrencia 4, tope 80. Devuelve `referrals[{userId, username, netwinMonth (null = no se
+    pudo leer), commissionMonth}]`, `totals {netwinMonth, commissionMonth, partial, skipped}`,
+    `pct/rate/mode/active` del referidor. Va separado del detalle para que el detalle cargue al
+    instante aunque JUGAYGANA esté lento.
+- **Panel (admin-sw v52 → v53):** card "🏆 Mejores referidores" (debajo de Actividad) con
+  selector de orden (activos / netwin generado / comisión / plata cargada / referidos / nuevos
+  30 d) y top 10/20/50/todos; columnas referidos, con carga, activos, nivel, cargado, netwin
+  generado (+ "mes actual (calc.)" si existe), comisión, nuevos 30 d, botón "👥 Ver referidos".
+  En el detalle del referidor la tabla de referidos suma **Netwin mes** (en vivo, se rellena
+  después con `loadReferralDetailNetwin`; "sin dato" si JUGAYGANA no respondió), **Com. mes**
+  (netwin × % actual) y **Netwin calc.** (histórico, con la comisión debajo); arriba una línea
+  con el netwin total del mes y la comisión estimada, y una card "NETWIN GENERADO (CALC.)".
+  Si el admin abre otro referidor antes de que llegue el netwin, la respuesta vieja se descarta.
+- **Validado:** `node --check` OK (server.js, controller, admin.js, admin-sw); HTML 760/760 divs,
+  ids únicos; ruta nueva en L~16880 (después de authMiddleware L3685 → sin TDZ). Redeploy (back +
+  panel). **PROBAR:** Referidos → ranking ordena al cambiar el selector; "Ver referidos" → la
+  tabla muestra "cargando…" en Netwin mes y se rellena en unos segundos; con un referido sin
+  carga muestra "—".
+
 ### 174. Referidos en el panel: ACTIVIDAD y EVOLUCIÓN (cuántos hay, cuántos activos, nuevos 7/30 días, mes a mes) — antes sólo se veía la plata a pagar
 - **Owner:** "no se ve si hay gente activa, si van subiendo los referidos; solo se ve al final
   del mes cuánto hay que pagar, pero no cuántos son, si hay muchos nuevos, si hay mejora o no".

@@ -7813,6 +7813,85 @@ let cachedReferrers = [];
 // Estado compartido con la tabla de referidores: por id del referidor → { referred, charged, active, pct, new30, ... }.
 let referralActivityByReferrer = new Map();
 let referralActivityLoaded = false;
+let referralActivityData = null;
+
+// #175 Ranking de mejores referidores (usa la data de /activity; sin llamadas extra).
+function renderReferralRanking() {
+    const body = document.getElementById('referralRankingBody');
+    if (!body) return;
+    const d = referralActivityData;
+    if (!d) { body.innerHTML = '<span style="color:#888;">Cargando...</span>'; return; }
+    const sortKey = document.getElementById('referralRankSort')?.value || 'active';
+    const top = parseInt(document.getElementById('referralRankTop')?.value || '20', 10);
+    const tie = (a, b) => (b.active - a.active) || (b.netwinHist - a.netwinHist) || (b.totalCharged - a.totalCharged) || (b.referred - a.referred);
+    const list = (d.referrers || []).slice().sort((a, b) => ((b[sortKey] || 0) - (a[sortKey] || 0)) || tie(a, b)).slice(0, top);
+    if (!list.length) { body.innerHTML = '<span style="color:#888;">Todavía no hay referidores.</span>'; return; }
+    const medal = (i) => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `<span style="color:#666;">${i + 1}</span>`;
+    const hl = (k) => sortKey === k ? 'background:rgba(255,215,0,0.06);' : '';
+    body.innerHTML = `<div style="overflow-x:auto;">
+    <table style="width:100%;border-collapse:collapse;min-width:1000px;font-size:12px;">
+        <thead><tr style="color:#888;font-size:10px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.1);">
+            <th style="padding:6px;">#</th>
+            <th style="padding:6px;">Referidor</th>
+            <th style="padding:6px;text-align:center;${hl('referred')}">Referidos</th>
+            <th style="padding:6px;text-align:center;" title="Con al menos una carga real">Con carga</th>
+            <th style="padding:6px;text-align:center;${hl('active')}" title="Cargas reales acumuladas ≥ el mínimo del nivel">Activos</th>
+            <th style="padding:6px;text-align:center;">Nivel</th>
+            <th style="padding:6px;text-align:right;${hl('totalCharged')}" title="Suma de cargas reales de sus referidos (histórico)">Cargado</th>
+            <th style="padding:6px;text-align:right;${hl('netwinHist')}" title="Suma del netwin (pérdida neta) de sus referidos en los cálculos mensuales">Netwin generado</th>
+            <th style="padding:6px;text-align:right;${hl('commissionHist')}" title="Comisión pagada + pendiente (histórico)">Comisión</th>
+            <th style="padding:6px;text-align:center;${hl('new30')}">Nuevos 30d</th>
+            <th style="padding:6px;"></th>
+        </tr></thead>
+        <tbody>${list.map((r, i) => `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+            <td style="padding:6px;font-size:14px;">${medal(i)}</td>
+            <td style="padding:6px;color:#fff;font-weight:bold;">${escHtml(r.username)}${r.excluded ? ' <span style="color:#ff4444;font-size:10px;">EXCLUIDO</span>' : ''}</td>
+            <td style="padding:6px;text-align:center;color:#b0b0b0;${hl('referred')}">${r.referred}</td>
+            <td style="padding:6px;text-align:center;color:#b0b0b0;">${r.charged}</td>
+            <td style="padding:6px;text-align:center;color:${r.active ? '#00ff88' : '#666'};font-weight:bold;${hl('active')}">${r.active}</td>
+            <td style="padding:6px;text-align:center;color:${r.pct > 0 ? '#ffd700' : '#666'};font-weight:bold;">${r.pct == null ? '—' : r.pct + '%'}${r.mode === 'override' ? '<div style="color:#888;font-size:9px;font-weight:normal;">override</div>' : ''}</td>
+            <td style="padding:6px;text-align:right;color:#fff;${hl('totalCharged')}">${fmtARS(r.totalCharged)}</td>
+            <td style="padding:6px;text-align:right;color:${r.netwinHist > 0 ? '#ffd700' : r.netwinHist < 0 ? '#ff6b6b' : '#666'};${hl('netwinHist')}">${r.netwinHist ? fmtARS(r.netwinHist) : '—'}${r.netwinCurrent ? `<div style="color:#888;font-size:9px;">mes actual (calc.): ${fmtARS(r.netwinCurrent)}</div>` : ''}</td>
+            <td style="padding:6px;text-align:right;color:${r.commissionHist ? '#d4af37' : '#666'};${hl('commissionHist')}">${r.commissionHist ? fmtARS(r.commissionHist) : '—'}</td>
+            <td style="padding:6px;text-align:center;color:${r.new30 ? '#00ff88' : '#555'};${hl('new30')}">${r.new30 ? '+' + r.new30 : '0'}</td>
+            <td style="padding:6px;"><button onclick="loadAdminUserReferrals('${escHtml(r.id)}')" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:3px 10px;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;">👥 Ver referidos</button></td>
+        </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+// #175 Netwin del mes EN VIVO por referido (JUGAYGANA, cache 15 min en el server). Se pide
+// DESPUÉS de pintar el detalle, y rellena las celdas refNet-<id> / refCom-<id>.
+async function loadReferralDetailNetwin(userId) {
+    const box = document.getElementById('referralDetailNetwinSummary');
+    try {
+        const res = await fetch(`${API_URL}/api/admin/referrals/${encodeURIComponent(userId)}/netwin`, { headers: { 'Authorization': `Bearer ${currentToken}` } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        // Si el admin ya abrió otro referidor, no pisar.
+        if (referralDetailCurrentId !== userId) return;
+        for (const r of (data.referrals || [])) {
+            const c1 = document.getElementById('refNet-' + r.userId), c2 = document.getElementById('refCom-' + r.userId);
+            if (c1) {
+                if (r.netwinMonth === null) c1.innerHTML = '<span style="color:#ff8080;font-size:10px;" title="JUGAYGANA no respondió; reintentá más tarde">sin dato</span>';
+                else c1.innerHTML = `<span style="color:${r.netwinMonth > 0 ? '#ffd700' : r.netwinMonth < 0 ? '#ff6b6b' : '#666'};font-weight:bold;">${fmtARS(r.netwinMonth)}</span>`;
+            }
+            if (c2) c2.innerHTML = r.commissionMonth === null ? '<span style="color:#555;">—</span>' : `<span style="color:${r.commissionMonth ? '#d4af37' : '#666'};">${fmtARS(r.commissionMonth)}</span>`;
+        }
+        if (box) {
+            const t = data.totals || {};
+            box.innerHTML = `<span style="color:#888;">Netwin del mes (${escHtml(data.period?.label || '')}, en vivo):</span>
+                <b style="color:${t.netwinMonth > 0 ? '#ffd700' : '#b0b0b0'};">${fmtARS(t.netwinMonth || 0)}</b>
+                <span style="color:#888;">· comisión estimada al ${data.pct}%:</span> <b style="color:#d4af37;">${fmtARS(t.commissionMonth || 0)}</b>
+                ${t.partial ? '<span style="color:#ff8080;font-size:11px;"> · ⚠️ algún referido sin dato (JUGAYGANA no respondió)</span>' : ''}
+                ${t.skipped ? `<span style="color:#888;font-size:11px;"> · ${t.skipped} referidos no consultados (tope 80)</span>` : ''}`;
+        }
+    } catch (e) {
+        if (referralDetailCurrentId !== userId) return;
+        if (box) box.innerHTML = `<span style="color:#ff8080;">No se pudo leer el netwin del mes (${escHtml(e.message)}).</span>`;
+        document.querySelectorAll('[id^="refNet-"]').forEach(el => { el.innerHTML = '<span style="color:#555;">—</span>'; });
+    }
+}
+let referralDetailCurrentId = null;
 
 async function loadReferralActivity() {
     const body = document.getElementById('referralActivityBody');
@@ -7828,7 +7907,9 @@ async function loadReferralActivity() {
         const d = data.data || {};
         referralActivityByReferrer = new Map((d.referrers || []).map(r => [r.id, r]));
         referralActivityLoaded = true;
+        referralActivityData = d;
         renderReferralActivity(d, body);
+        renderReferralRanking(); // #175
         // La tabla de referidores ya puede mostrar las columnas nuevas.
         if (cachedReferrers.length) renderReferrersTable(cachedReferrers);
     } catch (e) {
@@ -8250,6 +8331,7 @@ async function loadAdminReferralPayouts() {
 async function loadAdminUserReferrals(userId) {
     const detailPanel = document.getElementById('referralUserDetail');
     const detailContent = document.getElementById('referralUserDetailContent');
+    referralDetailCurrentId = userId; // #175
     if (detailPanel) detailPanel.style.display = 'block';
     if (detailContent) detailContent.innerHTML = '<span style="color:#888;">Cargando detalle...</span>';
     // Scroll to detail
@@ -8280,6 +8362,9 @@ async function loadAdminUserReferrals(userId) {
                 <td style="padding:5px 6px;text-align:center;color:${ru.charges ? '#fff' : '#555'};">${ru.charges || 0}</td>
                 <td style="padding:5px 6px;text-align:right;color:${ru.totalCharged ? '#00ff88' : '#555'};">${fmtARS(ru.totalCharged || 0)}</td>
                 <td style="padding:5px 6px;color:#888;font-size:11px;">${ru.lastChargeAt ? fmtFechaAR(ru.lastChargeAt) : '—'}</td>
+                <td id="refNet-${escHtml(ru.id)}" style="padding:5px 6px;text-align:right;">${ru.charges > 0 ? '<span style="color:#666;font-size:10px;">cargando…</span>' : '<span style="color:#555;">—</span>'}</td>
+                <td id="refCom-${escHtml(ru.id)}" style="padding:5px 6px;text-align:right;">${ru.charges > 0 ? '<span style="color:#666;font-size:10px;">…</span>' : '<span style="color:#555;">—</span>'}</td>
+                <td style="padding:5px 6px;text-align:right;color:${ru.netwinHist > 0 ? '#ffd700' : ru.netwinHist < 0 ? '#ff6b6b' : '#555'};" title="${ru.periodsCalculated ? ru.periodsCalculated + ' mes(es) calculados, último ' + escHtml(ru.lastPeriodCalculated || '') : 'Sin cálculo mensual todavía'}">${ru.periodsCalculated ? fmtARS(ru.netwinHist) : '—'}${ru.commissionHist ? `<div style="color:#888;font-size:9px;">com. ${fmtARS(ru.commissionHist)}</div>` : ''}</td>
                 <td style="padding:5px 6px;color:${ru.excludedFromReferral?'#ff4444':'#888'};font-size:11px;">${ru.excludedFromReferral ? '❌ Excluido' : '✅'}</td>
             </tr>`;
         }).join('');
@@ -8368,6 +8453,11 @@ async function loadAdminUserReferrals(userId) {
                         <div style="color:#888;font-size:10px;margin-bottom:4px;">CARGADO POR SUS REFERIDOS</div>
                         <div style="color:#b0b0b0;font-weight:bold;">${fmtARS(act.totalCharged)}</div>
                         <div style="color:#666;font-size:10px;">activo = ≥ ${fmtARS(act.minChargedARS)}</div>
+                    </div>
+                    <div style="background:rgba(255,215,0,0.03);border:1px solid rgba(255,215,0,0.2);border-radius:8px;padding:10px;text-align:center;">
+                        <div style="color:#888;font-size:10px;margin-bottom:4px;">NETWIN GENERADO (CALC.)</div>
+                        <div style="color:${act.netwinHist > 0 ? '#ffd700' : '#b0b0b0'};font-weight:bold;">${fmtARS(act.netwinHist || 0)}</div>
+                        <div style="color:#666;font-size:10px;">com. ${fmtARS(act.commissionHist || 0)} en los meses calculados</div>
                     </div>` : ''}
                     <div style="background:rgba(0,255,136,0.03);border:1px solid rgba(0,255,136,0.15);border-radius:8px;padding:10px;text-align:center;">
                         <div style="color:#888;font-size:10px;margin-bottom:4px;">TOTAL PAGADO</div>
@@ -8386,9 +8476,10 @@ async function loadAdminUserReferrals(userId) {
 
                 ${d.referredUsers && d.referredUsers.length > 0 ? `
                 <div style="margin-bottom:16px;">
-                    <h4 style="color:#d4af37;margin-bottom:8px;font-size:13px;">👥 Usuarios Referidos (${d.referredUsers.length})</h4>
+                    <h4 style="color:#d4af37;margin-bottom:4px;font-size:13px;">👥 Usuarios Referidos (${d.referredUsers.length}) <span style="color:#888;font-size:11px;font-weight:normal;">· ordenados por netwin calculado</span></h4>
+                    <div id="referralDetailNetwinSummary" style="font-size:12px;margin-bottom:8px;color:#888;">Leyendo el netwin del mes en JUGAYGANA…</div>
                     <div style="overflow-x:auto;">
-                    <table style="width:100%;border-collapse:collapse;min-width:640px;">
+                    <table style="width:100%;border-collapse:collapse;min-width:900px;">
                         <thead><tr style="color:#888;font-size:11px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.1);">
                             <th style="padding:5px 6px;">Usuario</th>
                             <th style="padding:5px 6px;">Registro</th>
@@ -8396,6 +8487,9 @@ async function loadAdminUserReferrals(userId) {
                             <th style="padding:5px 6px;text-align:center;">Cargas</th>
                             <th style="padding:5px 6px;text-align:right;">Total cargado</th>
                             <th style="padding:5px 6px;">Última carga</th>
+                            <th style="padding:5px 6px;text-align:right;color:#ffd700;" title="Pérdida neta del referido en el mes en curso, leída en vivo de JUGAYGANA (cache 15 min)">Netwin mes</th>
+                            <th style="padding:5px 6px;text-align:right;color:#d4af37;" title="Netwin del mes × % actual del referidor">Com. mes</th>
+                            <th style="padding:5px 6px;text-align:right;" title="Netwin acumulado en los cálculos mensuales ya hechos (Calcular)">Netwin calc.</th>
                             <th style="padding:5px 6px;">Acceso</th>
                         </tr></thead>
                         <tbody>${referredRows}</tbody>
@@ -8429,6 +8523,9 @@ async function loadAdminUserReferrals(userId) {
                 </div>` : '<div style="color:#888;font-size:12px;">Sin pagos realizados aún.</div>'}
             `;
         }
+        // #175: netwin del mes en vivo, después de pintar (JUGAYGANA puede tardar).
+        if ((d.referredUsers || []).some(ru => ru.charges > 0)) loadReferralDetailNetwin(userId);
+        else { const box = document.getElementById('referralDetailNetwinSummary'); if (box) box.innerHTML = '<span style="color:#666;">Ningún referido cargó todavía: no hay netwin que leer.</span>'; }
     } catch (e) {
         if (detailContent) detailContent.innerHTML = '<span style="color:#ff4444;">Error: ' + e.message + '</span>';
     }

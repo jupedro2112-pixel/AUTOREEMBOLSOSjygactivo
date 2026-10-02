@@ -4,7 +4,27 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-09-30**
+> **Última actualización: 2026-10-02**
+
+## Sesión 2026-10-02
+
+### 176. Paquete de réplica COMPLETO del sistema de lotes con regalo para otro repo JUGAYGANA (`docs/replicas/lotes-jugaygana/`)
+- **Owner:** "me pasás para copiar y pegar el sistema de notificaciones por lote, que quiero
+  implementarlo en un repo que tiene JUGAYGANA".
+- A diferencia de los paquetes anteriores (patches de un cambio puntual para el hermano girox),
+  éste trae el **código actual completo extraído tal cual** (commit `fd653ca`), ya que el destino
+  también opera sobre JUGAYGANA: `models-NotifBatch.js`, `models-PromoBonus.js`,
+  `server-01-tope-lote.js` (config hgcashAppBonus + `_loteBonusAmount`/`_loteCapTxt`),
+  `server-02-promo-bonus-endpoints.js`, `server-03-lotes-block.js` (bloque entero, 1.150 líneas:
+  franja, claim/revert/settle, audiencias, motor de envío, canje, 5 rutas),
+  `server-04-hooks-cargas.md` (fragmentos de `/api/admin/deposit` y `hgcashAutoCarga` con el
+  contrato de un solo bono automático), `server-05-dependencias-helpers.js` (sendPushIfOffline,
+  renderSystemCommand, _alertMoneyAmbiguous, _emitAdminOnlyChatNote, _rouletteHasAppInstalled),
+  `panel-index.html.part`, `panel-admin.js.part`, `pwa-index.html.part`, `pwa-ui.js.part`,
+  `pwa-promobonus.js`, y `README.md` con tabla de pegado, dependencias a verificar, reglas de
+  plata, trampas (TDZ, hora ART, vencimiento lazy, onclick inline) y el prompt para el asistente
+  del otro repo + prueba en vivo. Todos los `.js` del paquete pasan `node --check`.
+- Sin cambios de código en este repo.
 
 ## Sesión 2026-09-30
 

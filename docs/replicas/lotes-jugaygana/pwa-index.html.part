@@ -1,0 +1,56 @@
+<!-- ============================================================================
+     PWA CLIENTE — fragmentos para public/index.html
+     ============================================================================ -->
+
+<!-- (a) Botón 🎁 en la barra superior (junto a los otros .tb-btn) -->
+            <button class="tb-btn gift-code-btn" id="giftCodeBtn" title="Reclamar bono con código">🎁</button>
+
+<!-- (b) En el home: card del bono vigente (la pinta js/promobonus.js) -->
+                 una notificación). Render dinámico desde js/promobonus.js. -->
+            <div id="promoBonusCard" style="display:none;"></div>
+
+<!-- (c) Modal 'Regalos con código' (canjear + información) -->
+    <!-- #149 Reclamar Bono con Código (códigos de "Lote con regalo" que llegan por notificación) -->
+    <div id="giftCodeModal" class="modal hidden" onclick="if(event.target===this)hideModal('giftCodeModal')">
+        <div class="modal-content" style="position:relative;max-width:440px;">
+            <button onclick="hideModal('giftCodeModal')" style="position:absolute;top:15px;right:15px;background:none;border:none;color:#888;font-size:24px;cursor:pointer;z-index:10;">✕</button>
+            <div class="modal-header">
+                <h2>🎁 Regalos con código</h2>
+                <p>Canjeá tu código o enterate cómo conseguirlos</p>
+            </div>
+            <!-- Selector de vista: canjear / información (#150) -->
+            <div style="display:flex;gap:8px;margin-bottom:14px;">
+                <button id="giftTabClaim" onclick="VIP.ui.giftCodeShowView('claim')" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(212,175,55,.6);background:rgba(212,175,55,.2);color:#d4af37;font-weight:900;cursor:pointer;">🔑 Canjear código</button>
+                <button id="giftTabInfo" onclick="VIP.ui.giftCodeShowView('info')" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(83,189,235,.5);background:rgba(83,189,235,.08);color:#53bdeb;font-weight:900;cursor:pointer;">ℹ️ INFORMACIÓN</button>
+            </div>
+            <div id="giftCodeBody">
+                <p style="color:#ccc;font-size:12.5px;line-height:1.55;margin:0 0 12px;">Si te llegó un <strong style="color:#d4af37;">código de regalo</strong>, ingresalo acá. Es de un solo uso por cuenta y tiene vencimiento.</p>
+                <div style="display:flex;gap:8px;">
+                    <input type="text" id="giftCodeInput" placeholder="EJ: REGALO24" maxlength="30" autocomplete="off" style="flex:1;min-width:0;text-transform:uppercase;letter-spacing:2px;padding:12px;border-radius:10px;border:1px solid rgba(212,175,55,.5);background:rgba(0,0,0,.35);color:#fff;font-size:16px;" onkeydown="if(event.key==='Enter')VIP.ui.claimGiftCode()">
+                    <button id="giftCodeBtnSend" onclick="VIP.ui.claimGiftCode()" style="background:linear-gradient(135deg,#d4af37,#b8962e);color:#1a0b2e;border:none;border-radius:10px;padding:0 16px;font-weight:900;cursor:pointer;">Canjear</button>
+                </div>
+                <div id="giftCodeResult" style="margin-top:12px;font-size:13px;line-height:1.5;"></div>
+                <p style="color:#888;font-size:11.5px;margin:12px 0 0;text-align:center;">¿No tenés ningún código? Tocá <strong style="color:#53bdeb;">ℹ️ INFORMACIÓN</strong> para saber cómo conseguirlos.</p>
+            </div>
+            <div id="giftInfoBody" class="hidden">
+                <div style="background:rgba(83,189,235,.07);border:1px solid rgba(83,189,235,.3);border-radius:12px;padding:12px 14px;margin-bottom:12px;">
+                    <p style="color:#e8e8e8;font-size:13px;line-height:1.6;margin:0 0 8px;"><strong style="color:#53bdeb;">¿Qué son los códigos de regalo?</strong><br>Cada tanto regalamos <strong>bonos extra en tu carga</strong> o <strong>fichas</strong>. Se entregan con un código que canjeás acá.</p>
+                    <p style="color:#e8e8e8;font-size:13px;line-height:1.6;margin:0;"><strong style="color:#53bdeb;">¿Dónde se consiguen?</strong><br>📢 En nuestra <strong>Comunidad de Telegram</strong>.<br>🔔 Por <strong>notificación de la app</strong>, directo a tu celular.<br><span style="color:#aaa;font-size:12px;">No hace falta pedirlos: cuando hay un regalo, te llega.</span></p>
+                </div>
+                <a id="giftInfoTelegramBtn" href="#" target="_blank" rel="noopener" style="display:none;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#2AABEE,#1e8fd0);color:#fff;text-decoration:none;border-radius:12px;padding:12px;font-weight:900;font-size:14px;margin-bottom:12px;">📢 Entrar a la Comunidad de Telegram</a>
+                <div style="background:rgba(0,0,0,.25);border-radius:12px;padding:12px 14px;">
+                    <p style="color:#d4af37;font-weight:900;font-size:12.5px;margin:0 0 8px;">Para recibir los regalos por notificación necesitás:</p>
+                    <div id="giftInfoAppRow" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.08);">
+                        <span style="font-size:13px;color:#e8e8e8;">📱 App instalada</span>
+                        <span id="giftInfoAppState" style="font-size:12.5px;font-weight:900;">…</span>
+                    </div>
+                    <div id="giftInfoNotifRow" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;">
+                        <span style="font-size:13px;color:#e8e8e8;">🔔 Notificaciones activas</span>
+                        <span id="giftInfoNotifState" style="font-size:12.5px;font-weight:900;">…</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<!-- (d) Script: <script src="/js/promobonus.js?v=N"></script> (bumpear ?v y CACHE_VERSION del SW) -->

@@ -11361,6 +11361,10 @@ function updateGiftBatchTypeUI() {
     const apply = (document.querySelector('input[name="giftBatchApply"]:checked') || {}).value || 'auto';
     // Rollover: fichas siempre; % solo si es automático (el agente pone el suyo).
     if (wrap) wrap.style.display = (tipo === 'fixed' || apply === 'auto') ? '' : 'none';
+    // #177: fichas POR TIEMPO → bloque de reclamo (con tilde para acreditar directo).
+    const modeNow = (document.querySelector('input[name="giftBatchMode"]:checked') || {}).value || 'code';
+    const claimW = document.getElementById('giftBatchClaimWrap');
+    if (claimW) claimW.style.display = (tipo === 'fixed' && modeNow === 'window') ? '' : 'none';
     const scope = (document.querySelector('input[name="giftBatchScope"]:checked') || {}).value || 'first';
     const scopeW = document.getElementById('giftBatchScopeWrap');
     const winW = document.getElementById('giftBatchWindowWrap');
@@ -11539,6 +11543,9 @@ async function sendGiftBatch() {
     }
     const rolloverX = 0; // JUGAYGANA: sin rollover
     const esFichas = giftType === 'fixed';
+    // #177: fichas por tiempo → reclamo con botón salvo que el agente tilde "directo".
+    const directCredit = !!(document.getElementById('giftBatchDirectCredit') || {}).checked;
+    const conReclamo = esFichas && mode === 'window' && !directCredit;
     // #263: aplicación del %
     const applyMode = (document.querySelector('input[name="giftBatchApply"]:checked') || {}).value || 'auto';
     const applyScope = (document.querySelector('input[name="giftBatchScope"]:checked') || {}).value || 'first';
@@ -11552,7 +11559,7 @@ async function sendGiftBatch() {
         ? (applyMode === 'agent'
             ? ('+' + amount + '% en próxima carga (lo aplica el agente, cartel verde)')
             : ('+' + amount + '% AUTOMÁTICO en ' + (applyScope === 'all' ? 'TODAS sus cargas' : 'su PRIMERA carga') + franjaTxt + ' — se suma solo, nadie marca nada · bono con ' + (rolloverX > 0 ? 'rollover x' + rolloverX : 'SIN rollover (retirable)')))
-        : ('$' + amount.toLocaleString('es-AR') + ' en fichas — SE ACREDITAN SOLAS');
+        : ('$' + amount.toLocaleString('es-AR') + ' en fichas — ' + (conReclamo ? 'SE ACREDITAN AL RECLAMAR (botón 🎁 en la app)' : 'SE ACREDITAN SOLAS'));
     const modoTxt = mode === 'code' ? 'CON CÓDIGO (solo los del lote pueden canjearlo)' : ('POR TIEMPO (' + validHours + 'hs)');
     const audTxt = esPublico ? ('📣 CÓDIGO PÚBLICO — cualquier cliente registrado' + (audience.maxClaims ? ' (cupo ' + audience.maxClaims + ' canjes)' : ' (SIN cupo)')) :
         audience.audienceType === 'all' ? '🌍 LOTE COMPLETO' :
@@ -11566,8 +11573,10 @@ async function sendGiftBatch() {
         notaFinal = 'Cualquier cliente que consiga el código activa su +' + amount + '% (cartel verde al agente), una vez por cuenta.';
     } else if (esFichas && mode === 'code') {
         notaFinal = '⚠️ La plata se acredita AUTOMÁTICAMENTE cuando cada uno canjea su código — sin intervención del agente.';
+    } else if (esFichas && conReclamo) {
+        notaFinal = '💰 Con RECLAMO: no se acredita nada al enviar. Cada cliente que toque RECLAMAR en su app recibe $' + amount.toLocaleString('es-AR') + ' al instante (máximo posible ≈ $' + (amount * count).toLocaleString('es-AR') + ' si reclaman todos). Lo que no se reclame antes de las ' + validHours + 'hs no se paga.';
     } else if (esFichas) {
-        notaFinal = '🚨 ATENCIÓN: se le acreditan $' + amount.toLocaleString('es-AR') + ' A CADA UNO apenas se envíe el lote — TOTAL ≈ $' + (amount * count).toLocaleString('es-AR') + ', automático, sin intervención del agente.';
+        notaFinal = '🚨 ATENCIÓN: se le acreditan $' + amount.toLocaleString('es-AR') + ' A CADA UNO apenas se envíe el lote — TOTAL ≈ $' + (amount * count).toLocaleString('es-AR') + ', automático, sin intervención del agente, aunque después no jueguen.';
     } else if (applyMode === 'auto') {
         notaFinal = '⚡ El % se suma SOLO cuando cada cliente carga (transferencia automática o carga manual sin bonus)' + (applyScope === 'all' ? ', en TODAS sus cargas' : ', una sola vez') + franjaTxt + ', hasta que venza la vigencia. Nadie tiene que marcar nada.';
     } else {
@@ -11586,6 +11595,7 @@ async function sendGiftBatch() {
             method: 'POST',
             body: JSON.stringify({
                 mode, giftType, amount, validHours, message, rolloverX,
+                directCredit, // #177 (solo fichas por tiempo)
                 useHours: Number((document.getElementById('giftBatchUseHours') || {}).value) || 24, // #173
                 applyMode, applyScope, applyFrom, applyTo,
                 ...audience,
@@ -11640,7 +11650,7 @@ async function loadNotifBatches() {
                     ? ' <span style="color:#7fd7ff;" title="Se suma solo en la carga">⚡ auto · ' + (b.applyScope === 'all' ? 'todas las cargas' : '1ª carga') + franjaH + (Number(b.rolloverX) > 0 ? ' · x' + b.rolloverX : ' · sin rollover') + '</span>'
                     : ' <span style="color:#aaa;">🧑‍💼 agente</span>')
                 : '';
-            const regalo = (b.giftType === 'percent' ? ('+' + b.amount + '%') : ('$' + Number(b.amount).toLocaleString('es-AR'))) + aplic;
+            const regalo = (b.giftType === 'percent' ? ('+' + b.amount + '%') : ('$' + Number(b.amount).toLocaleString('es-AR') + (b.claimRequired ? ' <span style="color:#ffd700;" title="Se acredita cuando el cliente toca RECLAMAR">🎁 con reclamo</span>' : (b.mode === 'window' ? ' <span style="color:#ff9d76;">directo</span>' : '')))) + aplic;
             const modo = b.mode === 'code' ? ('🔑 ' + escapeHtml(b.code || '')) : ('⏰ ' + b.validHours + 'hs');
             const aud = b.isPublic ? ('📣 código público' + (b.maxClaims ? ' (cupo ' + b.maxClaims + ')' : '')) :
                 b.audienceType === 'segment' ? ('🎯 ' + escapeHtml(b.audienceLabel || 'segmento')) :
@@ -11663,6 +11673,9 @@ async function loadNotifBatches() {
                     b.total + ' destinatarios · ' + envio + ' · ' + b.claimed + ' con bono' +
                     (b.sinNotis ? ' · <span style="color:#ff9d76;">' + b.sinNotis + ' sin notis</span>' : '') +
                     // #173 resultado de los bonos: cargaron con él / todavía activos / vencidos sin usar
+                    // #177 fichas: cuántos las cobraron (reclamo o canje) y cuánto salió
+                    (b.giftType === 'fixed' ? ' · <span style="color:#00ff88;">💰 ' + (b.credited || 0) + ' acreditados ($' + ((b.credited || 0) * Number(b.amount)).toLocaleString('es-AR') + ')</span>' +
+                        (b.claimRequired ? ' · <span style="color:' + (vencido ? '#888' : '#ffd700') + ';">' + Math.max(0, b.total - (b.credited || 0)) + (vencido ? ' no reclamaron (vencido)' : ' sin reclamar') + '</span>' : '') : '') +
                     (b.giftType === 'percent' ? ' · <span style="color:#7fd7ff;">' + (b.usados || 0) + ' cargaron' + (b.bonoTotal > 0 ? ' ($' + Number(b.bonoTotal).toLocaleString('es-AR') + ')' : '') + '</span>' +
                         ' · <span style="color:#00ff88;">' + (b.activos || 0) + ' activos</span>' +
                         ' · <span style="color:#ff9d76;">' + (b.vencidos || 0) + ' vencidos sin usar</span>' +
@@ -11693,7 +11706,13 @@ async function toggleNotifBatchDetail(id) {
         const MAX_ROWS = 400;
         const shown = recs.slice(0, MAX_ROWS);
         // #173 resumen del lote: quién canjeó, quién cargó con el bono, quién lo dejó vencer.
-        const resumen = (j.batch && j.batch.giftType === 'percent')
+        const resumen = (j.batch && j.batch.giftType === 'fixed')
+            ? '<div style="display:flex;gap:.6rem;flex-wrap:wrap;font-size:.78rem;margin-bottom:.4rem;">' +
+                '<span style="color:#00ff88;">💰 acreditados <b>' + (sm.acreditados || 0) + '</b>' + (sm.fichasTotal > 0 ? ' ($' + Number(sm.fichasTotal).toLocaleString('es-AR') + ' pagados)' : '') + '</span>' +
+                (j.batch.claimRequired ? '<span style="color:#ffd700;">🎁 sin reclamar <b>' + (sm.sinReclamar || 0) + '</b></span>' +
+                    '<span style="color:#ff9d76;">⏰ no reclamaron y venció <b>' + (sm.vencidosSinReclamar || 0) + '</b></span>' : '') +
+              '</div>'
+            : (j.batch && j.batch.giftType === 'percent')
             ? '<div style="display:flex;gap:.6rem;flex-wrap:wrap;font-size:.78rem;margin-bottom:.4rem;">' +
                 '<span style="color:#ccc;">🔑 canjearon <b>' + (sm.canjearon || 0) + '</b></span>' +
                 '<span style="color:#7fd7ff;">⚡ cargaron con el bono <b>' + (sm.usaron || 0) + '</b>' + (sm.bonoTotal > 0 ? ' ($' + Number(sm.bonoTotal).toLocaleString('es-AR') + ' regalados)' : '') + '</span>' +
@@ -11707,7 +11726,9 @@ async function toggleNotifBatchDetail(id) {
                 let estado;
                 const canje = u.claimedAt ? '<span style="color:#aaa;">canjeó ' + fx(u.claimedAt) + '</span> · ' : '';
                 const usoTxt = (u.usedAt ? ' ' + fx(u.usedAt) : '') + (u.cargaMonto > 0 ? ' · carga $' + Number(u.cargaMonto).toLocaleString('es-AR') : '') + (u.usesTotalBonus > 0 ? ' · bono $' + Number(u.usesTotalBonus).toLocaleString('es-AR') : '');
-                if (u.creditedAt) estado = '<span style="color:#00ff88;">💰 acreditado automático</span>';
+                if (u.creditedAt) estado = '<span style="color:#00ff88;">💰 acreditado ' + fx(u.creditedAt) + (u.giftOutcome === 'credited' && j.batch && j.batch.claimRequired ? ' (lo reclamó)' : '') + '</span>';
+                else if (u.giftOutcome === 'pending_claim') estado = '<span style="color:#ffd700;">🎁 sin reclamar todavía</span>';
+                else if (u.giftOutcome === 'expired_unclaimed') estado = '<span style="color:#ff9d76;">⏰ no lo reclamó y venció (no se pagó)</span>';
                 else if (u.creditError) estado = '<span style="color:#ff6b6b;" title="' + escapeHtml(u.creditError) + '">⚠ sin acreditar: ' + escapeHtml(u.creditError) + '</span>';
                 else if (u.outcome === 'used' && u.autoApply) estado = canje + '<span style="color:#7fd7ff;">⚡ cargó con el bono (solo)' + usoTxt + (u.applyScope === 'all' ? ' · ' + (u.usesCount || 0) + 'x' : '') + '</span>';
                 else if (u.outcome === 'used') estado = canje + '<span style="color:#7fd7ff;">✔ cargó con el bono · lo aplicó ' + escapeHtml(u.usedBy || '-') + usoTxt + '</span>';

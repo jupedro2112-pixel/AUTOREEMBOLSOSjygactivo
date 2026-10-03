@@ -95,6 +95,8 @@ VIP.socket = (function () {
             if (message.id && VIP.state.processedMessageIds.has(message.id)) {
                 return;
             }
+            // #177: un mensaje del sistema puede traer un regalo de fichas para RECLAMAR → refrescar la card.
+            if (message.type === 'system') { try { if (VIP.promoBonus && VIP.promoBonus.loadGifts) setTimeout(VIP.promoBonus.loadGifts, 800); } catch (_) {} }
 
             const existingMsg = document.querySelector(`[data-message-id="${message.id}"]`);
             if (existingMsg) {

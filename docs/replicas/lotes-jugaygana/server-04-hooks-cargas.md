@@ -124,6 +124,7 @@ Mensaje al cliente (donde se arma el texto de /sys_deposit_bonus):
             `⚠️ El bono de LOTE automático (+${_lcH.pct}%) NO se pudo acreditar en la carga hgcash (${jugaygana.errToString((_lcRes && _lcRes.error) || 'sin respuesta')}). Sigue vigente: aplicalo a mano si corresponde.`);
         }
       }
+    }
 ```
 
 Mensaje al cliente y nota interna de la carga automática:
@@ -131,12 +132,12 @@ Mensaje al cliente y nota interna de la carga automática:
 ```js
       if (appBonus.kind === 'lote') clientMsg += `\n🎁 Incluye tu regalo: +${appBonus.pct}% extra por el lote de regalo${appBonus.loteScope === 'first' ? ' (ya utilizado)' : ''}.`;
 
-
     const bonusNote = appBonus.applied
       ? (appBonus.kind === 'lote'
         ? ` ⚡ + BONO DE LOTE AUTOMÁTICO +${appBonus.pct}% (${appBonus.loteLabel}): $${Number(appBonus.amount).toLocaleString('es-AR')}. ${appBonus.loteScope === 'first' ? 'El bono quedó USADO.' : 'El bono sigue vigente para sus próximas cargas.'} No hay que marcar nada.`
         : ` 🎁 + BONO AUTOMÁTICO ${appBonus.pct}% ${appBonus.kind === 'install_100' ? '(primera carga, app instalada)' : '(app instalada)'}: $${Number(appBonus.amount).toLocaleString('es-AR')}.`)
       : (appBonus.skippedForBank
+        ? ` 🚨 SIN bonos automáticos: multicuenta confirmada por banco (${_dupBank.holder} ya cargó en @${_dupBank.matchedUsername || '?'}).`
 ```
 
 ## 4.c Si el repo destino NO tiene hgcash

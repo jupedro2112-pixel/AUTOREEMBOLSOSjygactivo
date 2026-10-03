@@ -4,7 +4,51 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-02**
+> **Última actualización: 2026-10-03**
+
+## Sesión 2026-10-03
+
+### 177. Fichas de lote POR TIEMPO con RECLAMO: no se acredita a todos al enviar, cada cliente toca "🎁 RECLAMAR" y recién ahí se le carga (sólo se paga a los que vuelven)
+- **Owner:** "cuando un lote sea regalo de saldo, que no se acredite a todos automáticamente sino
+  que tengan que reclamarlo; al cargarle a todos es pérdida de plata en gente que después no va a
+  jugar, cada carga cuesta dinero. Que el cliente lo reclame ahí mismo, práctico, y si reclama que
+  se cargue automático como bono".
+- **Modelo:** `NotifBatch.claimRequired` (Boolean, default false para lotes viejos). `POST
+  /api/admin/notif-batches` lo setea `true` para fichas en modo 'window' salvo `directCredit:true`
+  (tilde del panel); esos recipients nacen con `claimedAt:null`.
+- **Motor (`_processOneNotifBatch`):** con `claimRequired` NO acredita ni crea PromoBonus: sólo
+  manda el mensaje (`_notifBatchChatContent`: "Tenés $X esperándote, tocá RECLAMAR… tenés Nhs") y el
+  push (`data.giftClaim = batchId`). El `else if` del % por tiempo ahora excluye `giftType fixed`.
+- **Helper compartido `_notifBatchFichasAfterClaim(uDoc, batch, {via})`:** lo que antes estaba
+  inline en el canje por código (acreditar en JUGAYGANA, marcar `creditedAt`, mensaje al cliente,
+  nota interna, liberar la reserva si falló limpio / NO liberar + alertar si fue ambiguo #151). Lo
+  usan `_tryClaimNotifBatchCode` (via 'code', textos iguales que antes) y el reclamo nuevo.
+- **Endpoints del cliente:** `GET /api/gift/pending` (lotes con `claimRequired`, fichas, vigentes,
+  donde el usuario está con `claimedAt:null`; hasta 5) y `POST /api/gift/claim {batchId}`
+  (reserva atómica `claimedAt null → ahora` con `expiresAt > now`, después el helper; 400 "ya
+  reclamaste" / "no es para tu cuenta" / "venció").
+- **Historial del panel:** `GET /api/admin/notif-batches` suma `claimRequired` y `credited`; la
+  fila de fichas dice "💰 N acreditados ($X) · N sin reclamar" (o "no reclamaron (vencido)") y
+  "🎁 con reclamo" / "directo". El detalle (`/:id`) devuelve por destinatario `giftOutcome`
+  (credited | pending_claim | expired_unclaimed) y `summary.{acreditados, sinReclamar,
+  vencidosSinReclamar, fichasTotal}`; cada fila: "💰 acreditado dd/mm (lo reclamó)" / "🎁 sin
+  reclamar todavía" / "⏰ no lo reclamó y venció (no se pagó)".
+- **Panel (admin-sw v53 → v54):** con Fichas + Por tiempo aparece el bloque dorado "💰 Fichas con
+  RECLAMO (recomendado)" con el tilde "🚨 Acreditar DIRECTO a todos al enviar" (apagado por
+  default); el confirm del envío explica que no se acredita nada hasta que reclamen y el máximo
+  posible. El radio dice "Fichas (el cliente las reclama con un botón)"; guía ❓ actualizada.
+- **PWA (`?v=72` + SW v72):** `promobonus.js` pide `/api/gift/pending` junto con el bono vigente
+  (al cargar, al volver a primer plano, cada 2 min y al llegar un mensaje del sistema por socket)
+  y pinta la card dorada "🎁 ¡Tenés $X en fichas de regalo! · RECLAMAR" en el home
+  (`#giftClaimCard`) y arriba del input del modal 🎁 (`#giftPendingBox`, `renderPending`).
+  `VIP.promoBonus.claim(batchId, btn)` → POST → "✅ ¡Listo! Tus $X ya están acreditados", refresca
+  el saldo (`VIP.ui.syncBalance`, ahora exportado) y saca la card. Errores en la misma card.
+- **Paquete de réplica (#176) regenerado** con esto adentro, ahora por script
+  (`docs/replicas/lotes-jugaygana/_extract.py`, marcadores en vez de números de línea).
+- **Validado:** `node --check` OK (server.js, modelo, admin.js, admin-sw, promobonus.js, ui.js,
+  socket.js, SW); HTML del panel 763/763 y de la PWA 391/391 divs, ids únicos; las rutas nuevas
+  van después de `/api/gift-code/claim` (sin TDZ). Redeploy (back + panel + PWA). **PROBAR:** ver
+  prueba 8 del README del paquete.
 
 ## Sesión 2026-10-02
 

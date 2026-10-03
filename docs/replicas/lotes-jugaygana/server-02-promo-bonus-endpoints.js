@@ -1,6 +1,6 @@
 // ============================================================================
 // 2) BONO DE CARGA (PromoBonus): bono vigente del usuario + cartel del agente + marcar usado
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit fd653ca, 2026-10-02). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 714dd04, 2026-10-03). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 

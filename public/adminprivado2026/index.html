@@ -1515,7 +1515,7 @@
                         <p style="margin:0 0 8px;color:#ffd166;"><b>⚠️ Regla de oro — quién pone la plata:</b> el <b>% con "🧑‍💼 Lo aplica el agente"</b> lo aplica el agente a mano (cartel verde + marcar usado) — es el modo viejo, por si querés controlarlo vos. Las <b>FICHAS se acreditan SOLAS, siempre</b>: con código, al canjearlo; por tiempo, apenas se envía el lote a todos. Entran como BONO en JUGAYGANA (individual_bonus). El agente no hace nada con las fichas — le llega una nota informativa.</p>
                         <p style="margin:0 0 8px;color:#ff9d76;"><b>🛡️ Candados anti-abuso (automáticos):</b> cada usuario tiene tope de regalos de lote (máx 3 acreditaciones en 24hs y $300.000 en 7 días). Si alguien lo supera, el crédito SE BLOQUEA solo y salta una <b>alerta roja urgente</b> a todos los admins conectados + una nota en el chat de ese usuario. Todo lo bloqueado queda visible en el detalle del lote ("⚠ sin acreditar").</p>
                         <ul style="margin:0 0 8px;padding-left:18px;">
-                            <li><b>Tipos de regalo:</b> <b>% extra en la próxima carga</b> (ej. +50%: carga $10.000 → le acreditás $15.000, siempre a mano) o <b>fichas</b> (ej. $5.000 — SIEMPRE automático).</li>
+                            <li><b>Tipos de regalo:</b> <b>% extra en la próxima carga</b> (ej. +50%: carga $10.000 → le acreditás $15.000, siempre a mano) o <b>fichas</b> (ej. $5.000 — por código se acreditan al canjear; por tiempo, el cliente las <b>RECLAMA con un botón</b> en la app y recién ahí se acreditan: sólo pagás a los que vuelven. Hay un tilde para acreditar directo a todos, como antes).</li>
                             <li><b>🔑 CON CÓDIGO:</b> la notificación lleva un código que el cliente canjea en su app (menú ☰ → "Reclamar Bono con Código"). <b>Solo funciona para los que están EN el lote</b> — si lo comparten en un grupo, al resto le dice "código no válido". Una sola vez por persona, hasta que venza el plazo. Si el regalo es %, al canjear aparece el cartel verde; si es fichas, la plata entra al toque y al agente le llega una nota "no hay que hacer nada".</li>
                             <li><b>⏰ POR TIEMPO:</b> sin código — al enviar, el bono queda ACTIVADO solo para todos los del lote por las horas que elijas. Ideal promos relámpago ("tenés 2 horas para cargar con +30%"). Al vencer desaparece solo.</li>
                             <li><b>Audiencias:</b> 📋 lista pegada (usuarios a dedo) · 🎯 <b>segmento</b>: elegís la base — 💸 <b>cargaron antes y no cargan hace ≥ X días</b> (los que más vale recuperar), 😴 sin entrar hace ≥ X días, o 🔥 cargaron en los últimos X días (activos/VIP) — y la afinás con mínimo de cargas históricas, mínimo de $ cargados, publicista y cupo (ej. "los 300 mejores ex-cargadores de santino") · 🌍 lote completo (todos) · 📣 <b>CÓDIGO PÚBLICO</b>: no se envía nada — el código se crea y lo subís VOS a la Comunidad de Telegram o a la red que quieras; CUALQUIER cliente registrado puede canjearlo (una vez por cuenta) mientras esté vigente, con cupo total de canjes opcional (ej. "los primeros 100"). Mismo regalo, mismos topes anti-abuso, y en el historial ves quiénes lo canjearon.</li>
@@ -1561,7 +1561,7 @@
                         <div>
                             <label class="form-label" style="display:block;margin-bottom:.3rem">Regalo</label>
                             <label style="margin-right:1rem;font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchType" value="percent" checked onchange="updateGiftBatchTypeUI()"> ％ extra en la carga</label>
-                            <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchType" value="fixed" onchange="updateGiftBatchTypeUI()"> 💵 Fichas (se acreditan solas)</label>
+                            <label style="font-size:.85rem;cursor:pointer"><input type="radio" name="giftBatchType" value="fixed" onchange="updateGiftBatchTypeUI()"> 💵 Fichas (el cliente las reclama con un botón)</label>
                         </div>
                     </div>
                     <!-- #263 (owner 2026-09-04): el % se aplica SOLO en la carga (auto) —
@@ -1590,6 +1590,13 @@
                             </div>
                             <div id="giftBatchApplyHint" style="color:#8fd3a8;font-size:.78rem;max-width:520px;line-height:1.4"></div>
                         </div>
+                    </div>
+                    <!-- #177 (owner 2026-10-03): fichas POR TIEMPO se acreditan recién cuando el cliente toca
+                         🎁 RECLAMAR en la app. Sólo se paga a los que vuelven. Checkbox para el modo viejo. -->
+                    <div id="giftBatchClaimWrap" style="display:none;margin-top:.75rem;background:rgba(255,215,0,0.06);border:1px solid rgba(255,215,0,0.3);border-radius:10px;padding:.7rem .9rem;font-size:.82rem;line-height:1.45">
+                        <div style="color:#ffd700;font-weight:900;margin-bottom:.25rem">💰 Fichas con RECLAMO (recomendado)</div>
+                        <div style="color:#ddd">Al enviar <b>no se acredita nada</b>. Cada cliente ve un cartel "🎁 Tenés $X de regalo — RECLAMAR" en el inicio de la app (y en el botón 🎁 de arriba); cuando lo toca, las fichas se acreditan al instante como bono. <b>Sólo pagás a los que de verdad vuelven a jugar.</b> Si no lo reclama antes de que venza la vigencia, no se paga.</div>
+                        <label style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem;cursor:pointer;color:#ff9d76"><input type="checkbox" id="giftBatchDirectCredit" onchange="updateGiftBatchTypeUI()" style="width:auto"> 🚨 Acreditar DIRECTO a todos al enviar, sin reclamo (modo viejo: paga a todos, cuesta plata aunque no jueguen)</label>
                     </div>
                     <div style="display:flex;gap:1rem;flex-wrap:wrap;margin-top:.75rem;align-items:flex-end">
                         <div>

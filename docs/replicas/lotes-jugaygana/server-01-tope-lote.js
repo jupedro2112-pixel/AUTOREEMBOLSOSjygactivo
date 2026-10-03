@@ -1,6 +1,6 @@
 // ============================================================================
 // 1) TOPE DEL % DE LOTE (#172) — comparte Config['hgcashAppBonus'] con el bono app (#164)
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit fd653ca, 2026-10-02). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 714dd04, 2026-10-03). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 

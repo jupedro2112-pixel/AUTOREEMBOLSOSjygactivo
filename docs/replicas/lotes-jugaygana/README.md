@@ -3,8 +3,13 @@
 Paquete para copiar y pegar el sistema de "🎁 Lote con regalo" de `AUTOREEMBOLSOSjygactivo`
 (WORKLOG #149 base, #150 modal info, #164 ruleta/tope, #172 tope del % de lote, #173 bono
 canjeado vence a 24 h + resumen por lote) en OTRO repo que también usa `jugaygana.js`.
-Código extraído del commit `fd653ca` (2026-10-02). Como el destino también es JUGAYGANA, la
-acreditación de plata (`jugaygana.creditUserBalance`) se copia tal cual.
+Incluye **#177 (2026-10-03): fichas por tiempo con RECLAMO** (no se acredita a todos al enviar;
+cada cliente toca "🎁 RECLAMAR" en la app y recién ahí se acreditan). Como el destino también es
+JUGAYGANA, la acreditación de plata (`jugaygana.creditUserBalance`) se copia tal cual.
+
+**El paquete se regenera solo:** `python3 docs/replicas/lotes-jugaygana/_extract.py` desde la raíz
+del repo extrae el código ACTUAL por marcadores (el encabezado de cada archivo dice de qué commit
+salió). Si en el futuro cambia el sistema de lotes, correrlo antes de mandar el paquete.
 
 ## Qué hace el sistema (para humanos)
 
@@ -21,6 +26,12 @@ REGALO:
 - Entrega por **código** (sólo los del lote lo canjean desde el botón 🎁 de la PWA; una vez
   canjeado tenés `useHours` (24 h default) para usarlo) o por **tiempo** (bono activado a todos por
   N horas).
+- **Fichas por tiempo con RECLAMO (#177, default):** al enviar no se acredita nada; el cliente ve
+  un cartel "🎁 Tenés $X en fichas de regalo — RECLAMAR" en el inicio de la app y dentro del modal
+  🎁; al tocarlo se reserva atómico y se acredita al instante (`GET /api/gift/pending`,
+  `POST /api/gift/claim {batchId}`). Lo que no se reclama antes de la vigencia no se paga. El panel
+  tiene un tilde "acreditar directo a todos" para el modo viejo, y el historial dice "N acreditados
+  ($X) · N sin reclamar / no reclamaron (vencido)".
 - Motor de envío **reanudable y multi-instancia** (claim atómico por destinatario, cron 45 s),
   historial "📤 Lotes enviados" con resumen por lote (canjearon / cargaron con el bono / activos /
   vencidos) y detalle por destinatario.
@@ -42,8 +53,8 @@ REGALO:
 | 8 | `panel-index.html.part` | `public/adminprivado2026/index.html` | 3 fragmentos: banner del chat, card del lote, historial |
 | 9 | `panel-admin.js.part` | `public/adminprivado2026/admin.js` | funciones + 2 llamadas (al abrir chat / al abrir Notificaciones) |
 | 10 | `pwa-index.html.part` | `public/index.html` | botón 🎁, card del bono, modal canjear/info, script |
-| 11 | `pwa-ui.js.part` | `public/js/ui.js` + `app.js` | funciones del modal + exports + listener |
-| 12 | `pwa-promobonus.js` | `public/js/promobonus.js` | card "tenés un bono vigente" en el home |
+| 11 | `pwa-ui.js.part` | `public/js/ui.js` + `app.js` + `socket.js` | funciones del modal + exports (incl. `syncBalance`) + listener + refresco al llegar un mensaje del sistema |
+| 12 | `pwa-promobonus.js` | `public/js/promobonus.js` | card "tenés un bono vigente" + card/botón RECLAMAR de fichas (#177) |
 
 ## Dependencias que el bloque asume (verificar en el destino antes de pegar)
 
@@ -126,9 +137,10 @@ la plata va por jugaygana.creditUserBalance igual que en el paquete). Seguí el 
 4. Panel admin (08, 09): banner del bono en el chat, card "🎁 Lote con regalo" y "📤 Lotes
    enviados" en la sección Notificaciones, funciones en admin.js, llamadas al abrir el chat y la
    sección. Mantené los nombres de funciones que usan los onclick inline.
-5. PWA (10, 11, 12): botón 🎁 en la barra, modal "Regalos con código" (canjear + ℹ️
-   información con estado app/notifs y link a Telegram), card del bono vigente en el home
-   (promobonus.js), exports en VIP.ui y listener en app.js. Bumpeá ?v y CACHE_VERSION del SW de
+5. PWA (10, 11, 12): botón 🎁 en la barra, modal "Regalos con código" (regalos para RECLAMAR con
+   botón + canjear código + ℹ️ información con estado app/notifs y link a Telegram), card del bono
+   vigente y card "RECLAMAR" de fichas en el home (promobonus.js), exports en VIP.ui (incluido
+   syncBalance), listener en app.js y refresco en socket.js. Bumpeá ?v y CACHE_VERSION del SW de
    la PWA, y CACHE_VERSION de admin-sw.js.
 6. Sumá 'notif_batch' y 'notif_batch_auto' a la lista de fuentes que acá excluyen "cargas
    reales" (referidos, cierre, analítica), si existe.
@@ -154,3 +166,8 @@ push. Listá al final qué helpers renombraste/adaptaste y qué quedó pendiente
    afuera → "Este código no es para tu cuenta"; dejarlo vencer → el detalle del lote dice
    "venció sin usar".
 7. Fichas: 3 créditos seguidos al mismo usuario en 24 h → el 4º no sale y hay alerta roja.
+8. Fichas POR TIEMPO (#177): enviar $500 a una cuenta de prueba → NO se acredita; en la app aparece
+   el cartel dorado "Tenés $500 en fichas de regalo — RECLAMAR" (home y modal 🎁) → tocar → "✅
+   acreditado", saldo sube, nota interna en el chat; el historial del lote dice "1 acreditados ($500)
+   · 0 sin reclamar". Dejar vencer otro → "no reclamó y venció (no se pagó)". Con el tilde "directo"
+   se acredita a todos al enviar, como antes.

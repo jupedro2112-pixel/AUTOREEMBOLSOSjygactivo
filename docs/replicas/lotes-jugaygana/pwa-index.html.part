@@ -5,11 +5,12 @@
 <!-- (a) Botón 🎁 en la barra superior (junto a los otros .tb-btn) -->
             <button class="tb-btn gift-code-btn" id="giftCodeBtn" title="Reclamar bono con código">🎁</button>
 
-<!-- (b) En el home: card del bono vigente (la pinta js/promobonus.js) -->
-                 una notificación). Render dinámico desde js/promobonus.js. -->
+<!-- (b) En el home: card del regalo para RECLAMAR (#177) + card del bono vigente (las pinta js/promobonus.js) -->
+            <!-- #177 Regalo de fichas pendiente de RECLAMAR (lote con reclamo). Render desde js/promobonus.js. -->
+            <div id="giftClaimCard" style="display:none;"></div>
             <div id="promoBonusCard" style="display:none;"></div>
 
-<!-- (c) Modal 'Regalos con código' (canjear + información) -->
+<!-- (c) Modal 'Regalos con código' (reclamar con botón + canjear código + información) -->
     <!-- #149 Reclamar Bono con Código (códigos de "Lote con regalo" que llegan por notificación) -->
     <div id="giftCodeModal" class="modal hidden" onclick="if(event.target===this)hideModal('giftCodeModal')">
         <div class="modal-content" style="position:relative;max-width:440px;">
@@ -24,6 +25,8 @@
                 <button id="giftTabInfo" onclick="VIP.ui.giftCodeShowView('info')" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(83,189,235,.5);background:rgba(83,189,235,.08);color:#53bdeb;font-weight:900;cursor:pointer;">ℹ️ INFORMACIÓN</button>
             </div>
             <div id="giftCodeBody">
+                <!-- #177 regalos de fichas pendientes de reclamar (botón, sin código) -->
+                <div id="giftPendingBox"></div>
                 <p style="color:#ccc;font-size:12.5px;line-height:1.55;margin:0 0 12px;">Si te llegó un <strong style="color:#d4af37;">código de regalo</strong>, ingresalo acá. Es de un solo uso por cuenta y tiene vencimiento.</p>
                 <div style="display:flex;gap:8px;">
                     <input type="text" id="giftCodeInput" placeholder="EJ: REGALO24" maxlength="30" autocomplete="off" style="flex:1;min-width:0;text-transform:uppercase;letter-spacing:2px;padding:12px;border-radius:10px;border:1px solid rgba(212,175,55,.5);background:rgba(0,0,0,.35);color:#fff;font-size:16px;" onkeydown="if(event.key==='Enter')VIP.ui.claimGiftCode()">
@@ -53,4 +56,5 @@
         </div>
     </div>
 
-<!-- (d) Script: <script src="/js/promobonus.js?v=N"></script> (bumpear ?v y CACHE_VERSION del SW) -->
+<!-- (d) Script (bumpear ?v y CACHE_VERSION del SW): -->
+    <script src="/js/promobonus.js?v=72"></script>

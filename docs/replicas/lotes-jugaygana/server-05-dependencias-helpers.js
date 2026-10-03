@@ -1,6 +1,6 @@
 // ============================================================================
 // 5) HELPERS que el bloque asume existentes. Copiar SOLO los que falten en el repo destino
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit fd653ca, 2026-10-02). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 714dd04, 2026-10-03). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 
@@ -77,12 +77,6 @@ async function sendPushIfOffline(user, title, body, data = {}) {
   return { delivery: _sent > 0 ? 'push' : (_failed > 0 ? 'error' : 'none'), sent: _sent, failed: _failed };
 }
 
-// ============================================
-// FUNCIONES HELPER PARA MONGODB
-// ============================================
-
-// Generar número de cuenta
-
 // --- renderSystemCommand(name, fallback, vars): mensajes automáticos editables desde COMANDOS ---
 async function renderSystemCommand(name, fallback, vars = {}) {
   let template = fallback;
@@ -104,9 +98,7 @@ async function renderSystemCommand(name, fallback, vars = {}) {
   return out;
 }
 
-// Igual que renderSystemCommand pero a partir de un Command ya cargado (los flujos
-// que ya hacían Command.findOne directo). Devuelve null si el comando existe pero su
-// respuesta está vacía (desactivado a propósito); usa el fallback si no existe.
+// --- resolveSysContent (helper de renderSystemCommand) ---
 function resolveSysContent(cmd, fallback) {
   if (cmd) {
     if (!cmd.response || !String(cmd.response).trim()) return null;
@@ -114,11 +106,6 @@ function resolveSysContent(cmd, fallback) {
   }
   return fallback;
 }
-
-// Tras una carga (manual o automática), ofrece al cliente el "100% de recuperación"
-// para que entre a la Comunidad. NO se envía si el cliente ya está etiquetado
-// 'comunidad' (ya está) o 'no comunidad' (ya dijo que no quiere) — anti-spam.
-// Texto editable desde COMANDOS (/sys_recover_100); si se vacía, no se envía.
 
 // --- _alertMoneyAmbiguous: alerta 🛑 cuando JUGAYGANA no confirma una operación de plata (#151) ---
 async function _alertMoneyAmbiguous(ctx, userId, username, amount, err) {
@@ -132,7 +119,6 @@ async function _alertMoneyAmbiguous(ctx, userId, username, amount, err) {
     }
   } catch (_) {}
 }
-
 
 // --- _emitAdminOnlyChatNote: nota INTERNA (solo agentes) en el chat del cliente ---
 async function _emitAdminOnlyChatNote(userId, username, content) {

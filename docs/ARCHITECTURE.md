@@ -423,6 +423,13 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `GET /api/admin/referrals/:userId/netwin` (server.js, admin) = netwin del mes EN VIVO por
   referido vía `_referralNetwinMonth` (cache 15 min, concurrencia 4, tope 80), que el panel pide
   después de pintar el detalle y rellena en la tabla de referidos.
+- **Lotes de FICHAS por tiempo con RECLAMO (#177):** `NotifBatch.claimRequired` (default en el
+  panel para fichas 'window'; tilde "directo" = modo viejo). El motor no acredita: manda el aviso y
+  el cliente reclama desde la PWA (`GET /api/gift/pending`, `POST /api/gift/claim {batchId}`,
+  server.js junto a `/api/gift-code/claim`): reserva atómica `recipients.$.claimedAt` → 
+  `_notifBatchFichasAfterClaim` (mismo helper que el canje por código: crédito JUGAYGANA, ambiguo =
+  no liberar + 🛑, fallo = liberar). Lo no reclamado antes de `expiresAt` no se paga. PWA:
+  `promobonus.js` (card `#giftClaimCard` + `#giftPendingBox` del modal 🎁, refresco por socket).
 - **Lotes con código (#173):** el PromoBonus creado al canjear vence a `canje + NotifBatch.useHours`
   (24 h default), independiente de la vigencia del lote; el detalle del lote (`/:id`) devuelve
   `outcome` por destinatario y `summary` (canjearon / usaron / activos / vencidos).

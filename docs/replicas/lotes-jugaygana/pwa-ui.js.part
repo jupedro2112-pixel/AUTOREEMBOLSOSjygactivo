@@ -1,8 +1,8 @@
 // ============================================================================
-// PWA CLIENTE — fragmentos para public/js/ui.js (namespace window.VIP.ui)
+// PWA CLIENTE — fragmentos para public/js/ui.js (namespace window.VIP.ui), app.js y socket.js
 // ============================================================================
 
-// (a) Funciones (usan showModal/hideModal, VIP.config.API_URL, token en localStorage, VIP.ui.installApp
+// (a) Funciones de ui.js (usan showModal/hideModal, VIP.config.API_URL, token en localStorage, VIP.ui.installApp
 //     y el 🔔 de la barra para activar notifs; adaptar nombres si difieren):
 
     function openGiftCodeModal() {
@@ -10,6 +10,7 @@
         const i = document.getElementById('giftCodeInput'); if (i) i.value = '';
         showModal('giftCodeModal');
         giftCodeShowView('claim');
+        try { if (VIP.promoBonus && VIP.promoBonus.renderPending) VIP.promoBonus.renderPending('giftPendingBox'); } catch (_) {} // #177
     }
     // #150: dos vistas separadas — canjear / información (de dónde salen los
     // códigos + Telegram + estado de app y notificaciones con botones para resolverlo).
@@ -98,8 +99,12 @@
     }
 
 // (b) Sumar al objeto exportado de VIP.ui:
-//     openGiftCodeModal, claimGiftCode, giftCodeShowView, giftInfoEnableNotifs,
+//     openGiftCodeModal, claimGiftCode, giftCodeShowView, giftInfoEnableNotifs, syncBalance (#177: promobonus.js lo llama tras reclamar)
 
 // (c) En app.js, al inicializar la UI logueada:
         const giftCodeBtn = document.getElementById('giftCodeBtn'); // #149
         if (giftCodeBtn) giftCodeBtn.addEventListener('click', () => VIP.ui.openGiftCodeModal());
+
+// (d) En socket.js, dentro del handler de 'new_message' (después del dedupe por id) — #177:
+            // #177: un mensaje del sistema puede traer un regalo de fichas para RECLAMAR → refrescar la card.
+            if (message.type === 'system') { try { if (VIP.promoBonus && VIP.promoBonus.loadGifts) setTimeout(VIP.promoBonus.loadGifts, 800); } catch (_) {} }

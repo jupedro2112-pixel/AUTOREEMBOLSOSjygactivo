@@ -287,6 +287,7 @@ VIP.ui = (function () {
         const i = document.getElementById('giftCodeInput'); if (i) i.value = '';
         showModal('giftCodeModal');
         giftCodeShowView('claim');
+        try { if (VIP.promoBonus && VIP.promoBonus.renderPending) VIP.promoBonus.renderPending('giftPendingBox'); } catch (_) {} // #177
     }
     // #150: dos vistas separadas — canjear / información (de dónde salen los
     // códigos + Telegram + estado de app y notificaciones con botones para resolverlo).
@@ -890,6 +891,7 @@ VIP.ui = (function () {
         syncBalance,
         showBalanceToast,
         updateBalanceDisplay,
+        syncBalance, // #177 (lo usa promobonus.js tras reclamar fichas)
         startBalancePolling,
         stopBalancePolling,
         sendWelcomeMessages,

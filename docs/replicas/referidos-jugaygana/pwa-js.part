@@ -1,0 +1,331 @@
+// ============================================================================
+// PWA CLIENTE — fragmentos para public/js/ui.js, app.js y auth.js (namespace window.VIP)
+// ============================================================================
+
+// (a) ui.js — bloque de referidos (fetch del dashboard con cache 60 s, modal, card del home, popup,
+//     compartir por WhatsApp/Telegram/share nativo). Usa showModal/hideModal, VIP.config.API_URL,
+//     VIP.state.currentToken, _esc, showToast si existe.
+
+    let _refData = null;
+    let _refLoadedAt = 0;
+    const _refMoney = (n) => '$' + new Intl.NumberFormat('es-AR').format(Math.round(Number(n) || 0));
+    function _refPct(rate) { return _refPctNum(_refPctOf(rate)); }
+    function _refPctOf(rate) { const n = Number(rate); return Math.round((Number.isFinite(n) ? n : 0) * 10000) / 100; }
+    function _refPctNum(p) { const n = Number(p) || 0; return (Number.isInteger(n) ? n : n.toFixed(n * 10 % 1 ? 2 : 1)) + '%'; }
+    function _refMaxPct(d) { const lv = (d && d.level) || {}; return _refPctNum(lv.maxPct != null ? lv.maxPct : _refPctOf(d && d.rate)); }
+    function _refAgo(d) {
+        if (!d) return '';
+        const ms = Date.now() - new Date(d).getTime();
+        const dias = Math.floor(ms / 86400000);
+        if (dias <= 0) return 'hoy';
+        if (dias === 1) return 'hace 1 día';
+        if (dias < 30) return 'hace ' + dias + ' días';
+        const m = Math.floor(dias / 30);
+        return m === 1 ? 'hace 1 mes' : 'hace ' + m + ' meses';
+    }
+
+    async function fetchReferralDashboard(force) {
+        if (!force && _refData && Date.now() - _refLoadedAt < 60000) return _refData;
+        const r = await fetch(`${VIP.config.API_URL}/api/referrals/dashboard`, { headers: { 'Authorization': `Bearer ${VIP.state.currentToken}` } });
+        if (!r.ok) throw new Error('dashboard ' + r.status);
+        const d = await r.json();
+        _refData = d; _refLoadedAt = Date.now();
+        VIP.state.referralData = d;
+        // #171 el cartel promocional muestra el MÁXIMO alcanzable ("hasta el 3%"); el % propio va en el tablero.
+        const lv = d.level || {};
+        document.querySelectorAll('.referralRatePct').forEach(el => { el.textContent = _refPctNum(lv.maxPct != null ? lv.maxPct : _refPctOf(d.rate)); });
+        document.querySelectorAll('.referralMyPct').forEach(el => { el.textContent = _refPctNum(lv.pct != null ? lv.pct : _refPctOf(d.rate)); });
+        return d;
+    }
+
+    async function openReferralModal() {
+        showModal('referralModal');
+        await loadReferralData(true);
+    }
+
+    async function loadReferralData(force) {
+        const c = document.getElementById('referralContent');
+        if (c && !_refData) c.innerHTML = '<span style="color:#888;font-size:12px;">Cargando tus referidos…</span>';
+        try {
+            const d = await fetchReferralDashboard(force);
+            renderReferralModal(d);
+            renderReferralHomeCard(d);
+        } catch (err) {
+            console.error('[Referrals] Error cargando datos:', err);
+            if (c) c.innerHTML = '<span style="color:#ff4444;font-size:12px;">No se pudieron cargar tus datos de referidos. Reintentá.</span>';
+        }
+    }
+
+    // #171 tile de un NIVEL de comisión (cantidad de referidos activos → %).
+    function _refTierHtml(t, lv) {
+        const on = t.reached, cur = t.current;
+        let foot;
+        if (cur) foot = '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;border:1px solid rgba(0,255,136,.5);">⭐ Tu nivel actual</span>';
+        else if (on) foot = '<span class="ref-pill" style="background:rgba(255,215,0,.12);color:#ffd700;border:1px solid rgba(255,215,0,.5);">✅ Alcanzado</span>';
+        else foot = '<span class="ref-pill" style="background:rgba(255,255,255,.06);color:#999;border:1px solid rgba(255,255,255,.15);">🔒 Te faltan ' + Math.max(0, t.count - (lv.active || 0)) + '</span>';
+        return '<div style="flex:1;min-width:96px;text-align:center;padding:9px 6px;border-radius:10px;background:' + (cur ? 'rgba(0,255,136,.07)' : (on ? 'rgba(255,215,0,.08)' : 'rgba(255,255,255,.03)')) + ';border:1px solid ' + (cur ? 'rgba(0,255,136,.55)' : (on ? 'rgba(255,215,0,.55)' : 'rgba(255,255,255,.12)')) + ';">' +
+            '<div style="font-size:11px;font-weight:900;color:#fff;margin-top:2px;">' + t.count + ' ACTIVOS</div>' +
+            '<div style="font-size:22px;font-weight:900;color:' + (on ? '#ffd700' : '#bbb') + ';line-height:1.15;">' + _refPctNum(t.pct) + '</div>' +
+            '<div style="font-size:9.5px;color:#aaa;margin-bottom:6px;">de la pérdida neta</div>' + foot + '</div>';
+    }
+
+    function renderReferralModal(d) {
+        const c = document.getElementById('referralContent');
+        if (!c || !d) return;
+        const t = d.totals || {}, lv = d.level || {}, per = d.period || {};
+        const pct = _refPct(d.rate);
+        const tiers = lv.tiers || [];
+        const maxCount = lv.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
+        const prog = Math.min(100, Math.round((lv.active || 0) / Math.max(1, maxCount) * 100));
+        const tiersOn = lv.enabled !== false && lv.mode === 'tiers' && tiers.length;
+        const netInfoId = 'refNetInfo';
+        let html = '';
+        // Link (solo el link: más directo que el código)
+        html += '<div style="background:rgba(255,255,255,.05);border:1px solid #d4af37;border-radius:12px;padding:12px;margin-bottom:12px;">' +
+            '<span style="color:#b0b0b0;font-size:10.5px;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:5px;">Tu link de referido</span>' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+            '<span id="myReferralLink" style="font-size:12px;color:#00ff88;word-break:break-all;flex:1;min-width:0;">' + _esc(d.referralLink || '—') + '</span>' +
+            '<button onclick="VIP.ui.copyReferralLink()" style="background:rgba(0,255,136,.1);border:1px solid #00ff88;color:#00ff88;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;">📋 Copiar</button>' +
+            '</div>' +
+            '<button onclick="VIP.ui.shareReferralLink()" style="width:100%;margin-top:9px;background:linear-gradient(135deg,#ffd700,#f7931e);color:#000;border:none;border-radius:10px;padding:10px;font-weight:900;font-size:13px;cursor:pointer;">🔗 INVITAR A TUS AMIGOS</button>' +
+            '<div style="font-size:10px;color:#888;margin-top:6px;text-align:center;">Tu amigo entra por el link, se registra y queda vinculado a vos para siempre. Código: <b style="color:#d4af37;letter-spacing:1px;">' + _esc(d.referralCode || '') + '</b></div>' +
+            '</div>';
+        // Tiles
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">' +
+            '<div class="ref-modal-tile" style="border-color:rgba(0,255,136,.35);"><span class="v" style="color:#00ff88;">👥 ' + (tiersOn ? (lv.active || 0) : (t.active || 0)) + '</span><span class="l">Referidos activos<br><span style="color:#777;">(' + (tiersOn ? 'cargaron al menos ' + _refMoney(lv.minChargedARS) : 'los que cargaron') + ')</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(255,215,0,.45);"><span class="v" style="color:#ffd700;">💰 ' + _refMoney(t.commissionMonth) + '</span><span class="l">Tu comisión acumulada<br><span style="color:#777;">(' + pct + ' de la pérdida neta de este mes' + (tiersOn ? ' · tu nivel' : '') + ')</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(255,80,80,.4);cursor:pointer;" onclick="VIP.ui.toggleReferralNetLossInfo()"><span class="v" style="color:#ff6b6b;">📉 ' + _refMoney(t.netLossMonth) + '</span><span class="l">Pérdida neta de tus referidos<br><span style="color:#ff9a9a;">ℹ️ tocá: es un monto variable</span></span></div>' +
+            '<div class="ref-modal-tile" style="border-color:rgba(0,170,255,.4);"><span class="v" style="color:#4fc3ff;">📊 ' + _refMoney(t.totalCharged) + '</span><span class="l">Total cargado por<br>tus referidos</span></div>' +
+            '</div>';
+        html += '<div id="' + netInfoId + '" style="display:none;background:rgba(255,80,80,.08);border:1px solid rgba(255,80,80,.4);border-radius:10px;padding:10px;margin-bottom:10px;font-size:11.5px;line-height:1.55;color:#eee;">' +
+            '<b style="color:#ff9a9a;">¿Por qué cambia este número?</b> La pérdida neta es lo que tus referidos apostaron menos lo que ganaron, sumado en el mes. Si un referido gana, su pérdida neta BAJA (y tu comisión también); si pierde, SUBE. Por eso puede subir o bajar día a día. Lo que cobrás se calcula con el número final del mes, el primer día hábil del mes siguiente.' +
+            (t.netwinPartial ? '<br><span style="color:#ffb347;">⚠️ Ahora mismo no pudimos leer la actividad de algún referido (la plataforma está demorada): el total puede estar incompleto por unos minutos.</span>' : '') + '</div>';
+        html += '<div style="background:rgba(255,255,255,.03);border-radius:10px;padding:9px 11px;margin-bottom:12px;font-size:11.5px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">' +
+            '<span style="color:#b0b0b0;">Período actual: <b style="color:#fff;">' + _esc(per.label || per.key || '—') + '</b></span>' +
+            '<span style="color:#b0b0b0;">Próxima acreditación: <b style="color:#fff;">' + _esc(per.nextCredit || '—') + '</b></span></div>';
+        // Tabla de referidos
+        const rows = d.referrals || [];
+        html += '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(212,175,55,.35);border-radius:12px;padding:10px;margin-bottom:12px;">' +
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;"><span style="font-size:13px;font-weight:900;color:#ffd700;">👥 MIS REFERIDOS (' + rows.length + ')</span></div>';
+        if (!rows.length) {
+            html += '<div style="color:#888;font-size:12px;padding:8px 0;">Todavía no tenés referidos. Compartí tu link y empezá a cobrar.</div>';
+        } else {
+            html += '<div style="overflow-x:auto;"><table class="ref-table"><thead><tr><th>Usuario</th><th>Estado</th><th style="text-align:right;">Cargado</th><th style="text-align:right;">Pérdida neta</th><th style="text-align:right;">Tu ' + pct + '</th></tr></thead><tbody>';
+            rows.forEach(r => {
+                const st = r.active ? '<span class="ref-pill" style="background:rgba(0,255,136,.15);color:#00ff88;">Activo</span>' : '<span class="ref-pill" style="background:rgba(255,80,80,.15);color:#ff8080;">Sin carga</span>';
+                const net = r.netLossMonth === null ? '<span style="color:#777;">…</span>' : _refMoney(Math.max(0, r.netLossMonth));
+                const com = r.commissionMonth === null ? '<span style="color:#777;">…</span>' : '<b style="color:#00ff88;">' + _refMoney(r.commissionMonth) + '</b>';
+                html += '<tr><td><b style="color:#fff;">' + _esc(r.username) + '</b><br><span style="color:#888;font-size:9.5px;">Se registró ' + _refAgo(r.registeredAt) + (r.qualified ? ' · ✔ activo para tu nivel' : (r.active ? ' · cargó menos de ' + _refMoney(lv.minChargedARS) : '')) + '</span></td>' +
+                    '<td>' + st + '</td><td style="text-align:right;">' + _refMoney(r.totalCharged) + '</td><td style="text-align:right;color:#ff9a9a;">' + net + '</td><td style="text-align:right;">' + com + '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+        html += '</div>';
+        // #171 Nivel de comisión según referidos activos
+        if (tiersOn) {
+            const next = lv.nextTier;
+            html += '<div style="background:linear-gradient(135deg,#2d0052,#1a0033);border:1.5px solid #ffd700;border-radius:12px;padding:12px;margin-bottom:12px;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;"><span style="font-size:13px;font-weight:900;color:#ffd700;">🏆 TU NIVEL DE COMISIÓN</span><span style="font-size:12px;color:#fff;font-weight:900;">' + (lv.active || 0) + ' / ' + maxCount + ' <span style="font-size:9.5px;color:#aaa;font-weight:400;">referidos activos</span></span></div>' +
+                '<div style="display:flex;align-items:center;gap:10px;margin:8px 0 6px;">' +
+                '<div style="font-size:34px;font-weight:900;color:#00ff88;line-height:1;">' + _refPctNum(lv.pct) + '</div>' +
+                '<div style="font-size:11px;color:#ddd;line-height:1.45;">' + (lv.currentTier ? 'Estás en el nivel de <b style="color:#fff;">' + lv.currentTier.count + ' referidos activos</b>. ' : 'Todavía no llegaste al primer nivel. ') +
+                (next ? 'Con <b style="color:#ffd700;">' + next.missing + ' más</b> pasás al <b style="color:#ffd700;">' + _refPctNum(next.pct) + '</b>.' : '¡Estás en el <b style="color:#ffd700;">máximo</b>!') + '</div></div>' +
+                '<div style="font-size:10.5px;color:#bbb;margin:0 0 6px;">Cuantos más amigos activos traés, mayor es el % que cobrás de la pérdida neta de TODOS tus referidos, todos los meses. Referido activo = cargó al menos <b style="color:#fff;">' + _refMoney(lv.minChargedARS) + '</b> en total.</div>' +
+                '<div class="dash-ref-bar" style="height:11px;"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
+                '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;">' + tiers.map(x => _refTierHtml(x, lv)).join('') + '</div>' +
+                (t.historicalMilestones > 0 ? '<div style="font-size:10.5px;color:#00ff88;margin-top:8px;text-align:center;">Ya cobraste ' + _refMoney(t.historicalMilestones) + ' en premios por referidos 🏆</div>' : '') +
+                '</div>';
+        }
+        html += '<div style="font-size:10.5px;color:#888;text-align:center;line-height:1.5;">Total cobrado en comisiones: <b style="color:#d4af37;">' + _refMoney(t.historicalCommission) + '</b>. La comisión del mes se calcula sobre la pérdida neta final y se acredita sola el primer día hábil del mes siguiente. Sin límite de referidos ni de ganancia.</div>';
+        c.innerHTML = html;
+    }
+
+    function toggleReferralNetLossInfo() {
+        const el = document.getElementById('refNetInfo');
+        if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+    }
+
+    // Card del home: nivel actual + progreso al próximo % + INVITAR AHORA (#171).
+    function renderReferralHomeCard(d) {
+        const c = document.getElementById('referralHomeCard');
+        if (!c) return;
+        if (!d) { c.style.display = 'none'; return; }
+        const lv = d.level || {}, tiers = lv.tiers || [];
+        const tiersOn = lv.enabled !== false && lv.mode === 'tiers' && tiers.length;
+        const maxCount = lv.maxCount || (tiers.length ? tiers[tiers.length - 1].count : 10);
+        const prog = Math.min(100, Math.round((lv.active || 0) / Math.max(1, maxCount) * 100));
+        const steps = tiers.slice(0, 4).map(t => '<div class="dash-ref-step' + (t.reached ? ' on' : '') + '"><b>' + (t.current ? '⭐' : (t.reached ? '✅' : '🔒')) + '</b>' + t.count + ' activos<br>' + _refPctNum(t.pct) + '</div>').join('');
+        const next = lv.nextTier;
+        c.innerHTML = '<div class="dash-ref">' +
+            '<div class="dash-ref-head"><span style="font-size:18px;">👥</span><span class="dash-ref-title">INVITÁ A TUS AMIGOS · cobrá hasta el ' + _refMaxPct(d) + '</span><button class="dash-ref-cta" onclick="VIP.ui.openReferralModal()">VER NIVELES ›</button></div>' +
+            (tiersOn ? ('<div class="dash-ref-bar"><div class="dash-ref-fill" style="width:' + prog + '%;"></div></div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:9.5px;color:#bbb;margin-bottom:4px;"><span>' + (lv.active || 0) + ' / ' + maxCount + ' referidos activos · cobrás <b style="color:#00ff88;">' + _refPctNum(lv.pct) + '</b></span><span style="color:#ffd700;">' + (next ? 'Te faltan ' + next.missing + ' para el ' + _refPctNum(next.pct) : '¡Nivel máximo!') + '</span></div>' +
+            '<div class="dash-ref-steps">' + steps + '</div>') : '') +
+            '<button class="dash-ref-invite" onclick="VIP.ui.shareReferralLink()">🔗 INVITAR AHORA</button>' +
+            '</div>';
+        c.style.display = '';
+        try { adjustLayout(); } catch (_) {}
+    }
+    async function loadReferralHomeCard() {
+        if (!VIP.state || !VIP.state.currentToken) return;
+        const u = VIP.state.currentUser;
+        if (u && u.role && u.role !== 'user') return;
+        try { renderReferralHomeCard(await fetchReferralDashboard(false)); } catch (_) {}
+    }
+
+    // Popup promocional: una vez por apertura de la app (sessionStorage), solo clientes.
+    // Si hay otro modal abierto (cambio de clave, bienvenida, instalación…) espera a que se
+    // cierre (reintenta hasta ~2 min) y recién ahí marca "mostrado".
+    let _refPromoTimer = null;
+    const REF_PROMO_COOLDOWN_MS = 30 * 60 * 1000; // "cada vez que abren la app": si pasaron 30 min, otra vez
+    function maybeShowReferralPromo() {
+        const u = VIP.state.currentUser;
+        if (!u || (u.role && u.role !== 'user')) { console.info('[ref-promo] no se muestra: cuenta de staff o usuario no cargado'); return; }
+        // localStorage con cooldown (no sessionStorage: iOS/Chrome restauran la pestaña y el
+        // "una vez por apertura" no se disparaba nunca más). ?refpromo=1 fuerza mostrarlo.
+        const force = /[?&]refpromo=1/.test(location.search || '');
+        try {
+            const last = Number(localStorage.getItem('vip_refPromoAt') || 0);
+            if (!force && last && Date.now() - last < REF_PROMO_COOLDOWN_MS) { console.info('[ref-promo] ya mostrado hace ' + Math.round((Date.now() - last) / 60000) + ' min'); return; }
+        } catch (_) {}
+        if (_refPromoTimer) return;
+        let tries = 0;
+        const attempt = async () => {
+            _refPromoTimer = null;
+            tries++;
+            const cur = VIP.state.currentUser;
+            if (!cur || !VIP.state.currentToken) return;
+            if (cur.mustChangePassword === true || VIP.state.passwordChangePending) { if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
+            const open = Array.from(document.querySelectorAll('.modal')).find(m => !m.classList.contains('hidden') && m.id !== 'referralPromoModal');
+            if (open) { console.info('[ref-promo] espera: modal abierto ' + open.id); if (tries < 24) _refPromoTimer = setTimeout(attempt, 5000); return; }
+            try {
+                const d = await fetchReferralDashboard(false);
+                const ex = document.getElementById('referralPromoExtra');
+                const lv = d.level || {};
+                if (ex && lv.enabled !== false && lv.mode === 'tiers' && lv.tiers && lv.tiers.length) ex.textContent = 'Tu % sube con tus amigos activos: ' + lv.tiers.map(t => t.count + ' amigos = ' + _refPctNum(t.pct)).join(' · ');
+            } catch (_) {}
+            try { localStorage.setItem('vip_refPromoAt', String(Date.now())); } catch (_) {}
+            console.info('[ref-promo] mostrando');
+            showModal('referralPromoModal');
+        };
+        _refPromoTimer = setTimeout(attempt, 1800);
+    }
+
+    // #170 Invitar: copia el link SIEMPRE y abre un chooser con WhatsApp, Telegram, otras apps y copiar.
+    async function shareReferralLink() {
+        let link = (_refData && _refData.referralLink) || null;
+        if (!link) { try { link = (await fetchReferralDashboard(false)).referralLink; } catch (_) {} }
+        if (!link) { showToast('No pudimos generar tu link. Probá de nuevo.', 'error'); return; }
+        const pct = _refMaxPct(_refData);
+        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Registrate con mi link y jugamos juntos 😉\n' + link;
+        let copied = false;
+        try { await navigator.clipboard.writeText(link); copied = true; } catch (_) { try { fallbackCopy(link); copied = true; } catch (_) {} }
+        const old = document.getElementById('referralShareChooser'); if (old) old.remove();
+        const ov = document.createElement('div');
+        ov.id = 'referralShareChooser';
+        ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(3px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px;';
+        ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+        const enc = encodeURIComponent(text);
+        const WA = '<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>';
+        const TG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>';
+        const item = (bg, icon, title, sub, onclick) =>
+            '<button onclick="' + onclick + '" style="width:100%;display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:10px 12px;cursor:pointer;margin-top:8px;text-align:left;color:#fff;transition:background .15s;" onmouseover="this.style.background=\'rgba(255,255,255,.08)\'" onmouseout="this.style.background=\'rgba(255,255,255,.04)\'">' +
+            '<span style="flex-shrink:0;width:42px;height:42px;border-radius:12px;background:' + bg + ';display:flex;align-items:center;justify-content:center;box-shadow:0 3px 10px rgba(0,0,0,.35);">' + icon + '</span>' +
+            '<span style="flex:1;min-width:0;"><span style="display:block;font-weight:800;font-size:14px;">' + title + '</span><span style="display:block;font-size:11px;color:#aab;line-height:1.3;">' + sub + '</span></span>' +
+            '<span style="color:#888;font-size:18px;">›</span></button>';
+        ov.innerHTML = '<div style="background:#14062b;border:1px solid rgba(255,215,0,.45);border-radius:18px;padding:16px;max-width:420px;width:100%;color:#fff;box-shadow:0 20px 60px rgba(0,0,0,.6);">' +
+            '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;">' +
+            '<span style="flex-shrink:0;width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#d4af37,#ffd700);display:flex;align-items:center;justify-content:center;font-size:20px;">🔗</span>' +
+            '<div style="flex:1;min-width:0;"><div style="font-weight:900;font-size:16px;letter-spacing:.2px;">Invitá a tus amigos</div>' +
+            '<div style="font-size:12px;color:#aab;margin-top:2px;">Cobrás hasta el <b style="color:#ffd700;">' + pct + '</b> de la pérdida neta de tus amigos: cuantos más activos, mayor tu %.</div></div>' +
+            '<button onclick="document.getElementById(\'referralShareChooser\').remove()" aria-label="Cerrar" style="flex-shrink:0;width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#ccc;font-size:16px;cursor:pointer;">✕</button></div>' +
+            '<div style="background:rgba(0,0,0,.35);border:1px dashed rgba(255,215,0,.35);border-radius:10px;padding:9px 11px;display:flex;align-items:center;gap:8px;">' +
+            '<span style="flex:1;min-width:0;font-size:11.5px;color:#9ff2c7;word-break:break-all;font-family:ui-monospace,Menlo,monospace;">' + _esc(link) + '</span>' +
+            '<span style="flex-shrink:0;font-size:10.5px;font-weight:800;color:' + (copied ? '#00ff88' : '#ffd700') + ';white-space:nowrap;">' + (copied ? '✓ Copiado' : '') + '</span></div>' +
+            '<div style="font-size:10.5px;color:#778;margin:10px 0 2px;text-transform:uppercase;letter-spacing:1px;font-weight:800;">Enviar por</div>' +
+            item('#25d366', WA, 'WhatsApp', 'Se abre con el mensaje y tu link listos', 'window.open(\'https://wa.me/?text=' + enc + '\',\'_blank\')') +
+            item('#229ed9', TG, 'Telegram', 'Elegí el chat o grupo donde compartirlo', 'window.open(\'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(text.replace(link, '').trim()) + '\',\'_blank\')') +
+            (navigator.share ? item('linear-gradient(135deg,#7c3aed,#4f46e5)', '<span style="font-size:20px;">📤</span>', 'Otras apps', 'Instagram, SMS, Messenger, correo…', 'VIP.ui.shareReferralNative()') : '') +
+            item('rgba(255,215,0,.16)', '<span style="font-size:20px;">📋</span>', 'Copiar el link', 'Para pegarlo donde quieras', 'VIP.ui.copyReferralLink()') +
+            '</div>';
+        document.body.appendChild(ov);
+    }
+    async function shareReferralNative() {
+        const link = (_refData && _refData.referralLink) || '';
+        const text = '🎰 Sumate a la sala con mi link y jugá con reembolsos todos los días. Registrate con mi link y jugamos juntos 😉\n' + link;
+        try { await navigator.share({ title: 'Invitación', text }); const ov = document.getElementById('referralShareChooser'); if (ov) ov.remove(); } catch (e) { /* cancelado */ }
+    }
+    function copyReferralLink() {
+        const link = (_refData && _refData.referralLink) || (document.getElementById('myReferralLink') || {}).textContent || '';
+        if (link && link !== '—') navigator.clipboard.writeText(link).then(() => showToast('✅ Link copiado', 'success')).catch(() => fallbackCopy(link));
+    }
+    function copyReferralCode() { copyReferralLink(); } // legacy: el código ya no se muestra suelto
+
+// (b) ui.js — sumar al objeto exportado de VIP.ui:
+        openReferralModal,
+        openGiftCodeModal,
+        claimGiftCode,
+        giftCodeShowView,
+        giftInfoEnableNotifs,
+        loadReferralData,
+        copyReferralCode,
+        copyReferralLink,
+        loadReferralHomeCard,
+        maybeShowReferralPromo,
+        shareReferralLink,
+        shareReferralNative,
+        toggleReferralNetLossInfo,
+
+// (c) app.js — al cargar la página (antes de que se muestre el login): ?ref= fijo 30 días + abre el registro solo
+    // Auto-fill referral code from URL ?ref=CODE. #168: el código se guarda 30 días y queda
+    // FIJO en el registro (un solo invitador por cuenta; el cliente no lo puede cambiar).
+    const urlParams = new URLSearchParams(window.location.search);
+    let refCode = (urlParams.get('ref') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 12);
+    try {
+        if (refCode) localStorage.setItem('vip_ref', JSON.stringify({ code: refCode, at: Date.now() }));
+        else { const saved = JSON.parse(localStorage.getItem('vip_ref') || 'null'); if (saved && saved.code && Date.now() - saved.at < 30 * 86400000) refCode = saved.code; }
+    } catch (_) {}
+    if (refCode) {
+        window._vipRefLocked = refCode;
+        const refInput = document.getElementById('registerReferralCode');
+        if (refInput) { refInput.value = refCode; refInput.readOnly = true; }
+        const registerBtn = document.getElementById('registerBtn');
+        if (registerBtn) {
+            registerBtn.style.background = 'linear-gradient(135deg, #d4af37 0%, #b8860b 100%)';
+            registerBtn.textContent = '🤝 Registrarse con código de referido';
+        }
+        // #171: si LLEGÓ por el link de referido (?ref= en la URL de esta carga) y no tiene
+        // sesión, se abre solo el registro con el código ya puesto. Quien entra por un link de
+        // invitación viene a crearse la cuenta, no a loguearse. Si ya había sesión, no molesta.
+        if (urlParams.get('ref') && !VIP.state.currentToken) {
+            setTimeout(() => {
+                if (VIP.state.currentToken || VIP.state.currentUser) return;
+                const open = Array.from(document.querySelectorAll('.modal')).find(m => !m.classList.contains('hidden'));
+                if (open && open.id !== 'registerModal') return; // el welcome de publicista u otro modal manda
+                if (VIP.auth && VIP.auth.applyRegisterModalMode) VIP.auth.applyRegisterModalMode();
+                VIP.ui.showModal('registerModal');
+                try { const u = document.getElementById('registerUsername'); if (u) u.focus(); } catch (_) {}
+            }, 500);
+        }
+    }
+
+// (d) auth.js — dentro de applyRegisterModalMode() (el código queda fijo y no editable si vino por link):
+        // #168: si vino por link de referido (?ref=), el código queda FIJO y no editable: un
+        // solo invitador por cuenta. Tiene prioridad sobre la atribución de pauta.
+        const lockedRef = window._vipRefLocked || null;
+        const hint = document.getElementById('registerReferralHint');
+        if (lockedRef) {
+            if (referralGroup) referralGroup.style.display = '';
+            if (referralInput) { referralInput.value = lockedRef; referralInput.readOnly = true; referralInput.style.opacity = '.85'; referralInput.style.borderColor = '#d4af37'; }
+            if (hint) { hint.textContent = '🤝 Viniste invitado con este código. Queda vinculado a tu cuenta.'; hint.style.color = '#d4af37'; }
+        } else if (attribution) {
+            if (referralGroup) referralGroup.style.display = 'none';
+            if (referralInput) { referralInput.value = ''; referralInput.readOnly = false; }
+        } else {
+            if (referralGroup) referralGroup.style.display = '';
+            if (referralInput) referralInput.readOnly = false;
+        }
+
+// (e) auth.js — en initializeSession() (cuando ya hay sesión), junto a las otras cargas del home:
+        if (VIP.ui.loadReferralHomeCard) VIP.ui.loadReferralHomeCard();   // #168 card INVITÁ A TUS AMIGOS
+        if (VIP.ui.maybeShowReferralPromo) VIP.ui.maybeShowReferralPromo(); // #168 popup (1× por apertura)

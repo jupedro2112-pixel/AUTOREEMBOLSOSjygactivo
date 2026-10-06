@@ -1,0 +1,195 @@
+<!-- ============================================================================
+     PANEL ADMIN — 2 fragmentos para public/adminprivado2026/index.html
+     ============================================================================ -->
+
+<!-- (a) En la sección COMANDOS (junto a las otras cards de config del admin general): % plano (#169) -->
+                        <!-- #169 % de comisión de referidos (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="referralRateHeader">
+                            <h3>🤝 Comisión de referidos</h3>
+                        </div>
+                        <div class="cbu-form" id="referralRateForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                % <b>plano</b> de la pérdida neta mensual de sus referidos que cobra el referidor. <b>Solo rige si los
+                                "Niveles de comisión por referidos activos" (más abajo) están apagados</b>; con los niveles activos, el % de cada
+                                referidor sale de cuántos referidos activos tiene (#171). El override por usuario siempre manda.
+                            </p>
+                            <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+                                <div class="form-group" style="margin:0;"><label for="referralRatePct">% de comisión</label><input type="number" id="referralRatePct" min="0" max="50" step="0.5" style="width:120px;"></div>
+                                <button class="btn-primary" onclick="saveReferralRate()">💾 Guardar %</button>
+                                <span id="referralRateMsg" style="font-size:12px;color:#aaa;"></span>
+                            </div>
+                        </div>
+
+<!-- (b) La sección REFERIDOS completa (reemplaza a la vieja). El nav-item data-section="referrals" ya existe. -->
+            <!-- Referidos Section -->
+            <section id="referralsSection" class="section">
+                <div class="panel-header">
+                    <h2>🤝 Referidos</h2>
+                </div>
+                <div style="padding:16px;display:grid;gap:20px;max-width:1200px;">
+
+                    <!-- ── DASHBOARD GLOBAL ── -->
+                    <div id="referralGlobalSummary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;"></div>
+
+                    <!-- ── #174 ACTIVIDAD Y EVOLUCIÓN ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(0,255,136,0.3);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                            <h3 style="color:#00ff88;font-size:15px;margin:0;">📈 Actividad y evolución de los referidos</h3>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                                <label style="font-size:11px;color:#888;">Meses</label>
+                                <select id="referralActivityMonths" onchange="loadReferralActivity()" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;">
+                                    <option value="3">3</option><option value="6" selected>6</option><option value="12">12</option>
+                                </select>
+                                <button onclick="loadReferralActivity()" style="background:rgba(0,255,136,0.1);border:1px solid #00ff88;color:#00ff88;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button>
+                            </div>
+                        </div>
+                        <p style="font-size:12px;color:#b0b0b0;line-height:1.5;margin:0 0 12px;">
+                            Cuántos referidos hay, cuántos <b>cargaron</b> y cuántos son <b>activos</b> (cargas reales acumuladas ≥ el mínimo del nivel),
+                            cuántos entraron en los últimos 7 y 30 días contra el período anterior, y la evolución mes a mes. Sale de la base propia
+                            (registros y cargas reales, sin regalos); no consulta JUGAYGANA, así que carga al instante.
+                        </p>
+                        <div id="referralActivityBody" style="font-size:13px;color:#b0b0b0;">Cargando...</div>
+                    </div>
+
+                    <!-- ── #175 MEJORES REFERIDORES ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,215,0,0.35);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                            <h3 style="color:#ffd700;font-size:15px;margin:0;">🏆 Mejores referidores</h3>
+                            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                                <label style="font-size:11px;color:#888;">Ordenar por</label>
+                                <select id="referralRankSort" onchange="renderReferralRanking()" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;">
+                                    <option value="active" selected>Referidos activos</option>
+                                    <option value="netwinHist">Netwin generado (calculado)</option>
+                                    <option value="commissionHist">Comisión generada</option>
+                                    <option value="totalCharged">Plata cargada por sus referidos</option>
+                                    <option value="referred">Cantidad de referidos</option>
+                                    <option value="new30">Nuevos en 30 días</option>
+                                </select>
+                                <label style="font-size:11px;color:#888;">Top</label>
+                                <select id="referralRankTop" onchange="renderReferralRanking()" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;">
+                                    <option value="10">10</option><option value="20" selected>20</option><option value="50">50</option><option value="1000">Todos</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p style="font-size:12px;color:#b0b0b0;line-height:1.5;margin:0 0 10px;">
+                            "Netwin generado" y "Comisión" salen de los cálculos mensuales ya hechos (Calcular); el mes en curso se ve
+                            en vivo entrando a <b>Ver referidos</b>, donde aparece el netwin de cada referido.
+                        </p>
+                        <div id="referralRankingBody" style="font-size:13px;color:#b0b0b0;">Cargando...</div>
+                    </div>
+
+                    <!-- ── CÁLCULO Y PAGO MENSUAL ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px;">
+                        <h3 style="margin-bottom:14px;color:#d4af37;font-size:15px;">⚙️ Cálculo y Pago Mensual</h3>
+                        <div style="background:rgba(247,147,30,0.05);border:1px solid rgba(247,147,30,0.15);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#b0b0b0;line-height:1.6;">
+                            <strong style="color:#f7931e;">Flujo recomendado:</strong>
+                            1) Ingresá el período → 2) <em>Preview</em> para ver estimación sin guardar →
+                            3) <em>Calcular</em> para guardar cálculo definitivo →
+                            4) <em>Pagar</em> para acreditar fichas.<br>
+                            <span style="color:#888;">Si el referido sigue jugando tras un pago, volvé a Calcular para obtener el <strong style="color:#d4af37;">delta pendiente</strong> y pagalo nuevamente.</span>
+                        </div>
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;">
+                            <div>
+                                <label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Período (YYYY-MM)</label>
+                                <input type="text" id="referralPeriodInput" placeholder="2026-04" maxlength="7"
+                                    style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:8px 12px;border-radius:6px;width:120px;font-size:13px;">
+                            </div>
+                            <button onclick="adminReferralPreview()" style="padding:8px 16px;border-radius:6px;cursor:pointer;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.2);color:#ccc;font-size:13px;">🔍 Preview</button>
+                            <button onclick="adminReferralCalculate()" style="padding:8px 16px;border-radius:6px;cursor:pointer;background:rgba(247,147,30,0.15);border:1px solid #f7931e;color:#f7931e;font-size:13px;">📊 Calcular</button>
+                            <button onclick="adminReferralPayout()" style="padding:8px 16px;border-radius:6px;cursor:pointer;background:rgba(0,255,136,0.1);border:1px solid #00ff88;color:#00ff88;font-size:13px;font-weight:bold;">💸 Pagar</button>
+                        </div>
+                        <div id="referralActionResult" style="font-size:12px;color:#b0b0b0;max-height:420px;overflow-y:auto;border-top:1px solid rgba(255,255,255,0.06);padding-top:10px;"></div>
+                    </div>
+
+                    <!-- ── #168 PREMIOS POR CANTIDAD DE REFERIDOS ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,215,0,0.35);border-radius:12px;padding:18px;">
+                        <h3 style="margin-bottom:8px;color:#ffd700;font-size:15px;">🏆 Niveles de comisión por referidos activos</h3>
+                        <p style="font-size:12px;color:#b0b0b0;line-height:1.55;margin:0 0 12px;">
+                            El % de comisión que cobra el referidor sobre la <b>pérdida neta</b> (netwin) de TODOS sus referidos depende de cuántos
+                            referidos <b>activos</b> tiene (activo = cargó al menos el mínimo, sumando sus cargas reales). Ej.: 3 activos → 1%, 5 → 2%,
+                            10 → 3% (máximo). Reemplaza a los premios en plata por cantidad (#168), que se podían estafar con cuentas falsas:
+                            sin pérdida real no hay comisión. Con menos referidos que el primer nivel cobra el <b>% base</b> (0 = nada).
+                            Si está <b>apagado</b>, se usa el % plano de la card de arriba para todos.
+                        </p>
+                        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">
+                            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#fff;cursor:pointer;"><input type="checkbox" id="refMsEnabled" style="width:auto;"> Niveles activos</label>
+                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">Mínimo cargado para ser "activo" ($)</label><input type="number" id="refMsMin" min="0" step="500" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:130px;"></div>
+                            <div><label style="display:block;font-size:11px;color:#888;margin-bottom:4px;">% base (menos referidos que el 1er nivel)</label><input type="number" id="refMsBasePct" min="0" max="50" step="0.5" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:7px 10px;border-radius:6px;width:90px;"></div>
+                        </div>
+                        <table class="data-table" style="max-width:520px;"><thead><tr><th>Referidos activos (desde)</th><th>% de comisión</th><th></th></tr></thead><tbody id="refMsTiers"></tbody></table>
+                        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                            <button class="btn btn-secondary btn-sm" onclick="addRefMsTier()">➕ Agregar nivel</button>
+                            <button class="btn-primary" onclick="saveReferralMilestones()">💾 Guardar niveles</button>
+                            <span id="refMsMsg" style="font-size:12px;color:#aaa;align-self:center;"></span>
+                        </div>
+                    </div>
+
+                    <!-- ── REFERIDORES ACTIVOS ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                            <h3 style="color:#d4af37;font-size:15px;">👑 Referidores</h3>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                                <!-- Filtros rápidos para la tabla -->
+                                <button id="referralFilterAll" onclick="filterReferrersTable('all')" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">Todos</button>
+                                <button id="referralFilterPending" onclick="filterReferrersTable('pending')" style="background:rgba(247,147,30,0.1);border:1px solid rgba(247,147,30,0.3);color:#f7931e;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">⏳ Con pendiente</button>
+                                <button id="referralFilterFailed" onclick="filterReferrersTable('failed')" style="background:rgba(255,68,68,0.1);border:1px solid rgba(255,68,68,0.3);color:#ff8080;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">❌ Último fallido</button>
+                                <button id="referralFilterActive" onclick="filterReferrersTable('active')" title="Referidores con al menos un referido activo (cargó ≥ el mínimo del nivel)" style="background:rgba(255,215,0,0.1);border:1px solid rgba(255,215,0,0.3);color:#ffd700;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">⭐ Con activos</button>
+                                <button id="referralFilterNew30" onclick="filterReferrersTable('new30')" title="Referidores que trajeron referidos nuevos en los últimos 30 días" style="background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:#00ff88;padding:4px 10px;border-radius:5px;cursor:pointer;font-size:11px;">🚀 Nuevos 30d</button>
+                                <button onclick="loadAdminReferralSummary()" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Actualizar</button>
+                            </div>
+                        </div>
+                        <div id="referralTopList" style="font-size:13px;">Cargando...</div>
+                    </div>
+
+                    <!-- ── DETALLE DE REFERIDOR ── -->
+                    <div id="referralUserDetail" style="display:none;background:var(--bg-card,#1a1a2e);border:1px solid rgba(212,175,55,0.4);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                            <h3 style="color:#d4af37;font-size:15px;">📊 Detalle de Referidor</h3>
+                            <button onclick="document.getElementById('referralUserDetail').style.display='none'" style="background:none;border:1px solid #444;color:#888;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px;">✕ Cerrar</button>
+                        </div>
+                        <div id="referralUserDetailContent" style="font-size:13px;"></div>
+                    </div>
+
+                    <!-- ── HISTORIAL DE PAGOS ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+                            <h3 style="color:#d4af37;font-size:15px;">📋 Historial de Pagos</h3>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                <select id="referralPayoutFilterStatus" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#ccc;padding:5px 8px;border-radius:6px;font-size:12px;">
+                                    <option value="">Todos los estados</option>
+                                    <option value="paid">✅ Pagado</option>
+                                    <option value="pending">⏳ Pendiente</option>
+                                    <option value="failed">❌ Fallido</option>
+                                </select>
+                                <select id="referralPayoutFilterDelta" style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#ccc;padding:5px 8px;border-radius:6px;font-size:12px;">
+                                    <option value="">Todos los tipos</option>
+                                    <option value="true">Δ Solo delta</option>
+                                    <option value="false">Solo base</option>
+                                </select>
+                                <input type="text" id="referralPayoutFilterPeriod" placeholder="Período YYYY-MM"
+                                    style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 10px;border-radius:6px;font-size:12px;width:130px;">
+                                <input type="text" id="referralPayoutFilterUsername" placeholder="Referidor..."
+                                    style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:5px 10px;border-radius:6px;font-size:12px;width:130px;">
+                                <button onclick="loadAdminReferralPayouts()" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:5px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Cargar</button>
+                            </div>
+                        </div>
+                        <div id="referralPayoutList" style="font-size:13px;">Cargando...</div>
+                    </div>
+
+                    <!-- ── RELACIONES DE REFERIDO (AUDITORÍA) ── -->
+                    <div style="background:var(--bg-card,#1a1a2e);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:18px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                            <h3 style="color:#d4af37;font-size:15px;">🔍 Auditoría de Relaciones</h3>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                <input type="text" id="referralRelFilterReferrer" placeholder="Filtrar por referidor"
+                                    style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;width:150px;">
+                                <input type="text" id="referralRelFilterReferred" placeholder="Filtrar por referido"
+                                    style="background:#0d0d1a;border:1px solid rgba(255,255,255,0.2);color:#fff;padding:6px 10px;border-radius:6px;font-size:12px;width:150px;">
+                                <button onclick="loadAdminReferralRelationships()" style="background:rgba(212,175,55,0.1);border:1px solid #d4af37;color:#d4af37;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;">🔄 Cargar</button>
+                            </div>
+                        </div>
+                        <div id="referralRelationshipsList" style="font-size:13px;"><span style="color:#888;">Hacé clic en "Cargar" para ver las relaciones.</span></div>
+                    </div>
+
+                </div>
+            </section>

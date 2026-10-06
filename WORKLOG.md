@@ -4,7 +4,27 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-03**
+> **Última actualización: 2026-10-06**
+
+## Sesión 2026-10-06
+
+### 178. Paquete de réplica COMPLETO del sistema de referidos (#168→#175) para otro repo JUGAYGANA (`docs/replicas/referidos-jugaygana/`)
+- **Owner:** "me pasás para copiar y pegar para mandar a otra IA de otra repo todo lo que
+  implementaste de referidos; la otra repo está como cuando arrancamos, quiero implementar igual
+  todo lo nuevo".
+- Mismo formato que el de lotes (#176/#177): script `_extract.py` por marcadores que copia los
+  archivos completos (`referralRate.js`, `referralTierService.js`, `ReferralMilestoneClaim.js`,
+  `referralCalculationService.js`, `referralController.js`, `referralRoutes.js`, las 2 imágenes del
+  popup) y extrae los fragmentos de server.js (requires, `/linkreferido`, carga del % plano,
+  `/api/admin/referral-rate`, bloque "#168 REFERIDOS" entero), del panel (card del % en COMANDOS,
+  sección Referidos completa, bloque "PANEL DE REFERIDOS - ADMIN" de admin.js + config de
+  niveles/%) y de la PWA (CSS, campo del registro, card del home, popup, modal, bloque de ui.js,
+  exports, hooks de app.js y auth.js). `README.md` con qué trae (#168 visibles, #169 % plano,
+  #170 chooser, #171 niveles anti-estafa + netwin, #174 actividad, #175 ranking + netwin por
+  referido), tabla de pegado, dependencias a verificar (incluido el formato `epoch_s` de #148),
+  reglas que no se pierden, el prompt para la otra IA y la prueba en vivo. Todos los `.js` pasan
+  `node --check`.
+- Sin cambios de código en este repo.
 
 ## Sesión 2026-10-03
 

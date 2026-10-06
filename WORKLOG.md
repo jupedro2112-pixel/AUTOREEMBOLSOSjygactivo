@@ -24,6 +24,13 @@
   referido), tabla de pegado, dependencias a verificar (incluido el formato `epoch_s` de #148),
   reglas que no se pierden, el prompt para la otra IA y la prueba en vivo. Todos los `.js` pasan
   `node --check`.
+- **Corrección del owner (mismo día):** el destino NO es JUGAYGANA, es el hermano con **1girox**
+  (tiene netwin y todo lo mismo, con otra API). El README pasa a tener la tabla "⚠️ OTRA PLATAFORMA:
+  qué se copia tal cual y qué se ADAPTA" (lo único dependiente de la plataforma es la lectura del
+  netwin: `_referralNetwinMonth` del bloque #168 y el cálculo mensual; el resto es Mongo + front) y
+  el prompt dice explícitamente que reescriba eso con la función de netwin girox que el hermano ya
+  usa, sin copiar nada que mencione jugaygana/royalty-statistics/jugayganaUserId. El fix #148
+  (epoch_s) no aplica allá.
 - Sin cambios de código en este repo.
 
 ## Sesión 2026-10-03

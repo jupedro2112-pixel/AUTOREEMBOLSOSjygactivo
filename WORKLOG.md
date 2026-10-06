@@ -8,6 +8,28 @@
 
 ## Sesión 2026-10-06
 
+### 180. Ruleta diaria en el panel: los premios en BONO también cuentan — cuántos salieron, cuántos lo USARON en una carga y cuántos lo dejaron vencer
+- **Owner:** "que en ruleta diaria diga también cuántos reclaman la del bono, y cuántos de esos
+  RECLAMAN ese bono y cuántos no; ahora sólo aparece el detalle de los que ganan $ saldo real".
+- **Causa:** desde #164 la ruleta puede dar `bonus_pct` (% en la próxima carga, PromoBonus
+  `sourceRuleCode:'ruleta'`), pero `/api/admin/roulette/stats` contaba "ganadores" sólo con
+  `prizeARS > 0` y el desglose por premio agrupaba por `$` → los bonos salían como "SIN PREMIO".
+- **Backend:** `stats`: `winners`/`winnersTotal` incluyen `prizeKind:'bonus_pct'`; nuevos
+  `moneyWinners(Total)` y `bonusWinners(Total)`; `byPrize` agrupa por `{kind, ars, pct}`; bloque
+  `bonus` = { total, used, active, expired, failed, usedBonusARS, usedCargaARS, byPct, byDay }
+  cruzando los giros con bono contra su PromoBonus (used = `status used` o `usesCount>0`; active =
+  vigente; expired = venció sin usar; failed = sin PromoBonus y giro no acreditado); `byDay` suma
+  `bonusUsed`/`bonusExpired`. `history`: cada giro con bono trae `bonusOutcome`, `bonusExpiresAt`,
+  `bonusUsedAt`, `bonusUsesTotal`, `bonusCargaMonto`.
+- **Panel (admin-sw v55 → v56):** tile Ganadores dice "N en $ · N en bono"; tile nuevo "🎁 Premios
+  en BONO": salieron / ✅ lo usaron (%) / ⏳ activos / ⏰ vencidos sin usar / ❌ fallidos + "cargaron
+  $X y se llevaron $Y de bono". Tabla por día con columnas En $ / En bono / Bono usado / Bono
+  vencido. Chips por premio: "🎁 +X% bono · N veces · usados/activos/vencidos". Historial: el
+  estado de un giro con bono pasa a ser ✅ USÓ EL BONO $X / ⏳ BONO ACTIVO (vence…) / ⏰ VENCIÓ SIN
+  USAR / ❌ NO SE ACTIVÓ.
+- **Validado:** `node --check` OK (server.js, admin.js, admin-sw). Sin rutas nuevas. Redeploy
+  (back + panel).
+
 ### 179. Ruleta diaria SOLO para clientes con X cargas en X días — editable desde RULETA DIARIA en el panel
 - **Owner:** "que la ruleta diaria solo esté activa si tiene x cargas en x días, y que esos x se
   puedan modificar desde RULETA DIARIA en el panel".

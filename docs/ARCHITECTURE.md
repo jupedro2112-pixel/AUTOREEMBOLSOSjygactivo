@@ -446,6 +446,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   fail-open ante error de DB. Status/spin devuelven `needsActive + minCargas + gateDays +
   cargasCount`; la PWA muestra la card 🔒 "Faltan N cargas" y el modal con "CARGAR AHORA".
   (Historia: fijo ">10/30d" desde #71, apagado 2026-08-20, configurable desde 2026-10-06.)
+  **Stats del panel (#180):** `/api/admin/roulette/stats` cuenta ganadores en $ y en bono por
+  separado y cruza los giros `bonus_pct` con su PromoBonus (usado / activo / vencido / fallido);
+  `/history` trae `bonusOutcome` por giro.
   Pick ponderado + **budget pacing** (distribuye el presupuesto diario por hora
   ART; si excede → fuerza SIN PREMIO; el total del día nunca supera el tope).
   ⚠️ **Fail-closed desde 2026-08-20:** sin tope activo (checkbox apagado o $0) o

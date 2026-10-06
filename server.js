@@ -18519,13 +18519,19 @@ app.get('/api/admin/roulette/stats', authMiddleware, adminMiddleware, async (req
     const days = Math.max(1, Math.min(90, Number(req.query.days) || 14));
     const cutoff = new Date(Date.now() - days * 24 * 3600 * 1000);
 
-    const [byDay, byPrize, totals] = await Promise.all([
+    // #180: un premio en BONO (% en la próxima carga) también es "ganador"; antes sólo contaban
+    // los de $ y los bonos aparecían como "SIN PREMIO" en el desglose por premio.
+    const isBonus = { $eq: ['$prizeKind', 'bonus_pct'] };
+    const isWinner = { $or: [{ $gt: ['$prizeARS', 0] }, isBonus] };
+    const [byDay, byPrize, totals, bonusSpins] = await Promise.all([
       DailyRouletteSpin.aggregate([
         { $match: { spunAt: { $gte: cutoff } } },
         { $group: {
           _id: '$dateKey',
           spins: { $sum: 1 },
-          winners: { $sum: { $cond: [{ $gt: ['$prizeARS', 0] }, 1, 0] } },
+          winners: { $sum: { $cond: [isWinner, 1, 0] } },
+          moneyWinners: { $sum: { $cond: [{ $gt: ['$prizeARS', 0] }, 1, 0] } },
+          bonusWinners: { $sum: { $cond: [isBonus, 1, 0] } },
           totalGiven: { $sum: { $cond: [{ $eq: ['$status', 'credited'] }, '$prizeARS', 0] } },
           totalPending: { $sum: { $cond: [{ $eq: ['$status', 'credit_failed'] }, '$prizeARS', 0] } }
         }},
@@ -18533,20 +18539,50 @@ app.get('/api/admin/roulette/stats', authMiddleware, adminMiddleware, async (req
       ]),
       DailyRouletteSpin.aggregate([
         { $match: { spunAt: { $gte: cutoff } } },
-        { $group: { _id: '$prizeARS', count: { $sum: 1 } } },
-        { $sort: { _id: -1 } }
+        { $group: { _id: { kind: { $cond: [isBonus, 'bonus_pct', { $cond: [{ $gt: ['$prizeARS', 0] }, 'money', 'none'] }] }, ars: { $ifNull: ['$prizeARS', 0] }, pct: { $ifNull: ['$prizePct', 0] } }, count: { $sum: 1 } } },
+        { $sort: { '_id.kind': 1, '_id.ars': -1, '_id.pct': -1 } }
       ]),
       DailyRouletteSpin.aggregate([
         { $match: { spunAt: { $gte: cutoff } } },
         { $group: {
           _id: null,
           spinsTotal: { $sum: 1 },
-          winnersTotal: { $sum: { $cond: [{ $gt: ['$prizeARS', 0] }, 1, 0] } },
+          winnersTotal: { $sum: { $cond: [isWinner, 1, 0] } },
+          moneyWinnersTotal: { $sum: { $cond: [{ $gt: ['$prizeARS', 0] }, 1, 0] } },
+          bonusWinnersTotal: { $sum: { $cond: [isBonus, 1, 0] } },
           givenTotal: { $sum: { $cond: [{ $eq: ['$status', 'credited'] }, '$prizeARS', 0] } },
           pendingTotal: { $sum: { $cond: [{ $eq: ['$status', 'credit_failed'] }, '$prizeARS', 0] } }
         }}
-      ])
+      ]),
+      DailyRouletteSpin.find({ spunAt: { $gte: cutoff }, prizeKind: 'bonus_pct' }).select('id dateKey prizePct promoBonusId status').lean()
     ]);
+
+    // #180 ¿Qué pasó con los BONOS que salieron? used = cargó con el bono (el % se aplicó solo),
+    // active = todavía vigente sin usar, expired = venció sin usar, failed = no se pudo activar.
+    const bonus = { total: bonusSpins.length, used: 0, active: 0, expired: 0, failed: 0, usedBonusARS: 0, usedCargaARS: 0, byPct: {}, byDay: {} };
+    try {
+      const now = new Date();
+      const pbIds = bonusSpins.map(b => b.promoBonusId).filter(Boolean);
+      const pbs = pbIds.length ? await PromoBonus.find({ id: { $in: pbIds } }).select('id status usesCount usesTotalBonus cargaMonto expiresAt').lean() : [];
+      const pbMap = new Map(pbs.map(p => [p.id, p]));
+      for (const b of bonusSpins) {
+        const pb = b.promoBonusId ? pbMap.get(b.promoBonusId) : null;
+        let outcome;
+        if (!pb) outcome = b.status === 'credited' ? 'expired' : 'failed';
+        else if (pb.status === 'used' || (pb.usesCount || 0) > 0) outcome = 'used';
+        else if (pb.status === 'active' && new Date(pb.expiresAt) > now) outcome = 'active';
+        else outcome = 'expired';
+        bonus[outcome]++;
+        if (outcome === 'used') { bonus.usedBonusARS += Number(pb.usesTotalBonus) || 0; bonus.usedCargaARS += Number(pb.cargaMonto) || 0; }
+        const k = String(b.prizePct || 0);
+        bonus.byPct[k] = bonus.byPct[k] || { total: 0, used: 0, active: 0, expired: 0, failed: 0 };
+        bonus.byPct[k].total++; bonus.byPct[k][outcome]++;
+        const dk = b.dateKey || '?';
+        bonus.byDay[dk] = bonus.byDay[dk] || { total: 0, used: 0, active: 0, expired: 0, failed: 0 };
+        bonus.byDay[dk].total++; bonus.byDay[dk][outcome]++;
+      }
+    } catch (e) { logger.warn(`[roulette] stats de bonos: ${e.message}`); }
+    for (const d of byDay) { const bd = bonus.byDay[d._id]; d.bonusUsed = bd ? bd.used : 0; d.bonusExpired = bd ? bd.expired : 0; }
 
     res.json({
       success: true,
@@ -18555,7 +18591,8 @@ app.get('/api/admin/roulette/stats', authMiddleware, adminMiddleware, async (req
       prizes: ROULETTE_PRIZES,
       byDay,
       byPrize,
-      totals: totals[0] || { spinsTotal: 0, winnersTotal: 0, givenTotal: 0, pendingTotal: 0 }
+      totals: totals[0] || { spinsTotal: 0, winnersTotal: 0, moneyWinnersTotal: 0, bonusWinnersTotal: 0, givenTotal: 0, pendingTotal: 0 },
+      bonus
     });
   } catch (err) {
     logger.error(`/api/admin/roulette/stats: ${err.message}`);
@@ -18585,6 +18622,24 @@ app.get('/api/admin/roulette/history', authMiddleware, adminMiddleware, async (r
         .lean(),
       DailyRouletteSpin.countDocuments(filter)
     ]);
+    // #180: para los premios en BONO, qué pasó con el bono (usó / activo / venció).
+    try {
+      const pbIds = items.filter(i => i.prizeKind === 'bonus_pct' && i.promoBonusId).map(i => i.promoBonusId);
+      if (pbIds.length) {
+        const now = new Date();
+        const pbs = await PromoBonus.find({ id: { $in: pbIds } }).select('id status usesCount usesTotalBonus cargaMonto expiresAt usedAt').lean();
+        const pbMap = new Map(pbs.map(p => [p.id, p]));
+        for (const it of items) {
+          if (it.prizeKind !== 'bonus_pct') continue;
+          const pb = it.promoBonusId ? pbMap.get(it.promoBonusId) : null;
+          if (!pb) { it.bonusOutcome = it.status === 'credited' ? 'expired' : 'failed'; continue; }
+          const used = pb.status === 'used' || (pb.usesCount || 0) > 0;
+          it.bonusOutcome = used ? 'used' : (pb.status === 'active' && new Date(pb.expiresAt) > now ? 'active' : 'expired');
+          it.bonusExpiresAt = pb.expiresAt; it.bonusUsedAt = pb.usedAt || null;
+          it.bonusUsesTotal = Number(pb.usesTotalBonus) || 0; it.bonusCargaMonto = Number(pb.cargaMonto) || 0;
+        }
+      }
+    } catch (e) { logger.warn(`[roulette] history bonos: ${e.message}`); }
     res.json({ success: true, total, page, pageSize, items });
   } catch (err) {
     logger.error(`/api/admin/roulette/history: ${err.message}`);

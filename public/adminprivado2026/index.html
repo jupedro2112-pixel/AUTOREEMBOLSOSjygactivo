@@ -1771,7 +1771,7 @@
                      se fuerza SIN PREMIO automáticamente. -->
                 <div style="background:linear-gradient(135deg,rgba(255,215,0,0.12),rgba(255,107,53,0.08));border:1.5px solid rgba(255,215,0,0.55);border-radius:11px;padding:13px 14px;margin-bottom:14px;">
                     <div style="color:#ffd700;font-weight:900;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;">💰 BUDGET DIARIO (distribuido a lo largo del día)</div>
-                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">Tope de plata a regalar por día. Se reparte parejo en 24h: si a las 12hs ya se gastó el 50%, los próximos ganadores se fuerzan a SIN PREMIO hasta que avance el día. El total del día <strong>nunca</strong> supera el tope.<br>⚠️ <strong>Sin tope activo (o en $0) la ruleta NO regala nada</strong>: todos los giros salen SIN PREMIO. La ruleta la ve <strong>todo cliente con la app instalada y notificaciones</strong> (ya no pide mínimo de cargas).</div>
+                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">Tope de plata a regalar por día. Se reparte parejo en 24h: si a las 12hs ya se gastó el 50%, los próximos ganadores se fuerzan a SIN PREMIO hasta que avance el día. El total del día <strong>nunca</strong> supera el tope.<br>⚠️ <strong>Sin tope activo (o en $0) la ruleta NO regala nada</strong>: todos los giros salen SIN PREMIO. La ruleta la ve <strong>todo cliente con la app instalada y notificaciones</strong> que cumpla las <strong>cargas mínimas</strong> de la card de abajo.</div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px;">
                         <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#fff;cursor:pointer;">
                             <input type="checkbox" id="rouletteBudgetEnabled" style="accent-color:#ffd700;">
@@ -1782,6 +1782,25 @@
                         <button onclick="saveRouletteBudget()" style="background:linear-gradient(135deg,#ffd700,#ff8800);color:#000;border:none;padding:8px 14px;border-radius:7px;font-weight:900;font-size:12.5px;cursor:pointer;">💾 GUARDAR</button>
                     </div>
                     <div id="rouletteBudgetStatus" style="font-size:11.5px;color:#aaa;"></div>
+                </div>
+
+                <!-- #179 Quién puede girar: cargas mínimas en N días (editable). -->
+                <div style="background:linear-gradient(135deg,rgba(0,255,136,0.10),rgba(0,212,255,0.06));border:1.5px solid rgba(0,255,136,0.50);border-radius:11px;padding:13px 14px;margin-bottom:14px;">
+                    <div style="color:#00ff88;font-weight:900;font-size:12px;letter-spacing:0.6px;margin-bottom:6px;">🎯 QUIÉN PUEDE GIRAR — cargas mínimas</div>
+                    <div style="color:#bbb;font-size:11px;margin-bottom:9px;line-height:1.5;">La ruleta queda activa sólo para los clientes que tengan <strong>al menos X cargas reales</strong> (sin regalos ni bonos) en los <strong>últimos N días</strong>. Los que no llegan ven la ruleta bloqueada con "te faltan N cargas" (incentivo para cargar). Si lo apagás, gira todo el que tenga la app instalada con notificaciones.</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px;">
+                        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:#fff;cursor:pointer;">
+                            <input type="checkbox" id="rouletteGateEnabled" style="accent-color:#00ff88;">
+                            <span>Exigir cargas</span>
+                        </label>
+                        <span style="color:#aaa;font-size:12px;">al menos</span>
+                        <input id="rouletteGateMin" type="number" min="1" max="1000" step="1" style="width:80px;background:rgba(0,0,0,0.45);border:1px solid rgba(0,255,136,0.40);color:#00ff88;padding:8px 10px;border-radius:7px;font-weight:800;font-size:13px;box-sizing:border-box;">
+                        <span style="color:#aaa;font-size:12px;">cargas en los últimos</span>
+                        <input id="rouletteGateDays" type="number" min="1" max="365" step="1" style="width:80px;background:rgba(0,0,0,0.45);border:1px solid rgba(0,255,136,0.40);color:#00ff88;padding:8px 10px;border-radius:7px;font-weight:800;font-size:13px;box-sizing:border-box;">
+                        <span style="color:#aaa;font-size:12px;">días</span>
+                        <button onclick="saveRouletteGate()" style="background:linear-gradient(135deg,#00ff88,#00b894);color:#000;border:none;padding:8px 14px;border-radius:7px;font-weight:900;font-size:12.5px;cursor:pointer;">💾 GUARDAR</button>
+                    </div>
+                    <div id="rouletteGateStatus" style="font-size:11.5px;color:#aaa;"></div>
                 </div>
 
                 <!-- Test del giro: simulación que no afecta el spin real

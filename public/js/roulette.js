@@ -44,6 +44,20 @@
         const c = document.getElementById('rouletteHomeCard');
         if (!c) return;
         if (!_state || !_state.eligible) {
+            // #179: tiene la app pero no llega a las cargas mínimas → card BLOQUEADA con lo que le
+            // falta (incentivo para cargar). Sin app sigue oculta como siempre.
+            if (_state && _state.needsActive) {
+                const faltan = Math.max(0, Number(_state.minCargas || 0) - Number(_state.cargasCount || 0));
+                c.innerHTML = '<div class="dash-roulette" style="opacity:.75;filter:grayscale(.35);" onclick="VIP.roulette && VIP.roulette.showLocked()">'
+                    + '<span class="dash-roulette-avatar">🔒</span>'
+                    + '<span class="dash-roulette-label">RULETA</span>'
+                    + '<span class="dash-roulette-sub">' + _esc(faltan > 0 ? 'Faltan ' + faltan + ' carga' + (faltan === 1 ? '' : 's') : 'Bloqueada') + '</span>'
+                    + '</div>';
+                c.style.display = '';
+                const sep0 = document.getElementById('rouletteRecentWinnersCard');
+                if (sep0) sep0.style.display = 'none';
+                return;
+            }
             c.style.display = 'none';
             c.innerHTML = '';
             // Ocultar tambien el card separado por si quedo de antes.
@@ -82,6 +96,30 @@
         if (sep) sep.style.display = 'none';
     }
 
+
+    // #179 Modal "te faltan cargas": la ruleta exige X cargas reales en los últimos N días.
+    function showLocked(info) {
+        const st = info || _state || {};
+        const min = Number(st.minCargas || 0), days = Number(st.gateDays || 0), have = Number(st.cargasCount || 0);
+        const faltan = Math.max(0, min - have);
+        document.getElementById('rouletteLockedModal')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'rouletteLockedModal';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:99998;display:flex;align-items:center;justify-content:center;padding:14px;';
+        overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+        overlay.innerHTML =
+            '<div style="background:linear-gradient(180deg,#1a0033,#0a001a);border:2.5px solid #ffd700;border-radius:18px;padding:22px 18px;max-width:420px;width:100%;color:#fff;box-shadow:0 0 40px rgba(255,215,0,0.40);text-align:center;">' +
+                '<div style="font-size:54px;line-height:1;margin-bottom:6px;">🔒</div>' +
+                '<div style="color:#ffd700;font-weight:900;font-size:17px;letter-spacing:1px;margin-bottom:6px;">Ruleta bloqueada</div>' +
+                '<div style="color:#fff;font-size:13.5px;line-height:1.55;margin-bottom:12px;">La ruleta diaria es para clientes activos: necesitás <strong style="color:#ffd700;">' + min + ' carga' + (min === 1 ? '' : 's') + '</strong> en los últimos <strong style="color:#ffd700;">' + days + ' días</strong>.</div>' +
+                '<div style="background:rgba(255,215,0,0.08);border:1px dashed rgba(255,215,0,0.45);border-radius:12px;padding:12px;margin-bottom:14px;font-size:14px;">' +
+                    'Llevás <strong style="color:#00ff88;font-size:18px;">' + have + '</strong> · te falta' + (faltan === 1 ? '' : 'n') + ' <strong style="color:#ffd700;font-size:18px;">' + faltan + '</strong>' +
+                '</div>' +
+                '<button onclick="document.getElementById(\'rouletteLockedModal\').remove();try{VIP.ui&&VIP.ui.loadAndShowCBU&&VIP.ui.loadAndShowCBU();}catch(_){}" style="width:100%;background:linear-gradient(135deg,#ffd700,#f7931e);color:#000;border:none;border-radius:12px;padding:13px;font-weight:900;font-size:14px;cursor:pointer;">💳 CARGAR AHORA</button>' +
+                '<button onclick="document.getElementById(\'rouletteLockedModal\').remove()" style="width:100%;margin-top:8px;background:rgba(255,255,255,.06);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:12px;padding:10px;font-weight:800;font-size:12.5px;cursor:pointer;">Cerrar</button>' +
+            '</div>';
+        document.body.appendChild(overlay);
+    }
 
     // Modal que se abre cuando el server rebota el giro porque al user
     // le faltan los pasos (app instalada o notifs). Detecta plataforma y
@@ -306,6 +344,10 @@
                     // No tiene app instalada y/o notifs aceptadas — mostrar
                     // el modal con los pasos clarito para que pueda participar.
                     _showNeedsAppModal();
+                } else if (d && d.needsActive) {
+                    // #179 le faltan cargas → modal con cuántas y botón para cargar.
+                    showLocked(d);
+                    loadStatus();
                 } else {
                     if (box) box.innerHTML = '<div style="color:#ff8080;padding:20px;">❌ ' + _esc((d && d.error) || 'Error') + '</div>';
                 }
@@ -393,7 +435,7 @@
         } catch (e) { /* best-effort */ }
     }
 
-    VIP.roulette = { loadStatus, open, close, spin, loadRecentWinners };
+    VIP.roulette = { loadStatus, open, close, spin, loadRecentWinners, showLocked };
 
     // Boot: cargar status apenas el usuario esté autenticado.
     document.addEventListener('DOMContentLoaded', () => {

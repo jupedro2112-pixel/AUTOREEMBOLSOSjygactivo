@@ -8,6 +8,39 @@
 
 ## Sesión 2026-10-06
 
+### 179. Ruleta diaria SOLO para clientes con X cargas en X días — editable desde RULETA DIARIA en el panel
+- **Owner:** "que la ruleta diaria solo esté activa si tiene x cargas en x días, y que esos x se
+  puedan modificar desde RULETA DIARIA en el panel".
+- **Antes:** existía un gate fijo en código ("más de 10 cargas en 30 días", owner 2026-06-24) que
+  se APAGÓ el 2026-08-20 (`ROULETTE_ACTIVE_GATE_DISABLED = true`). Ahora vuelve, configurable.
+- **Backend (server.js, junto a la ruleta):** `Config['rouletteGate']` = { enabled, minDeposits,
+  days } (defaults: ON, **10 cargas en 30 días**; cache 30 s, `getRouletteGateConfig`).
+  `_rouletteIsActiveClient` cuenta cargas REALES (`type:'deposit'`, `status:'completed'`,
+  `metadata.source` fuera de `referralTiers.NON_BANK_SOURCES` — misma lista que referidos; antes la
+  lista era más corta y no filtraba status) y devuelve `{active: count >= minDeposits, count, cfg}`
+  (antes era "más de"). Fail-open ante error de DB. `GET /api/roulette/status` suma `minCargas`,
+  `gateDays`, `gateEnabled`, `cargasCount`; `POST /api/roulette/spin` rechaza con 403 `needsActive`
+  + esos campos y el mensaje "necesitás N cargas en los últimos D días (llevás K)". Nuevos
+  `GET/PUT /api/admin/roulette/gate` (solo admin general; valida 1–1000 cargas y 1–365 días;
+  invalida el cache). Se eliminaron las constantes viejas.
+- **Panel (admin-sw v54 → v55):** card "🎯 QUIÉN PUEDE GIRAR — cargas mínimas" debajo del budget:
+  tilde "Exigir cargas" + "al menos [X] cargas en los últimos [N] días" + Guardar + estado. El texto
+  del budget ya no dice "ya no pide mínimo de cargas". Se carga junto con el budget al abrir la
+  sección.
+- **PWA (`?v=73` + SW v73, `roulette.js`):** si tiene la app pero no llega al mínimo, la card del
+  home NO se oculta: se ve "🔒 RULETA · Faltan N cargas" (gris) y al tocarla abre el modal
+  "Ruleta bloqueada: necesitás X cargas en los últimos N días · llevás K · te faltan N" con botón
+  "💳 CARGAR AHORA" (abre el CBU). Si el server rechaza el giro con `needsActive`, mismo modal.
+  Sin app instalada sigue oculta como siempre. `VIP.roulette.showLocked` nuevo.
+- **Ojo:** con el default (10 en 30 días) la ruleta se bloquea para casi todos apenas se deploya.
+  **Operativo:** entrar a 🎰 Ruleta diaria y poner los números que quiera el owner (o apagar el
+  tilde) ANTES o inmediatamente después del deploy.
+- **Validado:** `node --check` OK (server.js, admin.js, admin-sw, roulette.js, SW); HTML del panel
+  y de la PWA balanceados; rutas nuevas junto a las de la ruleta (después de authMiddleware).
+  Redeploy (back + panel + PWA). **PROBAR:** panel → guardar "2 cargas en 7 días" → cuenta de
+  prueba con 1 carga: card 🔒 "Faltan 1 carga", modal con botón cargar; después de la 2ª carga la
+  ruleta vuelve a girar.
+
 ### 178. Paquete de réplica COMPLETO del sistema de referidos (#168→#175) para otro repo JUGAYGANA (`docs/replicas/referidos-jugaygana/`)
 - **Owner:** "me pasás para copiar y pegar para mandar a otra IA de otra repo todo lo que
   implementaste de referidos; la otra repo está como cuando arrancamos, quiero implementar igual

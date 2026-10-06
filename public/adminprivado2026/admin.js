@@ -9900,6 +9900,42 @@ async function saveRouletteBudget() {
     }
 }
 
+// #179 Quién puede girar: cargas mínimas en N días (Config['rouletteGate']).
+async function loadRouletteGate() {
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/gate');
+        const d = await r.json();
+        const statusEl = document.getElementById('rouletteGateStatus');
+        if (!r.ok || !d.success) { if (statusEl) statusEl.textContent = d.error === 'Solo admin general' ? '🔒 Sólo el admin general puede editar esto.' : ''; return; }
+        const en = document.getElementById('rouletteGateEnabled'), mn = document.getElementById('rouletteGateMin'), dy = document.getElementById('rouletteGateDays');
+        if (en) en.checked = !!d.enabled;
+        if (mn) mn.value = d.minDeposits || '';
+        if (dy) dy.value = d.days || '';
+        if (statusEl) statusEl.innerHTML = d.enabled
+            ? '✅ Activo: gira el que tenga <strong>' + d.minDeposits + '</strong> carga' + (d.minDeposits === 1 ? '' : 's') + ' o más en los últimos <strong>' + d.days + '</strong> días.'
+            : '⏸ Apagado: gira todo cliente con la app instalada y notificaciones.';
+    } catch (_) {}
+}
+
+async function saveRouletteGate() {
+    const enabled = !!document.getElementById('rouletteGateEnabled')?.checked;
+    const minDeposits = parseInt(document.getElementById('rouletteGateMin')?.value || '0', 10) || 0;
+    const days = parseInt(document.getElementById('rouletteGateDays')?.value || '0', 10) || 0;
+    if (minDeposits < 1 || minDeposits > 1000) { showToast('Las cargas mínimas van de 1 a 1000', 'error'); return; }
+    if (days < 1 || days > 365) { showToast('Los días van de 1 a 365', 'error'); return; }
+    try {
+        const r = await rouletteAuthFetch('/api/admin/roulette/gate', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled, minDeposits, days })
+        });
+        const d = await r.json();
+        if (!r.ok || !d.success) { showToast(d.error || 'Error al guardar', 'error'); return; }
+        showToast(enabled ? '✅ Guardado: ' + minDeposits + ' cargas en ' + days + ' días' : '✅ Guardado: sin mínimo de cargas', 'success');
+        loadRouletteGate();
+    } catch (e) { showToast('Error al guardar', 'error'); }
+}
+window.loadRouletteGate = loadRouletteGate; window.saveRouletteGate = saveRouletteGate;
+
 // Reinicia la ruleta del día: borra los giros de HOY para que todos puedan
 // volver a girar. Confirmación obligatoria — es una acción destructiva.
 async function resetRouletteDaily() {
@@ -9978,8 +10014,9 @@ async function loadRouletteAdmin() {
     const body = document.getElementById('rouletteAdminBody');
     if (!body) return;
     body.innerHTML = '<div style="color:#aaa;text-align:center;padding:24px;">⏳ Cargando…</div>';
-    // Cargar budget en paralelo (no bloqueante).
+    // Cargar budget y gate de cargas en paralelo (no bloqueante).
     loadRouletteBudget();
+    loadRouletteGate(); // #179
     try {
         const [statsResp, historyResp] = await Promise.all([
             rouletteAuthFetch('/api/admin/roulette/stats?days=' + days),

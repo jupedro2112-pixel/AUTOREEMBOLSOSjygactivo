@@ -439,9 +439,13 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - **Ruleta diaria**: requiere PWA instalada (token FCM standalone). **Premios editables
   (#164, `Config['roulettePrizes']`)**: `money` (fichas, auto-crédito, cuenta contra el tope),
   `bonus_pct` (% en la próxima carga → PromoBonus `sourceRuleCode:'ruleta'` autoApply, se
-  aplica solo al cargar; no consume tope) o `none`; sin config rige la tabla por defecto. El gate de
-  "cliente activo" (>10 cargas reales/30d, #71) está **APAGADO** desde 2026-08-20
-  (`ROULETTE_ACTIVE_GATE_DISABLED=true`, owner: para TODOS los que tengan la app).
+  aplica solo al cargar; no consume tope) o `none`; sin config rige la tabla por defecto. **Gate
+  de "cliente activo" (#179, `Config['rouletteGate']` = {enabled, minDeposits, days}; default ON,
+  10 cargas en 30 días; editable en panel → 🎰 Ruleta diaria → "Quién puede girar"):** cargas
+  reales = deposit completed fuera de `referralTiers.NON_BANK_SOURCES`; `count >= minDeposits`;
+  fail-open ante error de DB. Status/spin devuelven `needsActive + minCargas + gateDays +
+  cargasCount`; la PWA muestra la card 🔒 "Faltan N cargas" y el modal con "CARGAR AHORA".
+  (Historia: fijo ">10/30d" desde #71, apagado 2026-08-20, configurable desde 2026-10-06.)
   Pick ponderado + **budget pacing** (distribuye el presupuesto diario por hora
   ART; si excede → fuerza SIN PREMIO; el total del día nunca supera el tope).
   ⚠️ **Fail-closed desde 2026-08-20:** sin tope activo (checkbox apagado o $0) o

@@ -17905,28 +17905,49 @@ function _rouletteHasAppInstalled(u) {
   return false;
 }
 
-// "Cliente activo" para la ruleta (owner 2026-06-24): MÁS DE 10 cargas REALES
-// (deposits, sin contar regalos/devoluciones) en los últimos 30 días. Devuelve
-// { active, count }. Ante error de lectura NO bloquea (no castiga por un fallo de DB).
-// ⚠️ GATE APAGADO por el owner (2026-08-20): la ruleta vuelve a ser para TODOS
-// los que tengan la app instalada con notificaciones (el freno del gasto es el
-// tope diario del panel, que ahora es fail-closed). Para reponer el gate: false.
-const ROULETTE_ACTIVE_GATE_DISABLED = true;
-const ROULETTE_MIN_CARGAS_30D = 10; // "más de" esto → activo (11+)
+// "Cliente activo" para la ruleta: al menos `minDeposits` cargas REALES (deposits completados,
+// sin regalos/bonos/devoluciones — misma lista que los referidos) en los últimos `days` días.
+// Historia: owner 2026-06-24 "más de 10 cargas en 30 días" fijo en código; 2026-08-20 lo apagó
+// (ruleta para todos con la app); #179 (owner 2026-10-06) vuelve CONFIGURABLE desde el panel →
+// Config['rouletteGate'] = { enabled, minDeposits, days }. Devuelve { active, count, cfg }.
+// Ante error de lectura NO bloquea (no castiga por un fallo de DB).
+const ROULETTE_GATE_DEFAULTS = { enabled: true, minDeposits: 10, days: 30 };
+let _rouletteGateCache = { at: 0, cfg: null };
+function _rouletteNormalizeGate(raw) {
+  const c = raw || {};
+  const min = Math.round(Number(c.minDeposits)), days = Math.round(Number(c.days));
+  return {
+    enabled: c.enabled !== false,
+    minDeposits: Number.isFinite(min) && min >= 1 && min <= 1000 ? min : ROULETTE_GATE_DEFAULTS.minDeposits,
+    days: Number.isFinite(days) && days >= 1 && days <= 365 ? days : ROULETTE_GATE_DEFAULTS.days
+  };
+}
+async function getRouletteGateConfig({ force = false } = {}) {
+  if (!force && _rouletteGateCache.cfg && Date.now() - _rouletteGateCache.at < 30 * 1000) return _rouletteGateCache.cfg;
+  let cfg;
+  try { cfg = _rouletteNormalizeGate(await getConfig('rouletteGate', null)); }
+  catch (e) { logger.warn(`[roulette] no se pudo leer rouletteGate (uso defaults): ${e.message}`); cfg = Object.assign({}, ROULETTE_GATE_DEFAULTS); }
+  _rouletteGateCache = { at: Date.now(), cfg };
+  return cfg;
+}
+async function _rouletteCountRecentDeposits(userId, username, days) {
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+  return Transaction.countDocuments({
+    $or: [{ userId: userId }, { username: username }],
+    type: 'deposit', status: 'completed',
+    'metadata.source': { $nin: referralTiers.NON_BANK_SOURCES },
+    timestamp: { $gte: since }
+  });
+}
 async function _rouletteIsActiveClient(userId, username) {
-  if (ROULETTE_ACTIVE_GATE_DISABLED) return { active: true, count: null };
+  const cfg = await getRouletteGateConfig();
+  if (!cfg.enabled) return { active: true, count: null, cfg };
   try {
-    const since = new Date(Date.now() - 30 * 24 * 3600 * 1000);
-    const count = await Transaction.countDocuments({
-      $or: [{ userId: userId }, { username: username }],
-      type: 'deposit',
-      'metadata.source': { $nin: ['install_bonus', 'welcome_gift', 'payout_refund'] },
-      timestamp: { $gte: since }
-    });
-    return { active: count > ROULETTE_MIN_CARGAS_30D, count };
+    const count = await _rouletteCountRecentDeposits(userId, username, cfg.days);
+    return { active: count >= cfg.minDeposits, count, cfg };
   } catch (e) {
     logger.warn(`[roulette] chequeo cliente activo falló: ${e.message}`);
-    return { active: true, count: null }; // fail-open: no bloquear por un error de DB
+    return { active: true, count: null, cfg }; // fail-open: no bloquear por un error de DB
   }
 }
 
@@ -17947,7 +17968,10 @@ app.get('/api/roulette/status', authMiddleware, async (req, res) => {
       eligible,
       needsAppNotifs: !appOk,
       needsActive: appOk && !act.active, // app OK pero no llega a las cargas mínimas
-      minCargas: ROULETTE_MIN_CARGAS_30D,
+      minCargas: act.cfg.enabled ? act.cfg.minDeposits : 0,
+      gateDays: act.cfg.days,
+      gateEnabled: !!act.cfg.enabled,
+      cargasCount: act.count,
       dateKey,
       prizes: (await getRoulettePrizesConfig()).prizes,
       alreadySpun: !!spin,
@@ -18010,6 +18034,29 @@ app.put('/api/admin/roulette/budget', authMiddleware, adminMiddleware, async (re
     logger.error(`PUT /api/admin/roulette/budget: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
+});
+
+// #179 GET/PUT /api/admin/roulette/gate — quién puede girar: cargas mínimas en N días (admin general).
+app.get('/api/admin/roulette/gate', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const cfg = await getRouletteGateConfig({ force: true });
+    res.json(Object.assign({ success: true, defaults: ROULETTE_GATE_DEFAULTS }, cfg));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.put('/api/admin/roulette/gate', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {};
+    const min = Math.round(Number(b.minDeposits)), days = Math.round(Number(b.days));
+    if (!(Number.isFinite(min) && min >= 1 && min <= 1000)) return res.status(400).json({ error: 'Las cargas mínimas tienen que ser un número entre 1 y 1000.' });
+    if (!(Number.isFinite(days) && days >= 1 && days <= 365)) return res.status(400).json({ error: 'Los días tienen que ser un número entre 1 y 365.' });
+    const next = { enabled: b.enabled !== false, minDeposits: min, days, updatedBy: req.user.username, updatedAt: new Date() };
+    await setConfig('rouletteGate', next);
+    _rouletteGateCache = { at: 0, cfg: null };
+    logger.info(`[roulette] gate de cargas: ${next.enabled ? 'ON' : 'OFF'} · ${min} cargas en ${days} días (por ${req.user.username})`);
+    res.json(Object.assign({ success: true, defaults: ROULETTE_GATE_DEFAULTS }, await getRouletteGateConfig({ force: true })));
+  } catch (e) { logger.warn(`[roulette] gate PUT: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 
 // #164 GET/PUT /api/admin/roulette/prizes — tabla de premios configurable.
@@ -18276,13 +18323,13 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
         needsAppNotifs: true
       });
     }
-    // Gate: solo clientes ACTIVOS (más de 10 cargas en los últimos 30 días).
+    // Gate: solo clientes ACTIVOS (≥ minDeposits cargas reales en los últimos `days` días, #179).
     const act = await _rouletteIsActiveClient(userId, username);
     if (!act.active) {
       return res.status(403).json({
-        error: `La ruleta es solo para clientes activos. Necesitás más de ${ROULETTE_MIN_CARGAS_30D} cargas en los últimos 30 días.`,
+        error: `La ruleta es solo para clientes activos: necesitás ${act.cfg.minDeposits} carga${act.cfg.minDeposits === 1 ? '' : 's'} en los últimos ${act.cfg.days} días (llevás ${act.count || 0}).`,
         needsActive: true,
-        minCargas: ROULETTE_MIN_CARGAS_30D
+        minCargas: act.cfg.minDeposits, gateDays: act.cfg.days, cargasCount: act.count
       });
     }
 

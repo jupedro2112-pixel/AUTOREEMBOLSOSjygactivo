@@ -1,19 +1,28 @@
-# Réplica — SISTEMA DE REFERIDOS completo (#168 → #175) para el repo hermano (plataforma 1girox)
+# Réplica — SISTEMA DE REFERIDOS completo (#168 → #175)
 
 Paquete para replicar TODO lo nuevo de referidos de `AUTOREEMBOLSOSjygactivo` (plataforma
-**JUGAYGANA**) en el repo hermano que opera sobre **1girox** (`giroxService`) y quedó en el estado
-"base" (tiene el sistema viejo de referidos: `referralController`, `referralRoutes`,
-`referralCalculationService`, `ReferralCommission/Payout/Event`, el 🤝 en la barra y el código de
-referido en el registro — pero nada de lo de abajo).
+**JUGAYGANA**) en otro repo que quedó en el estado "base" (tiene el sistema viejo de referidos:
+`referralController`, `referralRoutes`, `referralCalculationService`, `ReferralCommission/Payout/Event`,
+el 🤝 en la barra y el código de referido en el registro — pero nada de lo de abajo).
 
-## ⚠️ OTRA PLATAFORMA — qué se copia tal cual y qué se ADAPTA
+**Sirve para DOS destinos distintos. Elegí tu caso y usá SOLO esa sección:**
 
-El código de este paquete es el real de JUGAYGANA: sirve como referencia línea por línea, pero
-**no se pega a ciegas**. La idea general (producto, reglas, pantallas, endpoints, modelos) es la
-misma; cambia únicamente DE DÓNDE sale el netwin y cómo se identifica al usuario en la plataforma.
+- **Destino A — repo que también usa JUGAYGANA** (`jugaygana.js`, royalty-statistics): el código se
+  pega tal cual, incluido el netwin. Prompt: "Prompt A" más abajo. Ignorá la sección "⚠️ OTRA
+  PLATAFORMA".
+- **Destino B — repo hermano con 1girox** (`giroxService`): todo igual salvo la lectura del netwin,
+  que se reescribe con la función girox que ese repo ya tiene. Leé "⚠️ OTRA PLATAFORMA" y usá el
+  "Prompt B".
 
-| Pieza | ¿Depende de la plataforma? | Qué hacer en el hermano |
-|-------|----------------------------|-------------------------|
+## ⚠️ OTRA PLATAFORMA — SOLO para el Destino B (1girox). Si tu repo usa JUGAYGANA, salteá esta sección.
+
+El código de este paquete es el real de JUGAYGANA: para girox sirve como referencia línea por
+línea, pero **no se pega a ciegas**. La idea general (producto, reglas, pantallas, endpoints,
+modelos) es la misma; cambia únicamente DE DÓNDE sale el netwin y cómo se identifica al usuario en
+la plataforma.
+
+| Pieza | ¿Depende de la plataforma? | Qué hacer en el hermano girox |
+|-------|----------------------------|-------------------------------|
 | `referralTierService.js`, `referralRate.js`, `ReferralMilestoneClaim.js`, `referralRoutes.js` | No (Mongo puro) | copiar tal cual (revisar los nombres de `metadata.source` en `NON_BANK_SOURCES`) |
 | `referralController.js` | No (Mongo puro) | copiar/diffear; la ruta `/admin/activity` y el detalle con cargas son independientes |
 | `referralCalculationService.js` | **SÍ**: lee el netwin de `referralRevenueService` (royalty-statistics de JUGAYGANA) | NO reemplazar el del hermano. Portar sólo 2 cambios: (1) la tasa del referidor sale de `referralTierService.resolveReferralRate(user)`; (2) la comisión se calcula sobre el NETWIN (pérdida neta real del referido) que el hermano YA sabe leer de girox, no sobre "owner revenue" |
@@ -21,10 +30,11 @@ misma; cambia únicamente DE DÓNDE sale el netwin y cómo se identifica al usua
 | `server-01` (requires, `/linkreferido`, % plano, `/api/admin/referral-rate`) | No | copiar |
 | Panel (HTML + admin.js) | No | copiar; los textos dicen "JUGAYGANA" en 2 o 3 tooltips → cambiar por girox |
 | PWA (HTML, CSS, ui.js, app.js, auth.js, imágenes) | No | copiar; moneda: acá es $ (ARS), en el hermano usar la que corresponda (Gs. si aplica) en `_refMoney` |
-| Fix #148 (fechas `epoch_s`) | Sólo JUGAYGANA | NO aplica en girox: ignorar el punto 5 de la prueba |
+| Fix #148 (fechas `epoch_s`) | Sólo JUGAYGANA | NO aplica en girox |
 
-No copiar NADA que mencione `jugaygana.js`, `jugayganaService`, `royalty-statistics`, `jugayganaUserId`
-ni `referralRevenueService` sin reemplazarlo por el equivalente girox que el hermano ya tiene.
+En girox no copiar NADA que mencione `jugaygana.js`, `jugayganaService`, `royalty-statistics`,
+`jugayganaUserId` ni `referralRevenueService` sin reemplazarlo por el equivalente girox que el
+hermano ya tiene.
 
 **El paquete se regenera solo:** `python3 docs/replicas/referidos-jugaygana/_extract.py` desde la
 raíz del repo (extrae el código ACTUAL de JUGAYGANA por marcadores; el encabezado de cada archivo
@@ -95,10 +105,14 @@ dice el commit).
 - **PWA:** `showModal/hideModal`, `VIP.config.API_URL`, `VIP.state.currentToken/currentUser`,
   `VIP.auth.applyRegisterModalMode`, `VIP.campaign.getActive` (atribución de pauta; si no existe,
   tratar como null), el 🤝 de la barra que llama `VIP.ui.openReferralModal()`.
-- **Netwin (girox):** la única fuente externa de todo el sistema. Se usa en 3 lugares: el cálculo
-  mensual (ya existe en el hermano), `GET /api/referrals/dashboard` (netwin del mes por referido,
-  cliente) y `GET /api/admin/referrals/:userId/netwin` (ídem, admin). Los tres tienen que usar LA
-  MISMA función del hermano, para que lo que ve el cliente coincida con lo que se le paga.
+- **Netwin:** la única fuente externa de todo el sistema. Se usa en 3 lugares: el cálculo mensual,
+  `GET /api/referrals/dashboard` (netwin del mes por referido, cliente) y
+  `GET /api/admin/referrals/:userId/netwin` (ídem, admin). Los tres tienen que usar LA MISMA
+  función, para que lo que ve el cliente coincida con lo que se le paga.
+  · Destino A (JUGAYGANA): es `referralRevenueService.getUserNetwinForDateRange`, que tiene que
+    mandar las fechas a royalty-statistics como `epoch_s` (día argentino exacto, fix #148 de este
+    repo). Si el destino sigue en formato `iso`, el netwin diario sale corrido 3 h.
+  · Destino B (girox): la función de netwin girox que el hermano ya usa.
 
 ## Reglas que NO se pueden perder al portar
 
@@ -116,7 +130,49 @@ dice el commit).
 6. Al tocar HTML + JS de la PWA juntos: bumpear `?v` de los scripts y `CACHE_VERSION` del SW; en el
    panel, `CACHE_VERSION` de `admin-sw.js`.
 
-## Prompt para pegar en el asistente del repo hermano (1girox)
+## Prompt A — para un repo que también usa JUGAYGANA
+
+```
+Leé WORKLOG.md, docs/ARCHITECTURE.md y CLAUDE.md como siempre. Después leé ENTERO el paquete
+de réplica que está en el repo gemelo clonado al lado (es código real, extraído tal cual):
+
+  /home/amnesia/Documents/AUTOREEMBOLSOSjygactivo/docs/replicas/referidos-jugaygana/README.md   ← primero
+  /home/amnesia/Documents/AUTOREEMBOLSOSjygactivo/docs/replicas/referidos-jugaygana/*            ← todos
+
+ESTE repo usa JUGAYGANA igual que el gemelo: sos el "Destino A" del README. Ignorá la sección
+"⚠️ OTRA PLATAFORMA" y el "Prompt B" (son para otro repo con 1girox).
+
+Quiero implementar en ESTE repo TODO el sistema nuevo de referidos (#168 a #175 del gemelo)
+EXACTAMENTE como funciona allá. Los dos repos operan sobre JUGAYGANA, así que el netwin se lee
+igual. Seguí el orden de la tabla "Archivos del paquete":
+
+1. Backend: referralRate.js, referralTierService.js (nuevo), ReferralMilestoneClaim.js (nuevo),
+   referralCalculationService.js, referralController.js y referralRoutes.js. Los que REEMPLAZAN un
+   archivo existente: antes de pisar, diffeá contra el de acá y conservá cualquier cambio local
+   que no esté en el paquete (avisame cuáles encontraste).
+2. server.js: requires + /linkreferido + carga del % plano (al arrancar y cada 60 s) + endpoints
+   /api/admin/referral-rate (archivo 07) y el bloque "#168 REFERIDOS" completo (archivo 08),
+   DESPUÉS de `const authMiddleware`. Verificá la sección "Dependencias" del README: si un helper
+   tiene otro nombre acá, adaptá las llamadas; no dupliques helpers.
+3. Panel admin: card "🤝 Comisión de referidos" en COMANDOS, sección Referidos completa
+   (reemplaza la vieja) y el bloque de admin.js con sus llamadas en el switch de secciones y en
+   loadCommands(). Mantené los nombres de funciones que usan los onclick inline. Bumpeá
+   CACHE_VERSION de admin-sw.js.
+4. PWA: CSS, campo de referido del registro (conservar ids), card del home, popup, modal, las 2
+   imágenes en public/img/, el bloque de ui.js + exports, el hook de app.js (?ref= fijo + abre
+   el registro solo), los dos hooks de auth.js. Bumpeá ?v de los scripts y CACHE_VERSION del SW.
+5. Verificá que referralRevenueService mande las fechas a royalty-statistics como epoch_s (día
+   argentino exacto, #148 del gemelo). Si acá sigue en iso, aplicá ese fix también.
+
+Reglas de ESTE repo que no se negocian: toda ruta nueva app.get/post DESPUÉS de
+`const authMiddleware` (TDZ); `node --check` en cada archivo tocado; HTML del panel y de la PWA
+balanceados; nada de premios en plata por cantidad de referidos (el premio es el % por nivel);
+toda comisión usa resolveReferralRate. Al terminar: WORKLOG (entrada nueva con qué se portó y
+qué se adaptó), docs/ARCHITECTURE.md (servicio de niveles, endpoints nuevos, flujo del link,
+trampas), commit y push. Listá al final qué adaptaste y qué quedó pendiente de probar en vivo.
+```
+
+## Prompt B — para el repo hermano con 1girox
 
 ```
 Leé WORKLOG.md, docs/ARCHITECTURE.md y CLAUDE.md como siempre. Después leé ENTERO el paquete
@@ -181,4 +237,5 @@ adaptaste y qué quedó pendiente de probar en vivo.
 5. Panel → Referidos: card de actividad con números, ranking ordenable, "Ver referidos" muestra
    cargas por referido y el netwin del mes se rellena en unos segundos.
 6. Preview del cálculo mensual: la tasa de cada referidor coincide con su nivel y la comisión es
-   % × netwin (el mismo número que el cliente vio en su tablero).
+   % × netwin (el mismo número que el cliente vio en su tablero). El paso 5 del Prompt A (fechas
+   epoch_s) es sólo para JUGAYGANA.

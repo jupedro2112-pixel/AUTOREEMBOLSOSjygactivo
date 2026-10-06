@@ -10041,19 +10041,19 @@ async function loadRouletteAdmin() {
         html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:14px;">';
         html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,215,0,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Giros totales</div><div style="color:#ffd700;font-size:22px;font-weight:900;margin-top:2px;">' + fmtNum(t.spinsTotal) + '</div></div>';
         html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(102,255,102,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Ganadores</div><div style="color:#66ff66;font-size:22px;font-weight:900;margin-top:2px;">' + fmtNum(t.winnersTotal) + '</div><div style="color:#888;font-size:10px;">' + (t.spinsTotal > 0 ? ((t.winnersTotal / t.spinsTotal * 100).toFixed(1) + '%') : '—') + ' · ' + fmtNum(t.moneyWinnersTotal) + ' en $ · ' + fmtNum(t.bonusWinnersTotal) + ' en bono</div></div>';
-        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,215,0,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">$ Regalado (saldo)</div><div style="color:#ffd700;font-size:22px;font-weight:900;margin-top:2px;">' + fmtMoney(t.givenTotal) + '</div><div style="color:#888;font-size:10px;">' + fmtNum(t.moneyWinnersTotal) + ' premios en $</div></div>';
-        // #180 premios en BONO (% en la próxima carga): cuántos salieron y qué pasó con ellos.
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,215,0,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">$ Regalado</div><div style="color:#ffd700;font-size:22px;font-weight:900;margin-top:2px;">' + fmtMoney(t.givenTotal) + '</div><div style="color:#888;font-size:10px;">saldo real · ' + fmtNum(t.moneyWinnersTotal) + ' premios</div></div>';
+        // #180 premios en BONO (% extra en la próxima carga): cuántos se APLICARON en una carga sobre
+        // cuántos salieron, cuántos vencieron, y cuánta plata de bono salió por esa vía.
         const bn = stats.bonus || { total: 0, used: 0, active: 0, expired: 0, failed: 0, usedBonusARS: 0, usedCargaARS: 0 };
-        const bnPct = (n) => bn.total > 0 ? ' (' + Math.round(n / bn.total * 100) + '%)' : '';
-        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(201,139,255,0.45);border-radius:10px;padding:11px;text-align:center;grid-column:span 2;"><div style="color:#c98bff;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">🎁 Premios en BONO (% próxima carga)</div>'
-            + '<div style="color:#c98bff;font-size:22px;font-weight:900;margin-top:2px;">' + fmtNum(bn.total) + ' <span style="font-size:11px;color:#aaa;font-weight:700;">salieron</span></div>'
-            + '<div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;font-size:11px;margin-top:4px;">'
-            + '<span style="color:#66ff66;" title="Cargaron y el % se les sumó solo">✅ <b>' + fmtNum(bn.used) + '</b> lo usaron' + bnPct(bn.used) + '</span>'
-            + '<span style="color:#ffd700;" title="Bono vigente, todavía no cargaron">⏳ <b>' + fmtNum(bn.active) + '</b> activos' + bnPct(bn.active) + '</span>'
-            + '<span style="color:#ff9d76;" title="Venció sin que cargaran">⏰ <b>' + fmtNum(bn.expired) + '</b> vencidos sin usar' + bnPct(bn.expired) + '</span>'
-            + (bn.failed ? '<span style="color:#ff8080;" title="No se pudo activar el bono">❌ <b>' + fmtNum(bn.failed) + '</b> fallidos</span>' : '')
-            + '</div>'
-            + (bn.used ? '<div style="color:#888;font-size:10px;margin-top:3px;">Los que lo usaron cargaron ' + fmtMoney(bn.usedCargaARS) + ' y se llevaron ' + fmtMoney(bn.usedBonusARS) + ' de bono</div>' : '')
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(201,139,255,0.45);border-radius:10px;padding:11px;text-align:center;" title="Bonos % que el cliente USÓ en una carga (el % se le sumó solo) sobre el total de bonos % que salieron en la ruleta">'
+            + '<div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">% extra aplicados</div>'
+            + '<div style="margin-top:2px;"><span style="color:#66ff66;font-size:22px;font-weight:900;">' + fmtNum(bn.used) + '</span> <span style="color:#ddd;font-size:12px;font-weight:700;">/ ' + fmtNum(bn.total) + ' ganados · ' + fmtNum(bn.expired) + ' vencidos</span></div>'
+            + '<div style="color:#888;font-size:10px;">' + (bn.total > 0 ? Math.round(bn.used / bn.total * 100) + '% aplicados' : '—') + (bn.active ? ' · ' + fmtNum(bn.active) + ' pendientes' : '') + (bn.failed ? ' · ' + fmtNum(bn.failed) + ' fallidos' : '') + '</div>'
+            + '</div>';
+        html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(102,255,102,0.35);border-radius:10px;padding:11px;text-align:center;" title="Plata de bono que se acreditó por los % extra de la ruleta usados en cargas">'
+            + '<div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">$ Bono por % extra</div>'
+            + '<div style="color:#66ff66;font-size:22px;font-weight:900;margin-top:2px;">' + fmtMoney(bn.usedBonusARS) + '</div>'
+            + (bn.used ? '<div style="color:#888;font-size:10px;">sobre ' + fmtMoney(bn.usedCargaARS) + ' cargados con el bono</div>' : '')
             + '</div>';
         if (t.pendingTotal > 0) html += '<div style="background:rgba(0,0,0,0.30);border:1px solid rgba(255,128,128,0.35);border-radius:10px;padding:11px;text-align:center;"><div style="color:#aaa;font-size:10.5px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">$ Pendiente</div><div style="color:#ff8080;font-size:22px;font-weight:900;margin-top:2px;">' + fmtMoney(t.pendingTotal) + '</div><div style="color:#888;font-size:10px;">credit fallido</div></div>';
         html += '</div>';
@@ -10067,24 +10067,20 @@ async function loadRouletteAdmin() {
             html += '<th style="padding:8px 10px;font-weight:800;">Fecha</th>';
             html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">Giros</th>';
             html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">Ganadores</th>';
-            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;color:#ffd700;" title="Premios en saldo">En $</th>';
-            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;color:#c98bff;" title="Premios en bono (% próxima carga)">En bono</th>';
-            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;color:#66ff66;" title="Bonos de ese día que se usaron en una carga">Bono usado</th>';
-            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;color:#ff9d76;" title="Bonos de ese día que vencieron sin usar">Bono vencido</th>';
             html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">$ Regalado</th>';
             html += '<th style="padding:8px 10px;font-weight:800;text-align:right;">$ Pendiente</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;color:#c98bff;" title="Bonos % de ese día que se aplicaron en una carga / bonos % ganados ese día (entre paréntesis: vencidos sin usar)">% aplic./ganados</th>';
+            html += '<th style="padding:8px 10px;font-weight:800;text-align:right;color:#66ff66;" title="Plata de bono acreditada por los % extra ganados ese día">$ Bono %</th>';
             html += '</tr></thead><tbody>';
             for (const d of stats.byDay) {
                 html += '<tr style="border-top:1px solid rgba(255,255,255,0.05);">';
                 html += '<td style="padding:7px 10px;color:#fff;font-weight:700;">' + escapeHtml(d._id) + '</td>';
                 html += '<td style="padding:7px 10px;text-align:right;color:#ddd;">' + fmtNum(d.spins) + '</td>';
                 html += '<td style="padding:7px 10px;text-align:right;color:#66ff66;font-weight:700;">' + fmtNum(d.winners) + '</td>';
-                html += '<td style="padding:7px 10px;text-align:right;color:#ffd700;">' + fmtNum(d.moneyWinners) + '</td>';
-                html += '<td style="padding:7px 10px;text-align:right;color:#c98bff;font-weight:700;">' + fmtNum(d.bonusWinners) + '</td>';
-                html += '<td style="padding:7px 10px;text-align:right;color:' + (d.bonusUsed ? '#66ff66' : '#666') + ';">' + fmtNum(d.bonusUsed) + '</td>';
-                html += '<td style="padding:7px 10px;text-align:right;color:' + (d.bonusExpired ? '#ff9d76' : '#666') + ';">' + fmtNum(d.bonusExpired) + '</td>';
                 html += '<td style="padding:7px 10px;text-align:right;color:#ffd700;font-weight:800;">' + fmtMoney(d.totalGiven) + '</td>';
                 html += '<td style="padding:7px 10px;text-align:right;color:' + (d.totalPending > 0 ? '#ff8080' : '#888') + ';">' + (d.totalPending > 0 ? fmtMoney(d.totalPending) : '—') + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;font-weight:700;color:' + (d.bonusWinners ? '#c98bff' : '#666') + ';">' + (d.bonusWinners ? fmtNum(d.bonusUsed) + ' / ' + fmtNum(d.bonusWinners) + (d.bonusExpired ? ' <span style="color:#ff9d76;font-weight:600;font-size:10px;">(' + fmtNum(d.bonusExpired) + ' venc.)</span>' : '') : '—') + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;font-weight:800;color:' + (d.bonusUsedARS ? '#66ff66' : '#666') + ';">' + (d.bonusUsedARS ? fmtMoney(d.bonusUsedARS) : '—') + '</td>';
                 html += '</tr>';
             }
             html += '</tbody></table></div>';
@@ -10139,17 +10135,25 @@ async function loadRouletteAdmin() {
                 html += '<tr style="border-top:1px solid rgba(255,255,255,0.05);">';
                 html += '<td style="padding:7px 10px;color:#aaa;font-size:10.5px;white-space:nowrap;">' + escapeHtml(when) + '</td>';
                 html += '<td style="padding:7px 10px;color:#fff;font-weight:700;">' + escapeHtml(it.username || '?') + '</td>';
-                html += '<td style="padding:7px 10px;text-align:right;color:' + (it.prizeKind === 'bonus_pct' ? '#c98bff' : (it.prizeARS >= 10000 ? '#ffd700' : (it.prizeARS >= 1000 ? '#ff8c5a' : (it.prizeARS > 0 ? '#aaffaa' : '#888')))) + ';font-weight:800;">' + (it.prizeKind === 'bonus_pct' ? '🎁 +' + it.prizePct + '%' : (it.prizeARS > 0 ? fmtMoney(it.prizeARS) : '—')) + '</td>';
+                html += '<td style="padding:7px 10px;text-align:right;color:' + (it.prizeKind === 'bonus_pct' ? '#66ff66' : (it.prizeARS >= 10000 ? '#ffd700' : (it.prizeARS >= 1000 ? '#ff8c5a' : (it.prizeARS > 0 ? '#aaffaa' : '#888')))) + ';font-weight:800;">' + (it.prizeKind === 'bonus_pct' ? it.prizePct + '% EXTRA' : (it.prizeARS > 0 ? fmtMoney(it.prizeARS) : '—')) + '</td>';
                 // #180: para un premio en BONO, el estado útil es qué pasó con el bono.
                 const bonusBadge = it.prizeKind === 'bonus_pct' ? ({
-                    used:    '<span style="background:rgba(102,255,102,0.15);color:#66ff66;border:1px solid #66ff66;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;" title="Cargó ' + (it.bonusCargaMonto ? '$' + fmtNum(it.bonusCargaMonto) : '') + ' y se le sumó ' + (it.bonusUsesTotal ? '$' + fmtNum(it.bonusUsesTotal) : 'el bono') + (it.bonusUsedAt ? ' el ' + escapeHtml(fmtFechaHoraAR(it.bonusUsedAt)) : '') + '">✅ USÓ EL BONO' + (it.bonusUsesTotal ? ' $' + fmtNum(it.bonusUsesTotal) : '') + '</span>',
-                    active:  '<span style="background:rgba(255,215,0,0.12);color:#ffd700;border:1px solid #ffd700;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;" title="Vence ' + (it.bonusExpiresAt ? escapeHtml(fmtFechaHoraAR(it.bonusExpiresAt)) : '') + '">⏳ BONO ACTIVO</span>',
-                    expired: '<span style="background:rgba(255,157,118,0.12);color:#ff9d76;border:1px solid #ff9d76;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;" title="No cargó antes de que venciera">⏰ VENCIÓ SIN USAR</span>',
+                    used:    '<span style="background:rgba(102,255,102,0.15);color:#66ff66;border:1px solid #66ff66;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">✅ % APLICADO</span>',
+                    active:  '<span style="background:rgba(255,170,0,0.15);color:#ffb400;border:1px solid #ffb400;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">🎁 % PENDIENTE</span>',
+                    expired: '<span style="background:rgba(255,157,118,0.12);color:#ff9d76;border:1px solid #ff9d76;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">⏰ % VENCIDO</span>',
                     failed:  '<span style="background:rgba(255,128,128,0.15);color:#ff8080;border:1px solid #ff8080;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:800;">❌ NO SE ACTIVÓ</span>'
+                }[it.bonusOutcome] || null) : null;
+                const bonusTxt = it.prizeKind === 'bonus_pct' ? ({
+                    used:    'aplicado' + (it.bonusUsedAt ? ' el ' + escapeHtml(fmtFechaHoraAR(it.bonusUsedAt)) : '') + (it.bonusCargaMonto ? ' · carga ' + fmtMoney(it.bonusCargaMonto) : '') + (it.bonusUsesTotal ? ' · bono ' + fmtMoney(it.bonusUsesTotal) : ''),
+                    active:  'se aplica en su próxima carga' + (it.bonusExpiresAt ? ' · vence ' + escapeHtml(fmtFechaHoraAR(it.bonusExpiresAt)) : ''),
+                    expired: 'venció sin usar' + (it.bonusExpiresAt ? ' el ' + escapeHtml(fmtFechaHoraAR(it.bonusExpiresAt)) : ''),
+                    failed:  'no se pudo activar el bono'
                 }[it.bonusOutcome] || null) : null;
                 html += '<td style="padding:7px 10px;text-align:center;">' + (bonusBadge || statusBadge) + '</td>';
                 html += '<td style="padding:7px 10px;color:#888;font-size:10px;font-family:monospace;">';
-                if (it.status === 'credited' && it.creditTxId) {
+                if (bonusTxt) {
+                    html += '<span style="color:' + (it.bonusOutcome === 'used' ? '#66ff66' : it.bonusOutcome === 'active' ? '#ffb400' : '#ff9d76') + ';">' + bonusTxt + '</span>';
+                } else if (it.status === 'credited' && it.creditTxId) {
                     html += escapeHtml(String(it.creditTxId).slice(0, 18));
                 } else if (it.status === 'credit_failed') {
                     html += '<button onclick="retryRouletteCredit(\'' + rouletteEscapeJsArg(it.id) + '\')" style="background:rgba(0,212,255,0.10);color:#00d4ff;border:1px solid rgba(0,212,255,0.40);padding:3px 8px;border-radius:5px;font-size:10px;font-weight:700;cursor:pointer;">🔁 Reintentar</button>';

@@ -18578,11 +18578,12 @@ app.get('/api/admin/roulette/stats', authMiddleware, adminMiddleware, async (req
         bonus.byPct[k] = bonus.byPct[k] || { total: 0, used: 0, active: 0, expired: 0, failed: 0 };
         bonus.byPct[k].total++; bonus.byPct[k][outcome]++;
         const dk = b.dateKey || '?';
-        bonus.byDay[dk] = bonus.byDay[dk] || { total: 0, used: 0, active: 0, expired: 0, failed: 0 };
+        bonus.byDay[dk] = bonus.byDay[dk] || { total: 0, used: 0, active: 0, expired: 0, failed: 0, usedBonusARS: 0 };
         bonus.byDay[dk].total++; bonus.byDay[dk][outcome]++;
+        if (outcome === 'used') bonus.byDay[dk].usedBonusARS += Number(pb.usesTotalBonus) || 0;
       }
     } catch (e) { logger.warn(`[roulette] stats de bonos: ${e.message}`); }
-    for (const d of byDay) { const bd = bonus.byDay[d._id]; d.bonusUsed = bd ? bd.used : 0; d.bonusExpired = bd ? bd.expired : 0; }
+    for (const d of byDay) { const bd = bonus.byDay[d._id]; d.bonusUsed = bd ? bd.used : 0; d.bonusExpired = bd ? bd.expired : 0; d.bonusUsedARS = bd ? Math.round(bd.usedBonusARS) : 0; }
 
     res.json({
       success: true,

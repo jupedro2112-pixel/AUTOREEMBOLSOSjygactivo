@@ -27,6 +27,13 @@
   vencido. Chips por premio: "🎁 +X% bono · N veces · usados/activos/vencidos". Historial: el
   estado de un giro con bono pasa a ser ✅ USÓ EL BONO $X / ⏳ BONO ACTIVO (vence…) / ⏰ VENCIÓ SIN
   USAR / ❌ NO SE ACTIVÓ.
+- **Formato final (captura del hermano, owner mismo día; admin-sw v57):** tiles "% EXTRA
+  APLICADOS: <usados> / <ganados> ganados · <vencidos> vencidos" y "$ BONO POR % EXTRA: $X"
+  (con "sobre $Y cargados con el bono"); tabla por día con columnas "% aplic./ganados" (usados /
+  ganados, entre paréntesis los vencidos) y "$ Bono %" (`byDay.bonusUsedARS`, nuevo en stats);
+  historial: Premio "10% EXTRA", Estado "🎁 % PENDIENTE / ✅ % APLICADO / ⏰ % VENCIDO / ❌ NO SE
+  ACTIVÓ" y en la columna de acción el texto "se aplica en su próxima carga · vence dd/mm hh:mm"
+  / "aplicado el … · carga $X · bono $Y" / "venció sin usar el …".
 - **Validado:** `node --check` OK (server.js, admin.js, admin-sw). Sin rutas nuevas. Redeploy
   (back + panel).
 

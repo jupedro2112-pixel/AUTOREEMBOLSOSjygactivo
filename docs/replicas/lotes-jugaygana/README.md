@@ -11,6 +11,25 @@ JUGAYGANA, la acreditación de plata (`jugaygana.creditUserBalance`) se copia ta
 del repo extrae el código ACTUAL por marcadores (el encabezado de cada archivo dice de qué commit
 salió). Si en el futuro cambia el sistema de lotes, correrlo antes de mandar el paquete.
 
+## ⚠️ OTRA PLATAFORMA — si el destino usa 1girox (giroxService) en vez de JUGAYGANA
+
+El código del paquete es el real de JUGAYGANA. Para un repo girox sirve como referencia exacta de
+QUÉ hacer, pero lo que toca PLATA se reescribe con lo que ese repo ya usa. Ojo: el sistema de lotes
+NACIÓ en el repo girox PAUTANUEVA (#160/#169/#263 de aquel WORKLOG) y de ahí se portó acá (#149),
+así que un repo girox puede tener ya una parte: **primero revisar qué existe y portar sólo lo que
+falte** (#172 tope del %, #173 bono canjeado vence a 24 h + resumen, #177 fichas con RECLAMO).
+
+| Pieza | ¿Depende de la plataforma? | Qué hacer en girox |
+|-------|----------------------------|--------------------|
+| `NotifBatch`, `PromoBonus`, audiencias, motor de envío, canje de código, franja horaria, `claimAuto/revert/settle` | No (Mongo puro) | copiar tal cual / completar lo que falte |
+| `_creditNotifBatchGift` (fichas) | **SÍ**: `jugaygana.creditUserBalance` | usar el crédito de bono girox que ese repo ya tiene (con `rolloverX` real y reference idempotente). Con reference idempotente el reintento ante timeout ES seguro, a diferencia de acá |
+| Hooks de las cargas (04): el % automático acredita con `jugaygana.creditUserBalance` | **SÍ** | en girox el % va como bonus de la MISMA carga (bonus_multiplier / bono con rollover), como ya lo hace su flujo de depósito; mantener el contrato reserva → crédito → settle / revert |
+| `_alertMoneyAmbiguous` / `ambiguous:true` | **SÍ** (#151 es un problema de JUGAYGANA sin reference) | si girox confirma por reference, no hace falta la rama "ambiguo"; dejar sólo fallo limpio → revert |
+| Tope del % de lote (01, `Config['hgcashAppBonus']`) | Parcial | usar la config del bono app que ese repo tenga (nombres de campos propios); si no tiene bono app, crear la config igual: es el tope del lote |
+| `_rouletteHasAppInstalled`, `sendPushIfOffline`, `renderSystemCommand`, `_emitAdminOnlyChatNote` | No | adaptar nombres a los helpers que ya existan |
+| Panel y PWA | No | copiar; cambiar textos "JUGAYGANA" y la moneda ($ → la del destino) |
+| hgcash (hook 04.b) | Sólo si ese repo tiene auto-carga por banco | si no, sólo va el hook de la carga manual |
+
 ## Qué hace el sistema (para humanos)
 
 Un agente manda una notificación (push + mensaje en el chat) a una AUDIENCIA (lista pegada de
@@ -108,7 +127,7 @@ los textos del lote en sí van hardcodeados (mensaje del agente + línea "🎁 T
   tienen que quedar en `window`. Al tocar HTML+JS de la PWA juntos, bumpear `?v` y
   `CACHE_VERSION` del SW; en el panel, `CACHE_VERSION` de `admin-sw.js`.
 
-## Prompt para pegar en el asistente del repo destino
+## Prompt A — para un repo que también usa JUGAYGANA
 
 ```
 Leé WORKLOG.md, docs/ARCHITECTURE.md y CLAUDE.md como siempre. Después leé ENTERO el paquete
@@ -151,6 +170,64 @@ ninguna operación de plata contra JUGAYGANA se reenvía a ciegas (ambiguous = f
 Al terminar: WORKLOG (entrada nueva con qué se portó y qué se adaptó), docs/ARCHITECTURE.md
 (modelos NotifBatch/PromoBonus, rutas, hook en las cargas, cron de 45 s, trampas), commit y
 push. Listá al final qué helpers renombraste/adaptaste y qué quedó pendiente de probar en vivo.
+```
+
+## Prompt B — para un repo con 1girox
+
+```
+Leé WORKLOG.md, docs/ARCHITECTURE.md y CLAUDE.md como siempre. Después leé ENTERO el paquete
+de réplica que está en el repo gemelo clonado al lado:
+
+  /home/amnesia/Documents/AUTOREEMBOLSOSjygactivo/docs/replicas/lotes-jugaygana/README.md   ← primero, sobre todo "⚠️ OTRA PLATAFORMA"
+  /home/amnesia/Documents/AUTOREEMBOLSOSjygactivo/docs/replicas/lotes-jugaygana/*            ← todos
+
+IMPORTANTE — OTRA PLATAFORMA: el gemelo opera sobre JUGAYGANA (jugaygana.js,
+creditUserBalance, ambiguous/_alertMoneyAmbiguous). ESTE repo opera sobre 1girox
+(giroxService). El paquete es código real del gemelo y sirve como referencia exacta de QUÉ
+hacer, pero todo lo que acredite PLATA (fichas del lote, % automático en la carga) lo tenés que
+hacer con lo que ESTE repo ya usa para acreditar bonos en girox (con su rollover y su reference
+idempotente). No copies nada que mencione jugaygana sin reemplazarlo por el equivalente girox.
+La tabla "OTRA PLATAFORMA" del README dice pieza por pieza.
+
+ANTES de pegar nada: revisá qué parte del sistema de lotes YA existe acá (el sistema nació en un
+repo girox, así que puede haber NotifBatch, PromoBonus, el motor de envío, el canje por código y
+el cartel verde). Listame qué hay y qué falta, y portá SOLO lo que falte. Lo que seguro es nuevo
+respecto de la versión vieja: #172 (tope del % de lote = tope del bono app), #173 (bono canjeado
+vence a `useHours` tras el canje + resumen por lote canjeó / cargó / venció) y #177 (fichas por
+tiempo con RECLAMO: no se acredita al enviar, el cliente toca 🎁 RECLAMAR en la app y recién ahí
+se acredita; GET /api/gift/pending + POST /api/gift/claim; card dorada en el home y en el modal
+🎁; tilde "acreditar directo" en el panel; historial "N acreditados / sin reclamar / vencidos").
+
+Quiero acá el mismo producto, con las mismas pantallas, reglas y endpoints. Seguí el orden de la
+tabla "Archivos del paquete":
+
+1. Modelos NotifBatch y PromoBonus (sumar los campos que falten: claimRequired, useHours,
+   autoApply, applyScope, applyFromMin/ToMin, usesCount, usesTotalBonus, sourceRuleId…).
+2. server.js: tope del % (01) con la config del bono app de ESTE repo; endpoints de PromoBonus
+   (02) si faltan; bloque de lotes (03) completando lo que falte, con _creditNotifBatchGift y
+   _notifBatchFichasAfterClaim reescritos sobre el crédito girox. Rutas DESPUÉS de
+   `const authMiddleware`. Verificá "Dependencias": si un helper tiene otro nombre acá, adaptá;
+   no dupliques.
+3. Hooks (04) en la carga manual (y en la auto-carga por banco si acá existe): una carga = como
+   mucho UN bono automático; reserva atómica → crédito → settle, revert si el crédito falló.
+   Si acá no existe multicuenta por banco, tratá _dupBank/_dupBankManual como null.
+4. Panel admin (08, 09): banner del bono en el chat, card "🎁 Lote con regalo" (con el bloque
+   "💰 Fichas con RECLAMO" y el tilde directo), "📤 Lotes enviados" con el resumen por lote;
+   funciones en admin.js y llamadas al abrir el chat y la sección. Mantené los nombres de los
+   onclick inline. Cambiá textos "JUGAYGANA" por girox. Bumpeá CACHE_VERSION de admin-sw.js.
+5. PWA (10, 11, 12): botón 🎁, modal "Regalos con código" (RECLAMAR con botón + canjear +
+   ℹ️ información), card del bono vigente y card RECLAMAR en el home (promobonus.js), exports en
+   VIP.ui (incluido syncBalance), listener en app.js y refresco en socket.js. Moneda del destino.
+   Bumpeá ?v de los scripts y CACHE_VERSION del SW.
+6. Sumá 'notif_batch' y 'notif_batch_auto' a la lista de fuentes que acá excluyen "cargas
+   reales" (referidos, cierre, analítica), si existe.
+
+Reglas de ESTE repo que no se negocian: toda ruta nueva app.get/post DESPUÉS de
+`const authMiddleware` (TDZ); `node --check` en cada archivo tocado; HTML del panel y de la PWA
+balanceados; la plata siempre con reserva atómica antes de acreditar y un solo bono automático
+por carga. Al terminar: WORKLOG (entrada nueva con qué se portó y qué se adaptó a girox),
+docs/ARCHITECTURE.md (modelos, rutas, hook en las cargas, cron de 45 s, trampas), commit y push.
+Listá al final qué ya existía, qué portaste, qué adaptaste y qué queda para probar en vivo.
 ```
 
 ## Prueba en vivo sugerida (después del deploy del destino)

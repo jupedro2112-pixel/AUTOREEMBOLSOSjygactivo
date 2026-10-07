@@ -81,6 +81,12 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `PUBLISHER_ADMIN_ALLOWED_PATHS`).
 - **Auth:** JWT por header Authorization O por cookie httpOnly `admin_api_session`
   (el panel admin usa cookie).
+- **Credenciales hgcash (#181):** el token de API y el secreto del webhook pueden venir del
+  PANEL (Banco automático → "🔐 Cuenta hgcash conectada", cifrados con `JWT_SECRET` en
+  `Config['hgcashCredentials']`) y MANDAN sobre `HGCASH_API_TOKEN`/`HGCASH_WEBHOOK_SECRET` de
+  SSM. Toda llamada a hgcash usa `hgcashPay.getToken()`, nunca `process.env` directo; el
+  webhook valida con `_hgcashWebhookSecrets()` (panel y/o SSM). Destinos del reenvío de
+  webhooks también desde el panel (`Config['hgcashFanout']`).
 - **Config sensible desde el panel:** sección "🔐 Config privada" (clave propia hasheada
   en `Config['privateconfigpass']`; hoy: IA de comprobantes en `Config['aiconfig']`,
   prioridad panel > env/SSM > default; SMS Masivo usa esa misma clave). Para una

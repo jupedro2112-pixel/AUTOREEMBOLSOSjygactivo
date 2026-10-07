@@ -825,6 +825,56 @@
                             <button class="btn-primary" onclick="saveHgcashConfig()">
                                 <span class="icon icon-save"></span> Guardar banco automático
                             </button>
+
+                            <!-- #320 Credenciales de la cuenta hgcash (token + secreto) desde el panel -->
+                            <div id="hgcashCredBox" style="margin-top:18px;padding:14px;border:1px solid rgba(212,175,55,0.45);border-radius:10px;background:rgba(212,175,55,0.05);">
+                                <h4 style="margin:0 0 6px;color:#d4af37;font-size:14px;">🔐 Cuenta hgcash conectada (token y secreto)</h4>
+                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                    Para <b>cambiar de cuenta hgcash</b> (se cayó una, cambió el titular) sin entrar a AWS: pegá acá el <b>token de API</b>
+                                    (<code>cash_…</code>) y el <b>secreto del webhook</b> de la cuenta NUEVA. Se guardan cifrados y mandan sobre los de AWS (SSM),
+                                    que quedan de respaldo. El token se prueba contra hgcash antes de guardar. Mientras cambiás, el sistema acepta los avisos
+                                    firmados con el secreto viejo Y el nuevo, así no se pierde ninguna carga.
+                                </p>
+                                <div id="hgcashCredStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
+                                <div class="form-group">
+                                    <label>Token de API (cash_…):</label>
+                                    <input type="password" id="hgcashCredToken" placeholder="(dejar vacío para no cambiarlo)" autocomplete="off" style="width:100%;">
+                                </div>
+                                <div class="form-group">
+                                    <label>Secreto del webhook:</label>
+                                    <input type="password" id="hgcashCredSecret" placeholder="(dejar vacío para no cambiarlo)" autocomplete="off" style="width:100%;">
+                                    <small style="color:#aaa;font-size:11px;">En el dashboard de la cuenta nueva de hgcash, configurá el webhook a: <code id="hgcashCredWebhookUrl">…</code></small>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button class="btn-primary" onclick="saveHgcashCredentials()">🔐 Probar y guardar</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashCredentials()" title="Borra lo cargado acá y vuelve a usar el token/secreto de AWS (SSM)">↩️ Volver a usar AWS (SSM)</button>
+                                    <span id="hgcashCredMsg" style="font-size:12px;color:#aaa;"></span>
+                                </div>
+                            </div>
+
+                            <!-- #326 Reenvío de los avisos de hgcash a otras páginas (misma cuenta hgcash) -->
+                            <div id="hgcashFanoutBox" style="margin-top:18px;padding:14px;border:1px solid rgba(83,189,235,0.45);border-radius:10px;background:rgba(83,189,235,0.05);">
+                                <h4 style="margin:0 0 6px;color:#53bdeb;font-size:14px;">🔁 Reenviar los avisos de hgcash a otras páginas</h4>
+                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                    hgcash permite <b>UNA sola dirección de webhook por cuenta</b>. Si varias páginas comparten la misma cuenta
+                                    hgcash, la página que tiene esa dirección cargada en hgcash le <b>reenvía cada aviso</b> a las demás, y cada una
+                                    carga solo las transferencias de <b>sus</b> clientes (por el comprobante). Poné acá la dirección del webhook de
+                                    cada una de las <b>otras</b> páginas, una por línea (máx. 5). Requisitos en la otra página: el <b>mismo secreto
+                                    del webhook</b> de esta cuenta hgcash y el banco automático activado. Una página que recibe avisos reenviados no
+                                    los vuelve a reenviar (no hay círculos).
+                                </p>
+                                <div id="hgcashFanoutStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
+                                <div class="form-group">
+                                    <label>Direcciones de las otras páginas (una por línea):</label>
+                                    <textarea id="hgcashFanoutUrls" rows="3" placeholder="https://otrapagina.com/api/hgcash/webhook" spellcheck="false" autocomplete="off" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+                                    <small style="color:#aaa;font-size:11px;">La dirección de ESTA página, para cargarla en la otra (o en hgcash): <code id="hgcashFanoutOwnUrl">…</code></small>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button class="btn-primary" onclick="saveHgcashFanout()">💾 Guardar reenvío</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashFanout()" title="Borra lo cargado acá y vuelve a usar HGCASH_FANOUT_URL de AWS (SSM)">↩️ Volver a usar AWS (SSM)</button>
+                                    <span id="hgcashFanoutMsg" style="font-size:12px;color:#aaa;"></span>
+                                </div>
+                            </div>
                         </div>
                         <!-- Movimientos del banco automático (hgcash) -->
                         <div id="hgcashMovementsPanel">

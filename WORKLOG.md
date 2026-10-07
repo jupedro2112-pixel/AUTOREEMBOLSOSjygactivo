@@ -4,7 +4,37 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-06**
+> **Última actualización: 2026-10-07**
+
+## Sesión 2026-10-07
+
+### 181. hgcash desde el PANEL: credenciales cifradas (token + secreto) y reenvío de webhooks a otras páginas — espec #320/#326 del hermano aplicada tal cual
+- **Owner:** aplicar `~/Documents/AUTOGIROXcompartido/docs/ESPEC-HGCASH-PANEL.md` bloque por
+  bloque, sin duplicar lo que ya estuviera. **Acá no había nada de #320/#326**: se aplicaron
+  los 6 bloques completos.
+- **Adaptación única:** este repo no tiene `getPublicBaseUrl()` → se definió sobre
+  `PUBLIC_BASE_URL` con default `https://autoreembolsos.com` (el dominio de ESTE clon). El header
+  `X-Forwarded-By` del reenvío dice `autoreembolsos` (en el hermano dice `vipcargas`). Se
+  conservó el guard extra del #117: además de la URL propia, nunca se reenvía al host del request.
+- **`src/services/hgcashService.js`:** `setTokenOverride/getTokenSource/getToken` (panel >
+  SSM), `getAccounts(withToken)` para probar un token antes de guardarlo; todas las llamadas ya
+  usaban `getToken()`.
+- **server.js:** bloque #320 (`_credKey/_credEncrypt/_credDecrypt` AES-256-GCM con clave
+  derivada de JWT_SECRET; `_loadHgcashCredentials` al arrancar +8 s y cada 60 s;
+  `_hgcashWebhookSecrets()`); el webhook valida la firma con cualquiera de los dos secretos y
+  loguea el origen de los rechazos; bloque #326 reemplaza el fan-out viejo de una sola URL
+  (`Config['hgcashFanout'].urls` hasta 5, cache 30 s, validación de URL https pública,
+  estadísticas por destino, anti-círculo). Endpoints `GET/POST/DELETE /api/admin/hgcash/
+  credentials` y `/fanout` (admin general). `GET /api/admin/hgcash/config` informa
+  `secretConfigured` (panel o SSM) y `webhookFullUrl` con el dominio real.
+- **Panel (admin-sw v57 → v58):** cards "🔐 Cuenta hgcash conectada (token y secreto)" y
+  "🔁 Reenviar los avisos de hgcash a otras páginas" dentro de Banco automático; se cargan junto
+  con la config. La línea de estado ya no muestra `https://vipcargas.com` fijo: usa
+  `webhookFullUrl`.
+- **Validado:** `node --check` OK (server.js, hgcashService.js, admin.js, admin-sw); HTML del
+  panel 777/777 divs, ids únicos; rutas nuevas después de `authMiddleware` (L~16134 vs L3805).
+  Redeploy (back + panel). **PROBAR en vivo:** ver pruebas 1-3 de la espec (token inválido
+  rechazado / válido lista la cuenta; carga real con la cuenta nueva; reenvío OK en la card).
 
 ## Sesión 2026-10-06
 

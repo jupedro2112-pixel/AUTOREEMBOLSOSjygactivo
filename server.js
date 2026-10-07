@@ -3342,11 +3342,70 @@ async function _sendRatingRequest(userId, trigger) {
 // authMiddleware (lo llama el banco). Valida firma HMAC sobre el body CRUDO,
 // guarda el movimiento (dedupe por id), responde 2xx rápido y matchea en
 // segundo plano. NUNCA carga si la config está apagada (modo sombra por defecto).
+// URL pública del sitio (sin barra final). #320/#326: la usan la URL propia del webhook y
+// las cards del panel. PUBLIC_BASE_URL (env property en EB) o el default de este clon.
+function getPublicBaseUrl() {
+  const v = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
+  return v || 'https://autoreembolsos.com';
+}
+
 // ============================================
-// FAN-OUT del webhook hgcash → autoreembolsos
+// #320 CREDENCIALES hgcash desde el PANEL (token de API + secreto del webhook)
 // ============================================
-// hgcash permite UNA sola URL de webhook por cuenta. vipcargas la recibe y la
-// reenvía al proyecto hermano (autoreembolsos, misma cuenta hgcash; cada uno
+// Owner: que un cambio de cuenta hgcash (se cae una, cambia el titular) lo pueda hacer un
+// admin desde el panel, sin entrar a AWS SSM. Se guardan CIFRADAS (AES-256-GCM, clave
+// derivada de JWT_SECRET, que ya vive en SSM) en Config['hgcashCredentials']; un dump de la
+// base no las expone. Cada instancia las carga en memoria al arrancar y cada 60 s.
+// Prioridad: panel > SSM. El webhook acepta la firma con CUALQUIERA de los dos secretos
+// (panel o SSM) → durante el cambio de cuenta no se pierde ningún aviso.
+// ⚠️ Si JWT_SECRET cambia, lo guardado no se puede descifrar → se usa SSM (y el panel avisa).
+let _hgcashPanelSecret = null;
+let _hgcashCredMeta = null; // { tokenLast4, secretLast4, updatedBy, updatedAt, decryptError }
+function _credKey() {
+  const base = process.env.JWT_SECRET || JWT_SECRET || '';
+  if (!base) return null;
+  return crypto.createHash('sha256').update(base + ':hgcash-credentials:v1').digest();
+}
+function _credEncrypt(plain) {
+  const key = _credKey(); if (!key) throw new Error('JWT_SECRET no disponible para cifrar');
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return [iv.toString('base64'), c.getAuthTag().toString('base64'), enc.toString('base64')].join('.');
+}
+function _credDecrypt(blob) {
+  const key = _credKey(); if (!key || !blob) return null;
+  const [iv, tag, data] = String(blob).split('.');
+  const d = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
+  d.setAuthTag(Buffer.from(tag, 'base64'));
+  return Buffer.concat([d.update(Buffer.from(data, 'base64')), d.final()]).toString('utf8');
+}
+async function _loadHgcashCredentials() {
+  try {
+    const v = await getConfig('hgcashCredentials', null);
+    if (!v || (!v.tokenEnc && !v.secretEnc)) {
+      hgcashPay.setTokenOverride(null); _hgcashPanelSecret = null; _hgcashCredMeta = null; return;
+    }
+    let token = null, secret = null, decryptError = false;
+    try { token = v.tokenEnc ? _credDecrypt(v.tokenEnc) : null; } catch (_) { decryptError = true; }
+    try { secret = v.secretEnc ? _credDecrypt(v.secretEnc) : null; } catch (_) { decryptError = true; }
+    hgcashPay.setTokenOverride(token);
+    _hgcashPanelSecret = secret || null;
+    _hgcashCredMeta = { tokenLast4: v.tokenLast4 || null, secretLast4: v.secretLast4 || null, updatedBy: v.updatedBy || null, updatedAt: v.updatedAt || null, decryptError };
+    if (decryptError) logger.error('[hgcash] credenciales del panel NO se pudieron descifrar (¿cambió JWT_SECRET?) — se usa SSM');
+  } catch (e) { logger.warn(`[hgcash] no se pudieron leer las credenciales del panel: ${e.message}`); }
+}
+setTimeout(() => { _loadHgcashCredentials(); }, 8 * 1000);
+setInterval(() => { _loadHgcashCredentials(); }, 60 * 1000);
+function _hgcashWebhookSecrets() {
+  return [_hgcashPanelSecret, process.env.HGCASH_WEBHOOK_SECRET || null].filter(Boolean);
+}
+
+// ============================================
+// FAN-OUT del webhook hgcash → otras páginas (misma cuenta hgcash)
+// ============================================
+// hgcash permite UNA sola URL de webhook por cuenta. La página que la tiene la
+// recibe y la reenvía a las otras páginas que comparten la cuenta (cada una
 // matchea sus propios comprobantes, no hay doble carga). Se reenvía el body
 // CRUDO (bytes exactos) con la firma ORIGINAL (X-HG-Webhook-Signature) para que
 // el destino valide el mismo HMAC con el secret compartido. Fire-and-forget con
@@ -3354,81 +3413,142 @@ async function _sendRatingRequest(userId, trigger) {
 // local NO se ve afectado en nada (ni demora la respuesta 200 a hgcash).
 // URL configurable por env/SSM: HGCASH_FANOUT_URL (leída lazy — SSM carga en el
 // bootstrap async). Poner 'off' para desactivar el reenvío sin deploy de código.
+// ⚠️ Este entorno ES autoreembolsos.com: el default histórico apuntaba a sí mismo
+// (incidente #117, bucle 504). El anti-círculo de abajo lo cubre igual.
 function _hgcashFanoutUrl() {
   const v = String(process.env.HGCASH_FANOUT_URL || '').trim();
   if (v.toLowerCase() === 'off') return null;
   return v || 'https://www.autoreembolsos.com/api/hgcash/webhook';
 }
 
+// #326 (owner 2026-10-06): los destinos del reenvío se cargan desde el PANEL
+// (Banco automático → "🔁 Reenviar los avisos a otras páginas"), sin tocar SSM.
+// Config['hgcashFanout'] = { urls: [...] } (hasta 5). Si ese Config EXISTE manda
+// el panel (lista vacía = no reenviar a nadie); si no existe, sigue valiendo
+// HGCASH_FANOUT_URL como antes. Cache de 30 s por instancia.
+// Anti-círculo: (1) un aviso que YA llegó reenviado (trae X-Forwarded-By) no se
+// vuelve a reenviar — la página que tiene el webhook en hgcash es la única que
+// reparte, y lista a TODAS las demás; (2) nunca se reenvía a la URL propia.
+const HGCASH_FANOUT_KEY = 'hgcashFanout';
+const HGCASH_FANOUT_MAX = 5;
+const HGCASH_FANOUT_TTL_MS = 30000;
+let _hgcashFanoutCache = null; // { at, value: { source, urls } }
+const _hgcashFanoutStats = new Map(); // url → { ok, fail, lastAt, lastOk, lastError } (por instancia, desde el arranque)
+
+function _fanoutUrlKey(u) {
+  try {
+    const p = new URL(String(u));
+    return `${p.protocol}//${p.host.toLowerCase()}${p.pathname.replace(/\/+$/, '')}`;
+  } catch (_) { return String(u || '').trim().toLowerCase().replace(/\/+$/, ''); }
+}
+function _hgcashOwnWebhookUrl() {
+  return `${getPublicBaseUrl()}/api/hgcash/webhook`;
+}
+// Valida una URL de destino cargada desde el panel. Tira Error con mensaje para el admin.
+function _normalizeFanoutUrl(raw) {
+  const v = String(raw || '').trim();
+  if (!v) throw new Error('Hay una línea vacía.');
+  if (v.length > 300) throw new Error('Una de las direcciones es demasiado larga.');
+  let p;
+  try { p = new URL(v); } catch (_) { throw new Error(`"${v.slice(0, 60)}" no es una dirección válida (tiene que empezar con https://).`); }
+  if (p.protocol !== 'https:') throw new Error(`"${p.host}": la dirección tiene que empezar con https://`);
+  if (p.username || p.password) throw new Error(`"${p.host}": la dirección no puede llevar usuario ni contraseña.`);
+  const host = p.hostname.toLowerCase();
+  if (host === 'localhost' || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/.test(host) || host.startsWith('[') || !host.includes('.')) {
+    throw new Error(`"${host}": tiene que ser el dominio público de la otra página.`);
+  }
+  if (!p.pathname || p.pathname === '/') p.pathname = '/api/hgcash/webhook'; // pegaron solo el dominio
+  p.hash = '';
+  return p.toString();
+}
+async function _getHgcashFanout(opts) {
+  const now = Date.now();
+  if (!(opts && opts.fresh) && _hgcashFanoutCache && (now - _hgcashFanoutCache.at) < HGCASH_FANOUT_TTL_MS) {
+    return _hgcashFanoutCache.value;
+  }
+  const raw = await getConfig(HGCASH_FANOUT_KEY, null);
+  let value;
+  if (raw && Array.isArray(raw.urls)) {
+    value = { source: 'panel', urls: raw.urls.map((u) => String(u || '').trim()).filter(Boolean).slice(0, HGCASH_FANOUT_MAX) };
+  } else {
+    const envUrl = _hgcashFanoutUrl();
+    value = { source: 'env', urls: envUrl ? [envUrl] : [] };
+  }
+  _hgcashFanoutCache = { at: now, value };
+  return value;
+}
+function _fanoutStat(url, ok, err) {
+  const st = _hgcashFanoutStats.get(url) || { ok: 0, fail: 0, lastAt: null, lastOk: null, lastError: null };
+  if (ok) st.ok++; else { st.fail++; st.lastError = String(err || '').slice(0, 160); }
+  st.lastAt = new Date(); st.lastOk = !!ok;
+  _hgcashFanoutStats.set(url, st);
+}
+
 function _fanoutHgcashWebhook(req) {
   try {
-    // ── ANTI-BUCLE (incidente 2026-08-20) ────────────────────────────────────
-    // 1) Un webhook que YA viene reenviado por el proyecto hermano trae el
-    //    header X-Forwarded-By: NO se re-reenvía (cortaba acá y no había chequeo:
-    //    este entorno ES autoreembolsos.com y el default del fanout apuntaba a
-    //    su propio dominio → cada webhook se reenviaba a sí mismo en bucle
-    //    infinito hasta tumbar el entorno con 504).
+    // Ya viene reenviado por otra página → no se reparte de nuevo (anti-círculo).
     if (req.get('X-Forwarded-By')) return;
-    const url = _hgcashFanoutUrl();
-    if (!url) return;
-    // 2) Nunca reenviar a nuestro PROPIO dominio (PUBLIC_BASE_URL o el host del
-    //    request): aunque la config quede mal, el bucle no se puede armar.
-    try {
-      const dstHost = new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
-      const ownHosts = [];
-      const pub = String(process.env.PUBLIC_BASE_URL || '').trim();
-      if (pub) { try { ownHosts.push(new URL(pub).hostname); } catch (_) {} }
-      const reqHost = String(req.get('host') || '').split(':')[0];
-      if (reqHost) ownHosts.push(reqHost);
-      for (const h of ownHosts) {
-        if (String(h).replace(/^www\./i, '').toLowerCase() === dstHost) {
-          logger.warn(`[hgcash-fanout] la URL de reenvío (${dstHost}) es NUESTRO propio dominio — reenvío omitido (anti-bucle). Configurá HGCASH_FANOUT_URL=off o apuntala al proyecto hermano.`);
-          return;
-        }
-      }
-    } catch (_) {}
-    const axios = require('axios');
+    // Body y firma se capturan YA (sincrónico); los destinos se resuelven aparte.
     const rawBody = req.rawBody ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}), 'utf8');
     const headers = {
       'Content-Type': req.get('Content-Type') || 'application/json',
-      'X-Forwarded-By': 'vipcargas'
+      'X-Forwarded-By': 'autoreembolsos'
     };
     const sig = req.get('X-HG-Webhook-Signature');
     if (sig) headers['X-HG-Webhook-Signature'] = sig;
-    // maxRedirects:0 a propósito: un redirect (http→https, www↔apex) rompería la
-    // entrega del POST — mejor que falle y quede visible en los logs.
-    const send = () => axios.post(url, rawBody, { headers, timeout: 8000, maxRedirects: 0 });
-    send().catch((e1) => {
-      logger.warn(`[hgcash-fanout] primer intento falló (${e1.message}) — reintento en 15s`);
-      const t = setTimeout(() => {
-        send().catch((e2) => {
-          logger.warn(`[hgcash-fanout] reenvío a ${url} falló definitivamente: ${e2.message}`);
-        });
-      }, 15000);
-      if (t.unref) t.unref();
-    });
+    _getHgcashFanout().then((cfg) => {
+      const own = _fanoutUrlKey(_hgcashOwnWebhookUrl());
+      // Además de la URL propia, nunca al host del request (el panel/EB pueden tener otro dominio).
+      const reqHost = String(req.get('host') || '').split(':')[0].replace(/^www\./i, '').toLowerCase();
+      for (const url of cfg.urls) {
+        if (_fanoutUrlKey(url) === own) continue; // nunca a nosotros mismos
+        try { if (reqHost && new URL(url).hostname.replace(/^www\./i, '').toLowerCase() === reqHost) continue; } catch (_) {}
+        _fanoutSendOne(url, rawBody, headers);
+      }
+    }).catch((e) => logger.warn(`[hgcash-fanout] no se pudieron leer los destinos: ${e.message}`));
   } catch (e) {
     logger.warn(`[hgcash-fanout] error preparando reenvío: ${e.message}`);
   }
 }
+function _fanoutSendOne(url, rawBody, headers) {
+  const axios = require('axios');
+  // maxRedirects:0 a propósito: un redirect (http→https, www↔apex) rompería la
+  // entrega del POST — mejor que falle y quede visible en los logs y en el panel.
+  const send = () => axios.post(url, rawBody, { headers, timeout: 8000, maxRedirects: 0 });
+  send().then(() => _fanoutStat(url, true)).catch((e1) => {
+    logger.warn(`[hgcash-fanout] ${url}: primer intento falló (${e1.message}) — reintento en 15s`);
+    const t = setTimeout(() => {
+      send().then(() => _fanoutStat(url, true)).catch((e2) => {
+        _fanoutStat(url, false, e2.message);
+        logger.warn(`[hgcash-fanout] reenvío a ${url} falló definitivamente: ${e2.message}`);
+      });
+    }, 15000);
+    if (t.unref) t.unref();
+  });
+}
 
 app.post('/api/hgcash/webhook', async (req, res) => {
   try {
-    const secret = process.env.HGCASH_WEBHOOK_SECRET || null;
-    if (secret) {
+    const secrets = _hgcashWebhookSecrets(); // #320: panel y/o SSM
+    if (secrets.length) {
       const sigHeader = req.get('X-HG-Webhook-Signature') || '';
       const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
-      const expected = crypto.createHmac('sha256', secret).update(raw, 'utf8').digest('hex');
       const provided = sigHeader.toLowerCase().startsWith('sha256=') ? sigHeader.slice(7).toLowerCase() : sigHeader.toLowerCase();
-      if (!safeCompare(expected, provided)) {
-        logger.warn('[hgcash] webhook con firma inválida — rechazado');
+      const okSig = secrets.some((sec) => safeCompare(crypto.createHmac('sha256', sec).update(raw, 'utf8').digest('hex'), provided));
+      if (!okSig) {
+        // Se loguea el origen (IP, X-Forwarded-By del fan-out de otro proyecto, UA, id/monto
+        // del payload) para identificar al emisor de los rechazos.
+        try {
+          const b = req.body || {};
+          logger.warn(`[hgcash] webhook con firma inválida — rechazado (ip=${req.ip} fwdBy=${req.get('X-Forwarded-By') || '-'} ua=${String(req.get('User-Agent') || '-').slice(0, 40)} id=${b.id || b.movementId || '-'} amount=${b.amount != null ? b.amount : '-'} type=${b.type || b.eventType || b.topic || '-'} sig=${provided ? 'sí' : 'NO'})`);
+        } catch (_) { logger.warn('[hgcash] webhook con firma inválida — rechazado'); }
         return res.status(401).json({ error: 'firma inválida' });
       }
     } else {
       // Fail-closed en producción: sin secreto no se puede validar la firma → NO se
       // procesa el webhook (evita inyección de movimientos/cargas falsas). En dev se permite.
       if (process.env.NODE_ENV === 'production') {
-        logger.error('[hgcash] webhook RECHAZADO en producción: falta HGCASH_WEBHOOK_SECRET en SSM');
+        logger.error('[hgcash] webhook RECHAZADO en producción: falta el secreto (panel → Banco automático, o HGCASH_WEBHOOK_SECRET en SSM)');
         return res.status(503).json({ error: 'webhook no configurado' });
       }
       logger.warn('[hgcash] webhook recibido SIN HGCASH_WEBHOOK_SECRET — no se valida firma (solo dev)');
@@ -15998,14 +16118,127 @@ app.get('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req,
     res.json({
       config: cfg,
       // No exponemos el secreto; sólo si está cargado (para que el panel avise).
-      secretConfigured: !!process.env.HGCASH_WEBHOOK_SECRET,
+      secretConfigured: _hgcashWebhookSecrets().length > 0, // #320: panel o SSM
       aiEnabled: comprobanteAi.isEnabled(),
-      webhookUrl: '/api/hgcash/webhook'
+      webhookUrl: '/api/hgcash/webhook',
+      // URL COMPLETA con el dominio real de este clon (el panel la mostraba con vipcargas.com fijo).
+      webhookFullUrl: `${getPublicBaseUrl()}/api/hgcash/webhook`
     });
   } catch (error) {
     console.error('Error obteniendo config hgcash:', error);
     res.status(500).json({ error: 'Error del servidor' });
   }
+});
+
+// #320 Credenciales hgcash desde el panel (token de API + secreto del webhook), solo admin general.
+app.get('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    await _loadHgcashCredentials();
+    const m = _hgcashCredMeta || {};
+    res.json({
+      tokenSource: hgcashPay.getTokenSource(),        // panel | ssm | none
+      panelToken: !!m.tokenLast4, panelSecret: !!m.secretLast4,
+      tokenLast4: m.tokenLast4 || null, secretLast4: m.secretLast4 || null,
+      updatedBy: m.updatedBy || null, updatedAt: m.updatedAt || null, decryptError: !!m.decryptError,
+      ssmToken: !!process.env.HGCASH_API_TOKEN, ssmSecret: !!process.env.HGCASH_WEBHOOK_SECRET,
+      webhookFullUrl: `${getPublicBaseUrl()}/api/hgcash/webhook`
+    });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {};
+    const token = typeof b.token === 'string' ? b.token.trim() : '';
+    const secret = typeof b.webhookSecret === 'string' ? b.webhookSecret.trim() : '';
+    if (!token && !secret) return res.status(400).json({ error: 'Pegá el token de API y/o el secreto del webhook' });
+    if (token && (token.length < 10 || token.length > 300 || /\s/.test(token))) return res.status(400).json({ error: 'El token no parece válido' });
+    if (secret && (secret.length < 8 || secret.length > 300 || /\s/.test(secret))) return res.status(400).json({ error: 'El secreto no parece válido' });
+    if (!_credKey()) return res.status(503).json({ error: 'No se puede cifrar ahora (falta JWT_SECRET). Usá SSM.' });
+    // El token se PRUEBA contra hgcash antes de guardar: si no anda, no se pisa el que funciona.
+    let accounts = null;
+    if (token) {
+      const t = await hgcashPay.getAccounts(token);
+      if (!t.ok) return res.status(400).json({ error: 'hgcash rechazó ese token: ' + String(t.error || '').slice(0, 160) });
+      accounts = (t.data || []).map((a) => ({ id: a.id, currency: a.currency, status: a.status, name: a.name || a.holderName || a.alias || null }));
+    }
+    const prev = (await getConfig('hgcashCredentials', null)) || {};
+    const next = Object.assign({}, prev, { updatedBy: req.user.username, updatedAt: new Date() });
+    if (token) { next.tokenEnc = _credEncrypt(token); next.tokenLast4 = token.slice(-4); }
+    if (secret) { next.secretEnc = _credEncrypt(secret); next.secretLast4 = secret.slice(-4); }
+    await setConfig('hgcashCredentials', next);
+    if (token) {
+      // Cuenta nueva → el accountId cacheado es de la VIEJA: se limpia y se resuelve con el token nuevo (#53).
+      try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: null })); } catch (_) {}
+    }
+    await _loadHgcashCredentials();
+    logger.warn(`[hgcash] credenciales cambiadas desde el panel por ${req.user.username}: ${token ? 'token …' + token.slice(-4) : ''}${token && secret ? ' + ' : ''}${secret ? 'secreto …' + secret.slice(-4) : ''}`);
+    res.json({ success: true, tokenSource: hgcashPay.getTokenSource(), accounts });
+  } catch (e) { logger.warn(`[hgcash] credentials POST: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.delete('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    await setConfig('hgcashCredentials', { tokenEnc: null, secretEnc: null, tokenLast4: null, secretLast4: null, updatedBy: req.user.username, updatedAt: new Date() });
+    try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: null })); } catch (_) {}
+    await _loadHgcashCredentials();
+    logger.warn(`[hgcash] credenciales del panel BORRADAS por ${req.user.username} → vuelve a SSM`);
+    res.json({ success: true, tokenSource: hgcashPay.getTokenSource() });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// #326 Reenvío (fan-out) de los avisos de hgcash a otras páginas — desde el panel.
+async function _hgcashFanoutPayload() {
+  const cfg = await _getHgcashFanout({ fresh: true });
+  const envUrl = _hgcashFanoutUrl();
+  return {
+    source: cfg.source,                 // panel | env
+    urls: cfg.urls,
+    envUrl: envUrl || null,             // lo que valdría sin config del panel
+    ownUrl: _hgcashOwnWebhookUrl(),
+    max: HGCASH_FANOUT_MAX,
+    stats: cfg.urls.map((u) => Object.assign({ url: u }, _hgcashFanoutStats.get(u) || { ok: 0, fail: 0, lastAt: null, lastOk: null, lastError: null }))
+  };
+}
+app.get('/api/admin/hgcash/fanout', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    res.json(await _hgcashFanoutPayload());
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/hgcash/fanout', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const rawList = Array.isArray(req.body && req.body.urls) ? req.body.urls : [];
+    const own = _fanoutUrlKey(_hgcashOwnWebhookUrl());
+    const urls = [], seen = new Set();
+    for (const raw of rawList) {
+      if (!String(raw || '').trim()) continue;
+      let u;
+      try { u = _normalizeFanoutUrl(raw); } catch (e) { return res.status(400).json({ error: e.message }); }
+      const k = _fanoutUrlKey(u);
+      if (k === own) return res.status(400).json({ error: 'Esa es la dirección de ESTA página: acá van las de las OTRAS páginas.' });
+      if (seen.has(k)) continue;
+      seen.add(k); urls.push(u);
+    }
+    if (urls.length > HGCASH_FANOUT_MAX) return res.status(400).json({ error: `Máximo ${HGCASH_FANOUT_MAX} páginas.` });
+    await Config.set(HGCASH_FANOUT_KEY, { urls }, req.user.username);
+    _hgcashFanoutCache = null;
+    logger.info(`[hgcash-fanout] ${req.user.username} configuró el reenvío desde el panel: ${urls.length ? urls.join(', ') : '(ninguno)'}`);
+    res.json(Object.assign({ success: true }, await _hgcashFanoutPayload()));
+  } catch (e) {
+    logger.error(`[hgcash-fanout] guardar falló: ${e.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+app.delete('/api/admin/hgcash/fanout', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    await Config.deleteOne({ key: HGCASH_FANOUT_KEY });
+    _hgcashFanoutCache = null;
+    logger.info(`[hgcash-fanout] ${req.user.username} borró la config del panel (vuelve a HGCASH_FANOUT_URL)`);
+    res.json(Object.assign({ success: true }, await _hgcashFanoutPayload()));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 
 app.post('/api/admin/hgcash/config', authMiddleware, adminMiddleware, async (req, res) => {

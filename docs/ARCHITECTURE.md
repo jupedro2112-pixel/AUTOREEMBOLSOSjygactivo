@@ -288,7 +288,8 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   pendiente del mismo monto (`hgcashConsumeOnManualDeposit`). Mensajes `/sys_deposit*`,
   `/sys_reminder`, `/sys_install_app`, `/sys_recover_100`.
 - **AUTO-CARGA hgcash** (`POST /api/hgcash/webhook`, firma HMAC sobre rawBody,
-  fail-closed en prod): guarda BankMovement → matching contra Comprobantes por
+  fail-closed en prod; **#181: la firma se acepta con el secreto del PANEL o el de SSM**,
+  `_hgcashWebhookSecrets()`): guarda BankMovement → matching contra Comprobantes por
   monto + (N° operación==coelsa/externalID, o nombre de origen + destino consistente)
   dentro de una ventana (60min desde comprobante / 10min desde movimiento). Ambigüedad
   → NO carga. ⚠️ **Si el comprobante muestra un CBU destino, ese CBU tiene que ser
@@ -328,13 +329,24 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   bonus del agente es su decisión, y el modal Depositar (`app-bonus-hint`:
   `bankDup` confirmada / `bankPossible` por IA) se lo avisa. `fraud-check` suma la
   razón `bank` (strong).
-  **Fan-out** (#94): reenvía el webhook crudo+firma a autoreembolsos.com
-  (`HGCASH_FANOUT_URL`, 'off' para apagar). ⚠️ **Guard anti-bucle** (#117,
-  incidente 2026-08-20): NO se reenvía si el webhook ya trae `X-Forwarded-By`
-  (es un reenvío del hermano) ni si el destino es nuestro PROPIO dominio
-  (`PUBLIC_BASE_URL`/host del request) — sin ese guard, este código corriendo
-  EN autoreembolsos.com se reenviaba a sí mismo en bucle infinito hasta
-  tumbar el entorno (504 en todo).
+  **Credenciales hgcash desde el panel (#181, espec #320 del hermano):** card "🔐 Cuenta
+  hgcash conectada" en Banco automático (admin general): token de API + secreto del webhook
+  cifrados AES-256-GCM con clave derivada de `JWT_SECRET` en `Config['hgcashCredentials']`
+  (`_credEncrypt/_credDecrypt`), cargados en memoria al arrancar (+8 s) y cada 60 s
+  (`_loadHgcashCredentials` → `hgcashPay.setTokenOverride`, `_hgcashPanelSecret`).
+  **Prioridad panel > SSM**; el token se prueba con `getAccounts(token)` antes de guardar y
+  al cambiarlo se limpia `hgcash.accountId`. `GET/POST/DELETE /api/admin/hgcash/credentials`.
+  Si cambia `JWT_SECRET`, lo guardado no se descifra → cae a SSM y la card avisa.
+  **Fan-out** (#94 → #181, espec #326): reenvía el webhook crudo+firma a las OTRAS páginas
+  que comparten la cuenta hgcash. Destinos desde el panel (`Config['hgcashFanout'].urls`,
+  hasta 5, card "🔁 Reenviar los avisos…", `GET/POST/DELETE /api/admin/hgcash/fanout`, cache
+  30 s, estadísticas por destino en memoria); sin ese Config vale `HGCASH_FANOUT_URL`
+  ('off' para apagar; ⚠️ el default histórico apunta a autoreembolsos.com = este clon).
+  ⚠️ **Guard anti-bucle** (#117, incidente 2026-08-20): NO se reenvía si el webhook ya
+  trae `X-Forwarded-By` (es un reenvío de otra página) ni si el destino es la URL propia
+  (`getPublicBaseUrl()` = `PUBLIC_BASE_URL` o default del clon) o el host del request — sin
+  ese guard, este código corriendo EN autoreembolsos.com se reenviaba a sí mismo en bucle
+  infinito hasta tumbar el entorno (504 en todo).
 - **Retiro self-service**: `POST /api/withdrawal/request` — exige phoneVerified, lock
   anti-doble, chequeo de saldo (UX), dedup 10min → crea PendingPayout
   (`deductAtPay:true`, SIN descontar) → mueve el chat a Pagos. El AGENTE confirma:

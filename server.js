@@ -3398,7 +3398,11 @@ async function _loadHgcashCredentials() {
 setTimeout(() => { _loadHgcashCredentials(); }, 8 * 1000);
 setInterval(() => { _loadHgcashCredentials(); }, 60 * 1000);
 function _hgcashWebhookSecrets() {
-  return [_hgcashPanelSecret, process.env.HGCASH_WEBHOOK_SECRET || null].filter(Boolean);
+  // #182 (owner 2026-10-13, réplica de PAUTANUEVAsantino #323): si hay secreto en el PANEL se
+  // acepta SOLO ese — el de SSM deja de valer, así los avisos de la cuenta hgcash VIEJA
+  // (firmados con el secreto viejo de AWS) se rechazan. Sin secreto en el panel → el de SSM.
+  if (_hgcashPanelSecret) return [_hgcashPanelSecret];
+  return [process.env.HGCASH_WEBHOOK_SECRET || null].filter(Boolean);
 }
 
 // ============================================

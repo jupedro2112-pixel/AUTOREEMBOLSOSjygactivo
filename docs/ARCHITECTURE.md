@@ -347,6 +347,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   (`getPublicBaseUrl()` = `PUBLIC_BASE_URL` o default del clon) o el host del request — sin
   ese guard, este código corriendo EN autoreembolsos.com se reenviaba a sí mismo en bucle
   infinito hasta tumbar el entorno (504 en todo).
+- **Webhook hgcash — secreto exclusivo (#182, 2026-10-13):** si hay secreto cargado en el panel,
+  `_hgcashWebhookSecrets()` devuelve SOLO ese: el `HGCASH_WEBHOOK_SECRET` de SSM deja de valer y
+  los avisos de la cuenta hgcash vieja se rechazan. Sin secreto en el panel vale el de SSM. ⚠️ Si
+  las dos cuentas comparten usuario/secreto de hgcash esto no alcanza (no hay filtro por CBU destino).
 - **Retiro self-service**: `POST /api/withdrawal/request` — exige phoneVerified, lock
   anti-doble, chequeo de saldo (UX), dedup 10min → crea PendingPayout
   (`deductAtPay:true`, SIN descontar) → mueve el chat a Pagos. El AGENTE confirma:

@@ -832,8 +832,8 @@
                                 <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
                                     Para <b>cambiar de cuenta hgcash</b> (se cayó una, cambió el titular) sin entrar a AWS: pegá acá el <b>token de API</b>
                                     (<code>cash_…</code>) y el <b>secreto del webhook</b> de la cuenta NUEVA. Se guardan cifrados y mandan sobre los de AWS (SSM),
-                                    que quedan de respaldo. El token se prueba contra hgcash antes de guardar. Mientras cambiás, el sistema acepta los avisos
-                                    firmados con el secreto viejo Y el nuevo, así no se pierde ninguna carga.
+                                    que quedan de respaldo. El token se prueba contra hgcash antes de guardar. Con un secreto cargado acá, los avisos
+                                    firmados con el secreto de AWS (la cuenta vieja) se <b>rechazan</b>: solo entra lo de la cuenta nueva.
                                 </p>
                                 <div id="hgcashCredStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
                                 <div class="form-group">

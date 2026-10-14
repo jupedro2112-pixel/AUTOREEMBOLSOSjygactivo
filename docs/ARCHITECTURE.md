@@ -439,8 +439,9 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `GET /api/admin/referrals/:userId/netwin` (server.js, admin) = netwin del mes EN VIVO por
   referido vía `_referralNetwinMonth` (cache 15 min, concurrencia 4, tope 80), que el panel pide
   después de pintar el detalle y rellena en la tabla de referidos.
-- **Lotes de FICHAS por tiempo con RECLAMO (#177):** `NotifBatch.claimRequired` (default en el
-  panel para fichas 'window'; tilde "directo" = modo viejo). El motor no acredita: manda el aviso y
+- **Lotes de FICHAS por tiempo con RECLAMO (#177, obligatorio desde #183):** `NotifBatch.claimRequired`
+  siempre `true` para fichas 'window' (el tilde "acreditar directo" se eliminó; owner 2026-10-14:
+  nunca cargar directo en JUGAYGANA, es pérdida de plata). El motor no acredita: manda el aviso y
   el cliente reclama desde la PWA (`GET /api/gift/pending`, `POST /api/gift/claim {batchId}`,
   server.js junto a `/api/gift-code/claim`): reserva atómica `recipients.$.claimedAt` → 
   `_notifBatchFichasAfterClaim` (mismo helper que el canje por código: crédito JUGAYGANA, ambiguo =

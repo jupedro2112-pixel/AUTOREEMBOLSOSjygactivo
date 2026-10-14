@@ -20749,9 +20749,10 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
 
     const sentAt = new Date();
     const expiresAt = new Date(sentAt.getTime() + validHours * 3600 * 1000);
-    // #177: fichas POR TIEMPO se acreditan recién cuando el cliente las RECLAMA con el botón
-    // (default). Sólo si el panel manda directCredit:true se acreditan a todos al enviar.
-    const claimRequired = mode === 'window' && giftType === 'fixed' && b.directCredit !== true;
+    // #177/#182: fichas POR TIEMPO se acreditan SOLO cuando el cliente las RECLAMA con el botón.
+    // Owner 2026-10-14: nunca directo a todos ("es pérdida de plata"); el tilde "acreditar
+    // directo" se eliminó del panel y acá se ignora cualquier directCredit que llegue.
+    const claimRequired = mode === 'window' && giftType === 'fixed';
     const batch = {
       id: uuidv4(),
       name, mode, giftType, amount, rolloverX, code, validHours, useHours, sentAt, expiresAt,
@@ -20792,7 +20793,7 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
       notFound,
       skipped,
       message: claimRequired
-        ? `Lote creado: ${users.length} destinatarios. Las notificaciones están saliendo en segundo plano. Las fichas se acreditan SOLO a los que toquen RECLAMAR en la app (vigente ${validHours}hs).`
+        ? `Lote creado: ${users.length} destinatarios. Las notificaciones están saliendo en segundo plano. Las fichas se acreditan SOLO a los que toquen RECLAMAR en la app (vigente ${validHours}hs); en "Ver lote" ves quién reclamó y quién no.`
         : `Lote creado: ${users.length} destinatarios. Las notificaciones están saliendo en segundo plano.`
     });
   } catch (err) {

@@ -11740,9 +11740,8 @@ async function sendGiftBatch() {
     }
     const rolloverX = 0; // JUGAYGANA: sin rollover
     const esFichas = giftType === 'fixed';
-    // #177: fichas por tiempo → reclamo con botón salvo que el agente tilde "directo".
-    const directCredit = !!(document.getElementById('giftBatchDirectCredit') || {}).checked;
-    const conReclamo = esFichas && mode === 'window' && !directCredit;
+    // #177/#182: fichas por tiempo → SIEMPRE con reclamo (nunca directo a todos).
+    const conReclamo = esFichas && mode === 'window';
     // #263: aplicación del %
     const applyMode = (document.querySelector('input[name="giftBatchApply"]:checked') || {}).value || 'auto';
     const applyScope = (document.querySelector('input[name="giftBatchScope"]:checked') || {}).value || 'first';
@@ -11770,10 +11769,8 @@ async function sendGiftBatch() {
         notaFinal = 'Cualquier cliente que consiga el código activa su +' + amount + '% (cartel verde al agente), una vez por cuenta.';
     } else if (esFichas && mode === 'code') {
         notaFinal = '⚠️ La plata se acredita AUTOMÁTICAMENTE cuando cada uno canjea su código — sin intervención del agente.';
-    } else if (esFichas && conReclamo) {
-        notaFinal = '💰 Con RECLAMO: no se acredita nada al enviar. Cada cliente que toque RECLAMAR en su app recibe $' + amount.toLocaleString('es-AR') + ' al instante (máximo posible ≈ $' + (amount * count).toLocaleString('es-AR') + ' si reclaman todos). Lo que no se reclame antes de las ' + validHours + 'hs no se paga.';
     } else if (esFichas) {
-        notaFinal = '🚨 ATENCIÓN: se le acreditan $' + amount.toLocaleString('es-AR') + ' A CADA UNO apenas se envíe el lote — TOTAL ≈ $' + (amount * count).toLocaleString('es-AR') + ', automático, sin intervención del agente, aunque después no jueguen.';
+        notaFinal = '💰 Con RECLAMO: no se acredita nada al enviar. Cada cliente que toque RECLAMAR en su app recibe $' + amount.toLocaleString('es-AR') + ' al instante (máximo posible ≈ $' + (amount * count).toLocaleString('es-AR') + ' si reclaman todos). Lo que no se reclame antes de las ' + validHours + 'hs no se paga. En "Ver lote" ves quién reclamó y quién no.';
     } else if (applyMode === 'auto') {
         notaFinal = '⚡ El % se suma SOLO cuando cada cliente carga (transferencia automática o carga manual sin bonus)' + (applyScope === 'all' ? ', en TODAS sus cargas' : ', una sola vez') + franjaTxt + ', hasta que venza la vigencia. Nadie tiene que marcar nada.';
     } else {
@@ -11792,7 +11789,6 @@ async function sendGiftBatch() {
             method: 'POST',
             body: JSON.stringify({
                 mode, giftType, amount, validHours, message, rolloverX,
-                directCredit, // #177 (solo fichas por tiempo)
                 useHours: Number((document.getElementById('giftBatchUseHours') || {}).value) || 24, // #173
                 applyMode, applyScope, applyFrom, applyTo,
                 ...audience,

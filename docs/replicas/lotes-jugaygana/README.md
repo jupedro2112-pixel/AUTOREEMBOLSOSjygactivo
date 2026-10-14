@@ -48,9 +48,10 @@ REGALO:
 - **Fichas por tiempo con RECLAMO (#177, default):** al enviar no se acredita nada; el cliente ve
   un cartel "🎁 Tenés $X en fichas de regalo — RECLAMAR" en el inicio de la app y dentro del modal
   🎁; al tocarlo se reserva atómico y se acredita al instante (`GET /api/gift/pending`,
-  `POST /api/gift/claim {batchId}`). Lo que no se reclama antes de la vigencia no se paga. El panel
-  tiene un tilde "acreditar directo a todos" para el modo viejo, y el historial dice "N acreditados
-  ($X) · N sin reclamar / no reclamaron (vencido)".
+  `POST /api/gift/claim {batchId}`). Lo que no se reclama antes de la vigencia no se paga. **Nunca
+  se acredita directo a todos** (#183: el tilde "directo" se eliminó; owner: es pérdida de plata).
+  El historial dice "N acreditados ($X) · N sin reclamar / no reclamaron (vencido)" y "Ver lote"
+  muestra por destinatario quién reclamó, quién no y a quién le venció.
 - Motor de envío **reanudable y multi-instancia** (claim atómico por destinatario, cron 45 s),
   historial "📤 Lotes enviados" con resumen por lote (canjearon / cargaron con el bono / activos /
   vencidos) y detalle por destinatario.
@@ -212,7 +213,7 @@ tabla "Archivos del paquete":
    mucho UN bono automático; reserva atómica → crédito → settle, revert si el crédito falló.
    Si acá no existe multicuenta por banco, tratá _dupBank/_dupBankManual como null.
 4. Panel admin (08, 09): banner del bono en el chat, card "🎁 Lote con regalo" (con el bloque
-   "💰 Fichas con RECLAMO" y el tilde directo), "📤 Lotes enviados" con el resumen por lote;
+   "💰 Las fichas se RECLAMAN", sin tilde directo), "📤 Lotes enviados" con el resumen por lote;
    funciones en admin.js y llamadas al abrir el chat y la sección. Mantené los nombres de los
    onclick inline. Cambiá textos "JUGAYGANA" por girox. Bumpeá CACHE_VERSION de admin-sw.js.
 5. PWA (10, 11, 12): botón 🎁, modal "Regalos con código" (RECLAMAR con botón + canjear +
@@ -246,5 +247,5 @@ Listá al final qué ya existía, qué portaste, qué adaptaste y qué queda par
 8. Fichas POR TIEMPO (#177): enviar $500 a una cuenta de prueba → NO se acredita; en la app aparece
    el cartel dorado "Tenés $500 en fichas de regalo — RECLAMAR" (home y modal 🎁) → tocar → "✅
    acreditado", saldo sube, nota interna en el chat; el historial del lote dice "1 acreditados ($500)
-   · 0 sin reclamar". Dejar vencer otro → "no reclamó y venció (no se pagó)". Con el tilde "directo"
-   se acredita a todos al enviar, como antes.
+   · 0 sin reclamar". Dejar vencer otro → "no reclamó y venció (no se pagó)". No existe el modo
+   "directo a todos".

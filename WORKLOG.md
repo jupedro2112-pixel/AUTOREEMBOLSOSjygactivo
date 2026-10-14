@@ -6,6 +6,25 @@
 >
 > **Última actualización: 2026-10-07**
 
+## Sesión 2026-10-14
+
+### 183. Fichas de lote por tiempo: SIEMPRE con reclamo — se eliminó el tilde "acreditar directo a todos"
+- **Owner:** "que no se cargue directo en JUGAYGANA porque es pérdida de plata, solo que se
+  reclame; y que en el detalle del lote aparezca quién reclamó y quién no".
+- **Cambio:** `POST /api/admin/notif-batches` fija `claimRequired = true` para toda fichas en
+  modo 'window' e ignora cualquier `directCredit` que llegue. Panel: se quitó el tilde "🚨
+  Acreditar DIRECTO…" del bloque de fichas (ahora dice "💰 Las fichas se RECLAMAN (nunca se cargan
+  directo)" y señala que en "Ver lote" se ve quién reclamó y quién no); `sendGiftBatch` ya no manda
+  `directCredit` y el confirm sólo tiene la variante con reclamo. Guía ❓ actualizada.
+  admin-sw v59 → v60.
+- **Quién reclamó y quién no:** ya estaba desde #177 — fila del lote "💰 N acreditados ($X) · N sin
+  reclamar" (o "no reclamaron (vencido)") y en 👥 Ver lote cada destinatario: "💰 acreditado dd/mm
+  (lo reclamó)" / "🎁 sin reclamar todavía" / "⏰ no lo reclamó y venció (no se pagó)". Sin cambios.
+- Fichas por CÓDIGO no cambian (se acreditan al canjear). Lotes viejos con `claimRequired:false` ya
+  estaban acreditados; no se tocan.
+- **Validado:** `node --check` OK (server.js, admin.js, admin-sw). Redeploy (back + panel). Docs:
+  ARCHITECTURE y README del paquete de réplica de lotes actualizados.
+
 ## Sesión 2026-10-13
 
 ### 182. Webhook hgcash: con secreto en el panel, el de AWS (SSM) deja de valer (réplica PAUTANUEVAsantino #323)

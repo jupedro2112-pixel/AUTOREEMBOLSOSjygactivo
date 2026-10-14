@@ -8,6 +8,23 @@
 
 ## Sesión 2026-10-14
 
+### 185. Bono de lote que NO se aplica en la carga: ahora el agente ve el MOTIVO en una nota interna (antes fallaba en silencio)
+- **Owner (capturas, RoyalMicha541):** lote +100% automático "válido por 1h" a las 18:39, carga
+  hgcash de $4.100 a las 18:44 acreditada SIN el bono, sin ninguna nota; el agente lo dio a mano.
+- **Diagnóstico de código:** `claimAutoPromoPercent` busca un PromoBonus `active`, no vencido,
+  `autoApply:true` y dentro de la franja; si no lo encuentra devuelve `claimed:false` **sin log ni
+  nota**, así que no se puede saber si venció, se usó, lo pisó otro bono (`_activateBatchPromoBonus`,
+  `_activateRoulettePromoBonus` y las reglas de notificación hacen `updateMany active → expired`
+  antes de crear el suyo) o quedó fuera de la franja horaria. Sin acceso a la DB de prod no se
+  puede afirmar cuál fue en ese caso; "Ver lote" del panel lo muestra por destinatario (activo /
+  cargó / venció sin usar / cancelado o reemplazado).
+- **Fix:** `claimAutoPromoPercent` devuelve `reason` + `last {pct, label, stillActive}` cuando el
+  cliente tuvo un bono de lote en las últimas 48 h y no aplica (usado / reemplazado o cancelado /
+  vencido / modo agente / fuera de franja) y lo loguea `[promo-auto]`. La carga hgcash y la manual
+  dejan la nota interna "ℹ️ El cliente tenía un bono de LOTE (+X%) pero NO se aplicó: <motivo>" con
+  la sugerencia de darlo a mano si sigue vigente.
+- **Validado:** `node --check` OK. Sólo backend. Redeploy.
+
 ### 184. Los avisos de un lote ya no llenan "Abiertos": el chat quieto se cierra solo al recibir el aviso
 - **Owner (captura del panel en EB):** Abiertos lleno de chats cuyo único mensaje es el aviso del
   lote ("Exclusivo clientes de la app… +100% EXTRA…"); "que aparezcan cerrados".

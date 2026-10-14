@@ -2832,6 +2832,10 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
           await _emitAdminOnlyChatNote(user.id, user.username,
             `⚠️ El bono de LOTE automático (+${_lcH.pct}%) NO se pudo acreditar en la carga hgcash (${jugaygana.errToString((_lcRes && _lcRes.error) || 'sin respuesta')}). Sigue vigente: aplicalo a mano si corresponde.`);
         }
+      } else if (_lcH.reason) {
+        // #185: tenía un bono de lote pero no correspondía aplicarlo → que el agente sepa por qué.
+        await _emitAdminOnlyChatNote(user.id, user.username,
+          `ℹ️ El cliente tenía un bono de LOTE (+${_lcH.last.pct}%, ${_lcH.last.label}) pero NO se aplicó en esta carga hgcash: ${_lcH.reason}.${_lcH.last.stillActive ? ' Si lo querés dar igual, aplicalo a mano con Bonus.' : ' No corresponde darlo salvo que vos decidas lo contrario.'}`);
       }
     }
 
@@ -9760,6 +9764,10 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
             await _emitAdminOnlyChatNote(user.id, user.username,
               `⚠️ El bono de LOTE automático (+${_lc.pct}%) NO se pudo acreditar en esta carga (${jugaygana.errToString((_lcRes && _lcRes.error) || 'sin respuesta')}). El bono sigue vigente: aplicalo a mano si corresponde y marcalo usado desde el cartel.`);
           }
+        } else if (_lc.reason) {
+          // #185: tenía un bono de lote pero no correspondía aplicarlo → que el agente sepa por qué.
+          await _emitAdminOnlyChatNote(user.id, user.username,
+            `ℹ️ El cliente tenía un bono de LOTE (+${_lc.last.pct}%, ${_lc.last.label}) pero NO se aplicó en esta carga: ${_lc.reason}.${_lc.last.stillActive ? ' Si lo querés dar igual, aplicalo con Bonus.' : ' No corresponde darlo salvo que vos decidas lo contrario.'}`);
         }
       }
 
@@ -19854,8 +19862,30 @@ async function claimAutoPromoPercent(user, usedBy) {
     const pb = await PromoBonus.findOne({
       username: uname, status: 'active', expiresAt: { $gt: now }, autoApply: true, percent: { $gt: 0 }
     }).sort({ activatedAt: -1 }).lean();
-    if (!pb) return { pct: 0, claimed: false };
-    if (!_inDailyWindow(pb.applyFromMin, pb.applyToMin, now)) return { pct: 0, claimed: false, outOfWindow: true };
+    if (!pb) {
+      // #185: si el cliente TUVO un bono de lote hace poco, explicar por qué no se aplica (antes
+      // devolvía claimed:false en silencio y nadie sabía si venció, se usó o lo pisó otro bono).
+      try {
+        const last = await PromoBonus.findOne({ username: uname, sourceRuleCode: 'lote', percent: { $gt: 0 } }).sort({ activatedAt: -1 }).lean();
+        if (last && last.activatedAt && (now - new Date(last.activatedAt)) < 48 * 3600 * 1000) {
+          const f = (d) => d ? new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
+          let reason;
+          if (last.status === 'used') reason = `ya se usó el ${f(last.usedAt)} (${last.usedBy || 'auto'})`;
+          else if (last.status === 'expired' && new Date(last.expiresAt) > now) reason = 'lo REEMPLAZÓ o canceló otro bono después (otro lote, ruleta, encuesta o el agente)';
+          else if (last.status === 'expired' || new Date(last.expiresAt) <= now) reason = `VENCIÓ el ${f(last.expiresAt)} (activado el ${f(last.activatedAt)})`;
+          else if (!last.autoApply) reason = 'es modo "lo aplica el agente" (cartel verde), no automático';
+          else reason = `estado ${last.status}`;
+          logger.info(`[promo-auto] ${uname}: tenía bono de lote +${last.percent}% pero NO se aplica — ${reason}`);
+          return { pct: 0, claimed: false, reason, last: { pct: Number(last.percent), label: last.sourceRuleName || 'lote', stillActive: false } };
+        }
+      } catch (_) {}
+      return { pct: 0, claimed: false };
+    }
+    if (!_inDailyWindow(pb.applyFromMin, pb.applyToMin, now)) {
+      const reason = `fuera de la franja horaria ${_fmtMinOfDay(pb.applyFromMin)}-${_fmtMinOfDay(pb.applyToMin)} (hora AR); el bono sigue vigente`;
+      logger.info(`[promo-auto] ${uname}: bono de lote +${pb.percent}% NO se aplica — ${reason}`);
+      return { pct: 0, claimed: false, outOfWindow: true, reason, last: { pct: Number(pb.percent), label: pb.sourceRuleName || 'lote', stillActive: true } };
+    }
     const scope = pb.applyScope === 'all' ? 'all' : 'first';
     let upd;
     if (scope === 'first') {

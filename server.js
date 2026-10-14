@@ -11186,6 +11186,29 @@ async function initializeData() {
   // Las dos juntas evitan borrar conversaciones legítimas cuyos mensajes hayan
   // expirado por el TTL de 3 días (esos usuarios sí tienen lastLogin). Si un
   // usuario purgado ingresa más tarde, /api/messages/welcome recrea su ChatStatus.
+  // #184 one-shot: los lotes de los últimos días ya dejaron chats "abiertos" cuyo único mensaje
+  // vivo es el aviso. Se aplica la misma regla que ahora usa el motor (open + sin actividad real
+  // en 24 h → closed por 'system (lote)') a los destinatarios de los lotes de los últimos 3 días
+  // (= TTL de Message; más viejos ya no tienen el aviso vivo). Idempotente por flag en Config.
+  try {
+    const flagL = await Config.findOne({ key: 'migration_close_lote_chats_2026_10_14' }).lean();
+    if (!flagL || flagL.value !== true) {
+      const since = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+      const batches = await NotifBatch.find({ sentAt: { $gte: since } }).select('recipients.userId').lean();
+      const ids = Array.from(new Set(batches.flatMap(b => (b.recipients || []).map(r => r.userId)).filter(Boolean)));
+      let closed = 0;
+      if (ids.length) {
+        const r = await ChatStatus.updateMany(
+          { userId: { $in: ids }, status: 'open', lastMessageAt: { $lt: new Date(Date.now() - STALE_CHAT_FOR_NOTICE_MS) } },
+          { $set: { status: 'closed', closedAt: new Date(), closedBy: 'system (lote)', assignedTo: null } }
+        );
+        closed = (r && r.modifiedCount) || 0;
+      }
+      await Config.findOneAndUpdate({ key: 'migration_close_lote_chats_2026_10_14' }, { key: 'migration_close_lote_chats_2026_10_14', value: true }, { upsert: true });
+      logger.info(`[startup] #184 chats quietos cerrados tras avisos de lote: ${closed} (de ${ids.length} destinatarios en 3 días)`);
+    }
+  } catch (e) { logger.warn(`[startup] #184 cierre de chats por lotes falló: ${e.message}`); }
+
   try {
     const flag = await Config.findOne({ key: 'migration_purge_empty_chatstatus_done' }).lean();
     if (!flag || flag.value !== true) {
@@ -20184,6 +20207,23 @@ async function _processNotifBatchQueue() {
   }
 }
 
+// #184 (owner 2026-10-14): los avisos automáticos (lotes) dejaban la pestaña Abiertos llena de
+// chats "abiertos desde siempre" cuyo único mensaje vivo era el aviso. Un aviso del sistema no
+// requiere atención: si el chat está 'open' pero sin actividad real en las últimas 24 h
+// (ChatStatus.lastMessageAt la actualizan los mensajes del cliente y de los agentes, NO los del
+// sistema), se cierra con closedBy 'system (<motivo>)'. Un chat con charla reciente queda abierto.
+// Si el cliente escribe después, la reapertura automática de send_message lo devuelve a Abiertos.
+const STALE_CHAT_FOR_NOTICE_MS = 24 * 60 * 60 * 1000;
+async function _closeStaleChatForSystemNotice(userId, reason) {
+  try {
+    const r = await ChatStatus.updateOne(
+      { userId, status: 'open', lastMessageAt: { $lt: new Date(Date.now() - STALE_CHAT_FOR_NOTICE_MS) } },
+      { $set: { status: 'closed', closedAt: new Date(), closedBy: `system (${reason})`, assignedTo: null } }
+    );
+    return !!(r && r.modifiedCount);
+  } catch (e) { logger.warn(`[chat] no se pudo cerrar el chat quieto de ${userId} tras aviso ${reason}: ${e.message}`); return false; }
+}
+
 async function _processOneNotifBatch(batchId) {
   const batch = await NotifBatch.findOne({ id: batchId }).select('-recipients').lean();
   if (!batch) return;
@@ -20273,6 +20313,10 @@ async function _processOneNotifBatch(batchId) {
             receiverId: u.id, receiverRole: 'user', content: mensajeChat,
             type: 'system', timestamp: new Date(), read: false
           });
+          // #184: el aviso de un lote NO es una conversación que haya que atender. Si el chat
+          // estaba "abierto" sin actividad real (24 h), se cierra solo para que no inunde
+          // Abiertos; si el cliente contesta, send_message lo reabre como siempre.
+          await _closeStaleChatForSystemNotice(u.id, 'lote');
           const r = await sendPushIfOffline(u, pushTitle, pushBody, batch.claimRequired ? { tag: 'notif-batch', giftClaim: batch.id } : { tag: 'notif-batch' });
           delivery = (r && r.delivery) || 'none';
         } else {

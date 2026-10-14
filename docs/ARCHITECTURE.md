@@ -439,6 +439,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `GET /api/admin/referrals/:userId/netwin` (server.js, admin) = netwin del mes EN VIVO por
   referido vía `_referralNetwinMonth` (cache 15 min, concurrencia 4, tope 80), que el panel pide
   después de pintar el detalle y rellena en la tabla de referidos.
+- **Avisos de lote y la pestaña Abiertos (#184):** el motor, tras crear el `Message` del aviso,
+  llama `_closeStaleChatForSystemNotice(userId, 'lote')`: chat 'open' con `lastMessageAt` > 24 h
+  → 'closed' por `system (lote)` (los mensajes del sistema no actualizan `lastMessageAt`). El
+  cliente que escribe lo reabre (send_message). Cualquier aviso automático nuevo que cree un
+  Message de sistema masivo tiene que llamar ese helper o vuelve a inundar Abiertos.
 - **Lotes de FICHAS por tiempo con RECLAMO (#177, obligatorio desde #183):** `NotifBatch.claimRequired`
   siempre `true` para fichas 'window' (el tilde "acreditar directo" se eliminó; owner 2026-10-14:
   nunca cargar directo en JUGAYGANA, es pérdida de plata). El motor no acredita: manda el aviso y

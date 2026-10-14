@@ -8,6 +8,25 @@
 
 ## Sesión 2026-10-14
 
+### 184. Los avisos de un lote ya no llenan "Abiertos": el chat quieto se cierra solo al recibir el aviso
+- **Owner (captura del panel en EB):** Abiertos lleno de chats cuyo único mensaje es el aviso del
+  lote ("Exclusivo clientes de la app… +100% EXTRA…"); "que aparezcan cerrados".
+- **Causa:** el motor del lote crea el `Message` del sistema pero no toca `ChatStatus`. Miles de
+  chats están 'open' desde siempre (nunca se cerraron) con los mensajes viejos ya expirados por
+  el TTL; el aviso les da un mensaje vivo y el filtro del #109 (sólo oculta chats SIN mensajes)
+  los deja pasar.
+- **Fix (server.js):** `_closeStaleChatForSystemNotice(userId, motivo)`: si el chat está 'open'
+  y `ChatStatus.lastMessageAt` (que sólo actualizan los mensajes del cliente y de los agentes) es
+  de hace más de 24 h, pasa a 'closed' con `closedBy: 'system (lote)'`. El motor lo llama tras
+  crear el aviso (los tres tipos: %, fichas con reclamo, código). Un chat con charla reciente queda
+  abierto. Si el cliente contesta, la reapertura automática de `send_message` lo devuelve a
+  Abiertos. **One-shot al arrancar** (`migration_close_lote_chats_2026_10_14`): aplica la misma
+  regla a los destinatarios de los lotes de los últimos 3 días, para limpiar lo que ya quedó.
+- **Validado:** `node --check` OK. Sólo backend → sin bump. Redeploy. **PROBAR:** tras el deploy,
+  en el log `[startup] #184 chats quietos cerrados tras avisos de lote: N`; Abiertos sin esos
+  chats y en Cerrados con "system (lote)"; mandar un lote de prueba a una cuenta sin actividad →
+  no aparece en Abiertos; que esa cuenta escriba → vuelve a Abiertos.
+
 ### 183. Fichas de lote por tiempo: SIEMPRE con reclamo — se eliminó el tilde "acreditar directo a todos"
 - **Owner:** "que no se cargue directo en JUGAYGANA porque es pérdida de plata, solo que se
   reclame; y que en el detalle del lote aparezca quién reclamó y quién no".

@@ -11834,7 +11834,8 @@ async function loadNotifBatches() {
         const rows = j.batches || [];
         if (!rows.length) { box.innerHTML = '<p style="color:#888;text-align:center;font-size:.85rem">Todavía no se envió ningún lote.</p>'; return; }
         box.innerHTML = rows.map((b) => {
-            const fecha = new Date(b.sentAt).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+            // #187: hora ARGENTINA explícita (sin timeZone usaba el reloj de la PC: en Tails/GMT mostraba 20:34 para un lote de las 17:34).
+            const fecha = new Date(b.sentAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
             const vencido = new Date(b.expiresAt).getTime() <= Date.now();
             const hm = (m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
             const franjaH = (b.applyFromMin != null && b.applyToMin != null) ? ' ' + hm(b.applyFromMin) + '-' + hm(b.applyToMin) : '';

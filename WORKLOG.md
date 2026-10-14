@@ -8,6 +8,14 @@
 
 ## Sesión 2026-10-14
 
+### 187. Historial de lotes: la hora de envío salía en el huso de la PC (en Tails = GMT), no en hora Argentina
+- **Owner:** "dice 8:24 y en realidad se mandó a las 5:24; ¿error del agente o del horario?". Era la
+  pantalla: la fila del lote formateaba `sentAt` sin `timeZone` (reloj del navegador; Tails corre en
+  GMT → 20:34) mientras el detalle "canjeó 05:34" ya usaba `America/Argentina/Buenos_Aires`. El
+  lote salió a las 17:34 ART. En una PC con hora argentina se veía bien.
+- **Fix:** `loadNotifBatches` formatea con `timeZone: 'America/Argentina/Buenos_Aires'` (único
+  formateador con hora sin huso que quedaba en admin.js). admin-sw v60 → v61.
+
 ### 186. 🔴 CAUSA CONFIRMADA del bono de lote que no se aplicó: el envío a 12k clientes tardó 81 min y el bono vencía 1 h después de CREAR el lote — ahora vence 1 h después de que el aviso LLEGA, y el motor manda 4 en paralelo
 - **Logs de EB (perez1/perez2, 14/10):** lote "Prueba relámpago" (+100% auto, 1 h, TODOS =
   12.453) creado 20:34:27 UTC; las dos instancias terminaron a las 21:55 (≈0,5 s por destinatario:

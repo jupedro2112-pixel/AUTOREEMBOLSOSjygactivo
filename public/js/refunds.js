@@ -196,7 +196,7 @@ VIP.refunds = (function () {
         availabilityInfo.innerHTML = '';
 
         if (type === 'weekly') {
-            const today = new Date().getDay();
+            const today = getArgentinaDate().getDay(); // #188 día ART, no el del teléfono
             const isClaimableDay = today === 1 || today === 2;
             if (!isClaimableDay) {
                 availabilityInfo.style.display = 'block';
@@ -214,7 +214,7 @@ VIP.refunds = (function () {
                 `;
             }
         } else if (type === 'monthly') {
-            const today = new Date().getDate();
+            const today = getArgentinaDate().getDate(); // #188 día ART
             const isClaimableDay = today >= 7;
             if (!isClaimableDay) {
                 availabilityInfo.style.display = 'block';
@@ -239,8 +239,9 @@ VIP.refunds = (function () {
         let timeRemaining = '';
 
         if (typeData.lastClaim) {
-            const lastClaim = new Date(typeData.lastClaim);
-            const now = new Date();
+            // #188: ambas en "reloj ART" (misma corrección) → los cortes de día/lunes/día 7 son argentinos.
+            const lastClaim = getArgentinaDate(new Date(typeData.lastClaim));
+            const now = getArgentinaDate();
 
             if (type === 'daily') {
                 // La ventana del diario se reabre a las 00:00 del día siguiente.

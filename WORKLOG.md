@@ -8,6 +8,24 @@
 
 ## Sesión 2026-10-14
 
+### 188. Toda fecha/hora que se muestra o se carga usa SIEMPRE hora Argentina, sin importar el reloj de la PC o del teléfono
+- **Owner:** "que tome siempre horario de ARGENTINA, no importa la hora de mi PC ni nada".
+- **Auditoría:** `fmtFechaAR`, `fmtFechaHoraAR`, `formatDateTime`, `formatChatTime`,
+  `getAdminDateLabel` y el chat de la PWA ya usaban `America/Argentina/Buenos_Aires`. Quedaban
+  sueltos y se corrigieron:
+  · **Panel:** "✅ Guardado hh:mm" de Config privada (2 lugares); nombre del CSV de usuarios; el
+    mes del contador de notificaciones mensuales por usuario (`notifMonthlyCounts`); la fecha
+    por defecto al cargar una historia de influencer y los componentes al editarla; y al GUARDAR
+    una historia la fecha/hora se interpreta como ART (`-03:00`) en vez de la del navegador.
+    admin-sw v61 → v62.
+  · **PWA (`?v=74` + SW v74):** hora de los ganadores de la ruleta; en Reembolsos el "es lunes o
+    martes" / "es día ≥ 7" y las ventanas de reclamo (mañana 00:00 / próximo lunes / día 7) se
+    calculan con `getArgentinaDate()` (ambas fechas en el mismo "reloj ART").
+- **Backend:** sin cambios (el server ya trabaja todo en ART: `_rouletteDateKeyART`,
+  `_argMinuteOfDay`, `_artDayKey`, cierre diario, etc.).
+- **Validado:** `node --check` OK (admin.js, admin-sw, roulette.js, refunds.js, SW). Redeploy
+  (panel + PWA).
+
 ### 187. Historial de lotes: la hora de envío salía en el huso de la PC (en Tails = GMT), no en hora Argentina
 - **Owner:** "dice 8:24 y en realidad se mandó a las 5:24; ¿error del agente o del horario?". Era la
   pantalla: la fila del lote formateaba `sentAt` sin `timeZone` (reloj del navegador; Tails corre en

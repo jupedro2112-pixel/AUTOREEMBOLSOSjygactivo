@@ -4022,7 +4022,7 @@ async function exportUsersCSV() {
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `usuarios_${new Date().toISOString().split('T')[0]}.csv`;
+        a.download = `usuarios_${getArgentinaDateStr(new Date())}.csv`; // #188 fecha ART
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
@@ -4064,8 +4064,7 @@ function notifUsageCell(user) {
     if (plan === 'solo_reembolsos') {
         return '<span style="color:#00a8ff;font-size:.76rem;white-space:nowrap;">Solo reembolsos</span>';
     }
-    const now = new Date();
-    const period = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const period = getArgentinaDateStr(new Date()).slice(0, 7); // #188 mes ART, no el de la PC
     const c = user.notifMonthlyCounts || {};
     const cur = (c.period === period) ? c : { bonos: 0, invitaciones: 0, regalos: 0 };
     const fmt = (used, cap) => {
@@ -5322,7 +5321,7 @@ async function savePrivateAiConfig() {
         const j = await _pcReadJson(r);
         if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); _pcStatus('pcAiSaveStatus', '❌ ' + (j.error || 'Error al guardar'), false); return; }
         showToast('Config de IA guardada', 'success');
-        _pcStatus('pcAiSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), true);
+        _pcStatus('pcAiSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }), true);
         renderPrivateAiConfig(j.ai || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAiSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
@@ -5374,7 +5373,7 @@ async function savePrivateAuditConfig() {
         const j = await _pcReadJson(r);
         if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (j.error || 'Error al guardar'), false); return; }
         showToast('Auditoría guardada', 'success');
-        _pcStatus('pcAuditSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), true);
+        _pcStatus('pcAuditSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }), true);
         renderPrivateAuditConfig(j.audit || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
@@ -13410,11 +13409,7 @@ async function openInfluencerStories(campaign, influencer) {
     document.getElementById('isTitle').textContent = '🎬 ' + influencer;
     document.getElementById('isSubtitle').textContent = 'Campaña ' + campaign + ' · seguimiento de costo y ROAS por historia';
     _editingStoryId = null;
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
-    document.getElementById('isNewDate').value = `${yyyy}-${mm}-${dd}`;
+    document.getElementById('isNewDate').value = getArgentinaDateStr(new Date()); // #188 hoy en ART
     document.getElementById('isNewTime').value = '20:00';
     document.getElementById('isNewCost').value = '';
     document.getElementById('isNewLabel').value = '';
@@ -13569,8 +13564,8 @@ async function submitNewStory() {
     if (!date) { errEl.textContent = 'Elegí la fecha de la historia'; errEl.style.display = 'block'; return; }
     if (cost === '' || isNaN(parseFloat(cost)) || parseFloat(cost) < 0) { errEl.textContent = 'Cargá un costo válido'; errEl.style.display = 'block'; return; }
 
-    // Instante absoluto en la TZ del navegador (ART) → ISO UTC.
-    const postedAt = new Date(`${date}T${time}`).toISOString();
+    // #188: la fecha/hora cargada es hora ARGENTINA (-03:00) sin importar el huso de la PC → ISO UTC.
+    const postedAt = new Date(`${date}T${time}:00-03:00`).toISOString();
     btn.disabled = true; btn.textContent = _editingStoryId ? 'Guardando…' : 'Agregando…';
     try {
         let r;
@@ -13606,7 +13601,8 @@ function editStory(id) {
     const s = (_storiesState && _storiesState.stories || []).find(x => x.storyId === id);
     if (!s) return;
     _editingStoryId = id;
-    const d = new Date(s.postedAt);
+    // #188: componentes en hora ARGENTINA (antes: reloj de la PC).
+    const d = new Date(new Date(s.postedAt).toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
     const yyyy = d.getFullYear(), mm = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
     const hh = String(d.getHours()).padStart(2, '0'), mi = String(d.getMinutes()).padStart(2, '0');
     document.getElementById('isNewDate').value = `${yyyy}-${mm}-${dd}`;

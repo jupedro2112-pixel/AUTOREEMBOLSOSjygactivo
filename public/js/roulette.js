@@ -392,11 +392,11 @@
         if (emptyEl) emptyEl.style.display = 'none';
         let html = '';
         for (const w of winners) {
-            // Horario hh:mm en hora local del browser (ART para la mayoría).
+            // Horario hh:mm SIEMPRE en hora Argentina (#188), sin importar el reloj del teléfono.
             let hhmm = '';
             try {
                 const d = new Date(w.spunAt);
-                hhmm = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+                hhmm = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' });
             } catch (_) { hhmm = ''; }
             html += '<div class="winner-row' + (w.isMe ? ' is-me' : '') + '">';
             html += '<span class="winner-user">👤 ' + _esc(w.username) + '</span>';

@@ -439,6 +439,11 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `GET /api/admin/referrals/:userId/netwin` (server.js, admin) = netwin del mes EN VIVO por
   referido vía `_referralNetwinMonth` (cache 15 min, concurrencia 4, tope 80), que el panel pide
   después de pintar el detalle y rellena en la tabla de referidos.
+- **Vigencia de los lotes (#186):** el PromoBonus de un lote 'window' vence `validHours` desde que
+  el motor le entrega el aviso a ESE cliente; `NotifBatch.expiresAt` se va extendiendo mientras se
+  envía (= último aviso + validHours). El motor corre `NOTIF_BATCH_WORKERS` (4) workers por
+  instancia sobre el claim atómico por destinatario. Nunca volver a calcular la validez de un bono
+  desde la creación del lote: con miles de destinatarios el envío tarda más que la validez.
 - **Avisos de lote y la pestaña Abiertos (#184):** el motor, tras crear el `Message` del aviso,
   llama `_closeStaleChatForSystemNotice(userId, 'lote')`: chat 'open' con `lastMessageAt` > 24 h
   → 'closed' por `system (lote)` (los mensajes del sistema no actualizan `lastMessageAt`). El

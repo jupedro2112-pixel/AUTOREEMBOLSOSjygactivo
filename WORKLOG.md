@@ -8,6 +8,27 @@
 
 ## Sesión 2026-10-14
 
+### 186. 🔴 CAUSA CONFIRMADA del bono de lote que no se aplicó: el envío a 12k clientes tardó 81 min y el bono vencía 1 h después de CREAR el lote — ahora vence 1 h después de que el aviso LLEGA, y el motor manda 4 en paralelo
+- **Logs de EB (perez1/perez2, 14/10):** lote "Prueba relámpago" (+100% auto, 1 h, TODOS =
+  12.453) creado 20:34:27 UTC; las dos instancias terminaron a las 21:55 (≈0,5 s por destinatario:
+  el push a FCM espera la respuesta). RoyalMicha541 recibió el push a las 21:39:13 y cargó a las
+  21:44:24; su PromoBonus vencía a las 21:34:27 (`expiresAt` del LOTE = creación + 1 h) → el mensaje
+  le dijo "válido por 1hs" con el bono ya muerto, y `claimAutoPromoPercent` no encontró nada. El
+  historial lo muestra: "12.452 vencidos sin usar, 1 cargó".
+- **Fix 1 (`_activateBatchPromoBonus`):** en modo 'window' el PromoBonus vence `validHours` desde
+  la ACTIVACIÓN (= cuando el motor le manda el aviso a ese cliente), no desde la creación del lote.
+  Modo 'code' sigue con `useHours` desde el canje (#173).
+- **Fix 2 (motor):** tras cada aviso entregado, `NotifBatch.expiresAt` se extiende a `ahora +
+  validHours` si era menor → el lote queda vigente hasta 1 h después del ÚLTIMO aviso (el canje por
+  código y el reclamo de fichas de los últimos destinatarios no nacen vencidos; el historial no
+  marca "vencido" un lote que todavía se está mandando).
+- **Fix 3 (motor):** `NOTIF_BATCH_WORKERS = 4` workers en paralelo por instancia (el claim por
+  destinatario ya era atómico; con 2 instancias son 8 envíos simultáneos → ~10 min para 12k).
+- **Validado:** `node --check` OK. Sólo backend. Redeploy. **PROBAR:** lote por tiempo de 1 h a
+  "todos" → en "Ver lote" cada destinatario vence ≈1 h después de SU aviso; el lote completa en
+  minutos; un cliente que carga dentro de su hora recibe el % solo.
+- Paquete de réplica de lotes regenerado (`_extract.py`).
+
 ### 185. Bono de lote que NO se aplica en la carga: ahora el agente ve el MOTIVO en una nota interna (antes fallaba en silencio)
 - **Owner (capturas, RoyalMicha541):** lote +100% automático "válido por 1h" a las 18:39, carga
   hgcash de $4.100 a las 18:44 acreditada SIN el bono, sin ninguna nota; el agente lo dio a mano.

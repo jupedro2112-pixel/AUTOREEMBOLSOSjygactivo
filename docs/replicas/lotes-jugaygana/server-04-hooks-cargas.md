@@ -80,6 +80,10 @@ Variables del flujo que usa: `user`, `amount`, `bonus` (let), `bonusRequested`, 
             await _emitAdminOnlyChatNote(user.id, user.username,
               `⚠️ El bono de LOTE automático (+${_lc.pct}%) NO se pudo acreditar en esta carga (${jugaygana.errToString((_lcRes && _lcRes.error) || 'sin respuesta')}). El bono sigue vigente: aplicalo a mano si corresponde y marcalo usado desde el cartel.`);
           }
+        } else if (_lc.reason) {
+          // #185: tenía un bono de lote pero no correspondía aplicarlo → que el agente sepa por qué.
+          await _emitAdminOnlyChatNote(user.id, user.username,
+            `ℹ️ El cliente tenía un bono de LOTE (+${_lc.last.pct}%, ${_lc.last.label}) pero NO se aplicó en esta carga: ${_lc.reason}.${_lc.last.stillActive ? ' Si lo querés dar igual, aplicalo con Bonus.' : ' No corresponde darlo salvo que vos decidas lo contrario.'}`);
         }
       }
 ```
@@ -123,6 +127,10 @@ Mensaje al cliente (donde se arma el texto de /sys_deposit_bonus):
           await _emitAdminOnlyChatNote(user.id, user.username,
             `⚠️ El bono de LOTE automático (+${_lcH.pct}%) NO se pudo acreditar en la carga hgcash (${jugaygana.errToString((_lcRes && _lcRes.error) || 'sin respuesta')}). Sigue vigente: aplicalo a mano si corresponde.`);
         }
+      } else if (_lcH.reason) {
+        // #185: tenía un bono de lote pero no correspondía aplicarlo → que el agente sepa por qué.
+        await _emitAdminOnlyChatNote(user.id, user.username,
+          `ℹ️ El cliente tenía un bono de LOTE (+${_lcH.last.pct}%, ${_lcH.last.label}) pero NO se aplicó en esta carga hgcash: ${_lcH.reason}.${_lcH.last.stillActive ? ' Si lo querés dar igual, aplicalo a mano con Bonus.' : ' No corresponde darlo salvo que vos decidas lo contrario.'}`);
       }
     }
 ```

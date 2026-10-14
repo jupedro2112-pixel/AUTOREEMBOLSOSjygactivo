@@ -1,6 +1,6 @@
 // ============================================================================
 // 3) BLOQUE COMPLETO 'LOTES DE NOTIFICACIONES CON REGALO' (#149 + #172 + #173 + #177)
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 714dd04, 2026-10-03). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit e4788dd, 2026-10-14). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 
@@ -61,8 +61,30 @@ async function claimAutoPromoPercent(user, usedBy) {
     const pb = await PromoBonus.findOne({
       username: uname, status: 'active', expiresAt: { $gt: now }, autoApply: true, percent: { $gt: 0 }
     }).sort({ activatedAt: -1 }).lean();
-    if (!pb) return { pct: 0, claimed: false };
-    if (!_inDailyWindow(pb.applyFromMin, pb.applyToMin, now)) return { pct: 0, claimed: false, outOfWindow: true };
+    if (!pb) {
+      // #185: si el cliente TUVO un bono de lote hace poco, explicar por qué no se aplica (antes
+      // devolvía claimed:false en silencio y nadie sabía si venció, se usó o lo pisó otro bono).
+      try {
+        const last = await PromoBonus.findOne({ username: uname, sourceRuleCode: 'lote', percent: { $gt: 0 } }).sort({ activatedAt: -1 }).lean();
+        if (last && last.activatedAt && (now - new Date(last.activatedAt)) < 48 * 3600 * 1000) {
+          const f = (d) => d ? new Date(d).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '?';
+          let reason;
+          if (last.status === 'used') reason = `ya se usó el ${f(last.usedAt)} (${last.usedBy || 'auto'})`;
+          else if (last.status === 'expired' && new Date(last.expiresAt) > now) reason = 'lo REEMPLAZÓ o canceló otro bono después (otro lote, ruleta, encuesta o el agente)';
+          else if (last.status === 'expired' || new Date(last.expiresAt) <= now) reason = `VENCIÓ el ${f(last.expiresAt)} (activado el ${f(last.activatedAt)})`;
+          else if (!last.autoApply) reason = 'es modo "lo aplica el agente" (cartel verde), no automático';
+          else reason = `estado ${last.status}`;
+          logger.info(`[promo-auto] ${uname}: tenía bono de lote +${last.percent}% pero NO se aplica — ${reason}`);
+          return { pct: 0, claimed: false, reason, last: { pct: Number(last.percent), label: last.sourceRuleName || 'lote', stillActive: false } };
+        }
+      } catch (_) {}
+      return { pct: 0, claimed: false };
+    }
+    if (!_inDailyWindow(pb.applyFromMin, pb.applyToMin, now)) {
+      const reason = `fuera de la franja horaria ${_fmtMinOfDay(pb.applyFromMin)}-${_fmtMinOfDay(pb.applyToMin)} (hora AR); el bono sigue vigente`;
+      logger.info(`[promo-auto] ${uname}: bono de lote +${pb.percent}% NO se aplica — ${reason}`);
+      return { pct: 0, claimed: false, outOfWindow: true, reason, last: { pct: Number(pb.percent), label: pb.sourceRuleName || 'lote', stillActive: true } };
+    }
     const scope = pb.applyScope === 'all' ? 'all' : 'first';
     let upd;
     if (scope === 'first') {
@@ -396,6 +418,10 @@ function _notifBatchChatContent(batch) {
 // completo (~1.6k) tarda ~1-2 min en segundo plano.
 const NOTIF_BATCH_STALE_SENDING_MS = 10 * 60 * 1000;
 const NOTIF_BATCH_SEND_PAUSE_MS = 35;
+// #186: envíos en paralelo por instancia. Cada destinatario tarda ~0,5 s (el push a FCM espera la
+// respuesta): 12.453 avisos con 2 instancias tardaron 81 min el 2026-10-14. El claim por
+// destinatario es atómico, así que N workers en el mismo proceso no se pisan.
+const NOTIF_BATCH_WORKERS = 4;
 let _notifBatchQueueRunning = false;
 
 async function _processNotifBatchQueue() {
@@ -414,6 +440,23 @@ async function _processNotifBatchQueue() {
   }
 }
 
+// #184 (owner 2026-10-14): los avisos automáticos (lotes) dejaban la pestaña Abiertos llena de
+// chats "abiertos desde siempre" cuyo único mensaje vivo era el aviso. Un aviso del sistema no
+// requiere atención: si el chat está 'open' pero sin actividad real en las últimas 24 h
+// (ChatStatus.lastMessageAt la actualizan los mensajes del cliente y de los agentes, NO los del
+// sistema), se cierra con closedBy 'system (<motivo>)'. Un chat con charla reciente queda abierto.
+// Si el cliente escribe después, la reapertura automática de send_message lo devuelve a Abiertos.
+const STALE_CHAT_FOR_NOTICE_MS = 24 * 60 * 60 * 1000;
+async function _closeStaleChatForSystemNotice(userId, reason) {
+  try {
+    const r = await ChatStatus.updateOne(
+      { userId, status: 'open', lastMessageAt: { $lt: new Date(Date.now() - STALE_CHAT_FOR_NOTICE_MS) } },
+      { $set: { status: 'closed', closedAt: new Date(), closedBy: `system (${reason})`, assignedTo: null } }
+    );
+    return !!(r && r.modifiedCount);
+  } catch (e) { logger.warn(`[chat] no se pudo cerrar el chat quieto de ${userId} tras aviso ${reason}: ${e.message}`); return false; }
+}
+
 async function _processOneNotifBatch(batchId) {
   const batch = await NotifBatch.findOne({ id: batchId }).select('-recipients').lean();
   if (!batch) return;
@@ -421,7 +464,9 @@ async function _processOneNotifBatch(batchId) {
   const pushTitle = batch.title || '🎁 Tenés un regalo';
   const pushBody = String(batch.message || '').slice(0, 150);
   let procesados = 0;
+  const validMs = (Number(batch.validHours) > 0 ? Number(batch.validHours) : 1) * 3600 * 1000;
 
+  const worker = async () => {
   for (;;) {
     const stale = new Date(Date.now() - NOTIF_BATCH_STALE_SENDING_MS);
     // Claim atómico del PRÓXIMO pendiente (o un 'sending' colgado). La
@@ -503,6 +548,10 @@ async function _processOneNotifBatch(batchId) {
             receiverId: u.id, receiverRole: 'user', content: mensajeChat,
             type: 'system', timestamp: new Date(), read: false
           });
+          // #184: el aviso de un lote NO es una conversación que haya que atender. Si el chat
+          // estaba "abierto" sin actividad real (24 h), se cierra solo para que no inunde
+          // Abiertos; si el cliente contesta, send_message lo reabre como siempre.
+          await _closeStaleChatForSystemNotice(u.id, 'lote');
           const r = await sendPushIfOffline(u, pushTitle, pushBody, batch.claimRequired ? { tag: 'notif-batch', giftClaim: batch.id } : { tag: 'notif-batch' });
           delivery = (r && r.delivery) || 'none';
         } else {
@@ -521,8 +570,17 @@ async function _processOneNotifBatch(batchId) {
       ).catch(() => {});
     }
     procesados++;
+    // #186: el lote sigue "vigente" hasta validHours después del ÚLTIMO aviso entregado (así el
+    // canje por código y el reclamo de fichas de los últimos destinatarios no nacen vencidos, y el
+    // historial no marca "vencido" un lote que todavía se está mandando).
+    if (batch.mode === 'window' || batch.mode === 'code') {
+      const newExp = new Date(Date.now() + validMs);
+      await NotifBatch.updateOne({ id: batchId, expiresAt: { $lt: newExp } }, { $set: { expiresAt: newExp } }).catch(() => {});
+    }
     await new Promise((r) => setTimeout(r, NOTIF_BATCH_SEND_PAUSE_MS));
   }
+  };
+  await Promise.all(Array.from({ length: NOTIF_BATCH_WORKERS }, () => worker()));
 
   // ¿Terminó? Sin pendientes NI 'sending' (los vivos de otra instancia
   // también cuentan — el próximo pase del cron lo cierra).
@@ -567,9 +625,12 @@ async function _activateBatchPromoBonus(user, batch) {
     activatedAt: new Date(),
     // #173: en modo código el bono vale `useHours` (24 h default) desde el CANJE, no hasta
     // que venza el lote. En modo 'window' (activado al enviar) sigue la vigencia del lote.
+    // #186: en modo 'window' vence `validHours` desde que se ACTIVA (= cuando el motor le manda el
+    // aviso), no desde la creación del lote: con 12k destinatarios el envío tarda más de una hora y
+    // los últimos recibían "válido por 1 h" con el bono ya vencido (RoyalMicha541, 2026-10-14).
     expiresAt: batch.mode === 'code'
       ? new Date(Date.now() + (Number(batch.useHours) > 0 ? Number(batch.useHours) : 24) * 3600 * 1000)
-      : batch.expiresAt,
+      : new Date(Date.now() + (Number(batch.validHours) > 0 ? Number(batch.validHours) : 1) * 3600 * 1000),
     status: 'active',
     // #263: aplicación automática del % (solo giftType percent)
     autoApply: batch.giftType === 'percent' && batch.applyMode === 'auto',
@@ -979,9 +1040,10 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
 
     const sentAt = new Date();
     const expiresAt = new Date(sentAt.getTime() + validHours * 3600 * 1000);
-    // #177: fichas POR TIEMPO se acreditan recién cuando el cliente las RECLAMA con el botón
-    // (default). Sólo si el panel manda directCredit:true se acreditan a todos al enviar.
-    const claimRequired = mode === 'window' && giftType === 'fixed' && b.directCredit !== true;
+    // #177/#182: fichas POR TIEMPO se acreditan SOLO cuando el cliente las RECLAMA con el botón.
+    // Owner 2026-10-14: nunca directo a todos ("es pérdida de plata"); el tilde "acreditar
+    // directo" se eliminó del panel y acá se ignora cualquier directCredit que llegue.
+    const claimRequired = mode === 'window' && giftType === 'fixed';
     const batch = {
       id: uuidv4(),
       name, mode, giftType, amount, rolloverX, code, validHours, useHours, sentAt, expiresAt,
@@ -1022,7 +1084,7 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
       notFound,
       skipped,
       message: claimRequired
-        ? `Lote creado: ${users.length} destinatarios. Las notificaciones están saliendo en segundo plano. Las fichas se acreditan SOLO a los que toquen RECLAMAR en la app (vigente ${validHours}hs).`
+        ? `Lote creado: ${users.length} destinatarios. Las notificaciones están saliendo en segundo plano. Las fichas se acreditan SOLO a los que toquen RECLAMAR en la app (vigente ${validHours}hs); en "Ver lote" ves quién reclamó y quién no.`
         : `Lote creado: ${users.length} destinatarios. Las notificaciones están saliendo en segundo plano.`
     });
   } catch (err) {

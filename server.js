@@ -20219,6 +20219,10 @@ function _notifBatchChatContent(batch) {
 // completo (~1.6k) tarda ~1-2 min en segundo plano.
 const NOTIF_BATCH_STALE_SENDING_MS = 10 * 60 * 1000;
 const NOTIF_BATCH_SEND_PAUSE_MS = 35;
+// #186: envíos en paralelo por instancia. Cada destinatario tarda ~0,5 s (el push a FCM espera la
+// respuesta): 12.453 avisos con 2 instancias tardaron 81 min el 2026-10-14. El claim por
+// destinatario es atómico, así que N workers en el mismo proceso no se pisan.
+const NOTIF_BATCH_WORKERS = 4;
 let _notifBatchQueueRunning = false;
 
 async function _processNotifBatchQueue() {
@@ -20261,7 +20265,9 @@ async function _processOneNotifBatch(batchId) {
   const pushTitle = batch.title || '🎁 Tenés un regalo';
   const pushBody = String(batch.message || '').slice(0, 150);
   let procesados = 0;
+  const validMs = (Number(batch.validHours) > 0 ? Number(batch.validHours) : 1) * 3600 * 1000;
 
+  const worker = async () => {
   for (;;) {
     const stale = new Date(Date.now() - NOTIF_BATCH_STALE_SENDING_MS);
     // Claim atómico del PRÓXIMO pendiente (o un 'sending' colgado). La
@@ -20365,8 +20371,17 @@ async function _processOneNotifBatch(batchId) {
       ).catch(() => {});
     }
     procesados++;
+    // #186: el lote sigue "vigente" hasta validHours después del ÚLTIMO aviso entregado (así el
+    // canje por código y el reclamo de fichas de los últimos destinatarios no nacen vencidos, y el
+    // historial no marca "vencido" un lote que todavía se está mandando).
+    if (batch.mode === 'window' || batch.mode === 'code') {
+      const newExp = new Date(Date.now() + validMs);
+      await NotifBatch.updateOne({ id: batchId, expiresAt: { $lt: newExp } }, { $set: { expiresAt: newExp } }).catch(() => {});
+    }
     await new Promise((r) => setTimeout(r, NOTIF_BATCH_SEND_PAUSE_MS));
   }
+  };
+  await Promise.all(Array.from({ length: NOTIF_BATCH_WORKERS }, () => worker()));
 
   // ¿Terminó? Sin pendientes NI 'sending' (los vivos de otra instancia
   // también cuentan — el próximo pase del cron lo cierra).
@@ -20411,9 +20426,12 @@ async function _activateBatchPromoBonus(user, batch) {
     activatedAt: new Date(),
     // #173: en modo código el bono vale `useHours` (24 h default) desde el CANJE, no hasta
     // que venza el lote. En modo 'window' (activado al enviar) sigue la vigencia del lote.
+    // #186: en modo 'window' vence `validHours` desde que se ACTIVA (= cuando el motor le manda el
+    // aviso), no desde la creación del lote: con 12k destinatarios el envío tarda más de una hora y
+    // los últimos recibían "válido por 1 h" con el bono ya vencido (RoyalMicha541, 2026-10-14).
     expiresAt: batch.mode === 'code'
       ? new Date(Date.now() + (Number(batch.useHours) > 0 ? Number(batch.useHours) : 24) * 3600 * 1000)
-      : batch.expiresAt,
+      : new Date(Date.now() + (Number(batch.validHours) > 0 ? Number(batch.validHours) : 1) * 3600 * 1000),
     status: 'active',
     // #263: aplicación automática del % (solo giftType percent)
     autoApply: batch.giftType === 'percent' && batch.applyMode === 'auto',

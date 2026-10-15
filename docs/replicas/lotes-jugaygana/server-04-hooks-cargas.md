@@ -50,7 +50,7 @@ Variables del flujo que usa: `user`, `amount`, `bonus` (let), `bonusRequested`, 
       if (!bonusRequested && !_dupBankManual) {
         const _lc = await claimAutoPromoPercent(user, req.user.username || 'agente');
         if (_lc.claimed) {
-          const _loteCfg = await getHgcashAppBonusConfig();
+          const _loteCfg = _loteCfgFor(_lc, await getHgcashAppBonusConfig()); // #172 tope global / #189 tope propio del lote
           const _loteAmt = _loteBonusAmount(parseFloat(amount), _lc.pct, _loteCfg); // #172 tope
           const _loteCapNote = _loteCapTxt(_lc.pct, _loteCfg);
           await new Promise(r => setTimeout(r, 700));
@@ -105,7 +105,7 @@ Mensaje al cliente (donde se arma el texto de /sys_deposit_bonus):
     if (!appBonus.applied && !_dupBank) {
       const _lcH = await claimAutoPromoPercent(user, 'auto-hgcash');
       if (_lcH.claimed) {
-        const _lcAmt = _loteBonusAmount(Number(amount), _lcH.pct, await getHgcashAppBonusConfig()); // #172 tope
+        const _lcAmt = _loteBonusAmount(Number(amount), _lcH.pct, _loteCfgFor(_lcH, await getHgcashAppBonusConfig())); // #172 tope global / #189 tope propio del lote
         await new Promise(r => setTimeout(r, 700));
         const _lcRes = _lcAmt > 0 ? await jugaygana.creditUserBalance(user.username, _lcAmt, user.jugayganaUserId || null).catch(() => null) : null;
         if (_lcRes && _lcRes.success) {

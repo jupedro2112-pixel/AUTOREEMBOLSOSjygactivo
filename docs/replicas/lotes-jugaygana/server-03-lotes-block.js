@@ -1,6 +1,6 @@
 // ============================================================================
 // 3) BLOQUE COMPLETO 'LOTES DE NOTIFICACIONES CON REGALO' (#149 + #172 + #173 + #177)
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit e4788dd, 2026-10-14). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 1e65bb8, 2026-10-15). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 
@@ -102,7 +102,7 @@ async function claimAutoPromoPercent(user, usedBy) {
     const label = `${pb.percent}% ${pb.sourceRuleName || 'lote'}` +
       (scope === 'all' ? ' (todas las cargas' + (pb.applyFromMin != null ? ` ${_fmtMinOfDay(pb.applyFromMin)}-${_fmtMinOfDay(pb.applyToMin)}` : '') + ')' : '');
     const rolloverX = (pb.rolloverX == null || !Number.isFinite(Number(pb.rolloverX))) ? null : Number(pb.rolloverX);
-    return { pct: Number(pb.percent), claimed: true, id: pb.id, scope, label, usedBy: usedBy || 'auto', rolloverX };
+    return { pct: Number(pb.percent), claimed: true, id: pb.id, scope, label, usedBy: usedBy || 'auto', rolloverX, capARS: pb.capARS == null ? null : Number(pb.capARS), capExcessPct: pb.capExcessPct == null ? null : Number(pb.capExcessPct) };
   } catch (e) {
     logger.warn(`[promo-auto] claim % falló: ${e.message}`);
     return { pct: 0, claimed: false };
@@ -639,7 +639,10 @@ async function _activateBatchPromoBonus(user, batch) {
     applyToMin: batch.applyToMin == null ? null : batch.applyToMin,
     // rollover propio del % automático (owner 2026-09-04: "que se use rollover
     // en bonus y evitamos cosas raras"); null = global
-    rolloverX: (batch.giftType === 'percent' && batch.applyMode === 'auto' && Number.isFinite(Number(batch.rolloverX))) ? Number(batch.rolloverX) : null
+    rolloverX: (batch.giftType === 'percent' && batch.applyMode === 'auto' && Number.isFinite(Number(batch.rolloverX))) ? Number(batch.rolloverX) : null,
+    // #189 tope propio del lote (null = global)
+    capARS: batch.capARS == null ? null : Number(batch.capARS),
+    capExcessPct: batch.capExcessPct == null ? null : Number(batch.capExcessPct)
   });
 }
 
@@ -659,7 +662,7 @@ function _giftLabelOf(batch) {
   if (batch.giftType !== 'percent') {
     return `regalo de $${Number(batch.amount).toLocaleString('es-AR')} en tu próxima carga`;
   }
-  const capTxt = batch.applyMode === 'auto' ? _loteCapTxt(batch.amount) : ''; // #172
+  const capTxt = batch.applyMode === 'auto' ? _loteCapTxt(batch.amount, _loteCfgFor(batch)) : ''; // #172 / #189 tope propio
   if (batch.applyMode === 'auto' && batch.applyScope === 'all') {
     return `+${batch.amount}% EXTRA en TODAS tus cargas${_batchWindowTxt(batch)}${capTxt}`;
   }
@@ -942,6 +945,23 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
       }
     }
 
+    // #189 TOPE PROPIO del % de este lote (sólo % automático). Vacío = usa el tope global del
+    // bono app. capARS 0 = sin tope. capExcessPct 0 = el excedente no recibe nada.
+    let capARS = null, capExcessPct = null;
+    if (giftType === 'percent' && applyMode === 'auto') {
+      if (b.capARS != null && b.capARS !== '') {
+        const c = Math.round(Number(b.capARS));
+        if (!Number.isFinite(c) || c < 0 || c > 100000000) return res.status(400).json({ error: 'El tope del bono tiene que ser un monto entre 0 (sin tope) y 100.000.000.' });
+        capARS = c;
+      }
+      if (b.capExcessPct != null && b.capExcessPct !== '') {
+        const e = Math.round(Number(b.capExcessPct));
+        if (!Number.isFinite(e) || e < 0 || e > 200) return res.status(400).json({ error: 'El % sobre el excedente tiene que estar entre 0 y 200.' });
+        capExcessPct = e;
+      }
+      if (capExcessPct != null && capARS == null) capARS = (await getHgcashAppBonusConfig()).firstCapARS; // % excedente sin tope propio → fija el global de hoy
+    }
+
     // Rollover del regalo de fichas (giftType fixed, cualquier modo — las
     // fichas SIEMPRE se acreditan solas: por código al canjear, por tiempo al
     // enviar). Se valida contra bonus.multipliers de JUGAYGANA (⚠️ NO los de
@@ -1007,7 +1027,7 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
       const batchP = {
         id: uuidv4(),
         name, mode: 'code', giftType, amount, rolloverX, code, validHours, useHours,
-        applyMode, applyScope, applyFromMin, applyToMin,
+        applyMode, applyScope, applyFromMin, applyToMin, capARS, capExcessPct,
         sentAt: sentAtP, expiresAt: new Date(sentAtP.getTime() + validHours * 3600 * 1000),
         title: '', message,
         sentBy: req.user.username, sentByRole: req.user.role,
@@ -1047,7 +1067,7 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
     const batch = {
       id: uuidv4(),
       name, mode, giftType, amount, rolloverX, code, validHours, useHours, sentAt, expiresAt,
-      applyMode, applyScope, applyFromMin, applyToMin, claimRequired,
+      applyMode, applyScope, applyFromMin, applyToMin, claimRequired, capARS, capExcessPct,
       title, message,
       sentBy: req.user.username, sentByRole: req.user.role,
       ...audience,
@@ -1110,7 +1130,7 @@ app.get('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req,
         sentBy: 1, sentByRole: 1,
         audienceType: 1, audienceDays: 1, audienceLimit: 1, audienceLabel: 1, sendDone: 1,
         isPublic: 1, maxClaims: 1,
-        applyMode: 1, applyScope: 1, applyFromMin: 1, applyToMin: 1, rolloverX: 1, useHours: 1, claimRequired: 1,
+        applyMode: 1, applyScope: 1, applyFromMin: 1, applyToMin: 1, rolloverX: 1, useHours: 1, claimRequired: 1, capARS: 1, capExcessPct: 1,
         total: { $size: { $ifNull: ['$recipients', []] } },
         credited: { $size: { $filter: { input: { $ifNull: ['$recipients', []] }, as: 'r', cond: { $ne: ['$$r.creditedAt', null] } } } },
         claimed: { $size: { $filter: { input: { $ifNull: ['$recipients', []] }, as: 'r', cond: { $ne: ['$$r.claimedAt', null] } } } },

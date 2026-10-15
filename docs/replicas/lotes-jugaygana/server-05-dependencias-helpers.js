@@ -1,6 +1,6 @@
 // ============================================================================
 // 5) HELPERS que el bloque asume existentes. Copiar SOLO los que falten en el repo destino
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit e4788dd, 2026-10-14). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 1e65bb8, 2026-10-15). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 

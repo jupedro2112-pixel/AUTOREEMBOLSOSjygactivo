@@ -71,6 +71,12 @@ const notifBatchSchema = new mongoose.Schema({
   // bono DESPUÉS de canjearlo (default 24). Vencido ese plazo el PromoBonus queda 'expired'
   // aunque el lote siga vigente para canjear. Así no quedan bonos reclamados colgados días.
   useHours: { type: Number, default: 24, min: 1 },
+  // #189 (owner 2026-10-15): TOPE PROPIO del % de ESTE lote (sólo % automático). El % completo
+  // aplica hasta `capARS` y el excedente de la carga va al `capExcessPct`. null = usa el tope
+  // global del bono app (Config['hgcashAppBonus'].firstCapARS / firstExcessPct, #172).
+  // capARS 0 = sin tope (el % completo sobre toda la carga).
+  capARS: { type: Number, default: null },
+  capExcessPct: { type: Number, default: null },
   // #177 (owner 2026-10-03): FICHAS POR TIEMPO con RECLAMO. true = al enviar NO se acredita a
   // nadie: cada cliente tiene un botón "🎁 RECLAMAR" en la app (card del home + modal 🎁) y las
   // fichas se acreditan recién cuando lo toca, mientras el lote esté vigente (expiresAt). Así

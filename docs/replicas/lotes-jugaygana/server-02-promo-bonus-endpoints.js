@@ -1,6 +1,6 @@
 // ============================================================================
 // 2) BONO DE CARGA (PromoBonus): bono vigente del usuario + cartel del agente + marcar usado
-// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit e4788dd, 2026-10-14). Pegar tal cual
+// Extraído de AUTOREEMBOLSOSjygactivo/server.js (commit 1e65bb8, 2026-10-15). Pegar tal cual
 // salvo lo indicado en README.md.
 // ============================================================================
 
@@ -80,7 +80,7 @@ app.get('/api/admin/promo-bonus', authMiddleware, adminMiddleware, async (req, r
         applyToMin: b.applyToMin == null ? null : b.applyToMin,
         usesCount: b.usesCount || 0,
         rolloverX: b.rolloverX == null ? null : b.rolloverX,
-        capTxt: Number(b.percent) > 0 ? _loteCapTxt(b.percent, await getHgcashAppBonusConfig()) : '' // #172
+        capTxt: Number(b.percent) > 0 ? _loteCapTxt(b.percent, _loteCfgFor(b, await getHgcashAppBonusConfig())) : '' // #172 / #189 tope propio
       }
     });
   } catch (err) {

@@ -99,6 +99,18 @@
                             </div>
                             <div id="giftBatchApplyHint" style="color:#8fd3a8;font-size:.78rem;max-width:520px;line-height:1.4"></div>
                         </div>
+                        <!-- #189 (owner 2026-10-15): tope PROPIO del % de este lote. Vacío = tope global del bono app. -->
+                        <div id="giftBatchCapWrap" style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end;margin-top:.6rem;padding-top:.6rem;border-top:1px dashed rgba(0,255,136,0.25)">
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="El % completo del lote aplica hasta este monto de carga. Vacío = usa el tope global de 'Bonos automáticos hgcash'. 0 = sin tope (el % sobre toda la carga).">💰 Tope de ESTE bono: % completo hasta $</label>
+                                <input type="number" id="giftBatchCapARS" class="form-input" min="0" step="500" placeholder="vacío = global" style="width:150px" onchange="updateGiftBatchTypeUI()" />
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="Lo que la carga excede del tope se bonifica a este %. Vacío = el % excedente global. 0 = el excedente no recibe bono.">% sobre lo que excede el tope</label>
+                                <input type="number" id="giftBatchCapExcess" class="form-input" min="0" max="200" step="1" placeholder="vacío = global" style="width:130px" onchange="updateGiftBatchTypeUI()" />
+                            </div>
+                            <div id="giftBatchCapHint" style="color:#8fd3a8;font-size:.78rem;max-width:520px;line-height:1.4"></div>
+                        </div>
                     </div>
                     <!-- #177 (owner 2026-10-03): fichas POR TIEMPO se acreditan recién cuando el cliente toca
                          🎁 RECLAMAR en la app. Sólo se paga a los que vuelven. Checkbox para el modo viejo. -->

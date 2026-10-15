@@ -439,6 +439,10 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   `GET /api/admin/referrals/:userId/netwin` (server.js, admin) = netwin del mes EN VIVO por
   referido vía `_referralNetwinMonth` (cache 15 min, concurrencia 4, tope 80), que el panel pide
   después de pintar el detalle y rellena en la tabla de referidos.
+- **Tope del % de lote (#172 → #189):** `_loteBonusAmount(amount, pct, cfg)` con `cfg =
+  _loteCfgFor(claimOrBatch, global)`: el tope propio del lote (`capARS`/`capExcessPct`, copiados al
+  PromoBonus al activar) manda; si es null rige el global de `Config['hgcashAppBonus']`. Vale en
+  la carga hgcash y en la manual; los textos (`_giftLabelOf`, `capTxt` del cartel) usan el mismo.
 - **Vigencia de los lotes (#186):** el PromoBonus de un lote 'window' vence `validHours` desde que
   el motor le entrega el aviso a ESE cliente; `NotifBatch.expiresAt` se va extendiendo mientras se
   envía (= último aviso + validHours). El motor corre `NOTIF_BATCH_WORKERS` (4) workers por

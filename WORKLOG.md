@@ -6,6 +6,31 @@
 >
 > **Última actualización: 2026-10-07**
 
+## Sesión 2026-10-15
+
+### 189. Tope PROPIO por lote: "100% hasta $X y el resto al Y%" configurable en cada lote (antes sólo el tope global del bono app)
+- **Owner:** "que un lote con bono de 100% se pueda limitar ESE bono: hasta cierto monto carga
+  automático y el resto carga otro bono; que funcione en la carga automática y en la manual, y
+  que el bono quede como usado".
+- **Antes (#172):** el % de todo lote automático usaba el tope GLOBAL (`Config['hgcashAppBonus']`
+  firstCapARS/firstExcessPct, $5.000 / 20%). Ahora cada lote puede traer el suyo.
+- **Modelos:** `NotifBatch.capARS` / `capExcessPct` y `PromoBonus.capARS` / `capExcessPct` (null =
+  global; `capARS` 0 = sin tope; `capExcessPct` 0 = el excedente no recibe bono).
+- **Backend:** `_loteCfgFor(src, globalCfg)` devuelve el tope efectivo (propio si lo tiene, si no
+  el global). Lo usan los DOS hooks (`hgcashAutoCarga` y `/api/admin/deposit` → `_loteBonusAmount`
+  y `_loteCapTxt`), `_giftLabelOf` (texto al cliente) y `capTxt` del cartel del agente.
+  `claimAutoPromoPercent` devuelve `capARS/capExcessPct` del PromoBonus; `_activateBatchPromoBonus`
+  los copia del lote; `POST /api/admin/notif-batches` los valida (0–100M / 0–200) sólo para % auto;
+  si mandan sólo el % excedente, el tope se fija al global de hoy. El lote sigue marcándose USADO
+  (scope first) o contando usos (scope all) como siempre.
+- **Panel (admin-sw v62 → v63):** en el formulario del lote, con % automático, bloque "💰 Tope de
+  ESTE bono: % completo hasta $ [ ] · % sobre lo que excede [ ]" con ejemplo calculado en vivo;
+  vacío = global. El confirm y la fila del historial dicen "tope $X +Y% resto" / "sin tope".
+- **Validado:** `node --check` OK; HTML 781/781; fórmula probada: global → $10.000 al 100% =
+  $6.000; tope propio $20.000 + 10% → $30.000 = $21.000; cap 0 → $10.000; excedente 0% → $5.000;
+  lote 50% con tope $8.000 → $10.000 = $4.400 (el excedente nunca supera el % del lote).
+  Redeploy (back + panel). Paquete de réplica de lotes regenerado.
+
 ## Sesión 2026-10-14
 
 ### 188. Toda fecha/hora que se muestra o se carga usa SIEMPRE hora Argentina, sin importar el reloj de la PC o del teléfono

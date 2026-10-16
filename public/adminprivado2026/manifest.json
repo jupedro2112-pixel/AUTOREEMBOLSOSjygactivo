@@ -1,6 +1,6 @@
 {
-  "name": "Admin Sala de Juegos",
-  "short_name": "Admin Sala",
+  "name": "Admin AUTOREEMBOLSOS",
+  "short_name": "Admin AR",
   "description": "Panel de administración para Sala de Juegos con notificaciones push",
   "start_url": "/adminprivado2026/",
   "display": "standalone",

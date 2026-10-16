@@ -9997,7 +9997,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         ? reminderCmd.response
             .replace(/\{amount\}/g, amount)
             .replace(/\{balance\}/g, newBalance)
-        : `🎮 ¡Recuerda!\nPara cargar o cobrar, ingresa a 🌐 www.vipcargas.com.\n🔥 ¡Ya tienes el acceso guardado, así que te queda más fácil y rápido cada vez que entres!  \n🕹️ ¡No olvides guardarla y mantenerla a mano!\n\nwww.vipcargas.com`;
+        : `🎮 ¡Recuerda!\nPara cargar o cobrar, ingresa a 🌐 www.autoreembolsos.com.\n🔥 ¡Ya tienes el acceso guardado, así que te queda más fácil y rápido cada vez que entres!  \n🕹️ ¡No olvides guardarla y mantenerla a mano!\n\nwww.vipcargas.com`;
       const reminderMessage = await Message.create({
         id: uuidv4(),
         senderId: 'admin',
@@ -11909,7 +11909,7 @@ async function initializeData() {
       name: '/sys_reminder',
       description: 'Mensaje recordatorio enviado después de cada depósito (sin variables de monto por defecto).',
       type: 'message',
-      response: '🎮 ¡Recuerda!\nPara cargar o cobrar, ingresa a 🌐 www.vipcargas.com.\n🔥 ¡Ya tienes el acceso guardado, así que te queda más fácil y rápido cada vez que entres!  \n🕹️ ¡No olvides guardarla y mantenerla a mano!\n\nwww.vipcargas.com'
+      response: '🎮 ¡Recuerda!\nPara cargar o cobrar, ingresa a 🌐 www.autoreembolsos.com.\n🔥 ¡Ya tienes el acceso guardado, así que te queda más fácil y rápido cada vez que entres!  \n🕹️ ¡No olvides guardarla y mantenerla a mano!\n\nwww.vipcargas.com'
     },
     {
       name: '/sys_install_app',
@@ -22039,7 +22039,7 @@ app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, re
 // porque lo usa el botón "Soporte VIP" de la pantalla de login.
 // ============================================================
 // Mensaje fijo con el que abre el chat de WhatsApp de soporte.
-const SOPORTE_WA_MENSAJE = 'Vengo de VIPCARGAS necesito ayuda';
+const SOPORTE_WA_MENSAJE = 'Vengo de AUTOREEMBOLSOS necesito ayuda';
 
 app.get('/api/config/soporte-vip', async (req, res) => {
   try {

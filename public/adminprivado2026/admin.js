@@ -9381,7 +9381,7 @@ function buildCampaignLink(code) {
     // Si el placeholder no fue reemplazado (dev local sin server render),
     // fallback al dominio público hardcodeado.
     if (!baseUrl || baseUrl.indexOf('PLACEHOLDER') !== -1) {
-        baseUrl = 'https://vipcargas.com';
+        baseUrl = 'https://autoreembolsos.com'; // #192 dominio de ESTE clon
     }
     baseUrl = baseUrl.replace(/\/$/, '');
     return `${baseUrl}/${encodeURIComponent(code)}`;

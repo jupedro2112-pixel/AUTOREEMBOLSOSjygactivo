@@ -8,6 +8,31 @@
 
 ## Sesión 2026-10-16
 
+### 192. Logo nuevo AUTOREEMBOLSOS (AR) en todo el repo — se van los logos y el nombre VIPCARGAS
+- **Owner:** reemplazar de raíz todo lo que sea logo por el nuevo (carpeta
+  `AUTOREEMBOLSOS_Android_iOS_ICONOS`), SOLO en este repo.
+- **Íconos (`public/icons/`):** los 10 PNG (32/72/96/128/144/152/180/192/384/512) regenerados desde
+  `iOS_AppStore_1024.png` con PIL (antes eran el logo de vipcargas y con tamaños inconsistentes, ej.
+  "192x192" de 801×800). Nuevos `icon-maskable-192x192.png` / `icon-maskable-512x512.png`
+  (fondo + foreground adaptativo de Android = zona segura para launchers que recortan en círculo);
+  `public/manifest.json` apunta las entradas `maskable` a esos. Nuevo `public/favicon.ico`
+  (16/32/48): el código ya lo pedía como ícono default de las notificaciones del navegador
+  (socket.js, notifications.js, admin.js) y NO existía.
+- **PWA (`index.html` ?v=74 → 75, SW v75 con `/favicon.ico` en el precache):** favicon = logo (antes
+  un emoji 🎰 en SVG), header del login = imagen del logo + "AUTOREEMBOLSOS" (antes ♛ / V I P /
+  VIPCARGAS), textos visibles "VIPCARGAS" → "AUTOREEMBOLSOS" (contraseña del casino, banner de
+  campaña, modales Bienvenido / Beneficios).
+- **Panel admin (admin-sw v65 → v66):** título y metas "ADMIN AUTOREEMBOLSOS", logo en el login
+  (antes 🎮), favicon.ico, manifest "Admin AUTOREEMBOLSOS", link de ejemplo de pauta y fallback
+  del dominio (`admin.js`) a autoreembolsos.com.
+- **Server:** mensaje automático "Para cargar o cobrar, ingresa a www.autoreembolsos.com" (fallback
+  del comando; si en la DB está editado, manda la DB) y texto del WhatsApp de soporte
+  "Vengo de AUTOREEMBOLSOS".
+- **Quedan a propósito (no son logos, decidir el owner):** los SMS de OTP dicen "VIPCARGAS: codigo…
+  vipcargas .com" (`src/services/otpService.js`, con test), el default de `PUBLIC_BASE_URL` en
+  server.js es vipcargas.com si la env no está (en EB/Render está seteada), y comentarios internos.
+- **Validado:** `node --check` OK, manifests JSON válidos, íconos revisados a 32 y 192 px.
+
 ### 191. Programar desde "✉️ Redactar notificación" + calendario con TODAS las notificaciones
 - **Owner:** que el compositor (aviso simple sin regalo) también se pueda programar por fecha, que
   eso aparezca en el calendario, y que el 📅 Cronograma muestre TODAS las notificaciones (hoy sólo

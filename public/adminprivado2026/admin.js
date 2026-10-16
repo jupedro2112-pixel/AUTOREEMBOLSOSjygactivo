@@ -14912,7 +14912,13 @@ function _cronRenderList() {
 }
 function cronGoBatch(batchId) {
     switchSection('notifications');
-    setTimeout(() => { const box = document.getElementById('notifBatchDetail_' + batchId); if (box) { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); if (box.style.display === 'none') toggleNotifBatchDetail(batchId); } else showToast('El lote no está en el historial visible (cambiá el período del historial)', 'info'); }, 600);
+    setTimeout(() => {
+        if (typeof toggleNotifBatchDetail === 'function') {
+            const box = document.getElementById('notifBatchDetail_' + batchId);
+            if (box) { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); if (box.style.display === 'none') toggleNotifBatchDetail(batchId); }
+            else showToast('El lote no está en el historial visible (cambiá el período del historial)', 'info');
+        } else if (typeof nbShowDetail === 'function') nbShowDetail(batchId);
+    }, 600);
 }
 function cronNewCampaign() {
     switchSection('notifications');

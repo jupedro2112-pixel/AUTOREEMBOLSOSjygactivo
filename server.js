@@ -21256,7 +21256,9 @@ async function _schedRunPart(c, part) {
   if (!pl.name) pl.name = (c.name || 'Campaña') + (nParts > 1 ? ` (tanda ${part.idx + 1}/${nParts})` : '');
   const r = await SCHED_ADAPTER.createBatch(pl, user);
   if (!r || r.http !== 200 || !r.body || !r.body.success) throw new Error((r && r.body && r.body.error) || 'el lote no se pudo crear');
-  return { batchId: r.body.id, code: r.body.code || null, count: (r.body.totals && r.body.totals.recipients) || (Array.isArray(pl.usernames) ? pl.usernames.length : null) };
+  const _t = r.body.totals || {};
+  const _cnt = _t.recipients != null ? _t.recipients : (_t.ok != null ? _t.ok : (Array.isArray(pl.usernames) ? pl.usernames.length : null));
+  return { batchId: r.body.id, code: r.body.code || null, count: _cnt };
 }
 
 let _schedRunning = false;
@@ -21292,7 +21294,7 @@ async function _schedTick() {
       } catch (e) {
         await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'error', 'parts.$.error': String(e.message || e).slice(0, 300) } }).catch(() => {});
         logger.error(`[cronograma] ❌ ${c.name || c.id} tanda ${part.idx + 1}: ${e.message}`);
-        try { if (telegramAlert && telegramAlert.isEnabled && telegramAlert.isEnabled()) await telegramAlert.send(`📅❌ Campaña programada "${c.name || c.id}" (tanda ${part.idx + 1}) NO salió: ${String(e.message).slice(0, 200)}`); } catch (_) {}
+        try { if (typeof telegramAlert !== 'undefined' && telegramAlert && telegramAlert.isEnabled && telegramAlert.isEnabled()) await telegramAlert.send(`📅❌ Campaña programada "${c.name || c.id}" (tanda ${part.idx + 1}) NO salió: ${String(e.message).slice(0, 200)}`); } catch (_) {}
       }
     }
   } catch (e) { logger.warn(`[cronograma] tick falló: ${e.message}`); }
@@ -21474,7 +21476,7 @@ app.get('/api/admin/cronograma-report', authMiddleware, adminMiddleware, async (
     const ids = batches.map(b => b.id);
     const pbAgg = ids.length ? await PromoBonus.aggregate([
       { $match: { sourceRuleCode: 'lote', sourceRuleId: { $in: ids } } },
-      { $group: { _id: '$sourceRuleId', used: { $sum: { $cond: [{ $or: [{ $eq: ['$status', 'used'] }, { $gt: ['$usesCount', 0] }] }, 1, 0] } }, bonoTotal: { $sum: { $ifNull: ['$usesTotalBonus', 0] } }, cargaTotal: { $sum: { $ifNull: ['$cargaMonto', 0] } } } }
+      { $group: { _id: '$sourceRuleId', used: { $sum: { $cond: [{ $or: [{ $eq: ['$status', 'used'] }, { $gt: [{ $ifNull: ['$usesCount', 0] }, 0] }] }, 1, 0] } }, bonoTotal: { $sum: { $ifNull: ['$usesTotalBonus', { $ifNull: ['$bonoMonto', 0] }] } }, cargaTotal: { $sum: { $ifNull: ['$cargaMonto', 0] } } } }
     ]) : [];
     const pbBy = new Map(pbAgg.map(a => [a._id, a]));
     const depMatch = SCHED_ADAPTER.realDepositMatch();

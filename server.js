@@ -21178,6 +21178,9 @@ const SCHED_ART_OFFSET_MS = 3 * 60 * 60 * 1000;
 // Adaptadores de ESTE repo (al replicar a otro repo, sólo cambian estas 3 líneas).
 const SCHED_ADAPTER = {
   createBatch: (payload, user) => _createNotifBatchFromBody(payload, user),
+  // #191 compositor "Redactar notificación" (push simple): envío por chunks y conteo del segmento
+  sendPush: (payload) => notificationRoutes.sendBatchPush(payload),
+  countPush: (payload) => notificationRoutes.countPushSegment(payload),
   resolveAudience: (payload) => _resolveNotifBatchAudience(payload),
   realDepositMatch: () => ({ type: 'deposit', status: 'completed', 'metadata.source': { $nin: referralTiers.NON_BANK_SOURCES } })
 };
@@ -21201,11 +21204,27 @@ function _schedCampaignStatus(c) {
   if (st.some(s => s === 'sent' || s === 'sending')) return 'sending';
   return 'scheduled';
 }
+// #191 etiqueta legible del segmento del compositor
+function _pushSegmentLabel(pl) {
+  const p = pl || {};
+  if (Array.isArray(p.usernames) && p.usernames.length) return `📋 ${p.usernames.length} usuario/s específicos`;
+  return { all: '📱 todos con app instalada', active: '🔥 activos (login 30d)', inactive_7d: '😴 inactivos 7d', inactive: '😴 inactivos +30d', with_balance: '💰 con saldo > 0' }[p.segment] || ('📱 ' + (p.segment || 'all'));
+}
 function _schedPublic(c) {
-  const parts = (c.parts || []).map(p => ({ idx: p.idx, runAt: p.runAt, status: p.status, count: p.count, usernamesCount: Array.isArray(p.usernames) ? p.usernames.length : null, batchId: p.batchId, code: p.code, sentAt: p.sentAt, error: p.error }));
+  const parts = (c.parts || []).map(p => ({ idx: p.idx, runAt: p.runAt, status: p.status, count: p.count, usernamesCount: Array.isArray(p.usernames) ? p.usernames.length : null, batchId: p.batchId, code: p.code, sentAt: p.sentAt, error: p.error, note: p.note || null }));
   const pl = c.payload || {};
+  const kind = c.kind === 'push' ? 'push' : 'lote';
+  if (kind === 'push') {
+    return {
+      id: c.id, kind, manual: !!c.manual, name: c.name, status: _schedCampaignStatus(c), paused: !!c.paused, cancelled: !!c.cancelled,
+      runAt: c.runAt, dayKey: _schedArtKey(c.runAt), parts, partsTotal: parts.length, partsSent: parts.filter(p => p.status === 'sent').length,
+      audienceLabel: c.audienceLabel || _pushSegmentLabel(pl), estimatedCount: c.estimatedCount,
+      gift: { kind: 'push', title: pl.title || '', message: pl.body || '', segment: pl.segment || 'all', batchSize: pl.batchSize || 100, usernamesCount: Array.isArray(pl.usernames) ? pl.usernames.length : 0, audienceType: 'push' },
+      createdBy: c.createdBy, createdAt: c.createdAt, updatedAt: c.updatedAt, notes: c.notes || ''
+    };
+  }
   return {
-    id: c.id, name: c.name, status: _schedCampaignStatus(c), paused: !!c.paused, cancelled: !!c.cancelled,
+    id: c.id, kind, manual: false, name: c.name, status: _schedCampaignStatus(c), paused: !!c.paused, cancelled: !!c.cancelled,
     runAt: c.runAt, dayKey: _schedArtKey(c.runAt), parts, partsTotal: parts.length, partsSent: parts.filter(p => p.status === 'sent').length,
     audienceLabel: c.audienceLabel || '', estimatedCount: c.estimatedCount,
     gift: { mode: pl.mode, giftType: pl.giftType, amount: pl.amount, applyMode: pl.applyMode, applyScope: pl.applyScope, validHours: pl.validHours, capARS: pl.capARS, capExcessPct: pl.capExcessPct, audienceType: pl.audienceType, title: pl.title || '', message: pl.message || '' },
@@ -21213,8 +21232,12 @@ function _schedPublic(c) {
   };
 }
 // Resuelve la audiencia del payload SIN enviar (estimación + validación al programar).
-async function _schedEstimate(payload) {
+async function _schedEstimate(payload, kind) {
   try {
+    if (kind === 'push') {
+      const count = await SCHED_ADAPTER.countPush(payload);
+      return { count, label: _pushSegmentLabel(payload), error: null, users: [] };
+    }
     if (payload.audienceType === 'public') return { count: 0, label: '📣 código público', error: null };
     const r = await SCHED_ADAPTER.resolveAudience(payload);
     if (r.error) return { count: null, label: '', error: r.error };
@@ -21234,6 +21257,21 @@ async function _schedRunPart(c, part) {
   const user = { username: c.createdBy || 'cronograma', role: 'admin', userId: null };
   const pl = Object.assign({}, c.payload || {});
   const nParts = (c.parts || []).length;
+  // #191 aviso push del compositor: manda TODO el segmento en chunks de batchSize con pausa.
+  if (c.kind === 'push') {
+    let offset = 0, ok = 0, fail = 0, total = null, guard = 0;
+    while (guard++ < 1000) {
+      const r = await SCHED_ADAPTER.sendPush({ title: pl.title, body: pl.body, segment: pl.segment || 'all', batchSize: pl.batchSize || 100, usernames: Array.isArray(pl.usernames) && pl.usernames.length ? pl.usernames : null, batchOffset: offset });
+      if (!r || r.http !== 200 || !r.body || !r.body.success) throw new Error((r && r.body && r.body.error) || 'el envío push falló');
+      const b = r.body;
+      total = b.totalSegmentUsers || 0; ok += b.successCount || 0; fail += b.failureCount || 0;
+      if (!(b.remaining > 0) || b.nextOffset == null || b.nextOffset <= offset) break;
+      offset = b.nextOffset;
+      await new Promise((r2) => setTimeout(r2, 1500));
+    }
+    if (!total) return { skipped: true, reason: 'ningún usuario con app en el segmento' };
+    return { batchId: null, code: null, count: ok, note: `${ok} entregados · ${fail} fallidos · ${total} en el segmento` };
+  }
   // Tandas: resolver la audiencia completa UNA vez y repartirla.
   if (nParts > 1) {
     let list = Array.isArray(part.usernames) ? part.usernames : null;
@@ -21288,8 +21326,8 @@ async function _schedTick() {
           await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'cancelled', 'parts.$.error': r.reason || 'vacía' } });
           logger.info(`[cronograma] ${c.name || c.id} tanda ${part.idx + 1}: ${r.reason}`);
         } else {
-          await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'sent', 'parts.$.sentAt': new Date(), 'parts.$.batchId': r.batchId, 'parts.$.code': r.code, 'parts.$.count': r.count, 'parts.$.error': null } });
-          logger.info(`[cronograma] ✅ ${c.name || c.id} tanda ${part.idx + 1}/${(c.parts || []).length} → lote ${r.batchId} (${r.count} destinatarios)`);
+          await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'sent', 'parts.$.sentAt': new Date(), 'parts.$.batchId': r.batchId, 'parts.$.code': r.code, 'parts.$.count': r.count, 'parts.$.note': r.note || null, 'parts.$.error': null } });
+          logger.info(`[cronograma] ✅ ${c.name || c.id} tanda ${part.idx + 1}/${(c.parts || []).length} → ${c.kind === 'push' ? 'push: ' + (r.note || '') : 'lote ' + r.batchId + ' (' + r.count + ' destinatarios)'}`);
         }
       } catch (e) {
         await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'error', 'parts.$.error': String(e.message || e).slice(0, 300) } }).catch(() => {});
@@ -21302,6 +21340,28 @@ async function _schedTick() {
 }
 setTimeout(() => { _schedTick().catch(() => {}); }, 20 * 1000);
 setInterval(() => { _schedTick().catch(() => {}); }, SCHED_TICK_MS);
+// #191 Cada envío MANUAL del compositor queda registrado como campaña push `manual:true` (sent) para
+// que el calendario muestre TODAS las notificaciones. Los lotes sucesivos del mismo aviso (mismo
+// título+mensaje+segmento dentro de 6 h) se acumulan en el mismo registro.
+try {
+  notificationRoutes.setPushLogHook(async (bodyIn, result, user) => {
+    const title = String(bodyIn.title || '').trim().slice(0, 100), body = String(bodyIn.body || '').trim().slice(0, 250);
+    const segment = Array.isArray(bodyIn.usernames) && bodyIn.usernames.length ? 'specific' : (bodyIn.segment || 'all');
+    const sent = (result.sentUsernames || []).length, ok = result.successCount || 0, fail = result.failureCount || 0;
+    const since = new Date(Date.now() - 6 * 3600 * 1000);
+    const prev = await ScheduledCampaign.findOne({ kind: 'push', manual: true, 'payload.title': title, 'payload.body': body, 'payload.segment': segment, runAt: { $gte: since } }).sort({ runAt: -1 });
+    if (prev) {
+      const p = prev.parts[0];
+      p.count = (p.count || 0) + ok; p.note = `${p.count} entregados (enviado a mano en lotes)`; prev.markModified('parts');
+      await prev.save(); return;
+    }
+    const now = new Date();
+    await ScheduledCampaign.create({ id: uuidv4(), kind: 'push', manual: true, name: title, payload: { title, body, segment, usernames: Array.isArray(bodyIn.usernames) ? bodyIn.usernames.slice(0, 20000) : null, batchSize: Number(bodyIn.batchSize) || 100 },
+      audienceLabel: _pushSegmentLabel({ segment, usernames: bodyIn.usernames }), estimatedCount: result.totalSegmentUsers || sent,
+      parts: [{ idx: 0, runAt: now, status: 'sent', count: ok, sentAt: now, note: `${ok} entregados · ${fail} fallidos (enviado a mano)` }], runAt: now,
+      createdBy: (user && user.username) || 'compositor', createdByRole: (user && user.role) || null });
+  });
+} catch (e) { logger.warn(`[cronograma] hook push: ${e.message}`); }
 
 function _schedCanManage(role) { return NOTIF_BATCH_SEND_ROLES.includes(role); }
 function _schedCanView(role) { return NOTIF_BATCH_VIEW_ROLES.includes(role); }
@@ -21336,7 +21396,47 @@ app.get('/api/admin/cronograma', authMiddleware, adminMiddleware, async (req, re
       q = { runAt: { $gte: new Date(Date.now() - 30 * 86400000), $lte: new Date(Date.now() + 60 * 86400000) } };
     }
     const rows = await ScheduledCampaign.find(q).sort({ runAt: 1 }).limit(500).lean();
-    res.json({ campaigns: rows.map(_schedPublic), today: _schedArtKey(new Date()) });
+    const out = rows.map(_schedPublic);
+    // #191 TODAS las notificaciones en el calendario: también los lotes enviados A MANO (NotifBatch
+    // sin campaña) y las plantillas automáticas programadas (ScheduledNotif: una vez / diario /
+    // semanal). Van como ítems de sólo lectura.
+    try {
+      const range = q['parts.runAt'] || q.runAt;
+      const linked = new Set(); for (const c of rows) for (const p of c.parts || []) if (p.batchId) linked.add(p.batchId);
+      const manual = await NotifBatch.find({ sentAt: range }).select('id name mode giftType amount applyMode applyScope validHours capARS capExcessPct audienceType audienceLabel audienceDays audienceLimit isPublic sentAt sentBy title message recipients.userId').sort({ sentAt: 1 }).limit(500).lean();
+      for (const b of manual) {
+        if (linked.has(b.id)) continue;
+        const n = (b.recipients || []).length;
+        out.push({ id: 'nb_' + b.id, kind: 'lote', manual: true, readonly: true, name: b.name || (b.isPublic ? 'Código público ' + (b.code || '') : 'Lote'), status: 'sent', paused: false, cancelled: false,
+          runAt: b.sentAt, dayKey: _schedArtKey(b.sentAt), parts: [{ idx: 0, runAt: b.sentAt, status: 'sent', count: n, batchId: b.id, sentAt: b.sentAt }], partsTotal: 1, partsSent: 1,
+          audienceLabel: b.audienceLabel || (b.isPublic ? '📣 código público' : b.audienceType === 'all' ? '🌍 lote completo' : b.audienceType === 'inactive' ? `😴 inactivos ≥${b.audienceDays || '?'}d` : '📋 lista'), estimatedCount: n,
+          gift: { mode: b.mode, giftType: b.giftType, amount: b.amount, applyMode: b.applyMode, applyScope: b.applyScope, validHours: b.validHours, capARS: b.capARS, capExcessPct: b.capExcessPct, audienceType: b.audienceType, title: b.title || '', message: b.message || '' },
+          createdBy: b.sentBy, createdAt: b.sentAt, notes: '' });
+      }
+      const from = range.$gte, to = range.$lt || range.$lte;
+      const ScheduledNotifM = require('./src/models/ScheduledNotif');
+      const autos = await ScheduledNotifM.find({ enabled: true }).lean();
+      const now = new Date();
+      for (const a of autos) {
+        const label = `🤖 ${a.type || 'plantilla'} · plan ${a.plan || ''}`.trim();
+        const occ = [];
+        if (a.mode === 'once') { if (a.runAt && a.runAt >= from && a.runAt < to) occ.push(new Date(a.runAt)); }
+        else if (a.time && /^\d{2}:\d{2}$/.test(a.time)) {
+          for (let d = new Date(from.getTime()); d < to; d = new Date(d.getTime() + 86400000)) {
+            const key = _schedArtKey(d); const at = new Date(key + 'T' + a.time + ':00-03:00');
+            if (at < from || at >= to) continue;
+            if (a.mode === 'weekly' && new Date(at.getTime() - SCHED_ART_OFFSET_MS).getUTCDay() !== Number(a.dayOfWeek)) continue;
+            occ.push(at);
+          }
+        }
+        for (const at of occ) out.push({ id: 'sn_' + a._id + '_' + at.getTime(), kind: 'auto', readonly: true, name: label, status: at <= now ? 'sent' : 'scheduled', paused: false, cancelled: false,
+          runAt: at, dayKey: _schedArtKey(at), parts: [{ idx: 0, runAt: at, status: at <= now ? 'sent' : 'scheduled', count: null }], partsTotal: 1, partsSent: at <= now ? 1 : 0,
+          audienceLabel: `plantilla automática (${a.mode === 'once' ? 'una vez' : a.mode === 'daily' ? 'todos los días' : 'semanal'})`, estimatedCount: null,
+          gift: { kind: 'auto', type: a.type, plan: a.plan, mode: a.mode, title: '', message: '' }, createdBy: a.createdBy || '', createdAt: a.createdAt, notes: '' });
+      }
+    } catch (e) { logger.warn(`[cronograma] extras del calendario: ${e.message}`); }
+    out.sort((a, b2) => new Date(a.runAt) - new Date(b2.runAt));
+    res.json({ campaigns: out, today: _schedArtKey(new Date()) });
   } catch (err) { logger.error(`GET /api/admin/cronograma: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 // GET /api/admin/cronograma/:id
@@ -21353,24 +21453,37 @@ app.post('/api/admin/cronograma', authMiddleware, adminMiddleware, async (req, r
   try {
     if (!_schedCanManage(req.user.role)) return res.status(403).json({ error: 'Solo admin general y cajeros de carga pueden programar campañas.' });
     const b = req.body || {};
-    const payload = (b.payload && typeof b.payload === 'object') ? b.payload : null;
-    if (!payload) return res.status(400).json({ error: 'Falta el contenido del lote (payload).' });
-    if (!['code', 'window'].includes(payload.mode)) return res.status(400).json({ error: 'Modo inválido (code | window).' });
-    if (!['percent', 'fixed'].includes(payload.giftType)) return res.status(400).json({ error: 'Tipo de regalo inválido.' });
-    if (!(Number(payload.amount) > 0)) return res.status(400).json({ error: 'Poné el monto del regalo.' });
-    if (payload.audienceType !== 'public' && String(payload.message || '').trim().length < 5) return res.status(400).json({ error: 'El mensaje tiene que tener al menos 5 caracteres.' });
+    const kind = b.kind === 'push' ? 'push' : 'lote';
+    let payload = (b.payload && typeof b.payload === 'object') ? b.payload : null;
+    if (!payload) return res.status(400).json({ error: 'Falta el contenido (payload).' });
+    if (kind === 'push') {
+      // #191 aviso del compositor: título + mensaje + segmento + tamaño de lote (+ usernames)
+      const title = String(payload.title || '').trim().slice(0, 100), body = String(payload.body || '').trim().slice(0, 250);
+      if (!title || !body) return res.status(400).json({ error: 'El título y el mensaje son obligatorios.' });
+      const segment = ['all', 'active', 'inactive_7d', 'inactive', 'with_balance', 'specific'].includes(payload.segment) ? payload.segment : 'all';
+      const usernames = segment === 'specific' ? (Array.isArray(payload.usernames) ? payload.usernames.map((u) => String(u).trim()).filter(Boolean).slice(0, 20000) : []) : null;
+      if (segment === 'specific' && !usernames.length) return res.status(400).json({ error: 'Pegá al menos un username.' });
+      const batchSize = [50, 100, 200].includes(Number(payload.batchSize)) ? Number(payload.batchSize) : 100;
+      payload = { title, body, segment, usernames, batchSize };
+    } else {
+      if (!['code', 'window'].includes(payload.mode)) return res.status(400).json({ error: 'Modo inválido (code | window).' });
+      if (!['percent', 'fixed'].includes(payload.giftType)) return res.status(400).json({ error: 'Tipo de regalo inválido.' });
+      if (!(Number(payload.amount) > 0)) return res.status(400).json({ error: 'Poné el monto del regalo.' });
+      if (payload.audienceType !== 'public' && String(payload.message || '').trim().length < 5) return res.status(400).json({ error: 'El mensaje tiene que tener al menos 5 caracteres.' });
+    }
     const pr = _schedBuildParts(b);
     if (pr.error) return res.status(400).json({ error: pr.error });
-    if (pr.parts.length > 1 && payload.audienceType === 'public') return res.status(400).json({ error: 'Un código público no se divide en tandas.' });
-    const est = await _schedEstimate(payload);
+    if (pr.parts.length > 1 && (kind === 'push' || payload.audienceType === 'public')) return res.status(400).json({ error: kind === 'push' ? 'Un aviso del compositor no se divide en tandas: ya sale solo en lotes de N con pausa.' : 'Un código público no se divide en tandas.' });
+    const est = await _schedEstimate(payload, kind);
     if (est.error) return res.status(400).json({ error: 'Audiencia: ' + est.error });
-    if (payload.audienceType !== 'public' && !(est.count > 0)) return res.status(400).json({ error: 'La audiencia quedó vacía con esos filtros (hoy). Revisá el segmento.' });
+    if (kind === 'push' && !(est.count > 0)) return res.status(400).json({ error: 'Ningún usuario del segmento tiene la app / token de notificaciones (hoy).' });
+    if (kind === 'lote' && payload.audienceType !== 'public' && !(est.count > 0)) return res.status(400).json({ error: 'La audiencia quedó vacía con esos filtros (hoy). Revisá el segmento.' });
     const c = await ScheduledCampaign.create({
-      id: uuidv4(), name: String(b.name || payload.name || '').trim().slice(0, 80) || `Campaña ${pr.parts[0].runAt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`,
+      id: uuidv4(), kind, name: String(b.name || payload.name || '').trim().slice(0, 80) || `Campaña ${pr.parts[0].runAt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`,
       payload, audienceLabel: est.label, estimatedCount: est.count, parts: pr.parts, runAt: pr.parts[0].runAt,
       createdBy: req.user.username, createdByRole: req.user.role, notes: String(b.notes || '').slice(0, 500)
     });
-    logger.info(`[cronograma] ${req.user.username} programó "${c.name}" (${pr.parts.length} tanda/s, ~${est.count} destinatarios) para ${_schedArtKey(c.runAt)}`);
+    logger.info(`[cronograma] ${req.user.username} programó ${kind === 'push' ? 'AVISO push ' : ''}"${c.name}" (${pr.parts.length} tanda/s, ~${est.count} destinatarios) para ${_schedArtKey(c.runAt)}`);
     res.json({ success: true, scheduled: true, id: c.id, campaign: _schedPublic(c.toObject()), totals: { recipients: est.count || 0 }, notFound: [], skipped: [],
       message: `Campaña programada: ${pr.parts.length > 1 ? pr.parts.length + ' tandas' : 'sale el ' + c.runAt.toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · ~${est.count} destinatarios (se recalculan al enviar).` });
   } catch (err) { logger.error(`POST /api/admin/cronograma: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
@@ -21387,7 +21500,7 @@ app.put('/api/admin/cronograma/:id', authMiddleware, adminMiddleware, async (req
     if (typeof b.notes === 'string') c.notes = b.notes.slice(0, 500);
     const pl = Object.assign({}, c.payload || {});
     if (typeof b.title === 'string') pl.title = b.title.trim().slice(0, 100);
-    if (typeof b.message === 'string') { if (pl.audienceType !== 'public' && b.message.trim().length < 5) return res.status(400).json({ error: 'El mensaje tiene que tener al menos 5 caracteres.' }); pl.message = b.message.trim().slice(0, 500); }
+    if (typeof b.message === 'string') { if (pl.audienceType !== 'public' && b.message.trim().length < 5) return res.status(400).json({ error: 'El mensaje tiene que tener al menos 5 caracteres.' }); if (c.kind === 'push') pl.body = b.message.trim().slice(0, 250); else pl.message = b.message.trim().slice(0, 500); }
     c.payload = pl; c.markModified('payload');
     if (Array.isArray(b.parts)) {
       for (const p of b.parts) {
@@ -21433,7 +21546,7 @@ app.post('/api/admin/cronograma/:id/:action', authMiddleware, adminMiddleware, a
       // Mismo contenido y misma cantidad de tandas (si mandan una sola fecha, las demás van +5 h).
       let parts = pr.parts;
       if (parts.length === 1 && c.parts.length > 1) parts = c.parts.map((p, i) => ({ idx: i, runAt: new Date(pr.parts[0].runAt.getTime() + i * 5 * 3600 * 1000), status: 'scheduled' }));
-      const dup = await ScheduledCampaign.create({ id: uuidv4(), name: (c.name || 'Campaña') + ' (copia)', payload: c.payload, audienceLabel: c.audienceLabel, estimatedCount: c.estimatedCount, parts, runAt: parts[0].runAt, createdBy: req.user.username, createdByRole: req.user.role, notes: c.notes });
+      const dup = await ScheduledCampaign.create({ id: uuidv4(), kind: c.kind || 'lote', name: (c.name || 'Campaña') + ' (copia)', payload: c.payload, audienceLabel: c.audienceLabel, estimatedCount: c.estimatedCount, parts, runAt: parts[0].runAt, createdBy: req.user.username, createdByRole: req.user.role, notes: c.notes });
       return res.json({ success: true, campaign: _schedPublic(dup.toObject()) });
     }
     else return res.status(400).json({ error: 'Acción inválida' });

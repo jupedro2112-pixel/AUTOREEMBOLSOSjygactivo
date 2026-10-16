@@ -1468,6 +1468,23 @@
                         <div id="notifModeInfo" style="margin-top:.6rem;font-size:.82rem;color:#a5b4fc;display:none"></div>
                     </div>
 
+                    <!-- #191 PROGRAMAR el aviso: fecha/hora de envío (hora Argentina) → va al 📅 Cronograma -->
+                    <div id="notifScheduleWrap" style="margin-top:1rem;padding:.75rem;border:1px dashed rgba(165,180,252,0.45);border-radius:8px;display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+                        <div>
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">📅 Cuándo sale</label>
+                            <select id="notifWhen" class="form-input" style="width:240px" onchange="updateNotifScheduleUI()">
+                                <option value="now">🚀 Ahora (al tocar Enviar)</option>
+                                <option value="schedule">📅 Programar fecha y hora</option>
+                            </select>
+                        </div>
+                        <div id="notifRunAtWrap" style="display:none">
+                            <label class="form-label" style="display:block;margin-bottom:.3rem">Fecha y hora (Argentina)</label>
+                            <input type="datetime-local" id="notifRunAt" class="form-input" style="width:210px" />
+                        </div>
+                        <div id="notifScheduleHint" style="font-size:.78rem;color:#a5b4fc;max-width:560px;line-height:1.4"></div>
+                        <div style="font-size:.78rem;color:#a5b4fc"><a href="#" onclick="switchSection('cronograma');return false" style="color:#a5b4fc">📅 Ver cronograma del mes →</a></div>
+                    </div>
+
                     <!-- Controles modo lote -->
                     <div id="notifBatchControls" style="display:flex;gap:1rem;margin-top:1rem;flex-wrap:wrap;align-items:center">
                         <!-- Segmento -->
@@ -1849,6 +1866,7 @@
                         <span><span class="cron-dot" style="background:#9ca3af"></span> Pausada</span>
                         <span><span class="cron-dot" style="background:#ef4444"></span> Error</span>
                         <span><span class="cron-dot" style="background:#6b7280;opacity:.5"></span> Cancelada</span>
+                        <span style="margin-left:.5rem">Tipos: 🎁 lote con regalo · 📱 aviso push (Redactar notificación) · 🤖 plantilla automática · ✋ enviado a mano</span>
                         <span style="margin-left:auto">Tocá un día para filtrar la lista.</span>
                     </div>
                     <div id="cronCalendar" class="cron-grid"></div>

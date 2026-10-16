@@ -8,6 +8,34 @@
 
 ## Sesión 2026-10-16
 
+### 191. Programar desde "✉️ Redactar notificación" + calendario con TODAS las notificaciones
+- **Owner:** que el compositor (aviso simple sin regalo) también se pueda programar por fecha, que
+  eso aparezca en el calendario, y que el 📅 Cronograma muestre TODAS las notificaciones (hoy sólo
+  las campañas de lote programadas). Igual en los 7 repos.
+- **Backend:** `src/routes/notificationRoutes.js`: el handler de `POST /api/notifications/send-batch`
+  pasó a `sendBatchPush(body)` (stub de `res` → `{http, body}`), la query del segmento a
+  `_pushSegmentQuery(segment, usernames)` y hay `countPushSegment` (estimación al programar);
+  exportados en el router (`router.sendBatchPush / countPushSegment / setPushLogHook`).
+  `ScheduledCampaign.kind` = `'lote' | 'push'` (+ `manual`, `parts.note`). En el cronograma:
+  `SCHED_ADAPTER.sendPush/countPush`; `POST /api/admin/cronograma` acepta `kind:'push'` con payload
+  `{title, body, segment, batchSize, usernames}` (sin tandas: ya sale en lotes de N con pausa de
+  1,5 s); `_schedRunPart` recorre los chunks hasta `remaining = 0` y guarda `note` ("X entregados ·
+  Y fallidos · Z en el segmento"); `PUT` edita el mensaje en `payload.body` para push.
+- **Calendario con todo (`GET /api/admin/cronograma?month=`):** además de las campañas, ítems de
+  sólo lectura: lotes enviados A MANO (NotifBatch sin campaña, ✋), plantillas automáticas
+  habilitadas (`ScheduledNotif` una vez / diario / semanal, 🤖, una ocurrencia por día que toque) y
+  envíos manuales del compositor (hook `setPushLogHook`: cada envío queda como campaña push
+  `manual:true`; lotes sucesivos del mismo aviso en 6 h se acumulan). Los históricos del
+  compositor anteriores a este cambio no existen (no se guardaban).
+- **Panel (admin-sw v64 → v65):** en "Redactar notificación", bloque "📅 Cuándo sale" (ahora /
+  programar fecha-hora AR); "🚀 Enviar lote" y "📤 Enviar a TODOS con app" pasan a "📅 Programar…" y
+  mandan `{kind:'push', payload, runAt}` al cronograma. En el cronograma: ícono por tipo en chips y
+  lista (🎁 lote · 📱 push · 🤖 automática · ✋ a mano), filas de sólo lectura con "🔎 Ver lote",
+  leyenda de tipos, nota del envío push.
+- **Validado:** `node --check` OK, HTML balanceado. **PROBAR:** programar un aviso a +2 min desde
+  el compositor, ver la chip 📱 en el calendario y que llegue; mandar un lote a mano desde el
+  compositor y ver que aparezca ✋ en el día; revisar que las plantillas 🤖 se vean.
+
 ### 190. 📅 CRONOGRAMA: campañas programadas (fecha/hora AR), calendario mensual, tandas, rangos de días/fechas y comparativo semanal
 - **Owner:** "entrar a principio de mes, preparar todas las campañas (bonos, regalos, avisos, activos,
   inactivos, fechas fuertes), revisar todo y dejar el mes completo programado". Más: filtros por

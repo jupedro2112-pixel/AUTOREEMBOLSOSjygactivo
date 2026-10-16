@@ -29,11 +29,17 @@ const partSchema = new mongoose.Schema({
   code: { type: String, default: null },
   sentAt: { type: Date, default: null },
   claimedAt: { type: Date, default: null },         // cuándo una instancia la tomó
+  note: { type: String, default: null },            // #191 resumen del envío push (entregados/fallidos)
   error: { type: String, default: null }
 }, { _id: false });
 
 const scheduledCampaignSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true, index: true },
+  // #191 'lote' = lote con regalo (NotifBatch); 'push' = aviso del compositor "Redactar
+  // notificación" (título + mensaje, segmento, lotes de N). Un push `manual:true` es el registro de
+  // un envío hecho a mano desde el compositor (sólo para que el calendario lo muestre).
+  kind: { type: String, enum: ['lote', 'push'], default: 'lote', index: true },
+  manual: { type: Boolean, default: false },
   name: { type: String, default: '', trim: true, maxlength: 80 },
   // Body EXACTO de POST /api/admin/notif-batches (mode, giftType, amount, validHours, message,
   // title, applyMode, applyScope, applyFrom/To, capARS, capExcessPct, audiencia, etc.).

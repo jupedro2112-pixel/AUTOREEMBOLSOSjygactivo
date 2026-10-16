@@ -1448,7 +1448,39 @@ router.get('/users-status', requireAdmin, async (req, res) => {
 // Permite enviar a segmentos, con seguimiento de offset para "siguiente lote"
 // Limpia automáticamente tokens inválidos detectados en el envío
 // ============================================
-router.post('/send-batch', requireAdmin, async (req, res) => {
+// #191 Query de un segmento del compositor ("Redactar notificación"). La usan el envío y el
+// conteo previo del CRONOGRAMA (estimación al programar). "Tiene token" = token en el campo
+// legacy fcmToken O en el array fcmTokens[] (un usuario que registró push desde el navegador
+// puede tener su token sólo en el array).
+function _pushSegmentQuery(segment, usernames) {
+  const HAS_TOKEN = { $or: [
+    { fcmToken: { $exists: true, $ne: null } },
+    { 'fcmTokens.0': { $exists: true } }
+  ] };
+  // Se usa $and para combinar el filtro del segmento con HAS_TOKEN sin pisar otros $or.
+  if (usernames && usernames.length > 0) {
+    // Match case-insensitive: "VipGabi074" vs "vipgabi074" igual debe encontrarlo.
+    const unameRegexes = usernames
+      .filter(u => typeof u === 'string' && u.trim())
+      .map(u => new RegExp('^' + u.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'));
+    return { $and: [ { username: { $in: unameRegexes } }, HAS_TOKEN ] };
+  }
+  if (segment === 'with_balance') return { $and: [ { balance: { $gt: 0 } }, HAS_TOKEN ] };
+  if (segment === 'active') return { $and: [ { lastLogin: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } }, HAS_TOKEN ] };
+  if (segment === 'inactive') { const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); return { $and: [ { $or: [{ lastLogin: { $lt: cutoff } }, { lastLogin: { $exists: false } }] }, HAS_TOKEN ] }; }
+  if (segment === 'inactive_7d') { const cutoff7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); return { $and: [ { $or: [{ lastLogin: { $lt: cutoff7d } }, { lastLogin: { $exists: false } }] }, HAS_TOKEN ] }; }
+  return HAS_TOKEN; // all: todos con token FCM
+}
+async function countPushSegment(p) {
+  const b = p || {};
+  const usernames = Array.isArray(b.usernames) ? b.usernames : null;
+  return User.countDocuments(_pushSegmentQuery(b.segment || 'all', usernames));
+}
+// #191 El envío por lotes vive en una función reutilizable: la ruta y el CRONOGRAMA (envíos
+// programados del compositor) usan el MISMO código. `res` es un stub → { http, body }.
+async function sendBatchPush(bodyIn) {
+  const res = { http: 200, body: null, status(c) { this.http = c; return this; }, json(o) { this.body = o; return this; } };
+  const req = { body: bodyIn || {} };
   try {
     const { title, body, data, batchSize = 100, usernames, segment = 'all', batchOffset = 0 } = req.body;
 
@@ -1463,38 +1495,7 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
     // "Tiene token" = token en el campo legacy fcmToken O en el array fcmTokens[].
     // Es indispensable incluir el array: un usuario que registró push desde el
     // navegador (no la PWA) puede tener su token sólo en fcmTokens[].
-    const HAS_TOKEN = { $or: [
-      { fcmToken: { $exists: true, $ne: null } },
-      { 'fcmTokens.0': { $exists: true } }
-    ] };
-
-    // Build base query based on segment. Se usa $and para combinar el filtro del
-    // segmento con HAS_TOKEN sin pisar otros operadores $or del segmento.
-    let query;
-    if (usernames && usernames.length > 0) {
-      // Match case-insensitive: si el admin tipea el usuario con otra
-      // capitalización (ej. "VipGabi074" vs "vipgabi074") igual debe
-      // encontrarlo, en vez de devolver 0 envíos silenciosamente.
-      const unameRegexes = usernames
-        .filter(u => typeof u === 'string' && u.trim())
-        .map(u => new RegExp('^' + u.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'));
-      query = { $and: [ { username: { $in: unameRegexes } }, HAS_TOKEN ] };
-    } else if (segment === 'with_balance') {
-      query = { $and: [ { balance: { $gt: 0 } }, HAS_TOKEN ] };
-    } else if (segment === 'active') {
-      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      query = { $and: [ { lastLogin: { $gte: cutoff } }, HAS_TOKEN ] };
-    } else if (segment === 'inactive') {
-      const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      query = { $and: [ { $or: [{ lastLogin: { $lt: cutoff } }, { lastLogin: { $exists: false } }] }, HAS_TOKEN ] };
-    } else if (segment === 'inactive_7d') {
-      // Inactivos en los últimos 7 días (sin login en 7 días)
-      const cutoff7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      query = { $and: [ { $or: [{ lastLogin: { $lt: cutoff7d } }, { lastLogin: { $exists: false } }] }, HAS_TOKEN ] };
-    } else {
-      // all: todos con token FCM
-      query = HAS_TOKEN;
-    }
+    const query = _pushSegmentQuery(segment, usernames); // #191 (misma query que countPushSegment)
 
     const allUsers = await User.find(query).select('username fcmToken fcmTokens id').sort({ _id: 1 }).lean();
 
@@ -1656,6 +1657,21 @@ router.post('/send-batch', requireAdmin, async (req, res) => {
     console.error('[FCM Batch] Error:', error);
     res.status(500).json({ error: error.message });
   }
+  return res;
+}
+// Hook (lo registra server.js): deja en el CRONOGRAMA un registro de cada envío manual del
+// compositor, para que el calendario muestre TODAS las notificaciones.
+let _pushLogHook = null;
+router.setPushLogHook = (fn) => { _pushLogHook = typeof fn === 'function' ? fn : null; };
+router.sendBatchPush = sendBatchPush;
+router.countPushSegment = countPushSegment;
+router.pushSegmentQuery = _pushSegmentQuery;
+router.post('/send-batch', requireAdmin, async (req, res) => {
+  const r = await sendBatchPush(req.body);
+  if (_pushLogHook && r.http === 200 && r.body && r.body.success && (r.body.sentUsernames || []).length) {
+    try { await _pushLogHook(req.body || {}, r.body, req.user || null); } catch (e) { console.warn('[push-log] ' + e.message); }
+  }
+  res.status(r.http).json(r.body);
 });
 
 // ============================================

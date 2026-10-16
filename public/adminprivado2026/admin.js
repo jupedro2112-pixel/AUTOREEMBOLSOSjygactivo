@@ -7413,6 +7413,8 @@ async function sendBatchNotification(batchOffset) {
         }
     }
 
+    // #191 programada → va al cronograma (no se manda ahora)
+    if (batchOffset === undefined && await _notifMaybeSchedule({ title, body, segment, batchSize, usernames })) return;
     const sendBtn = document.getElementById('notifSendBtn');
     const nextBtn = document.getElementById('notifNextBatchBtn');
     if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = '⏳ Enviando...'; }
@@ -7637,6 +7639,8 @@ async function sendAllWithApp(startOffset = 0) {
         return;
     }
 
+    // #191 programada → va al cronograma (no se manda ahora)
+    if (startOffset === 0 && await _notifMaybeSchedule({ title, body, segment: 'all', batchSize: 100, usernames: null })) return;
     // Confirmación al iniciar desde 0 (operación que puede tardar varios minutos)
     if (startOffset === 0) {
         if (!confirm('Vas a enviar a TODOS los usuarios con app instalada. Puede tardar varios minutos según la cantidad de usuarios. ¿Continuar?')) return;
@@ -14771,8 +14775,11 @@ function _cronArtHM(d) { return _cronArtIso(d).slice(11, 16); }
 function _cronArtLocalInput(d) { return _cronArtIso(d).slice(0, 16); }
 function _cronFmt(d) { const k = _cronArtKey(d); return k.slice(8, 10) + '/' + k.slice(5, 7) + ' ' + _cronArtHM(d); }
 function _cronBadge(st) { const s = CRON_STATUS[st] || { t: st, c: '#888' }; return '<span style="background:' + s.c + ';color:#fff;border-radius:4px;padding:1px 6px;font-size:.72rem;font-weight:600">' + s.t + '</span>'; }
+function _cronKindIcon(c) { return c.kind === 'push' ? '📱' : c.kind === 'auto' ? '🤖' : (c.manual ? '✋' : '🎁'); }
 function _cronGiftTxt(g) {
     if (!g) return '';
+    if (g.kind === 'push') return '📱 aviso push (sin regalo)' + (g.batchSize ? ' · lotes de ' + g.batchSize : '');
+    if (g.kind === 'auto') return '🤖 plantilla ' + (g.type || '') + (g.plan ? ' · plan ' + g.plan : '');
     const base = g.giftType === 'percent' ? ('+' + g.amount + '%' + (g.applyMode === 'auto' ? ' auto' : ' c/agente') + (g.capARS != null ? (Number(g.capARS) === 0 ? ' sin tope' : ' tope $' + Number(g.capARS).toLocaleString('es-AR')) : '')) : ('$' + Number(g.amount || 0).toLocaleString('es-AR') + ' fichas');
     return base + ' · ' + (g.mode === 'code' ? 'código' : 'por tiempo ' + g.validHours + 'h');
 }
@@ -14873,7 +14880,7 @@ function _cronRenderCalendar() {
         items.slice(0, 3).forEach(({ c, p }) => {
             const st = c.cancelled ? 'cancelled' : (c.paused && p.status === 'scheduled' ? 'paused' : p.status);
             const col = (CRON_STATUS[st] || {}).c || '#888';
-            chips += '<span class="cron-chip" style="background:' + col + (st === 'cancelled' ? ';opacity:.5' : '') + '" title="' + escHtml(c.name) + ' — ' + _cronArtHM(p.runAt) + (c.partsTotal > 1 ? ' (tanda ' + (p.idx + 1) + '/' + c.partsTotal + ')' : '') + '">' + _cronArtHM(p.runAt) + ' ' + escHtml(c.name || 'Campaña') + (c.partsTotal > 1 ? ' ' + (p.idx + 1) + '/' + c.partsTotal : '') + '</span>';
+            chips += '<span class="cron-chip" style="background:' + col + (st === 'cancelled' ? ';opacity:.5' : '') + '" title="' + escHtml(c.name) + ' — ' + _cronArtHM(p.runAt) + (c.partsTotal > 1 ? ' (tanda ' + (p.idx + 1) + '/' + c.partsTotal + ')' : '') + '">' + _cronKindIcon(c) + ' ' + _cronArtHM(p.runAt) + ' ' + escHtml(c.name || 'Campaña') + (c.partsTotal > 1 ? ' ' + (p.idx + 1) + '/' + c.partsTotal : '') + '</span>';
         });
         if (items.length > 3) chips += '<span style="color:#a5b4fc">+' + (items.length - 3) + ' más</span>';
         html += '<div class="cron-day' + (isToday ? ' today' : '') + (_cronDayFilter === k ? ' cron-best' : '') + '" onclick="cronPickDay(\'' + k + '\')"><div class="n">' + d + (items.length ? ' <span style="color:#a5b4fc;font-weight:400">(' + items.length + ')</span>' : '') + '</div>' + chips + '</div>';
@@ -14891,17 +14898,24 @@ function _cronRenderList() {
         const parts = (c.parts || []).map((p) => {
             const st = c.cancelled && p.status === 'scheduled' ? 'cancelled' : (c.paused && p.status === 'scheduled' ? 'paused' : p.status);
             const ic = st === 'sent' ? '✅' : st === 'sending' ? '⏳' : st === 'error' ? '❌' : st === 'paused' ? '⏸️' : st === 'cancelled' ? '🚫' : '🕒';
-            return '<span title="' + escHtml(p.error || '') + '" style="white-space:nowrap">' + ic + ' ' + (c.partsTotal > 1 ? (p.idx + 1) + '/' + c.partsTotal + ' ' : '') + _cronFmt(p.runAt) + (p.count != null ? ' (' + p.count + ')' : '') + (p.batchId ? ' <a href="#" style="color:#a5b4fc" onclick="cronGoBatch(\'' + p.batchId + '\');return false">ver lote</a>' : '') + (p.error ? ' <span style="color:#f87171">' + escHtml(String(p.error).slice(0, 80)) + '</span>' : '') + '</span>';
+            return '<span title="' + escHtml(p.error || p.note || '') + '" style="white-space:nowrap">' + ic + ' ' + (c.partsTotal > 1 ? (p.idx + 1) + '/' + c.partsTotal + ' ' : '') + _cronFmt(p.runAt) + (p.count != null ? ' (' + p.count + ')' : '') + (p.note ? ' <span style="color:#8fd3a8">' + escHtml(String(p.note).slice(0, 60)) + '</span>' : '') + (p.batchId ? ' <a href="#" style="color:#a5b4fc" onclick="cronGoBatch(\'' + p.batchId + '\');return false">ver lote</a>' : '') + (p.error ? ' <span style="color:#f87171">' + escHtml(String(p.error).slice(0, 80)) + '</span>' : '') + '</span>';
         }).join(' · ');
-        const pend = (c.parts || []).some((p) => p.status === 'scheduled' || p.status === 'error' || p.status === 'paused');
+        const pend = !c.readonly && (c.parts || []).some((p) => p.status === 'scheduled' || p.status === 'error' || p.status === 'paused');
         const acts = [];
+        if (c.readonly) {
+            if (c.parts && c.parts[0] && c.parts[0].batchId) acts.push('<button class="btn btn-secondary" onclick="cronGoBatch(\'' + c.parts[0].batchId + '\')">🔎 Ver lote</button>');
+            return '<div class="cron-row"><div style="min-width:220px;flex:1"><div>' + _cronBadge(c.status) + ' ' + _cronKindIcon(c) + ' <strong>' + escHtml(c.name || '') + '</strong> <span style="color:#888;font-size:.74rem">' + (c.kind === 'auto' ? 'plantilla automática' : 'enviado a mano') + '</span></div>' +
+                '<div style="color:#8fd3a8;font-size:.78rem;margin-top:2px">' + escHtml(c.audienceLabel || '') + (c.estimatedCount != null ? ' · ' + Number(c.estimatedCount).toLocaleString('es-AR') + ' destinatarios' : '') + ' · ' + escHtml(_cronGiftTxt(c.gift)) + '</div>' +
+                (c.gift && c.gift.message ? '<div style="color:#cbd5e1;font-size:.76rem;margin-top:2px;white-space:pre-wrap">' + escHtml((c.gift.title ? c.gift.title + ': ' : '') + c.gift.message).slice(0, 220) + '</div>' : '') +
+                '<div style="font-size:.76rem;margin-top:3px;color:#cbd5e1">' + parts + '</div><div style="font-size:.7rem;color:#666;margin-top:2px">por ' + escHtml(c.createdBy || '') + '</div></div><div class="acts">' + acts.join('') + '</div></div>';
+        }
         if (!c.cancelled && pend) acts.push('<button class="btn btn-secondary" onclick="cronOpenEdit(\'' + c.id + '\')">✏️ Editar</button>');
         if (!c.cancelled && pend) acts.push(c.paused ? '<button class="btn btn-secondary" onclick="cronAction(\'' + c.id + '\',\'resume\')">▶ Reanudar</button>' : '<button class="btn btn-secondary" onclick="cronAction(\'' + c.id + '\',\'pause\')">⏸ Pausar</button>');
         if (!c.cancelled && pend) acts.push('<button class="btn btn-secondary" onclick="cronAction(\'' + c.id + '\',\'run-now\', true)">🚀 Enviar ahora</button>');
         acts.push('<button class="btn btn-secondary" onclick="cronDuplicate(\'' + c.id + '\')">📄 Duplicar</button>');
         if (!c.cancelled) acts.push('<button class="btn btn-secondary" style="color:#f87171" onclick="cronDelete(\'' + c.id + '\')">🗑️</button>');
         return '<div class="cron-row">' +
-            '<div style="min-width:220px;flex:1"><div>' + _cronBadge(c.status) + ' <strong>' + escHtml(c.name || 'Campaña') + '</strong>' + (c.partsTotal > 1 ? ' <span style="color:#a5b4fc">' + c.partsSent + '/' + c.partsTotal + ' tandas</span>' : '') + '</div>' +
+            '<div style="min-width:220px;flex:1"><div>' + _cronBadge(c.status) + ' ' + _cronKindIcon(c) + ' <strong>' + escHtml(c.name || 'Campaña') + '</strong>' + (c.partsTotal > 1 ? ' <span style="color:#a5b4fc">' + c.partsSent + '/' + c.partsTotal + ' tandas</span>' : '') + '</div>' +
             '<div style="color:#8fd3a8;font-size:.78rem;margin-top:2px">' + escHtml(c.audienceLabel || c.gift.audienceType || '') + (c.estimatedCount != null ? ' · ~' + Number(c.estimatedCount).toLocaleString('es-AR') + ' destinatarios' : '') + ' · ' + escHtml(_cronGiftTxt(c.gift)) + '</div>' +
             (c.gift.message ? '<div style="color:#cbd5e1;font-size:.76rem;margin-top:2px;white-space:pre-wrap">' + escHtml((c.gift.title ? c.gift.title + ': ' : '') + c.gift.message).slice(0, 220) + '</div>' : '') +
             '<div style="font-size:.76rem;margin-top:3px;color:#cbd5e1">' + parts + '</div>' +
@@ -15029,3 +15043,37 @@ async function loadCronReport() {
 window.updateGiftBatchScheduleUI = updateGiftBatchScheduleUI; window.cronMonthShift = cronMonthShift; window.loadCronograma = loadCronograma; window.cronPickDay = cronPickDay;
 window.cronGoBatch = cronGoBatch; window.cronNewCampaign = cronNewCampaign; window.cronAction = cronAction; window.cronDuplicate = cronDuplicate; window.cronDelete = cronDelete;
 window.cronOpenEdit = cronOpenEdit; window.cronCloseEdit = cronCloseEdit; window.cronSaveEdit = cronSaveEdit; window.loadCronReport = loadCronReport;
+
+// ── #191 Programar desde "✉️ Redactar notificación" ──
+function updateNotifScheduleUI() {
+    const sched = ((document.getElementById('notifWhen') || {}).value || 'now') === 'schedule';
+    const w = document.getElementById('notifRunAtWrap'); if (w) w.style.display = sched ? '' : 'none';
+    const ra = document.getElementById('notifRunAt');
+    if (sched && ra && !ra.value) { const d = new Date(Date.now() + 3600 * 1000); d.setMinutes(0, 0, 0); ra.value = _cronArtLocalInput(d); }
+    const b1 = document.getElementById('notifSendBtn'); if (b1 && !b1.disabled) b1.textContent = sched ? '📅 Programar' : '🚀 Enviar lote';
+    const b2 = document.getElementById('notifSendAllBtn'); if (b2 && !b2.disabled) b2.textContent = sched ? '📅 Programar a TODOS con app' : '📤 Enviar a TODOS con app';
+    const h = document.getElementById('notifScheduleHint');
+    if (h) h.textContent = sched ? 'Se guarda en el 📅 Cronograma y sale sola a esa hora (hora Argentina): manda TODO el segmento en lotes del tamaño elegido, con pausa entre lotes. Desde el cronograma la podés editar, pausar, duplicar o borrar.' : '';
+}
+// true = se programó (o hubo error y NO hay que mandar ahora); false = mandar ahora como siempre
+async function _notifMaybeSchedule(payload) {
+    if (((document.getElementById('notifWhen') || {}).value || 'now') !== 'schedule') return false;
+    const runAt = ((document.getElementById('notifRunAt') || {}).value || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(runAt)) { showToast('Poné fecha y hora (Argentina) para programar', 'error'); return true; }
+    if (new Date(runAt + ':00-03:00').getTime() < Date.now() - 60000) { showToast('La fecha está en el pasado (hora Argentina)', 'error'); return true; }
+    const segTxt = payload.usernames && payload.usernames.length ? payload.usernames.length + ' usuarios específicos' : ((document.getElementById('notifSegment') || {}).selectedOptions || [{}])[0].textContent || payload.segment;
+    if (!confirm('¿Programar esta notificación?\n\n' + payload.title + '\n' + payload.body + '\n\nSegmento: ' + segTxt + '\nSale el ' + runAt.replace('T', ' ') + ' (hora Argentina), en lotes de ' + payload.batchSize + ' con pausa. NO se manda nada ahora.')) return true;
+    try {
+        const r = await authFetch('/api/admin/cronograma', { method: 'POST', body: JSON.stringify({ kind: 'push', name: payload.title, payload, runAt }) });
+        const j = await r.json();
+        if (!r.ok || !j.success) { showToast(j.error || 'No se pudo programar', 'error'); return true; }
+        showToast('Notificación programada', 'success');
+        const st = document.getElementById('notifBatchStatus');
+        if (st) { st.style.display = ''; st.innerHTML = '📅 ' + escHtml(j.message || 'Programada') + ' <a href="#" onclick="switchSection(\'cronograma\');return false" style="color:#a5b4fc">ver cronograma</a>'; }
+        const w = document.getElementById('notifWhen'); if (w) w.value = 'now';
+        const ra = document.getElementById('notifRunAt'); if (ra) ra.value = '';
+        updateNotifScheduleUI();
+    } catch (e) { showToast('Error de conexión', 'error'); }
+    return true;
+}
+window.updateNotifScheduleUI = updateNotifScheduleUI;

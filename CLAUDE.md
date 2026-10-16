@@ -153,6 +153,8 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `_createNotifBatchFromBody(body, user)`; cualquier validación/efecto nuevo del lote va en esa
   función (así lo heredan las campañas programadas). Las rutas del cronograma son
   `/api/admin/cronograma*` porque `/api/admin/campaigns` YA es de publicistas: no reusar ese path.
+  El compositor push (`/api/notifications/send-batch`) es un wrapper de `sendBatchPush` en
+  `notificationRoutes.js` (misma regla: lo nuevo del envío va en la función).
 
 - **TDZ en server.js (incidente #133):** `authMiddleware`, `adminMiddleware`, etc. son
   `const` definidos en ~L3270-3400. **Toda ruta `app.get/post(...)` que los use tiene que

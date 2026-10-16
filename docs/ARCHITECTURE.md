@@ -150,7 +150,11 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   es un PromoBonus `sourceRuleCode:'lote'` (`autoApply/applyScope/applyFromMin`);
   `claimAutoPromoPercent` lo reserva atómico en la carga (`/api/admin/deposit`,
   `hgcashAutoCarga`). Motor de envío reanudable (cron 45 s).
-- **ScheduledCampaign** (#190) — campaña PROGRAMADA: `payload` = body exacto del POST de lotes,
+- **ScheduledCampaign** (#190, #191) — campaña PROGRAMADA (`kind:'lote'` = body exacto del POST de
+  lotes; `kind:'push'` = aviso del compositor `{title, body, segment, batchSize, usernames}`, enviado
+  por `notificationRoutes.sendBatchPush` en chunks; `manual:true` = registro de un envío a mano del
+  compositor para el calendario). `GET /api/admin/cronograma` suma además lotes enviados a mano y
+  ocurrencias de ScheduledNotif como ítems de sólo lectura. Campaña de lote: `payload` = body exacto del POST de lotes,
   `parts[]` (tandas con `runAt`/`status`/`usernames`/`batchId`), `paused/cancelled`. El
   programador `_schedTick` (60 s) la dispara vía `_createNotifBatchFromBody`; la audiencia de
   las tandas se resuelve una vez y se reparte sin repetir. Rutas `/api/admin/cronograma*`.

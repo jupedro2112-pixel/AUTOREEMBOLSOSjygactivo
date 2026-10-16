@@ -129,6 +129,10 @@
                     <span class="icon icon-bell"></span>
                     <span>Notificaciones</span>
                 </a>
+                <a href="#" class="nav-item" data-section="cronograma">
+                    <span>📅</span>
+                    <span>Cronograma</span>
+                </a>
                 <a href="#" class="nav-item" data-section="encuesta">
                     <span>📊</span>
                     <span>Encuesta</span>
@@ -1719,6 +1723,14 @@
                                 <input type="number" id="giftBatchInactiveDays" class="form-input" min="1" max="365" step="1" value="7" style="width:90px" />
                             </div>
                             <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="Opcional: cierra el rango. Ej.: X=7 y hasta=14 → 'entre 7 y 14 días'">hasta Y días (opc.)</label>
+                                <input type="number" id="giftBatchInactiveDaysMax" class="form-input" min="2" max="730" step="1" placeholder="sin tope" style="width:105px" onchange="updateGiftBatchSegHint()" />
+                            </div>
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="Alternativa a los días: rango de fechas (hora Argentina). Si lo completás, X/Y días se ignoran.">o entre fechas</label>
+                                <div style="display:flex;gap:.3rem;align-items:center"><input type="date" id="giftBatchDateFrom" class="form-input" style="width:150px" onchange="updateGiftBatchSegHint()" /><span style="color:#8fd3a8">→</span><input type="date" id="giftBatchDateTo" class="form-input" style="width:150px" onchange="updateGiftBatchSegHint()" /></div>
+                            </div>
+                            <div>
                                 <label class="form-label" style="display:block;margin-bottom:.3rem" title="Cantidad mínima de cargas en toda su historia">Mín. cargas (hist.)</label>
                                 <input type="number" id="giftBatchMinDeposits" class="form-input" min="0" step="1" placeholder="0" style="width:110px" />
                             </div>
@@ -1744,6 +1756,31 @@
                                 <input type="number" id="giftBatchMaxClaims" class="form-input" min="1" step="1" placeholder="sin cupo" style="width:140px" />
                             </div>
                         </div>
+                    </div>
+                    <!-- #190 PROGRAMAR: fecha/hora de envío (hora Argentina) y división en tandas -->
+                    <div id="giftBatchScheduleWrap" style="margin-top:1rem;padding:.75rem;border:1px dashed rgba(165,180,252,0.45);border-radius:8px">
+                        <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+                            <div>
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">📅 Cuándo sale</label>
+                                <select id="giftBatchWhen" class="form-input" style="width:240px" onchange="updateGiftBatchScheduleUI()">
+                                    <option value="now">🚀 Ahora (al tocar Enviar)</option>
+                                    <option value="schedule">📅 Programar fecha y hora</option>
+                                </select>
+                            </div>
+                            <div id="giftBatchRunAtWrap" style="display:none">
+                                <label class="form-label" style="display:block;margin-bottom:.3rem">Fecha y hora (Argentina)</label>
+                                <input type="datetime-local" id="giftBatchRunAt" class="form-input" style="width:210px" onchange="updateGiftBatchScheduleUI()" />
+                            </div>
+                            <div id="giftBatchPartsWrap" style="display:none">
+                                <label class="form-label" style="display:block;margin-bottom:.3rem" title="Divide la audiencia en N tandas iguales, sin repetir usuarios; cada tanda sale a su hora">Dividir en tandas</label>
+                                <select id="giftBatchParts" class="form-input" style="width:140px" onchange="updateGiftBatchScheduleUI()">
+                                    <option value="1">1 (sin dividir)</option><option value="2">2 tandas</option><option value="3">3 tandas</option><option value="4">4 tandas</option><option value="5">5 tandas</option><option value="6">6 tandas</option><option value="8">8 tandas</option><option value="10">10 tandas</option><option value="12">12 tandas</option>
+                                </select>
+                            </div>
+                            <div style="font-size:.78rem;color:#a5b4fc"><a href="#" onclick="switchSection('cronograma');return false" style="color:#a5b4fc">📅 Ver cronograma del mes →</a></div>
+                        </div>
+                        <div id="giftBatchPartsTimes" style="display:none;gap:.6rem;flex-wrap:wrap;margin-top:.6rem"></div>
+                        <div id="giftBatchScheduleHint" style="color:#a5b4fc;font-size:.78rem;margin-top:.5rem"></div>
                     </div>
                     <div style="margin-top:1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
                         <button class="btn btn-secondary" onclick="previewGiftBatch()">🔍 Validar lista</button>
@@ -1786,6 +1823,81 @@
                     </div>
                     <div id="notifPagination" style="margin-top:1rem;display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap"></div>
                 </div>
+            </section>
+
+            <!-- ============================================
+                 #190 CRONOGRAMA — campañas programadas (fecha/hora AR),
+                 calendario mensual, tandas y comparativo semanal/mensual.
+                 ============================================ -->
+            <section id="cronogramaSection" class="section">
+                <div class="panel-header">
+                    <h2>📅 Cronograma</h2>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <button class="btn btn-secondary" onclick="cronMonthShift(-1)">◀</button>
+                        <strong id="cronMonthLabel" style="min-width:170px;text-align:center;color:#fff"></strong>
+                        <button class="btn btn-secondary" onclick="cronMonthShift(1)">▶</button>
+                        <button class="btn btn-secondary" onclick="cronMonthShift(0)">Hoy</button>
+                        <button class="btn btn-primary" onclick="cronNewCampaign()">➕ Nueva campaña programada</button>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom:1rem">
+                    <div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem;color:#a5b4fc;margin-bottom:.6rem">
+                        <span>Estados:</span>
+                        <span><span class="cron-dot" style="background:#60a5fa"></span> Programada</span>
+                        <span><span class="cron-dot" style="background:#f59e0b"></span> Enviando (tandas en curso)</span>
+                        <span><span class="cron-dot" style="background:#22c55e"></span> Enviada</span>
+                        <span><span class="cron-dot" style="background:#9ca3af"></span> Pausada</span>
+                        <span><span class="cron-dot" style="background:#ef4444"></span> Error</span>
+                        <span><span class="cron-dot" style="background:#6b7280;opacity:.5"></span> Cancelada</span>
+                        <span style="margin-left:auto">Tocá un día para filtrar la lista.</span>
+                    </div>
+                    <div id="cronCalendar" class="cron-grid"></div>
+                </div>
+                <div class="card" style="margin-bottom:1rem">
+                    <h3 style="margin:0 0 .6rem 0;font-size:1rem">🗂️ Campañas del mes</h3>
+                    <div id="cronList" style="font-size:.85rem">Cargando…</div>
+                </div>
+                <div id="cronEditCard" class="card" style="display:none;margin-bottom:1rem;border:1px solid rgba(165,180,252,0.5)">
+                    <h3 style="margin:0 0 .6rem 0;font-size:1rem">✏️ Editar campaña <span id="cronEditName" style="color:#a5b4fc"></span></h3>
+                    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:flex-end">
+                        <div><label class="form-label" style="display:block;margin-bottom:.3rem">Nombre</label><input type="text" id="cronEditNameInput" class="form-input" maxlength="80" style="width:260px" /></div>
+                        <div><label class="form-label" style="display:block;margin-bottom:.3rem">Título (push)</label><input type="text" id="cronEditTitle" class="form-input" maxlength="100" style="width:260px" /></div>
+                    </div>
+                    <div style="margin-top:.6rem"><label class="form-label" style="display:block;margin-bottom:.3rem">Mensaje</label><textarea id="cronEditMessage" class="form-input" rows="3" maxlength="500" style="width:100%;max-width:700px"></textarea></div>
+                    <div style="margin-top:.6rem"><label class="form-label" style="display:block;margin-bottom:.3rem">Tandas (fecha y hora Argentina; las ya enviadas no se tocan)</label><div id="cronEditParts" style="display:flex;gap:.6rem;flex-wrap:wrap"></div></div>
+                    <div style="margin-top:.6rem"><label class="form-label" style="display:block;margin-bottom:.3rem">Notas internas</label><input type="text" id="cronEditNotes" class="form-input" maxlength="500" style="width:100%;max-width:700px" /></div>
+                    <div style="margin-top:.8rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                        <button class="btn btn-primary" onclick="cronSaveEdit()">💾 Guardar</button>
+                        <button class="btn btn-secondary" onclick="cronCloseEdit()">Cerrar</button>
+                        <span id="cronEditStatus" style="font-size:.85rem;color:#a5b4fc"></span>
+                    </div>
+                </div>
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+                        <h3 style="margin:0;font-size:1rem">📊 Comparativo del mes: semana 1 · 2 · 3 · 4 y resumen</h3>
+                        <button class="btn btn-secondary" onclick="loadCronReport()">🔄 Recalcular</button>
+                    </div>
+                    <div style="color:#8fd3a8;font-size:.78rem;margin:.4rem 0 .6rem">Entran TODOS los lotes enviados en el mes (programados 📅 o a mano). "Cargaron" = clientes del lote que hicieron una carga real en las 48 h siguientes al envío. Costo = $ de bono usado + fichas acreditadas. "x" = $ cargado sobre el costo.</div>
+                    <div id="cronReport">Cargando…</div>
+                </div>
+                <style>
+                    .cron-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle}
+                    .cron-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+                    .cron-grid .cron-dow{font-size:.72rem;color:#a5b4fc;text-align:center;padding:2px 0}
+                    .cron-day{min-height:86px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:4px;font-size:.72rem;background:rgba(0,0,0,0.25);cursor:pointer;overflow:hidden}
+                    .cron-day.off{opacity:.35;cursor:default}
+                    .cron-day.today{border-color:#d4af37;box-shadow:0 0 0 1px #d4af37 inset}
+                    .cron-day .n{color:#cbd5e1;font-weight:600;margin-bottom:2px}
+                    .cron-chip{display:block;border-radius:4px;padding:1px 4px;margin-bottom:2px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.7rem}
+                    .cron-row{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem .4rem;border-bottom:1px solid rgba(255,255,255,0.06);flex-wrap:wrap}
+                    .cron-row .acts{display:flex;gap:.3rem;flex-wrap:wrap;margin-left:auto}
+                    .cron-row .acts button{font-size:.72rem;padding:3px 8px}
+                    .cron-tbl{width:100%;border-collapse:collapse;font-size:.8rem}
+                    .cron-tbl th,.cron-tbl td{padding:4px 6px;border-bottom:1px solid rgba(255,255,255,0.08);text-align:right;white-space:nowrap}
+                    .cron-tbl th:first-child,.cron-tbl td:first-child,.cron-tbl th:nth-child(2),.cron-tbl td:nth-child(2){text-align:left}
+                    .cron-best{background:rgba(34,197,94,0.12)}
+                    @media (max-width:700px){.cron-day{min-height:52px}.cron-chip{font-size:.6rem}}
+                </style>
             </section>
 
             <!-- ============================================

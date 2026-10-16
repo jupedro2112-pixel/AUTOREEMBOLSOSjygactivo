@@ -4,7 +4,61 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-07**
+> **Última actualización: 2026-10-16**
+
+## Sesión 2026-10-16
+
+### 190. 📅 CRONOGRAMA: campañas programadas (fecha/hora AR), calendario mensual, tandas, rangos de días/fechas y comparativo semanal
+- **Owner:** "entrar a principio de mes, preparar todas las campañas (bonos, regalos, avisos, activos,
+  inactivos, fechas fuertes), revisar todo y dejar el mes completo programado". Más: filtros por
+  RANGO (sin cargar entre 7 y 14 días, cargaron entre fecha y fecha), dividir el lote completo en
+  tandas con horarios sin repetir usuarios, historial con estado, y comparativo semana 1/2/3/4 con
+  resumen mensual que recomiende qué repetir y qué no. Lo mismo va a los 6 repos hermanos.
+- **Diseño:** CAPA encima de los lotes, sin tocar la mecánica del regalo. `ScheduledCampaign`
+  (`src/models/ScheduledCampaign.js`) guarda el MISMO body que acepta `POST /api/admin/notif-batches`
+  (`payload`) + `parts[]` (tandas: `runAt`, `status`, `usernames`, `batchId`, `count`, `error`).
+  El cuerpo del POST se extrajo a **`_createNotifBatchFromBody(body, user)`** (stub de `res`:
+  devuelve `{http, body}`); el endpoint real sólo la llama. El programador la usa tal cual, así
+  todo lo que valide/haga un lote (código, tope, claim, motor de envío) vale para lo programado.
+- **Programador (`_schedTick`, 60 s, en cada instancia):** reclama cada tanda vencida con
+  `findOneAndUpdate` posicional (`scheduled → sending`; dos instancias no mandan la misma),
+  crea el lote, marca `sent` (con `batchId`, `code`, `count`) o `error` (texto visible +
+  Telegram). Tanda `sending` colgada >15 min → `error` (no se reenvía sola). **Tandas:** la
+  audiencia completa se resuelve UNA vez al correr la primera y se reparte round-robin en N listas
+  sin repetir (el cupo limita el total); cada tanda sale como lote `audienceType:'list'`. En modo
+  código, la 1ª usa el código elegido y las demás generan uno propio (un código no puede repetirse
+  entre lotes activos). Estado de la campaña derivado: scheduled | sending | sent | paused | error
+  | cancelled. Pausar + reanudar reprograma las tandas vencidas a +2 min.
+- **Rangos (`_resolveNotifBatchSegment`):** `audienceDaysMax` ("entre X y Y días") o
+  `dateFrom/dateTo` (AAAA-MM-DD, hora AR, ≤400 días) para las 3 bases: último ingreso (nologin),
+  última carga (nodeposit) y "cargaron" (deposited = ≥1 carga DENTRO del rango, vía `win` de
+  `_notifBatchDepositStats`). Con rango, los que nunca entraron NO entran. `audienceLabel` lo dice.
+- **Endpoints** (prefijo **`/api/admin/cronograma`** — OJO `/api/admin/campaigns` ya existía para
+  publicistas): `GET ?month=YYYY-MM` (lista del mes), `GET /:id` (con payload), `POST` ({name,
+  payload, runAt | parts:[{runAt}]}; valida payload + estima la audiencia HOY y rechaza si queda
+  vacía), `PUT /:id` (nombre, título, mensaje, notas, fechas de tandas no enviadas), `POST
+  /:id/pause|resume|run-now|duplicate`, `DELETE /:id` (si nada salió se borra; si ya salió una
+  tanda, cancela las pendientes y queda en el historial), `GET /api/admin/cronograma-report?month=`.
+- **Comparativo (`cronograma-report`):** entran TODOS los NotifBatch del mes (programados o a
+  mano). Por lote: avisados, les llegó (socket/push), canjearon, acreditados, usaron el bono
+  (PromoBonus `lote` usados), **cargaron en 48 h** (clientes y $ reales, `Transaction` deposit sin
+  payout_refund), conversión = cargaron/avisados, costo = bono $ + fichas, x = $ cargado / costo.
+  Semanas por día del mes (1–7, 8–14, 15–21, 22–28, 29+). Recomendaciones heurísticas sobre lotes
+  ≥30 destinatarios: REPETIR (top 3 conversión), REVISAR (≤ mitad de la mediana, ≥100 avisados),
+  mejor franja horaria, mejor tipo de regalo, mejor segmento, mejor vs peor semana.
+- **Panel (admin-sw v63 → v64):** en el formulario del lote, bloque "📅 Cuándo sale" (ahora /
+  programar: fecha-hora AR, dividir en 1–12 tandas con una hora por tanda, sin tandas para código
+  público) — el botón pasa a "📅 Programar" y manda `{name, payload, parts}` al cronograma. En
+  el segmento: "hasta Y días (opc.)" y "o entre fechas" con hint. Sección nueva **📅 Cronograma**:
+  calendario del mes (chips por tanda coloreados por estado, tocar un día filtra), lista de
+  campañas con Editar / Pausar-Reanudar / Enviar ahora / Duplicar (pide fecha) / Eliminar, "ver
+  lote" salta al historial, tarjeta de edición, y "📊 Comparativo del mes" (tabla por semana con
+  🏆, totales, recomendaciones, detalle campaña por campaña).
+- **Validado:** `node --check` OK (server.js, admin.js, admin-sw, modelo); tests puros de
+  parseo de hora AR, estado derivado, reparto de 12.000 en 3×4.000 sin repetir, orden/validación
+  de tandas, semana del mes. HTML balanceado. Sin runtime. **PROBAR en Render:** programar un
+  lote de prueba a +2 min (1 tanda y 3 tandas), pausar/reanudar, duplicar, borrar; ver que el
+  comparativo cargue con los lotes del mes.
 
 ## Sesión 2026-10-15
 

@@ -149,6 +149,11 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   bumpear `?v` y `CACHE_VERSION` del SW al mismo número (sin eso, una carga corre
   HTML nuevo + JS viejo cacheado). Detalle completo en `docs/ARCHITECTURE.md` §7.
 
+- **Lotes y Cronograma (#190):** el POST `/api/admin/notif-batches` es un wrapper de
+  `_createNotifBatchFromBody(body, user)`; cualquier validación/efecto nuevo del lote va en esa
+  función (así lo heredan las campañas programadas). Las rutas del cronograma son
+  `/api/admin/cronograma*` porque `/api/admin/campaigns` YA es de publicistas: no reusar ese path.
+
 - **TDZ en server.js (incidente #133):** `authMiddleware`, `adminMiddleware`, etc. son
   `const` definidos en ~L3270-3400. **Toda ruta `app.get/post(...)` que los use tiene que
   estar DESPUÉS de esa línea** (las funciones sí pueden ir antes: hoisting). Si no, el

@@ -150,6 +150,10 @@ modelos); sus migraciones corren únicamente si algo llamara a ese connectDB.
   es un PromoBonus `sourceRuleCode:'lote'` (`autoApply/applyScope/applyFromMin`);
   `claimAutoPromoPercent` lo reserva atómico en la carga (`/api/admin/deposit`,
   `hgcashAutoCarga`). Motor de envío reanudable (cron 45 s).
+- **ScheduledCampaign** (#190) — campaña PROGRAMADA: `payload` = body exacto del POST de lotes,
+  `parts[]` (tandas con `runAt`/`status`/`usernames`/`batchId`), `paused/cancelled`. El
+  programador `_schedTick` (60 s) la dispara vía `_createNotifBatchFromBody`; la audiencia de
+  las tandas se resuelve una vez y se reparte sin repetir. Rutas `/api/admin/cronograma*`.
 - **DailyRouletteSpin** — 1 giro/día (índices únicos userId+dateKey y
   username+dateKey). Auto-crédito en JUGAYGANA; `credit_failed` → retry desde panel.
 - **Review** (1 por user, moderada), **OtpCode** (TTL 5 min, hash bcrypt, 3 intentos),
@@ -464,6 +468,12 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 - **Lotes con código (#173):** el PromoBonus creado al canjear vence a `canje + NotifBatch.useHours`
   (24 h default), independiente de la vigencia del lote; el detalle del lote (`/:id`) devuelve
   `outcome` por destinatario y `summary` (canjearon / usaron / activos / vencidos).
+- **Cronograma / campañas programadas (#190):** el POST de lotes vive en
+  `_createNotifBatchFromBody(body, user)` (stub de `res` → `{http, body}`); el endpoint y el
+  programador llaman a la misma función. Segmentos con RANGO: `audienceDaysMax` o
+  `dateFrom/dateTo` (hora AR) en `_resolveNotifBatchSegment`. Comparativo del mes en
+  `GET /api/admin/cronograma-report` (conversión = cargaron en 48 h / avisados; costo = bono $ +
+  fichas). Panel: sección 📅 Cronograma + bloque "📅 Cuándo sale" en el formulario del lote.
 - **Lotes con regalo (% automático):** el monto del bono sale de `_loteBonusAmount` con el tope
   del bono app (`Config['hgcashAppBonus'].firstCapARS/firstExcessPct`, #172): % del lote hasta el
   tope + excedente al % menor. Franja horaria diaria en hora ART con minuto final inclusive.
@@ -617,6 +627,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
 | `_runInactividadTick` | 6 h | **APAGADO** (`INACTIVIDAD_DISABLED=true`) | InactividadFire.fireKey único |
 | `_runBonusStrategy` | 10 min | **APAGADO** (`BONUS_STRATEGY_DISABLED=true`) | step en StrategyEnrollment |
 | `_runDueSchedules` (ScheduledNotif) | 60 s | activo | lastRunAt |
+| `_schedTick` (campañas programadas / tandas, #190) | 60 s | activo | claim posicional `parts.$.status scheduled→sending`; colgada >15 min → error |
 | `_pollPayingPayouts` | 45 s | activo (confirma pagos si el webhook no llegó) | handlePayoutStatusWebhook idempotente |
 | `_runFcmPrune` | 24 h | activo | flag anti-overlap en memoria |
 | `fbAdsWebhook.startWorker` | 5 min | activo | nextRetryAt |

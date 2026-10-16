@@ -20002,19 +20002,26 @@ async function _resolveNotifBatchUsers(usernames) {
 //     campaign (código de publicista), audienceLimit (cupo).
 // Las cargas salen de Transaction (permanente), excluyendo devoluciones de
 // retiro. Devuelve además audienceLabel legible para el historial.
-async function _notifBatchDepositStats() {
+// #190 `win` opcional {from,to}: suma además cuántas cargas tuvo cada usuario DENTRO de esa ventana.
+async function _notifBatchDepositStats(win) {
+  const group = { _id: '$userId', last: { $max: '$timestamp' }, count: { $sum: 1 }, total: { $sum: '$amount' } };
+  if (win && win.from && win.to) group.win = { $sum: { $cond: [{ $and: [{ $gte: ['$timestamp', win.from] }, { $lte: ['$timestamp', win.to] }] }, 1, 0] } };
   const rows = await Transaction.aggregate([
     { $match: { type: 'deposit', 'metadata.source': { $ne: 'payout_refund' } } },
-    { $group: { _id: '$userId', last: { $max: '$timestamp' }, count: { $sum: 1 }, total: { $sum: '$amount' } } }
+    { $group: group }
   ]);
   const m = new Map();
-  for (const r of rows) if (r._id) m.set(String(r._id), { last: r.last, count: r.count, total: r.total });
+  for (const r of rows) if (r._id) m.set(String(r._id), { last: r.last, count: r.count, total: r.total, win: r.win || 0 });
   return m;
 }
 function _segmentLabel(f, days, limit) {
-  const base = f.segBase === 'nodeposit' ? `💸 sin cargar ≥${days}d`
-    : f.segBase === 'deposited' ? `🔥 cargaron en los últimos ${days}d`
-    : `😴 sin entrar ≥${days}d`;
+  // #190 rangos: "entre X y Y días" o "entre fecha y fecha"
+  const fmtD = (s) => String(s).slice(8, 10) + '/' + String(s).slice(5, 7);
+  const rango = (f.dateFrom && f.dateTo) ? `entre el ${fmtD(f.dateFrom)} y el ${fmtD(f.dateTo)}`
+    : (f.daysMax ? `entre ${days} y ${f.daysMax}d` : null);
+  const base = f.segBase === 'nodeposit' ? (rango ? `💸 última carga ${rango}` : `💸 sin cargar ≥${days}d`)
+    : f.segBase === 'deposited' ? (rango ? `🔥 cargaron ${rango}` : `🔥 cargaron en los últimos ${days}d`)
+    : (rango ? `😴 último ingreso ${rango}` : `😴 sin entrar ≥${days}d`);
   const extras = [];
   if (f.minDeposits > 0) extras.push(`≥${f.minDeposits} cargas`);
   if (f.minTotalArs > 0) extras.push(`≥$${Number(f.minTotalArs).toLocaleString('es-AR')} cargados`);
@@ -20022,9 +20029,25 @@ function _segmentLabel(f, days, limit) {
   return base + (extras.length ? ' · ' + extras.join(' · ') : '') + (limit ? ` (cupo ${limit})` : '');
 }
 async function _resolveNotifBatchSegment(b) {
-  const days = Math.round(Number(b.audienceDays));
-  if (!Number.isFinite(days) || days < 1 || days > 365) {
+  // #190 RANGOS (owner 2026-10-16): además de "hace ≥ X días", `audienceDaysMax` (= "entre X y Y
+  // días") o `dateFrom`/`dateTo` (YYYY-MM-DD, hora Argentina = "entre fecha y fecha"). Aplica a
+  // último ingreso (nologin), última carga (nodeposit) y cargaron (deposited = tuvieron ≥1
+  // carga dentro del rango).
+  const hasDates = !!(b.dateFrom && b.dateTo);
+  let dFrom = null, dTo = null;
+  if (hasDates) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(b.dateFrom)) || !/^\d{4}-\d{2}-\d{2}$/.test(String(b.dateTo))) return { error: 'Fechas inválidas (AAAA-MM-DD).' };
+    dFrom = new Date(b.dateFrom + 'T00:00:00-03:00'); dTo = new Date(b.dateTo + 'T23:59:59.999-03:00');
+    if (isNaN(dFrom) || isNaN(dTo) || dFrom > dTo) return { error: 'La fecha "desde" tiene que ser anterior a "hasta".' };
+    if (dTo - dFrom > 400 * 86400000) return { error: 'El rango de fechas no puede superar 400 días.' };
+  }
+  const days = hasDates ? 0 : Math.round(Number(b.audienceDays));
+  if (!hasDates && (!Number.isFinite(days) || days < 1 || days > 365)) {
     return { error: 'Los días tienen que estar entre 1 y 365.' };
+  }
+  let daysMax = (hasDates || b.audienceDaysMax == null || b.audienceDaysMax === '') ? null : Math.round(Number(b.audienceDaysMax));
+  if (daysMax != null && (!Number.isFinite(daysMax) || daysMax <= days || daysMax > 730)) {
+    return { error: '"Hasta Y días" tiene que ser mayor que X (y ≤ 730).' };
   }
   let limit = b.audienceLimit == null || b.audienceLimit === '' ? null : Math.round(Number(b.audienceLimit));
   if (limit != null && (!Number.isFinite(limit) || limit < 1 || limit > NOTIF_BATCH_MAX_RECIPIENTS)) {
@@ -20036,14 +20059,20 @@ async function _resolveNotifBatchSegment(b) {
   if (!Number.isFinite(minDeposits) || minDeposits < 0 || minDeposits > 100000) return { error: 'Mínimo de cargas inválido.' };
   if (!Number.isFinite(minTotalArs) || minTotalArs < 0 || minTotalArs > 1e9) return { error: 'Mínimo de $ cargados inválido.' };
   const campaign = String(b.campaign || '').trim().slice(0, 60);
-  const f = { segBase, minDeposits, minTotalArs, campaign };
-  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const f = { segBase, minDeposits, minTotalArs, campaign, daysMax, dateFrom: hasDates ? b.dateFrom : null, dateTo: hasDates ? b.dateTo : null };
+  // Ventana [winFrom, winTo]: lo "más viejo" y lo "más nuevo" que entra. Sin rango: winFrom = null.
+  const winTo = hasDates ? dTo : new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const winFrom = hasDates ? dFrom : (daysMax ? new Date(Date.now() - daysMax * 24 * 60 * 60 * 1000) : null);
+  const hasRange = !!winFrom;
 
   const q = { role: 'user', isBlocked: { $ne: true } };
-  if (segBase === 'nologin') q.$or = [{ lastLogin: { $lt: cutoff } }, { lastLogin: { $exists: false } }];
+  if (segBase === 'nologin') {
+    q.$or = hasRange ? [{ lastLogin: { $gte: winFrom, $lte: winTo } }] : [{ lastLogin: { $lt: winTo } }, { lastLogin: { $exists: false } }];
+  }
   if (campaign) q.acquisitionCampaign = new RegExp('^' + campaign.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
   const needStats = segBase !== 'nologin' || minDeposits > 0 || minTotalArs > 0;
-  const stats = needStats ? await _notifBatchDepositStats() : null;
+  const stats = needStats ? await _notifBatchDepositStats((segBase === 'deposited' && hasRange) ? { from: winFrom, to: winTo } : null) : null;
+  const cutoff = winTo;
 
   let users = await User.find(q).select(NOTIF_BATCH_USER_SELECT + ' lastLogin').lean();
   if (needStats) {
@@ -20052,8 +20081,8 @@ async function _resolveNotifBatchSegment(b) {
       const st = stats.get(String(u.id)) || { last: null, count: 0, total: 0 };
       if (st.count < minCount) return false;
       if (st.total < minTotalArs) return false;
-      if (segBase === 'nodeposit' && !(st.last && st.last < cutoff)) return false;
-      if (segBase === 'deposited' && !(st.last && st.last >= cutoff)) return false;
+      if (segBase === 'nodeposit' && !(st.last && st.last < cutoff && (!hasRange || st.last >= winFrom))) return false;
+      if (segBase === 'deposited' && (hasRange ? !(st.win > 0) : !(st.last && st.last >= cutoff))) return false;
       u._st = st;
       return true;
     });
@@ -20067,7 +20096,7 @@ async function _resolveNotifBatchSegment(b) {
   for (const u of users) delete u._st;
   return {
     users, notFound: [], skipped: [],
-    audience: { audienceType: 'segment', audienceDays: days, audienceLimit: limit, audienceFilter: f, audienceLabel: _segmentLabel(f, days, limit) }
+    audience: { audienceType: 'segment', audienceDays: days || null, audienceLimit: limit, audienceFilter: f, audienceLabel: _segmentLabel(f, days, limit) }
   };
 }
 
@@ -20702,7 +20731,12 @@ app.post('/api/admin/notif-batches/preview', authMiddleware, adminMiddleware, as
 // lote queda guardado (y los bonos creados en modo window); las
 // notificaciones salen en segundo plano y la entrega por usuario se va
 // registrando en el doc (se ve en el historial del panel).
-app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req, res) => {
+// #190 El cuerpo del POST vive en una función para que el CRONOGRAMA (campañas programadas) cree
+// lotes con el MISMO código. `res` es un stub: devuelve { http, body } en vez de responder.
+async function _createNotifBatchFromBody(body, user) {
+  // Los `return res.status(..).json(..)` del cuerpo devuelven ESTE stub → el caller lee r.http / r.body.
+  const res = { http: 200, body: null, status(c) { this.http = c; return this; }, json(o) { this.body = o; return this; } };
+  const req = { body: body || {}, user: user || {} };
   try {
     if (!NOTIF_BATCH_SEND_ROLES.includes(req.user.role)) {
       return res.status(403).json({ error: 'Solo admin general y cajeros de carga pueden enviar lotes.' });
@@ -20924,6 +20958,11 @@ app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req
     logger.error(`/api/admin/notif-batches: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
+  return res;
+}
+app.post('/api/admin/notif-batches', authMiddleware, adminMiddleware, async (req, res) => {
+  const r = await _createNotifBatchFromBody(req.body, req.user);
+  res.status(r.http).json(r.body);
 });
 
 // GET /api/admin/notif-batches — historial de lotes (sin el detalle por
@@ -21120,6 +21159,389 @@ app.post('/api/gift/claim', authMiddleware, authLimiter, async (req, res) => {
 // del plan que voto, contado desde la inscripcion. Cada push activa un
 // PromoBonus (reutiliza activateChargeBonuses): cartel del usuario + banner
 // del agente. La estrategia corre solo si isActive.
+// ============================================================================
+// #190 CRONOGRAMA — campañas PROGRAMADAS, calendario mensual, tandas y comparativo
+// ============================================================================
+// Owner (2026-10-16): "entrar a principio de mes, preparar todas las campañas —bonos,
+// regalos, avisos, activos, inactivos, fechas fuertes—, revisar todo y dejar el mes
+// completo programado". Es una CAPA encima de los lotes: una campaña guarda el MISMO body
+// que acepta POST /api/admin/notif-batches (`payload`) y el programador lo dispara a la hora
+// (hora Argentina) llamando a `_createNotifBatchFromBody` (la misma función que usa el
+// endpoint). Un lote completo se puede partir en TANDAS: la audiencia se resuelve una vez
+// (al correr la primera) y se reparte sin repetir usuarios; cada tanda sale como lote 'list'.
+// Multi-instancia: claim atómico por tanda (findOneAndUpdate posicional).
+const ScheduledCampaign = require('./src/models/ScheduledCampaign');
+const SCHED_TICK_MS = 60 * 1000;
+const SCHED_STALE_SENDING_MS = 15 * 60 * 1000;
+const SCHED_MAX_PARTS = 12;
+const SCHED_ART_OFFSET_MS = 3 * 60 * 60 * 1000;
+// Adaptadores de ESTE repo (al replicar a otro repo, sólo cambian estas 3 líneas).
+const SCHED_ADAPTER = {
+  createBatch: (payload, user) => _createNotifBatchFromBody(payload, user),
+  resolveAudience: (payload) => _resolveNotifBatchAudience(payload),
+  realDepositMatch: () => ({ type: 'deposit', status: 'completed', 'metadata.source': { $nin: referralTiers.NON_BANK_SOURCES } })
+};
+
+function _schedArtKey(d) { return new Date(new Date(d).getTime() - SCHED_ART_OFFSET_MS).toISOString().slice(0, 10); }
+function _schedArtHour(d) { return new Date(new Date(d).getTime() - SCHED_ART_OFFSET_MS).getUTCHours(); }
+// 'YYYY-MM-DDTHH:mm' (hora Argentina) → Date. También acepta ISO completo.
+function _schedParseRunAt(v) {
+  const s = String(v || '').trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) { const d = new Date(s + ':00-03:00'); return isNaN(d) ? null : d; }
+  const d = new Date(s); return isNaN(d) ? null : d;
+}
+function _schedCampaignStatus(c) {
+  if (c.cancelled) return 'cancelled';
+  const st = (c.parts || []).map(p => p.status);
+  if (!st.length) return 'scheduled';
+  if (st.some(s => s === 'error')) return 'error';
+  if (c.paused && st.some(s => s === 'scheduled' || s === 'paused')) return 'paused';
+  if (st.every(s => s === 'sent' || s === 'cancelled')) return 'sent';
+  if (st.some(s => s === 'sent' || s === 'sending')) return 'sending';
+  return 'scheduled';
+}
+function _schedPublic(c) {
+  const parts = (c.parts || []).map(p => ({ idx: p.idx, runAt: p.runAt, status: p.status, count: p.count, usernamesCount: Array.isArray(p.usernames) ? p.usernames.length : null, batchId: p.batchId, code: p.code, sentAt: p.sentAt, error: p.error }));
+  const pl = c.payload || {};
+  return {
+    id: c.id, name: c.name, status: _schedCampaignStatus(c), paused: !!c.paused, cancelled: !!c.cancelled,
+    runAt: c.runAt, dayKey: _schedArtKey(c.runAt), parts, partsTotal: parts.length, partsSent: parts.filter(p => p.status === 'sent').length,
+    audienceLabel: c.audienceLabel || '', estimatedCount: c.estimatedCount,
+    gift: { mode: pl.mode, giftType: pl.giftType, amount: pl.amount, applyMode: pl.applyMode, applyScope: pl.applyScope, validHours: pl.validHours, capARS: pl.capARS, capExcessPct: pl.capExcessPct, audienceType: pl.audienceType, title: pl.title || '', message: pl.message || '' },
+    createdBy: c.createdBy, createdAt: c.createdAt, updatedAt: c.updatedAt, notes: c.notes || ''
+  };
+}
+// Resuelve la audiencia del payload SIN enviar (estimación + validación al programar).
+async function _schedEstimate(payload) {
+  try {
+    if (payload.audienceType === 'public') return { count: 0, label: '📣 código público', error: null };
+    const r = await SCHED_ADAPTER.resolveAudience(payload);
+    if (r.error) return { count: null, label: '', error: r.error };
+    const aud = r.audience || {};
+    const label = aud.audienceLabel || (aud.audienceType === 'all' ? '🌍 lote completo' : aud.audienceType === 'inactive' ? `😴 inactivos ≥${aud.audienceDays}d` : aud.audienceType === 'segment' ? '🎯 segmento' : '📋 lista');
+    return { count: (r.users || []).length, label, error: null, users: r.users || [] };
+  } catch (e) { return { count: null, label: '', error: e.message }; }
+}
+// Reparte usuarios en N tandas iguales (sin repetir).
+function _schedSplitUsers(users, n) {
+  const out = Array.from({ length: n }, () => []);
+  users.forEach((u, i) => out[i % n].push(u.username));
+  return out;
+}
+
+async function _schedRunPart(c, part) {
+  const user = { username: c.createdBy || 'cronograma', role: 'admin', userId: null };
+  const pl = Object.assign({}, c.payload || {});
+  const nParts = (c.parts || []).length;
+  // Tandas: resolver la audiencia completa UNA vez y repartirla.
+  if (nParts > 1) {
+    let list = Array.isArray(part.usernames) ? part.usernames : null;
+    if (!list) {
+      const est = await _schedEstimate(pl);
+      if (est.error) throw new Error('audiencia: ' + est.error);
+      const chunks = _schedSplitUsers(est.users, nParts);
+      const sets = {};
+      for (let i = 0; i < nParts; i++) { sets[`parts.${i}.usernames`] = chunks[i]; sets[`parts.${i}.count`] = chunks[i].length; }
+      await ScheduledCampaign.updateOne({ id: c.id }, { $set: sets });
+      list = chunks[part.idx] || [];
+    }
+    if (!list.length) return { skipped: true, reason: 'tanda vacía' };
+    pl.audienceType = 'list'; pl.usernames = list;
+    delete pl.audienceDays; delete pl.audienceLimit; delete pl.maxClaims;
+    // Un código no puede repetirse entre lotes ACTIVOS: la 1ª tanda usa el código elegido (si hay)
+    // y las siguientes generan uno propio (cada cliente ve sólo el suyo, así que no cambia nada).
+    if (pl.mode === 'code' && c.parts.some(p => p.idx !== part.idx && p.code)) pl.code = null;
+  }
+  if (!pl.name) pl.name = (c.name || 'Campaña') + (nParts > 1 ? ` (tanda ${part.idx + 1}/${nParts})` : '');
+  const r = await SCHED_ADAPTER.createBatch(pl, user);
+  if (!r || r.http !== 200 || !r.body || !r.body.success) throw new Error((r && r.body && r.body.error) || 'el lote no se pudo crear');
+  return { batchId: r.body.id, code: r.body.code || null, count: (r.body.totals && r.body.totals.recipients) || (Array.isArray(pl.usernames) ? pl.usernames.length : null) };
+}
+
+let _schedRunning = false;
+async function _schedTick() {
+  if (_schedRunning) return;
+  _schedRunning = true;
+  try {
+    const now = new Date();
+    // Tandas 'sending' colgadas (instancia muerta a mitad) → error visible.
+    await ScheduledCampaign.updateMany(
+      { 'parts': { $elemMatch: { status: 'sending', claimedAt: { $lt: new Date(now - SCHED_STALE_SENDING_MS) } } } },
+      { $set: { 'parts.$[p].status': 'error', 'parts.$[p].error': 'quedó colgada enviando (instancia reiniciada). Reprogramala.' } },
+      { arrayFilters: [{ 'p.status': 'sending', 'p.claimedAt': { $lt: new Date(now - SCHED_STALE_SENDING_MS) } }] }
+    ).catch(() => {});
+    for (let guard = 0; guard < 20; guard++) {
+      const c = await ScheduledCampaign.findOneAndUpdate(
+        { cancelled: { $ne: true }, paused: { $ne: true }, parts: { $elemMatch: { status: 'scheduled', runAt: { $lte: now } } } },
+        { $set: { 'parts.$.status': 'sending', 'parts.$.claimedAt': now } },
+        { new: false }
+      ).lean();
+      if (!c) break;
+      const part = (c.parts || []).find(p => p.status === 'scheduled' && new Date(p.runAt) <= now);
+      if (!part) break;
+      try {
+        const r = await _schedRunPart(c, part);
+        if (r && r.skipped) {
+          await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'cancelled', 'parts.$.error': r.reason || 'vacía' } });
+          logger.info(`[cronograma] ${c.name || c.id} tanda ${part.idx + 1}: ${r.reason}`);
+        } else {
+          await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'sent', 'parts.$.sentAt': new Date(), 'parts.$.batchId': r.batchId, 'parts.$.code': r.code, 'parts.$.count': r.count, 'parts.$.error': null } });
+          logger.info(`[cronograma] ✅ ${c.name || c.id} tanda ${part.idx + 1}/${(c.parts || []).length} → lote ${r.batchId} (${r.count} destinatarios)`);
+        }
+      } catch (e) {
+        await ScheduledCampaign.updateOne({ id: c.id, 'parts.idx': part.idx }, { $set: { 'parts.$.status': 'error', 'parts.$.error': String(e.message || e).slice(0, 300) } }).catch(() => {});
+        logger.error(`[cronograma] ❌ ${c.name || c.id} tanda ${part.idx + 1}: ${e.message}`);
+        try { if (telegramAlert && telegramAlert.isEnabled && telegramAlert.isEnabled()) await telegramAlert.send(`📅❌ Campaña programada "${c.name || c.id}" (tanda ${part.idx + 1}) NO salió: ${String(e.message).slice(0, 200)}`); } catch (_) {}
+      }
+    }
+  } catch (e) { logger.warn(`[cronograma] tick falló: ${e.message}`); }
+  finally { _schedRunning = false; }
+}
+setTimeout(() => { _schedTick().catch(() => {}); }, 20 * 1000);
+setInterval(() => { _schedTick().catch(() => {}); }, SCHED_TICK_MS);
+
+function _schedCanManage(role) { return NOTIF_BATCH_SEND_ROLES.includes(role); }
+function _schedCanView(role) { return NOTIF_BATCH_VIEW_ROLES.includes(role); }
+// Valida y arma las tandas del body: { runAt } o { parts: [{runAt}, ...] } (hora AR).
+function _schedBuildParts(b) {
+  const list = Array.isArray(b.parts) && b.parts.length ? b.parts : [{ runAt: b.runAt }];
+  if (list.length > SCHED_MAX_PARTS) return { error: `Máximo ${SCHED_MAX_PARTS} tandas.` };
+  const parts = [];
+  for (let i = 0; i < list.length; i++) {
+    const d = _schedParseRunAt(list[i] && (list[i].runAt || list[i]));
+    if (!d) return { error: `La fecha/hora de la tanda ${i + 1} no es válida (YYYY-MM-DDTHH:mm, hora Argentina).` };
+    if (d.getTime() < Date.now() - 60 * 1000) return { error: `La tanda ${i + 1} está en el pasado (${d.toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}).` };
+    parts.push({ idx: i, runAt: d, status: 'scheduled' });
+  }
+  parts.sort((a, b2) => a.runAt - b2.runAt).forEach((p, i) => { p.idx = i; });
+  return { parts };
+}
+
+// GET /api/admin/cronograma?month=YYYY-MM  (sin month = próximas 60 días + últimas 30)
+app.get('/api/admin/cronograma', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanView(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
+    const m = String(req.query.month || '').trim();
+    let q;
+    if (/^\d{4}-\d{2}$/.test(m)) {
+      const from = new Date(new Date(m + '-01T00:00:00Z').getTime() + SCHED_ART_OFFSET_MS);
+      const [y, mo] = m.split('-').map(Number);
+      const next = `${mo === 12 ? y + 1 : y}-${String(mo === 12 ? 1 : mo + 1).padStart(2, '0')}`;
+      const to = new Date(new Date(next + '-01T00:00:00Z').getTime() + SCHED_ART_OFFSET_MS);
+      q = { 'parts.runAt': { $gte: from, $lt: to } };
+    } else {
+      q = { runAt: { $gte: new Date(Date.now() - 30 * 86400000), $lte: new Date(Date.now() + 60 * 86400000) } };
+    }
+    const rows = await ScheduledCampaign.find(q).sort({ runAt: 1 }).limit(500).lean();
+    res.json({ campaigns: rows.map(_schedPublic), today: _schedArtKey(new Date()) });
+  } catch (err) { logger.error(`GET /api/admin/cronograma: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+// GET /api/admin/cronograma/:id
+app.get('/api/admin/cronograma/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanView(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
+    const c = await ScheduledCampaign.findOne({ id: String(req.params.id || '') }).lean();
+    if (!c) return res.status(404).json({ error: 'Campaña no encontrada' });
+    res.json(Object.assign(_schedPublic(c), { payload: c.payload }));
+  } catch (err) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// POST /api/admin/cronograma — { name, payload, runAt | parts:[{runAt}], notes }
+app.post('/api/admin/cronograma', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanManage(req.user.role)) return res.status(403).json({ error: 'Solo admin general y cajeros de carga pueden programar campañas.' });
+    const b = req.body || {};
+    const payload = (b.payload && typeof b.payload === 'object') ? b.payload : null;
+    if (!payload) return res.status(400).json({ error: 'Falta el contenido del lote (payload).' });
+    if (!['code', 'window'].includes(payload.mode)) return res.status(400).json({ error: 'Modo inválido (code | window).' });
+    if (!['percent', 'fixed'].includes(payload.giftType)) return res.status(400).json({ error: 'Tipo de regalo inválido.' });
+    if (!(Number(payload.amount) > 0)) return res.status(400).json({ error: 'Poné el monto del regalo.' });
+    if (payload.audienceType !== 'public' && String(payload.message || '').trim().length < 5) return res.status(400).json({ error: 'El mensaje tiene que tener al menos 5 caracteres.' });
+    const pr = _schedBuildParts(b);
+    if (pr.error) return res.status(400).json({ error: pr.error });
+    if (pr.parts.length > 1 && payload.audienceType === 'public') return res.status(400).json({ error: 'Un código público no se divide en tandas.' });
+    const est = await _schedEstimate(payload);
+    if (est.error) return res.status(400).json({ error: 'Audiencia: ' + est.error });
+    if (payload.audienceType !== 'public' && !(est.count > 0)) return res.status(400).json({ error: 'La audiencia quedó vacía con esos filtros (hoy). Revisá el segmento.' });
+    const c = await ScheduledCampaign.create({
+      id: uuidv4(), name: String(b.name || payload.name || '').trim().slice(0, 80) || `Campaña ${pr.parts[0].runAt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}`,
+      payload, audienceLabel: est.label, estimatedCount: est.count, parts: pr.parts, runAt: pr.parts[0].runAt,
+      createdBy: req.user.username, createdByRole: req.user.role, notes: String(b.notes || '').slice(0, 500)
+    });
+    logger.info(`[cronograma] ${req.user.username} programó "${c.name}" (${pr.parts.length} tanda/s, ~${est.count} destinatarios) para ${_schedArtKey(c.runAt)}`);
+    res.json({ success: true, scheduled: true, id: c.id, campaign: _schedPublic(c.toObject()), totals: { recipients: est.count || 0 }, notFound: [], skipped: [],
+      message: `Campaña programada: ${pr.parts.length > 1 ? pr.parts.length + ' tandas' : 'sale el ' + c.runAt.toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · ~${est.count} destinatarios (se recalculan al enviar).` });
+  } catch (err) { logger.error(`POST /api/admin/cronograma: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+// PUT /api/admin/cronograma/:id — { name, notes, title, message, parts:[{idx, runAt}] } (sólo tandas no enviadas)
+app.put('/api/admin/cronograma/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanManage(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
+    const c = await ScheduledCampaign.findOne({ id: String(req.params.id || '') });
+    if (!c) return res.status(404).json({ error: 'Campaña no encontrada' });
+    if (c.cancelled) return res.status(400).json({ error: 'La campaña está cancelada.' });
+    const b = req.body || {};
+    if (typeof b.name === 'string') c.name = b.name.trim().slice(0, 80);
+    if (typeof b.notes === 'string') c.notes = b.notes.slice(0, 500);
+    const pl = Object.assign({}, c.payload || {});
+    if (typeof b.title === 'string') pl.title = b.title.trim().slice(0, 100);
+    if (typeof b.message === 'string') { if (pl.audienceType !== 'public' && b.message.trim().length < 5) return res.status(400).json({ error: 'El mensaje tiene que tener al menos 5 caracteres.' }); pl.message = b.message.trim().slice(0, 500); }
+    c.payload = pl; c.markModified('payload');
+    if (Array.isArray(b.parts)) {
+      for (const p of b.parts) {
+        const part = c.parts.find(x => x.idx === Number(p.idx));
+        if (!part) continue;
+        if (part.status === 'sent' || part.status === 'sending') continue;
+        const d = _schedParseRunAt(p.runAt);
+        if (!d) return res.status(400).json({ error: `Fecha/hora inválida en la tanda ${Number(p.idx) + 1}.` });
+        part.runAt = d; if (part.status === 'error' || part.status === 'cancelled') { part.status = 'scheduled'; part.error = null; }
+      }
+      c.markModified('parts');
+    }
+    const pend = c.parts.filter(p => p.status === 'scheduled').map(p => p.runAt.getTime());
+    c.runAt = new Date(Math.min(...(pend.length ? pend : c.parts.map(p => p.runAt.getTime()))));
+    c.updatedBy = req.user.username;
+    await c.save();
+    res.json({ success: true, campaign: _schedPublic(c.toObject()) });
+  } catch (err) { logger.error(`PUT /api/admin/cronograma: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+// POST /api/admin/cronograma/:id/pause | resume | duplicate | run-now · DELETE /:id
+app.post('/api/admin/cronograma/:id/:action', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanManage(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
+    const c = await ScheduledCampaign.findOne({ id: String(req.params.id || '') });
+    if (!c) return res.status(404).json({ error: 'Campaña no encontrada' });
+    const a = String(req.params.action || '');
+    if (a === 'pause') { c.paused = true; }
+    else if (a === 'resume') {
+      c.paused = false;
+      // Tandas que vencieron mientras estaba pausada: se reprograman a ahora + 2 min (no se pierden).
+      for (const p of c.parts) if (p.status === 'scheduled' && p.runAt < new Date()) p.runAt = new Date(Date.now() + 2 * 60 * 1000);
+      c.markModified('parts');
+    }
+    else if (a === 'run-now') {
+      const p = c.parts.find(x => x.status === 'scheduled' || x.status === 'error' || x.status === 'paused');
+      if (!p) return res.status(400).json({ error: 'No queda ninguna tanda pendiente.' });
+      p.runAt = new Date(); p.status = 'scheduled'; p.error = null; c.paused = false; c.markModified('parts');
+    }
+    else if (a === 'duplicate') {
+      const b = req.body || {};
+      const pr = _schedBuildParts(b.runAt || (Array.isArray(b.parts) && b.parts.length) ? b : { runAt: new Date(c.runAt.getTime() + 7 * 86400000).toISOString() });
+      if (pr.error) return res.status(400).json({ error: pr.error });
+      // Mismo contenido y misma cantidad de tandas (si mandan una sola fecha, las demás van +5 h).
+      let parts = pr.parts;
+      if (parts.length === 1 && c.parts.length > 1) parts = c.parts.map((p, i) => ({ idx: i, runAt: new Date(pr.parts[0].runAt.getTime() + i * 5 * 3600 * 1000), status: 'scheduled' }));
+      const dup = await ScheduledCampaign.create({ id: uuidv4(), name: (c.name || 'Campaña') + ' (copia)', payload: c.payload, audienceLabel: c.audienceLabel, estimatedCount: c.estimatedCount, parts, runAt: parts[0].runAt, createdBy: req.user.username, createdByRole: req.user.role, notes: c.notes });
+      return res.json({ success: true, campaign: _schedPublic(dup.toObject()) });
+    }
+    else return res.status(400).json({ error: 'Acción inválida' });
+    c.updatedBy = req.user.username;
+    await c.save();
+    res.json({ success: true, campaign: _schedPublic(c.toObject()) });
+  } catch (err) { logger.error(`POST /api/admin/cronograma/:id/:action: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.delete('/api/admin/cronograma/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanManage(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
+    const c = await ScheduledCampaign.findOne({ id: String(req.params.id || '') });
+    if (!c) return res.status(404).json({ error: 'Campaña no encontrada' });
+    const anySent = c.parts.some(p => p.status === 'sent' || p.status === 'sending');
+    if (!anySent) { await ScheduledCampaign.deleteOne({ id: c.id }); return res.json({ success: true, deleted: true }); }
+    // Ya salió alguna tanda: se cancela lo que falta y queda en el historial.
+    for (const p of c.parts) if (p.status === 'scheduled' || p.status === 'paused' || p.status === 'error') p.status = 'cancelled';
+    c.cancelled = true; c.markModified('parts'); c.updatedBy = req.user.username;
+    await c.save();
+    res.json({ success: true, cancelled: true, campaign: _schedPublic(c.toObject()) });
+  } catch (err) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+// GET /api/admin/cronograma-report?month=YYYY-MM — comparativo por SEMANA del mes y resumen
+// con recomendaciones. Entran TODOS los lotes del mes (programados o enviados a mano).
+// Métricas por lote: destinatarios, notificados, canjes, acreditados (fichas), usaron el bono
+// (% en una carga), cargaron en 48 h (clientes y $ reales), conversión = cargaron/destinatarios,
+// costo = bono $ usado + fichas acreditadas.
+app.get('/api/admin/cronograma-report', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_schedCanView(req.user.role)) return res.status(403).json({ error: 'Sin permiso.' });
+    const m = /^\d{4}-\d{2}$/.test(String(req.query.month || '')) ? String(req.query.month) : _schedArtKey(new Date()).slice(0, 7);
+    const from = new Date(new Date(m + '-01T00:00:00Z').getTime() + SCHED_ART_OFFSET_MS);
+    const [y, mo] = m.split('-').map(Number);
+    const next = `${mo === 12 ? y + 1 : y}-${String(mo === 12 ? 1 : mo + 1).padStart(2, '0')}`;
+    const to = new Date(new Date(next + '-01T00:00:00Z').getTime() + SCHED_ART_OFFSET_MS);
+    const batches = await NotifBatch.find({ sentAt: { $gte: from, $lt: to } }).select('id name mode giftType amount applyMode audienceType audienceLabel sentAt sentBy recipients.userId recipients.delivery recipients.claimedAt recipients.creditedAt isPublic claimRequired').sort({ sentAt: 1 }).lean();
+    const sched = await ScheduledCampaign.find({ 'parts.batchId': { $in: batches.map(b => b.id) } }).select('id name parts.batchId').lean();
+    const schedByBatch = new Map(); for (const c of sched) for (const p of c.parts || []) if (p.batchId) schedByBatch.set(p.batchId, c);
+    const ids = batches.map(b => b.id);
+    const pbAgg = ids.length ? await PromoBonus.aggregate([
+      { $match: { sourceRuleCode: 'lote', sourceRuleId: { $in: ids } } },
+      { $group: { _id: '$sourceRuleId', used: { $sum: { $cond: [{ $or: [{ $eq: ['$status', 'used'] }, { $gt: ['$usesCount', 0] }] }, 1, 0] } }, bonoTotal: { $sum: { $ifNull: ['$usesTotalBonus', 0] } }, cargaTotal: { $sum: { $ifNull: ['$cargaMonto', 0] } } } }
+    ]) : [];
+    const pbBy = new Map(pbAgg.map(a => [a._id, a]));
+    const depMatch = SCHED_ADAPTER.realDepositMatch();
+    const rows = [];
+    for (const b of batches) {
+      const recs = b.recipients || [];
+      const uids = recs.map(r => r.userId).filter(Boolean);
+      const sentAt = new Date(b.sentAt), until = new Date(sentAt.getTime() + 48 * 3600 * 1000);
+      let dep = { users: 0, amount: 0, count: 0 };
+      if (uids.length) {
+        const agg = await Transaction.aggregate([
+          { $match: Object.assign({ userId: { $in: uids }, timestamp: { $gte: sentAt, $lte: until } }, depMatch) },
+          { $group: { _id: '$userId', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+          { $group: { _id: null, users: { $sum: 1 }, amount: { $sum: '$amount' }, count: { $sum: '$count' } } }
+        ]);
+        if (agg[0]) dep = { users: agg[0].users, amount: Math.round(agg[0].amount), count: agg[0].count };
+      }
+      const pb = pbBy.get(b.id) || { used: 0, bonoTotal: 0, cargaTotal: 0 };
+      const credited = recs.filter(r => r.creditedAt).length;
+      const fichasCost = b.giftType === 'fixed' ? credited * (Number(b.amount) || 0) : 0;
+      const sc = schedByBatch.get(b.id);
+      const day = _schedArtKey(sentAt); const dom = Number(day.slice(8, 10));
+      rows.push({
+        batchId: b.id, name: b.name || '', scheduled: !!sc, campaignName: sc ? sc.name : null, sentAt: b.sentAt, day, hour: _schedArtHour(sentAt), week: Math.min(5, Math.ceil(dom / 7)),
+        mode: b.mode, giftType: b.giftType, amount: b.amount, applyMode: b.applyMode, audienceType: b.isPublic ? 'public' : (b.audienceType || 'list'), audienceLabel: b.audienceLabel || '',
+        recipients: recs.length, delivered: recs.filter(r => r.delivery === 'socket' || r.delivery === 'push').length,
+        claimed: recs.filter(r => r.claimedAt).length, credited, bonusUsed: pb.used, bonusCost: Math.round(pb.bonoTotal), fichasCost,
+        cost: Math.round(pb.bonoTotal) + fichasCost, depositors48h: dep.users, deposits48h: dep.amount, depositCount48h: dep.count,
+        conv: recs.length ? Math.round(dep.users / recs.length * 1000) / 10 : 0,
+        roi: (Math.round(pb.bonoTotal) + fichasCost) > 0 ? Math.round(dep.amount / (Math.round(pb.bonoTotal) + fichasCost) * 10) / 10 : null
+      });
+    }
+    const weeks = [1, 2, 3, 4, 5].map(w => {
+      const rs = rows.filter(r => r.week === w);
+      const sum = (k) => rs.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+      const rec = sum('recipients'), du = sum('depositors48h');
+      return { week: w, label: w === 5 ? 'Semana 5 (29→fin)' : `Semana ${w} (${(w - 1) * 7 + 1}→${w * 7})`, campaigns: rs.length, recipients: rec, delivered: sum('delivered'), depositors48h: du, deposits48h: sum('deposits48h'), bonusUsed: sum('bonusUsed'), cost: sum('cost'), conv: rec ? Math.round(du / rec * 1000) / 10 : 0 };
+    }).filter(w => w.campaigns > 0 || w.week <= 4);
+    const withData = weeks.filter(w => w.campaigns > 0);
+    const bestWeek = withData.length ? withData.reduce((a, b2) => (b2.conv > a.conv ? b2 : a)) : null;
+    const worstWeek = withData.length > 1 ? withData.reduce((a, b2) => (b2.conv < a.conv ? b2 : a)) : null;
+    // Recomendaciones (heurísticas simples sobre lotes con ≥ 30 destinatarios).
+    const big = rows.filter(r => r.recipients >= 30);
+    const convs = big.map(r => r.conv).sort((a, b2) => a - b2);
+    const median = convs.length ? convs[Math.floor(convs.length / 2)] : 0;
+    const recs = [];
+    const top = big.slice().sort((a, b2) => b2.conv - a.conv).slice(0, 3);
+    for (const r of top) if (r.conv > 0) recs.push({ kind: 'repeat', text: `✅ REPETIR "${r.campaignName || r.name || r.batchId.slice(0, 8)}" (${r.day} ${String(r.hour).padStart(2, '0')}h · ${r.audienceLabel || r.audienceType} · ${r.giftType === 'percent' ? '+' + r.amount + '%' : '$' + r.amount}): ${r.conv}% cargó en 48 h ($${r.deposits48h.toLocaleString('es-AR')}${r.roi != null ? ', x' + r.roi + ' sobre el costo' : ''}).` });
+    const low = big.filter(r => r.conv < median * 0.5 && r.recipients >= 100).sort((a, b2) => a.conv - b2.conv).slice(0, 3);
+    for (const r of low) recs.push({ kind: 'review', text: `⚠️ REVISAR "${r.campaignName || r.name || r.batchId.slice(0, 8)}" (${r.day} · ${r.audienceLabel || r.audienceType}): ${r.conv}% de conversión, la mitad o menos que la mediana del mes (${median}%). Cambiá segmento, regalo u horario antes de repetirla.` });
+    const byHour = {}; for (const r of big) { const k = r.hour < 12 ? 'mañana (antes de 12)' : r.hour < 18 ? 'tarde (12–18)' : 'noche (18–24)'; byHour[k] = byHour[k] || { rec: 0, du: 0 }; byHour[k].rec += r.recipients; byHour[k].du += r.depositors48h; }
+    const hourRank = Object.entries(byHour).map(([k, v]) => ({ k, conv: v.rec ? Math.round(v.du / v.rec * 1000) / 10 : 0, rec: v.rec })).filter(x => x.rec >= 100).sort((a, b2) => b2.conv - a.conv);
+    if (hourRank.length > 1) recs.push({ kind: 'hour', text: `🕒 Mejor franja del mes: ${hourRank[0].k} (${hourRank[0].conv}% cargó) vs ${hourRank[hourRank.length - 1].k} (${hourRank[hourRank.length - 1].conv}%). Programá las próximas en la franja que más convierte.` });
+    const byGift = {}; for (const r of big) { const k = r.giftType === 'fixed' ? 'fichas' : (r.applyMode === 'auto' ? '% automático' : '% con agente'); byGift[k] = byGift[k] || { rec: 0, du: 0, cost: 0, dep: 0 }; byGift[k].rec += r.recipients; byGift[k].du += r.depositors48h; byGift[k].cost += r.cost; byGift[k].dep += r.deposits48h; }
+    const giftRank = Object.entries(byGift).map(([k, v]) => ({ k, conv: v.rec ? Math.round(v.du / v.rec * 1000) / 10 : 0, roi: v.cost > 0 ? Math.round(v.dep / v.cost * 10) / 10 : null, rec: v.rec })).filter(x => x.rec >= 100).sort((a, b2) => b2.conv - a.conv);
+    if (giftRank.length > 1) recs.push({ kind: 'gift', text: `🎁 Tipo de regalo que mejor convirtió: ${giftRank[0].k} (${giftRank[0].conv}%${giftRank[0].roi != null ? ', x' + giftRank[0].roi + ' sobre el costo' : ''}); el que menos: ${giftRank[giftRank.length - 1].k} (${giftRank[giftRank.length - 1].conv}%).` });
+    const byAud = {}; for (const r of big) { const k = r.audienceLabel || r.audienceType; byAud[k] = byAud[k] || { rec: 0, du: 0 }; byAud[k].rec += r.recipients; byAud[k].du += r.depositors48h; }
+    const audRank = Object.entries(byAud).map(([k, v]) => ({ k, conv: v.rec ? Math.round(v.du / v.rec * 1000) / 10 : 0, rec: v.rec })).filter(x => x.rec >= 100).sort((a, b2) => b2.conv - a.conv);
+    if (audRank.length > 1) recs.push({ kind: 'audience', text: `🎯 Segmento que mejor respondió: ${audRank[0].k} (${audRank[0].conv}%); el que peor: ${audRank[audRank.length - 1].k} (${audRank[audRank.length - 1].conv}%).` });
+    if (bestWeek && worstWeek && bestWeek.week !== worstWeek.week) recs.push({ kind: 'week', text: `📆 ${bestWeek.label} fue la mejor (${bestWeek.conv}% cargó de ${bestWeek.recipients.toLocaleString('es-AR')} avisados) y ${worstWeek.label} la peor (${worstWeek.conv}%). Fijate qué cambió (segmento, regalo, horario, día) y repetí lo de la buena.` });
+    if (!rows.length) recs.push({ kind: 'none', text: 'Todavía no hay lotes enviados en este mes.' });
+    const sum = (k) => rows.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+    const totals = { campaigns: rows.length, recipients: sum('recipients'), depositors48h: sum('depositors48h'), deposits48h: sum('deposits48h'), cost: sum('cost'), conv: sum('recipients') ? Math.round(sum('depositors48h') / sum('recipients') * 1000) / 10 : 0, roi: sum('cost') > 0 ? Math.round(sum('deposits48h') / sum('cost') * 10) / 10 : null };
+    res.json({ month: m, weeks, bestWeek: bestWeek ? bestWeek.week : null, campaigns: rows, totals, median, recommendations: recs });
+  } catch (err) { logger.error(`GET /api/admin/cronograma/report: ${err.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+
 const BonusStrategyConfig = require('./src/models/BonusStrategyConfig');
 const StrategyEnrollment = require('./src/models/StrategyEnrollment');
 

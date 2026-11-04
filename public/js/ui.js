@@ -986,6 +986,7 @@ VIP.ui._copyUsernameToClipboard = function(username, onSuccess) {
 VIP.ui.openPlatformModal = function() {
   const modal = document.getElementById('platformModal');
   if (!modal) return;
+  VIP.ui._loadCasinoUrl(); // #193 la página del casino puede haber cambiado en COMANDOS
   const username = VIP.state.currentUser?.username || '';
   const userEl = document.getElementById('platformModalUser');
   if (userEl) userEl.textContent = username || 'Usuario';
@@ -1032,8 +1033,22 @@ VIP.ui.copyPlatformUsername = function() {
   });
 };
 
+// #193: la página del casino sale de COMANDOS (/sys_casino_url). Se pide al arrancar y cada vez que se abre
+// el modal; "Abrir Casino" usa la última que llegó (window.open tiene que ir DENTRO del toque, sin esperar
+// un fetch, o el bloqueador de pop-ups la frena). Sin respuesta, la de siempre.
+VIP.ui._casinoUrl = 'https://www.jugaygana44.bet';
+VIP.ui._loadCasinoUrl = function() {
+  try {
+    fetch(VIP.config.API_URL + '/api/config/casino-url', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && typeof j.url === 'string' && /^https?:\/\//i.test(j.url)) VIP.ui._casinoUrl = j.url; })
+      .catch(function () {});
+  } catch (_) {}
+};
+VIP.ui._loadCasinoUrl();
+
 VIP.ui.goToPlatform = function() {
-  window.open('https://www.jugaygana44.bet', '_blank');
+  window.open(VIP.ui._casinoUrl || 'https://www.jugaygana44.bet', '_blank');
   VIP.ui.closePlatformModal();
 };
 

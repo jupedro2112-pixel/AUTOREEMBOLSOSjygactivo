@@ -33,6 +33,7 @@ const bankSweepSchema = new mongoose.Schema({
     index: true
   },
   accountId: { type: String, default: null },
+  hgAccountKey: { type: String, default: null }, // #194 perfil de cuenta hgcash que la pagó
   balanceBefore: { type: Number, default: null }, // saldo neto hgcash antes de pedirla (informativo)
   hgRequestId: { type: String, default: null, index: true }, // id del REQUEST (createCashOut)
   hgTxId: { type: String, default: null },                   // id de la transacción real (ledger)

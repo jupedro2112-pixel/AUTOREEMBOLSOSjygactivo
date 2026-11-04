@@ -26,6 +26,9 @@ const bankMovementSchema = new mongoose.Schema({
   status: { type: String, default: null },
   type: { type: String, default: null },
   accountId: { type: String, default: null },
+  // #194 perfil de cuenta hgcash (Config['hgcashAccounts'].accounts[].key) por cuyo secreto
+  // entró el aviso → el panel muestra de qué cuenta vino.
+  accountKey: { type: String, default: null },
 
   // Partes
   fromName: { type: String, default: null },

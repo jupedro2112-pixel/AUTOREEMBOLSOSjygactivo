@@ -6256,47 +6256,130 @@ async function loadHgcashConfig() {
 }
 
 // ====== #320 Credenciales hgcash desde el panel (token + secreto del webhook) ======
+// ====== #194 Cuentas hgcash (hasta 3) + cuenta ACTIVA rotable con un botón (réplica #223/#223b de CARGASGIROXactivo) ======
+let _hgAccState = null;
+function _hgAccFmtCbu(c) { return c ? String(c).replace(/(\d{4})(?=\d)/g, '$1 ') : ''; }
 async function loadHgcashCredentials() {
     const box = document.getElementById('hgcashCredBox');
     const st = document.getElementById('hgcashCredStatus');
     if (!box) return;
     try {
-        const r = await authFetch('/api/admin/hgcash/credentials');
+        const r = await authFetch('/api/admin/hgcash/accounts');
         if (!r.ok) { box.style.display = 'none'; return; }
         box.style.display = '';
-        const j = await r.json();
-        const src = j.tokenSource === 'panel' ? '<b style="color:#66ff99;">PANEL</b> (token …' + escapeHtml(j.tokenLast4 || '') + ')'
-            : j.tokenSource === 'ssm' ? '<b style="color:#ffd479;">AWS (SSM)</b>' : '<b style="color:#ff8080;">NINGUNO — el pago y la carga automática no andan</b>';
-        const sec = j.panelSecret ? '<b style="color:#66ff99;">PANEL</b> (…' + escapeHtml(j.secretLast4 || '') + ')' + (j.ssmSecret ? ' — el de AWS ya NO se acepta' : '')
-            : (j.ssmSecret ? '<b style="color:#ffd479;">AWS (SSM)</b>' : '<b style="color:#ff8080;">NINGUNO — los avisos de hgcash se rechazan</b>');
-        st.innerHTML = '🔑 Token en uso: ' + src + '<br>✍️ Secreto del webhook: ' + sec +
-            (j.updatedBy ? '<br><span style="color:#888;">Último cambio desde el panel: ' + escapeHtml(j.updatedBy) + ' · ' + (j.updatedAt ? fmtFechaHoraAR(j.updatedAt) : '') + '</span>' : '') +
-            (j.decryptError ? '<br><span style="color:#ff8080;">⚠️ Lo guardado en el panel no se pudo leer (¿cambió JWT_SECRET?). Se está usando AWS. Volvé a cargarlo.</span>' : '');
-        const u = document.getElementById('hgcashCredWebhookUrl'); if (u) u.textContent = j.webhookFullUrl || '';
+        _hgAccRender(await r.json());
     } catch (_) { if (st) st.textContent = 'No se pudo leer el estado.'; }
 }
-async function saveHgcashCredentials() {
-    const t = (document.getElementById('hgcashCredToken') || {}).value || '';
-    const s = (document.getElementById('hgcashCredSecret') || {}).value || '';
+const loadHgcashAccounts = loadHgcashCredentials;
+function _hgAccRender(j) {
+    _hgAccState = j;
+    const st = document.getElementById('hgcashCredStatus');
+    const list = document.getElementById('hgAccList');
+    const u = document.getElementById('hgcashCredWebhookUrl'); if (u) u.textContent = j.webhookFullUrl || '';
+    const act = (j.accounts || []).find(a => a.active);
+    if (st) {
+        st.innerHTML = (act
+            ? '🔑 Cuenta ACTIVA: <b style="color:#66ff99;">' + escapeHtml(act.label) + '</b> (token …' + escapeHtml(act.tokenLast4 || '—') + ')'
+            : (j.tokenSource === 'ssm' ? '🔑 Sin cuentas en el panel: se usa el token/secreto de <b style="color:#ffd479;">AWS (SSM)</b>' : '<b style="color:#ff8080;">Sin cuenta hgcash: el pago y la carga automática no andan</b>')) +
+            (j.switchedBy ? '<br><span style="color:#888;">Última rotación: ' + escapeHtml(j.switchedBy) + ' · ' + (j.switchedAt ? fmtFechaHoraAR(j.switchedAt) : '') + '</span>' : '') +
+            (j.decryptError ? '<br><span style="color:#ff8080;">⚠️ Lo guardado en el panel no se pudo leer (¿cambió JWT_SECRET?). Se está usando AWS. Volvé a cargarlo.</span>' : '');
+    }
+    try { const r = document.querySelector('input[name="hgAccMode"][value="' + (j.incomingMode === 'active' ? 'active' : 'all') + '"]'); if (r) r.checked = true; } catch (_) {} // #194
+    if (list) {
+        list.innerHTML = (j.accounts || []).map(a => {
+            const recv = a.incomingEnabled === false ? '<span style="color:#ffb74d;">⏸️ cargas PAUSADAS (van a la bandeja)</span>' : (a.receives ? '<span style="color:#66ff99;">⚡ recibe cargas automáticas</span>' : '<span style="color:#aaa;">⚪ no carga sola (modo "solo la cuenta en uso")</span>'); // #194
+            const pay = a.cbu || a.alias ? escapeHtml(a.titular || a.accountName || '') + (a.cbu ? ' · CBU ' + _hgAccFmtCbu(a.cbu) : '') + (a.alias ? ' · alias ' + escapeHtml(a.alias) : '') : '<span style="color:#ffb74d;">sin titular/CBU/alias (el cliente no ve datos de esta cuenta)</span>';
+            return '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 10px;border-radius:8px;border:1px solid ' + (a.active ? 'rgba(102,255,153,0.6)' : 'rgba(255,255,255,0.12)') + ';background:' + (a.active ? 'rgba(102,255,153,0.08)' : 'rgba(0,0,0,0.2)') + ';">' +
+                '<div style="flex:1;min-width:220px;font-size:12px;line-height:1.5;">' +
+                    '<b style="color:' + (a.active ? '#66ff99' : '#d4af37') + ';">' + (a.active ? '● ACTIVA — ' : '') + escapeHtml(a.label) + '</b>' +
+                    '<br>' + pay +
+                    '<br>' + recv +
+                    '<br><span style="color:#888;">token ' + (a.hasToken ? '…' + escapeHtml(a.tokenLast4 || '') : '<span style="color:#ff8080;">FALTA</span>') + ' · secreto ' + (a.hasSecret ? '…' + escapeHtml(a.secretLast4 || '') : '<span style="color:#ff8080;">FALTA (no recibe cargas solas)</span>') + (a.accountId ? ' · id ' + escapeHtml(String(a.accountId)) : '') + '</span>' +
+                '</div>' +
+                '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+                    (a.active ? '' : '<button class="btn-primary btn-sm" onclick="activateHgcashAccount(\'' + a.key + '\')">🔁 USAR ESTA</button>') +
+                    (a.incomingEnabled === false ? '<button class="btn btn-secondary btn-sm" onclick="toggleHgcashIncoming(\'' + a.key + '\', true)">▶️ Reanudar cargas</button>' : '<button class="btn btn-secondary btn-sm" onclick="toggleHgcashIncoming(\'' + a.key + '\', false)" title="Sus transferencias dejan de cargarse solas y quedan en la bandeja">⏸️ Pausar cargas</button>') +
+                    (j.canEdit ? '<button class="btn btn-secondary btn-sm" onclick="hgAccEdit(\'' + a.key + '\')">✏️ Editar</button>' : '') +
+                    (j.canEdit && !a.active ? '<button class="btn btn-secondary btn-sm" onclick="deleteHgcashAccount(\'' + a.key + '\')">🗑️</button>' : '') +
+                '</div></div>';
+        }).join('') || '<div style="color:#888;font-size:12px;">Todavía no hay cuentas cargadas.</div>';
+    }
+    const add = document.getElementById('hgAccAddBtn');
+    if (add) add.style.display = (j.canEdit && (j.accounts || []).length < (j.max || 3)) ? '' : 'none';
+}
+function hgAccNew() {
+    const f = document.getElementById('hgAccForm'); if (!f) return;
+    ['hgAccKey', 'hgAccLabel', 'hgAccToken', 'hgAccSecret', 'hgAccTitular', 'hgAccBank', 'hgAccCbu', 'hgAccAlias'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    const t = document.getElementById('hgAccFormTitle'); if (t) t.textContent = '➕ Cuenta nueva';
+    const tok = document.getElementById('hgAccToken'); if (tok) tok.placeholder = '(obligatorio en una cuenta nueva)';
+    f.style.display = '';
+}
+function hgAccEdit(key) {
+    const a = ((_hgAccState || {}).accounts || []).find(x => x.key === key); if (!a) return;
+    const f = document.getElementById('hgAccForm'); if (!f) return;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+    set('hgAccKey', a.key); set('hgAccLabel', a.label); set('hgAccToken', ''); set('hgAccSecret', '');
+    set('hgAccTitular', a.titular); set('hgAccBank', a.bank); set('hgAccCbu', a.cbu); set('hgAccAlias', a.alias);
+    const t = document.getElementById('hgAccFormTitle'); if (t) t.textContent = '✏️ Editar: ' + a.label;
+    const tok = document.getElementById('hgAccToken'); if (tok) tok.placeholder = '(vacío = no cambiarlo; hoy …' + (a.tokenLast4 || '') + ')';
+    f.style.display = '';
+}
+function hgAccCancel() { const f = document.getElementById('hgAccForm'); if (f) f.style.display = 'none'; }
+async function saveHgcashAccount() {
     const m = document.getElementById('hgcashCredMsg');
-    if (!t.trim() && !s.trim()) { if (m) { m.style.color = '#ff8080'; m.textContent = 'Pegá el token y/o el secreto.'; } return; }
-    if (!confirm('¿Cambiar la cuenta hgcash conectada? Desde ahora las cargas y los pagos automáticos van a usar estos datos.')) return;
-    if (m) { m.style.color = '#aaa'; m.textContent = 'Probando con hgcash…'; }
+    const v = (id) => ((document.getElementById(id) || {}).value || '').trim();
+    const body = { key: v('hgAccKey') || undefined, label: v('hgAccLabel'), token: v('hgAccToken'), webhookSecret: v('hgAccSecret'), titular: v('hgAccTitular'), bank: v('hgAccBank'), cbu: v('hgAccCbu'), alias: v('hgAccAlias') };
+    if (!body.label) { if (m) { m.style.color = '#ff8080'; m.textContent = 'Poné un nombre para la cuenta.'; } return; }
+    if (!body.key && !body.token) { if (m) { m.style.color = '#ff8080'; m.textContent = 'Una cuenta nueva necesita el token de API.'; } return; }
+    if (m) { m.style.color = '#aaa'; m.textContent = body.token ? 'Probando el token con hgcash…' : 'Guardando…'; }
     try {
-        const r = await authFetch('/api/admin/hgcash/credentials', { method: 'POST', body: JSON.stringify({ token: t.trim(), webhookSecret: s.trim() }) });
+        const r = await authFetch('/api/admin/hgcash/accounts', { method: 'POST', body: JSON.stringify(body) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo guardar'); } return; }
-        document.getElementById('hgcashCredToken').value = '';
-        document.getElementById('hgcashCredSecret').value = '';
-        const acc = (j.accounts || []).map(a => (a.name || a.id) + ' (' + (a.currency || '') + ', ' + (a.status || '') + ')').join(' · ');
-        if (m) { m.style.color = '#66ff99'; m.textContent = '✅ Guardado' + (acc ? ' — cuentas que ve el token: ' + acc : ''); }
-        showToast('Cuenta hgcash actualizada', 'success');
-        loadHgcashCredentials();
-        try { loadHgcashBalance(); } catch (_) {}
+        hgAccCancel();
+        const acc = (j.apiAccounts || []).map(a => (a.name || a.id) + ' (' + (a.currency || '') + ', ' + (a.status || '') + ')').join(' · ');
+        if (m) { m.style.color = (j.warnings || []).length ? '#ffb74d' : '#66ff99'; m.textContent = '✅ Guardado' + (acc ? ' — cuentas que ve el token: ' + acc : '') + ((j.warnings || []).length ? ' · ⚠️ ' + j.warnings.join(' ') : ''); }
+        showToast('Cuenta hgcash guardada', 'success');
+        _hgAccRender(j);
+        try { loadHgcashBalance(); loadHgcashConfig(); } catch (_) {}
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error de conexión'; } }
+}
+async function deleteHgcashAccount(key) {
+    const a = ((_hgAccState || {}).accounts || []).find(x => x.key === key);
+    if (!confirm('¿Borrar la cuenta "' + (a ? a.label : key) + '"? Los avisos firmados con su secreto se van a RECHAZAR desde ahora (las transferencias a esa cuenta ya no entran solas).')) return;
+    const m = document.getElementById('hgcashCredMsg');
+    try {
+        const r = await authFetch('/api/admin/hgcash/accounts/' + encodeURIComponent(key), { method: 'DELETE' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo borrar'); } return; }
+        if (m) { m.style.color = '#66ff99'; m.textContent = '✅ Cuenta borrada'; }
+        _hgAccRender(j);
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error de conexión'; } }
+}
+// Rotar la cuenta ACTIVA (desde Configuración o desde 🏦 Banco). `from` = 'bank' usa el mensaje de esa barra.
+async function activateHgcashAccount(key, from) {
+    const a = ((_hgAccState || {}).accounts || []).find(x => x.key === key);
+    const label = a ? a.label : key;
+    if (!confirm('¿Usar la cuenta "' + label + '" desde ahora?\n\n• Los retiros y las bajadas salen por esta cuenta.\n• El cliente pasa a ver su titular/CBU/alias al cargar.\n• Las cargas siguen entrando por TODAS las cuentas cargadas.')) return;
+    const m = document.getElementById(from === 'bank' ? 'bankAccountMsg' : 'hgcashCredMsg');
+    if (m) { m.style.color = '#aaa'; m.textContent = '⏳ Cambiando…'; }
+    try {
+        const r = await authFetch('/api/admin/hgcash/accounts/' + encodeURIComponent(key) + '/activate', { method: 'POST', body: '{}' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo cambiar'); } return; }
+        const warn = (j.warnings || []).join(' ');
+        if (m) { m.style.color = warn ? '#ffb74d' : '#66ff99'; m.textContent = '✅ Ahora se usa "' + (j.label || label) + '"' + (warn ? ' · ⚠️ ' + warn : ''); }
+        showToast('Cuenta hgcash en uso: ' + (j.label || label), 'success');
+        if (warn) showToast(warn, 'warning');
+        _hgAccState = j;
+        if (document.getElementById('hgAccList')) _hgAccRender(j);
+        _bankAccountSwitchRender(j);
+        try { loadBankBalance(); } catch (_) {}
+        try { if (document.getElementById('hgAccList')) { loadHgcashBalance(); loadHgcashConfig(); loadCBUConfig(); } } catch (_) {} // la card de CBU del cliente cambia con la cuenta activa
     } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error de conexión'; } }
 }
 async function clearHgcashCredentials() {
-    if (!confirm('¿Borrar el token/secreto cargados en el panel y volver a usar los de AWS (SSM)?')) return;
+    if (!confirm('¿Borrar TODAS las cuentas hgcash cargadas en el panel y volver a usar el token/secreto de AWS (SSM)?')) return;
     const m = document.getElementById('hgcashCredMsg');
     try {
         const r = await authFetch('/api/admin/hgcash/credentials', { method: 'DELETE' });
@@ -6306,7 +6389,73 @@ async function clearHgcashCredentials() {
         loadHgcashCredentials();
     } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error de conexión'; } }
 }
-window.loadHgcashCredentials = loadHgcashCredentials; window.saveHgcashCredentials = saveHgcashCredentials; window.clearHgcashCredentials = clearHgcashCredentials;
+// #194 Modo de cargas automáticas (todas / solo la en uso) — desde la card o desde la barra de 🏦 Banco.
+async function setHgcashIncomingMode(mode, from) {
+    const m = document.getElementById(from === 'bank' ? 'bankAccountMsg' : 'hgcashCredMsg');
+    const txt = mode === 'active' ? 'SOLO por la cuenta en uso (las transferencias a las otras cuentas quedan en la bandeja para asignar a mano)' : 'por TODAS las cuentas cargadas';
+    if (!confirm('Cargas automáticas ' + txt + '.\n\n¿Confirmás?')) { if (_hgAccState) { _hgAccRender(_hgAccState); _bankAccountSwitchRender(_hgAccState); } return; }
+    if (m) { m.style.color = '#aaa'; m.textContent = '⏳ Guardando…'; }
+    try {
+        const r = await authFetch('/api/admin/hgcash/accounts/incoming-mode', { method: 'POST', body: JSON.stringify({ mode }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo guardar'); } return; }
+        const warn = (j.warnings || []).join(' ');
+        if (m) { m.style.color = warn ? '#ffb74d' : '#66ff99'; m.textContent = '✅ Cargas automáticas ' + (mode === 'active' ? 'solo por la cuenta en uso' : 'por todas las cuentas') + (warn ? ' · ⚠️ ' + warn : ''); }
+        if (warn) showToast(warn, 'warning');
+        _hgAccState = j; if (document.getElementById('hgAccList')) _hgAccRender(j); _bankAccountSwitchRender(j);
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error de conexión'; } }
+}
+// #194 Pausar / reanudar las cargas automáticas de una cuenta.
+async function toggleHgcashIncoming(key, enabled) {
+    const a = ((_hgAccState || {}).accounts || []).find(x => x.key === key);
+    const label = a ? a.label : key;
+    if (!confirm((enabled ? '¿Reanudar las cargas automáticas de "' + label + '"?' : '¿PAUSAR las cargas automáticas de "' + label + '"?\n\nLas transferencias a esa cuenta se siguen registrando pero NO se cargan solas: quedan en la bandeja de 🏦 Banco para asignar a mano.'))) return;
+    const m = document.getElementById('hgcashCredMsg');
+    try {
+        const r = await authFetch('/api/admin/hgcash/accounts/' + encodeURIComponent(key) + '/incoming', { method: 'POST', body: JSON.stringify({ enabled: !!enabled }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo'); } return; }
+        const warn = (j.warnings || []).join(' ');
+        if (m) { m.style.color = warn ? '#ffb74d' : '#66ff99'; m.textContent = '✅ "' + (j.label || label) + '": cargas ' + (enabled ? 'reanudadas' : 'pausadas') + (warn ? ' · ⚠️ ' + warn : ''); }
+        if (warn) showToast(warn, 'warning');
+        _hgAccState = j; _hgAccRender(j); _bankAccountSwitchRender(j);
+    } catch (_) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ Error de conexión'; } }
+}
+window.setHgcashIncomingMode = setHgcashIncomingMode; window.toggleHgcashIncoming = toggleHgcashIncoming;
+// Barra "Cuenta hgcash en uso" de la sección 🏦 Banco (la ve el encargado: admin/depositor/withdrawer).
+function _bankAccountSwitchRender(j) {
+    const box = document.getElementById('bankAccountSwitch'); if (!box) return;
+    const accs = (j && j.accounts) || [];
+    if (accs.length < 1) { box.style.display = 'none'; return; }
+    const act = accs.find(a => a.active);
+    const lbl = document.getElementById('bankAccountActive'); if (lbl) lbl.textContent = act ? act.label : '—';
+    const sel = document.getElementById('bankAccountSel');
+    if (sel) sel.innerHTML = accs.map(a => '<option value="' + a.key + '"' + (a.active ? ' selected' : '') + '>' + escapeHtml(a.label) + (a.active ? ' (en uso)' : '') + (a.hasToken ? '' : ' — sin token') + (a.incomingEnabled === false ? ' — cargas pausadas' : '') + '</option>').join('');
+    const md = document.getElementById('bankAccountMode'); if (md) md.value = j.incomingMode === 'active' ? 'active' : 'all'; // #194
+    box.style.display = accs.length > 1 ? 'flex' : 'none';
+}
+async function loadBankAccountSwitch() {
+    try {
+        const r = await authFetch('/api/admin/hgcash/accounts');
+        if (!r.ok) { const b = document.getElementById('bankAccountSwitch'); if (b) b.style.display = 'none'; return; }
+        const j = await r.json(); _hgAccState = j; _bankAccountSwitchRender(j);
+    } catch (_) {}
+}
+function bankSwitchAccount() {
+    const sel = document.getElementById('bankAccountSel'); if (!sel || !sel.value) return;
+    const cur = ((_hgAccState || {}).accounts || []).find(a => a.active);
+    if (cur && cur.key === sel.value) { const m = document.getElementById('bankAccountMsg'); if (m) { m.style.color = '#aaa'; m.textContent = 'Esa ya es la cuenta en uso.'; } return; }
+    activateHgcashAccount(sel.value, 'bank');
+}
+window.loadHgcashCredentials = loadHgcashCredentials; window.loadHgcashAccounts = loadHgcashAccounts; window.clearHgcashCredentials = clearHgcashCredentials;
+window.hgAccNew = hgAccNew; window.hgAccEdit = hgAccEdit; window.hgAccCancel = hgAccCancel; window.saveHgcashAccount = saveHgcashAccount;
+window.deleteHgcashAccount = deleteHgcashAccount; window.activateHgcashAccount = activateHgcashAccount; window.bankSwitchAccount = bankSwitchAccount; window.loadBankAccountSwitch = loadBankAccountSwitch;
+// #194 etiqueta de la cuenta hgcash por la que entró/salió un movimiento (verde = la cuenta en uso).
+function _hgAccountTag(m) {
+    const acc = m && m.hgAccount; if (!acc) return '';
+    return ' <span style="font-size:9px;padding:1px 4px;border-radius:5px;background:rgba(212,175,55,0.15);color:' + (acc.active ? '#66ff99' : '#d4af37') + ';font-weight:700;" title="' + (acc.active ? 'cuenta hgcash en uso' : 'otra cuenta hgcash cargada') + '">' + escapeHtml(acc.label) + '</span>';
+}
+window._hgAccountTag = _hgAccountTag;
 
 // ====== #326 Reenvío (fan-out) de los avisos de hgcash a otras páginas ======
 // Config['hgcashFanout'] vía /api/admin/hgcash/fanout (solo admin general). Con
@@ -6425,7 +6574,7 @@ async function loadHgcashMovements(page = 1) {
             const op = m.coelsaCode || m.externalId || '—';
             return '<tr>' +
                 '<td style="white-space:nowrap;">' + escapeHtml(fecha) + '</td>' +
-                '<td>' + escapeHtml(dir) + '</td>' +
+                '<td>' + escapeHtml(dir) + _hgAccountTag(m) + '</td>' +
                 '<td style="white-space:nowrap;">' + escapeHtml(monto) + '</td>' +
                 '<td>' + escapeHtml(origen) + '</td>' +
                 '<td style="font-size:11px;">' + escapeHtml(cbuOrigen) + '</td>' +
@@ -14057,6 +14206,7 @@ function loadBankSection() {
     if (day && !day.value) day.value = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
     bankSetTab(_bankTab || 'pending');
     loadBankBalance();
+    loadBankAccountSwitch(); // #194 cuenta hgcash en uso + USAR ESTA
 }
 
 function bankSetTab(tab) {
@@ -14167,6 +14317,7 @@ function _bankRowHtml(m) {
     const ref = m.coelsaCode || m.externalId || '—';
     const open = isIn && ['pending', 'no_match', 'needs_review', 'error', 'shadow_matched'].includes(m.matchStatus);
     let estado = isIn ? hgcashStatusBadge(m.matchStatus) : (m.outKind === 'sweep' ? '<span style="background:#5a2d82;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Bajada</span>' : (m.outKind === 'payout' || m.payoutUsername ? '<span style="background:#2a6df0;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Pago a cliente</span>' : '<span style="background:#7a1010;color:#fff;border-radius:9px;padding:2px 8px;font-size:10.5px;">Salida sin origen</span>'));
+    if (isIn) estado += _hgAccountTag(m); // #194 cuenta hgcash por la que entró
     if (m.status && !/done/i.test(m.status)) estado += ' <span style="font-size:10px;color:#ffb347;">(' + escapeHtml(m.status) + ')</span>';
     if (m.resolution) estado += '<br><span style="font-size:10px;color:#aaa;">No corresponde: ' + escapeHtml(m.resolutionNote || '') + ' (' + escapeHtml(m.resolvedBy || '') + ')</span>';
     else if (m.chargeError) estado += '<br><span style="color:#dc3545;font-size:10px;">' + escapeHtml(String(m.chargeError).slice(0, 70)) + '</span>';

@@ -831,28 +831,45 @@
                                 <span class="icon icon-save"></span> Guardar banco automático
                             </button>
 
-                            <!-- #320 Credenciales de la cuenta hgcash (token + secreto) desde el panel -->
+                            <!-- #194 Cuentas hgcash (hasta 3) + cuenta ACTIVA rotable con un botón (antes: una sola cuenta) -->
                             <div id="hgcashCredBox" style="margin-top:18px;padding:14px;border:1px solid rgba(212,175,55,0.45);border-radius:10px;background:rgba(212,175,55,0.05);">
-                                <h4 style="margin:0 0 6px;color:#d4af37;font-size:14px;">🔐 Cuenta hgcash conectada (token y secreto)</h4>
+                                <h4 style="margin:0 0 6px;color:#d4af37;font-size:14px;">🏦 Cuentas hgcash (hasta 3) — rotación con un botón</h4>
                                 <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
-                                    Para <b>cambiar de cuenta hgcash</b> (se cayó una, cambió el titular) sin entrar a AWS: pegá acá el <b>token de API</b>
-                                    (<code>cash_…</code>) y el <b>secreto del webhook</b> de la cuenta NUEVA. Se guardan cifrados y mandan sobre los de AWS (SSM),
-                                    que quedan de respaldo. El token se prueba contra hgcash antes de guardar. Con un secreto cargado acá, los avisos
-                                    firmados con el secreto de AWS (la cuenta vieja) se <b>rechazan</b>: solo entra lo de la cuenta nueva.
+                                    Cargá hasta <b>3 cuentas hgcash</b> (token de API <code>cash_…</code>, secreto del webhook y los datos de pago que ve el cliente).
+                                    La cuenta <b>ACTIVA</b> paga los retiros y las bajadas, responde el saldo y su titular/CBU/alias es lo que ve el cliente.
+                                    <b>Las cargas entran por CUALQUIERA de las cuentas cargadas</b> (si un cliente transfiere a la anterior, se acredita igual).
+                                    El botón <b>USAR ESTA</b> rota al instante; también está en 🏦 Banco para el encargado. Todo se guarda cifrado.
+                                    En cada cuenta de hgcash, configurá el webhook a: <code id="hgcashCredWebhookUrl">…</code>
                                 </p>
                                 <div id="hgcashCredStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
-                                <div class="form-group">
-                                    <label>Token de API (cash_…):</label>
-                                    <input type="password" id="hgcashCredToken" placeholder="(dejar vacío para no cambiarlo)" autocomplete="off" style="width:100%;">
+                                <!-- #194 modo de cargas automáticas -->
+                                <div id="hgAccModeBox" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.2);font-size:12px;">
+                                    <span>⚡ Cargas automáticas:</span>
+                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="hgAccMode" value="all" style="width:auto;" onchange="setHgcashIncomingMode('all')"> por <b>todas</b> las cuentas cargadas</label>
+                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="hgAccMode" value="active" style="width:auto;" onchange="setHgcashIncomingMode('active')"> <b>solo</b> por la cuenta en uso</label>
+                                    <small style="color:#888;">Lo que no se carga solo queda en la bandeja de 🏦 Banco para asignar a mano.</small>
                                 </div>
-                                <div class="form-group">
-                                    <label>Secreto del webhook:</label>
-                                    <input type="password" id="hgcashCredSecret" placeholder="(dejar vacío para no cambiarlo)" autocomplete="off" style="width:100%;">
-                                    <small style="color:#aaa;font-size:11px;">En el dashboard de la cuenta nueva de hgcash, configurá el webhook a: <code id="hgcashCredWebhookUrl">…</code></small>
+                                <div id="hgAccList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;"></div>
+                                <div id="hgAccForm" style="display:none;padding:12px;border:1px dashed rgba(212,175,55,0.5);border-radius:8px;margin-bottom:10px;">
+                                    <h5 id="hgAccFormTitle" style="margin:0 0 8px;color:#d4af37;font-size:13px;">➕ Cuenta nueva</h5>
+                                    <input type="hidden" id="hgAccKey" value="">
+                                    <div class="form-group"><label>Nombre de la cuenta (para reconocerla):</label><input type="text" id="hgAccLabel" placeholder="Ej. Cuenta Juan" maxlength="40" style="width:100%;"></div>
+                                    <div class="form-group"><label>Token de API (cash_…):</label><input type="password" id="hgAccToken" placeholder="(obligatorio en una cuenta nueva; vacío = no cambiarlo)" autocomplete="off" style="width:100%;"></div>
+                                    <div class="form-group"><label>Secreto del webhook:</label><input type="password" id="hgAccSecret" placeholder="(vacío = no cambiarlo)" autocomplete="off" style="width:100%;"><small style="color:#aaa;font-size:11px;">Sin secreto, los avisos de esa cuenta se rechazan y las cargas no entran solas.</small></div>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                        <div class="form-group"><label>Titular (lo ve el cliente):</label><input type="text" id="hgAccTitular" maxlength="120" style="width:100%;"></div>
+                                        <div class="form-group"><label>Banco / billetera:</label><input type="text" id="hgAccBank" maxlength="60" placeholder="Ej. hgcash" style="width:100%;"></div>
+                                        <div class="form-group"><label>CBU/CVU (22 dígitos):</label><input type="text" id="hgAccCbu" maxlength="22" inputmode="numeric" style="width:100%;"></div>
+                                        <div class="form-group"><label>Alias:</label><input type="text" id="hgAccAlias" maxlength="60" style="width:100%;"></div>
+                                    </div>
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                        <button class="btn-primary" onclick="saveHgcashAccount()">🔐 Probar y guardar</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="hgAccCancel()">Cancelar</button>
+                                    </div>
                                 </div>
                                 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                                    <button class="btn-primary" onclick="saveHgcashCredentials()">🔐 Probar y guardar</button>
-                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashCredentials()" title="Borra lo cargado acá y vuelve a usar el token/secreto de AWS (SSM)">↩️ Volver a usar AWS (SSM)</button>
+                                    <button class="btn btn-secondary btn-sm" id="hgAccAddBtn" onclick="hgAccNew()">➕ Agregar cuenta</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashCredentials()" title="Borra TODAS las cuentas cargadas acá y vuelve a usar el token/secreto de AWS (SSM)">↩️ Borrar todas y volver a AWS (SSM)</button>
                                     <span id="hgcashCredMsg" style="font-size:12px;color:#aaa;"></span>
                                 </div>
                             </div>
@@ -2694,6 +2711,18 @@
                     <div id="bankBalanceBox" style="display:none;margin-left:auto;padding:6px 12px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:12.5px;color:#dfe;">
                         💰 Saldo hgcash: <b id="bankBalanceVal">…</b> <span style="margin-left:8px;font-size:11px;color:#7CFC00;">● en vivo</span>
                     </div>
+                </div>
+                <!-- #194 cuenta hgcash en uso + rotación con un botón (admin, depositor, withdrawer) -->
+                <div id="bankAccountSwitch" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;background:rgba(212,175,55,0.08);border:1px solid rgba(212,175,55,0.40);border-radius:10px;font-size:12.5px;color:#eee;">
+                    <span>🏦 Cuenta hgcash en uso: <b id="bankAccountActive" style="color:#d4af37;">…</b></span>
+                    <select id="bankAccountSel" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;"></select>
+                    <button class="btn-primary btn-sm" onclick="bankSwitchAccount()">🔁 USAR ESTA</button>
+                    <span style="margin-left:6px;">⚡ Cargas automáticas:</span>
+                    <select id="bankAccountMode" onchange="setHgcashIncomingMode(this.value, 'bank')" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;">
+                        <option value="all">por todas las cuentas</option>
+                        <option value="active">solo por la cuenta en uso</option>
+                    </select>
+                    <span id="bankAccountMsg" style="font-size:11.5px;color:#aaa;"></span>
                 </div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="bankTabs">
                     <button class="btn btn-secondary btn-sm bank-tab active" data-tab="pending" onclick="bankSetTab('pending')">⏳ Pendientes <span id="bankTabPendingCount" style="opacity:.8;"></span></button>

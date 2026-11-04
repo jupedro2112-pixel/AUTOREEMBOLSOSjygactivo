@@ -7,6 +7,8 @@
 >
 > Última actualización integral: **2026-07-09** (lectura de punta a punta de todo el
 > repo: server.js completo, clientes JUGAYGANA, 28 modelos, servicios, PWA y panel).
+> Actualización parcial 2026-11-04: **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
+> CARGASGIROXactivo)** — ver "Cuentas hgcash múltiples" en la auto-carga del banco.
 > Los números de línea derivan con cada cambio — usalos como referencia aproximada y
 > confirmá con grep.
 
@@ -530,6 +532,22 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   responder (mensaje/comando/carga/retiro/CBU) o cerrar lo resuelve; sobre-umbral →
   ChatDelay. Reporte `GET /api/admin/chat-delays` (solo admin).
 
+  **Cuentas hgcash múltiples (#194, réplica #223/#223b de CARGASGIROXactivo):** `Config['hgcashAccounts'] = { accounts: [{ key, label,
+  tokenEnc, secretEnc, …Last4, accountId, accountName, cbu, alias, bank, titular, incomingEnabled }], activeKey, switchedBy/At, incomingMode }`,
+  cifrado igual que antes; cada instancia lo descifra en memoria a los 8 s y cada **15 s** (`_hgAccounts`, `_hgActiveKey`, `_hgIncomingMode`).
+  `Config['hgcashCredentials']` (una sola cuenta) se migra solo a `a1` la primera vez; panel > SSM (`HGCASH_API_TOKEN` / `HGCASH_WEBHOOK_SECRET`
+  valen solo sin cuentas en el panel). La **ACTIVA** paga (`hgcashPay.setTokenOverride`), responde el saldo y define lo que ve el cliente
+  (`_hgApplyActiveToConfigs` → `hgcash.accountName/cbu/accountId` y `Config['cbu']`). **TODAS reciben:** `_hgcashWebhookSecretEntries()` → el
+  webhook acepta la firma de cualquiera y guarda por cuál entró en `BankMovement.accountKey`; `_comprobanteToOurBank` reconoce el CBU/titular
+  de cualquiera que RECIBA. **Qué cuentas cargan solas:** `incomingMode 'all'|'active'` + `accounts[].incomingEnabled` → `_hgAccountReceives(a)`;
+  `_hgMovementAutoOff(m)` da el motivo y el movimiento queda `pending` con `chargeError` (`hgcashMatchFromMovement` lo saltea,
+  `hgcashMatchFromComprobante` no lo toma de candidato). **Cada pago recuerda su cuenta** (`PendingPayout.hgAccountKey`, `BankSweep.hgAccountKey`):
+  `hgcashService` acepta `token` opcional en todas las llamadas y las consultas de estado/recibo pasan `_hgTokenFor(key)`; el pago recarga las
+  cuentas antes de resolver (`_loadHgcashCredentials()`). Endpoints: `GET/POST /api/admin/hgcash/accounts`, `DELETE /:key`, `POST /:key/activate`,
+  `POST /accounts/incoming-mode`, `POST /:key/incoming` (ver/rotar/modo/pausa: admin, depositor, withdrawer; credenciales: solo admin); legacy
+  `POST/DELETE /api/admin/hgcash/credentials` siguen (escriben sobre la activa / borran todas). Panel: card "🏦 Cuentas hgcash (hasta 3)" en
+  Comandos → Banco automático + barra "Cuenta hgcash en uso" en 🏦 Banco; movimientos y bandeja llevan `hgAccount {key,label,active}`.
+
 ## 6. Front-end: PWA cliente y panel admin
 
 ### PWA (`public/`)
@@ -666,6 +684,12 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
 - **Validación local**: sólo `node --check` (no hay node_modules en Tails).
 
 ## 9. Trampas / "no rompas esto"
+
+- **Página del casino (#193, 2026-10-29):** sale de COMANDOS → `/sys_casino_url` (`getCasinoPlayUrl()` en server.js: comando →
+  `JUGAYGANA_PLAY_URL` → `https://www.jugaygana44.bet`; `_refreshCasinoUrl` al arrancar / cada 60 s / al guardar). La PWA la pide en
+  `GET /api/config/casino-url` (público) al cargar y al abrir el modal; "Abrir Casino" (`VIP.ui.goToPlatform`) abre `VIP.ui._casinoUrl`.
+  No hay login automático al casino en JUGAYGANA: solo cambia el link. Solo el admin general guarda ese comando. No volver a escribir el
+  dominio fijo en código. Test: `node scripts/test-casino-url.js`.
 
 - **DOS `connectDB`**: el real es `config/database.js`; el de `src/models/index.js` NO
   se usa. No definir schemas en config/database.js.

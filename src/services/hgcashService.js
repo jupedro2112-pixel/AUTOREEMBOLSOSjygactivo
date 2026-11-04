@@ -27,19 +27,22 @@ function getToken() { return _tokenOverride || process.env.HGCASH_API_TOKEN || n
 /** true si hay token de API configurado (el pago automático está disponible). */
 function isEnabled() { return !!getToken(); }
 
-function _headers() {
-  return { Authorization: `Bearer ${getToken()}`, 'content-type': 'application/json' };
+// #194: todas las llamadas aceptan un `token` opcional (el de la cuenta hgcash que
+// originó la operación) → sin él, el de la cuenta ACTIVA (override del panel) o SSM.
+function _tok(t) { return (typeof t === 'string' && t.trim()) ? t.trim() : getToken(); }
+function _headers(t) {
+  return { Authorization: `Bearer ${_tok(t)}`, 'content-type': 'application/json' };
 }
 
 // Valida un CBU/CVU o alias y devuelve el titular real (para que el agente confirme
 // a quién le está pagando). Servicio pago de hgcash (costo chico por consulta).
 // @returns { ok, data: { alias, cvu, cuit, nombre, tipoPersona } } | { ok:false, error }
-async function lookupAlias(aliasOrCvu) {
-  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+async function lookupAlias(aliasOrCvu, token) {
+  if (!_tok(token)) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
   const value = String(aliasOrCvu || '').trim();
   if (!value) return { ok: false, error: 'alias/CVU vacío' };
   try {
-    const r = await axios.post(`${BASE}/alias-lookup`, { alias: value }, { headers: _headers(), timeout: 15000 });
+    const r = await axios.post(`${BASE}/alias-lookup`, { alias: value }, { headers: _headers(token), timeout: 15000 });
     return { ok: true, data: r.data || {} };
   } catch (e) {
     const detail = e.response ? `HTTP ${e.response.status} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.message;
@@ -55,7 +58,7 @@ async function lookupAlias(aliasOrCvu) {
 // @returns { ok, data: [accounts] } | { ok:false, error, httpStatus }
 // #320: `withToken` opcional → prueba un token NUEVO antes de guardarlo (no toca el vigente).
 async function getAccounts(withToken) {
-  const tok = (typeof withToken === 'string' && withToken.trim()) ? withToken.trim() : getToken();
+  const tok = _tok(withToken);
   if (!tok) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
   try {
     const r = await axios.get(`${BASE}/accounts`, { headers: { Authorization: `Bearer ${tok}`, 'content-type': 'application/json' }, timeout: 15000 });
@@ -73,8 +76,8 @@ async function getAccounts(withToken) {
 // `externalID` da idempotencia: si se reintenta con el mismo, hgcash devuelve 409
 // (Duplicate External ID) en vez de pagar dos veces.
 // @returns { ok, data: { id, externalID, createdAt, status } } | { ok:false, error, httpStatus }
-async function createCashOut({ accountId, amount, toCBU, toName, toCUIT, concept, externalID, webhookUrl }) {
-  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+async function createCashOut({ accountId, amount, toCBU, toName, toCUIT, concept, externalID, webhookUrl, token }) {
+  if (!_tok(token)) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
   if (!accountId) return { ok: false, error: 'Falta accountId de la cuenta hgcash' };
 
   const dest = String(toCBU || '').replace(/\D/g, '');
@@ -92,7 +95,7 @@ async function createCashOut({ accountId, amount, toCBU, toName, toCUIT, concept
   if (webhookUrl) body.webhookUrl = webhookUrl;
 
   try {
-    const r = await axios.post(`${BASE}/transactions`, body, { headers: _headers(), timeout: 30000 });
+    const r = await axios.post(`${BASE}/transactions`, body, { headers: _headers(token), timeout: 30000 });
     return { ok: true, data: r.data || {} };
   } catch (e) {
     const httpStatus = e.response && e.response.status;
@@ -106,11 +109,11 @@ async function createCashOut({ accountId, amount, toCBU, toName, toCUIT, concept
 // devolvió createCashOut. El recibo PDF se pide con el id de transacción, no del
 // request. Puede devolver transactionId=null si todavía no se procesó.
 // GET /transaction-requests/{id}/transaction-id → { transactionId }
-async function getTransactionIdForRequest(requestId) {
-  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+async function getTransactionIdForRequest(requestId, token) {
+  if (!_tok(token)) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
   if (!requestId) return { ok: false, error: 'requestId vacío' };
   try {
-    const r = await axios.get(`${BASE}/transaction-requests/${encodeURIComponent(requestId)}/transaction-id`, { headers: _headers(), timeout: 15000 });
+    const r = await axios.get(`${BASE}/transaction-requests/${encodeURIComponent(requestId)}/transaction-id`, { headers: _headers(token), timeout: 15000 });
     return { ok: true, transactionId: (r.data && r.data.transactionId) || null };
   } catch (e) {
     const httpStatus = e.response && e.response.status;
@@ -123,11 +126,11 @@ async function getTransactionIdForRequest(requestId) {
 // Trae una URL firmada para descargar el PDF del comprobante de un pago. La URL
 // VENCE en 1 hora (por eso conviene resolverla on-demand, no guardarla).
 // GET /transactions/{id}/receipt → { signedUrl }
-async function getReceiptUrl(transactionId) {
-  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+async function getReceiptUrl(transactionId, token) {
+  if (!_tok(token)) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
   if (!transactionId) return { ok: false, error: 'transactionId vacío' };
   try {
-    const r = await axios.get(`${BASE}/transactions/${encodeURIComponent(transactionId)}/receipt`, { headers: _headers(), timeout: 20000 });
+    const r = await axios.get(`${BASE}/transactions/${encodeURIComponent(transactionId)}/receipt`, { headers: _headers(token), timeout: 20000 });
     return { ok: true, signedUrl: (r.data && r.data.signedUrl) || null };
   } catch (e) {
     const httpStatus = e.response && e.response.status;
@@ -139,11 +142,11 @@ async function getReceiptUrl(transactionId) {
 
 // Estado de un pago saliente (cash-out) por su id de REQUEST. Sirve para destrabar
 // un payout que quedó en 'paying' (webhook perdido). GET /transaction/{id}/status.
-async function getTransactionStatus(requestId) {
-  if (!getToken()) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
+async function getTransactionStatus(requestId, token) {
+  if (!_tok(token)) return { ok: false, error: 'HGCASH_API_TOKEN no configurado' };
   if (!requestId) return { ok: false, error: 'requestId vacío' };
   try {
-    const r = await axios.get(`${BASE}/transaction/${encodeURIComponent(requestId)}/status`, { headers: _headers(), timeout: 15000 });
+    const r = await axios.get(`${BASE}/transaction/${encodeURIComponent(requestId)}/status`, { headers: _headers(token), timeout: 15000 });
     const data = r.data || {};
     const status = data.status || data.state || null;
     return { ok: true, status: status ? String(status) : null, data };
@@ -158,8 +161,8 @@ async function getTransactionStatus(requestId) {
 // Descarga los BYTES del PDF del comprobante: resuelve un signedUrl fresco y baja
 // el archivo. Devuelve { ok, buffer }. La signedUrl es de descarga directa (presignada),
 // no necesita el token. Best-effort: ante cualquier error devuelve ok:false.
-async function fetchReceiptPdf(transactionId) {
-  const r = await getReceiptUrl(transactionId);
+async function fetchReceiptPdf(transactionId, token) {
+  const r = await getReceiptUrl(transactionId, token);
   if (!r.ok || !r.signedUrl) return { ok: false, error: r.error || 'sin signedUrl' };
   try {
     const resp = await axios.get(r.signedUrl, { responseType: 'arraybuffer', timeout: 20000 });

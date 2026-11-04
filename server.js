@@ -1900,6 +1900,12 @@ function _comprobanteToOurBank(comprobante, cfg) {
   const cfgCbu = _digits(cfg.cbu);
   if (cfgCbu && _digits(comprobante.destCbu) === cfgCbu) return true;
   if (cfg.accountName && _nameMatch(comprobante.destHolder, cfg.accountName)) return true;
+  for (const a of _hgAccounts) { // #194 cualquiera de las cuentas hgcash cargadas que RECIBA cargas (modo/pausa)
+    if (!_hgAccountReceives(a)) continue;
+    if (a.cbu && _digits(comprobante.destCbu) === a.cbu) return true;
+    const nm = a.accountName || a.titular;
+    if (nm && _nameMatch(comprobante.destHolder, nm)) return true;
+  }
   return false;
 }
 
@@ -2112,8 +2118,18 @@ async function hgcashConsumeOnManualDeposit(userId, username, amount, txId = nul
 
 // Guarda el accountId de nuestra cuenta hgcash en la config si todavía no está
 // (lo necesitamos para los pagos salientes / cash-out).
-async function ensureHgcashAccountIdSaved(accountId) {
+async function ensureHgcashAccountIdSaved(accountId, key) {
   try {
+    if (!accountId) return;
+    // #194: el aviso vino firmado por un perfil del panel → ese accountId es de ESE perfil.
+    if (key) {
+      const a = _hgAccountByKey(key);
+      if (a && !a.accountId) {
+        await _hgSaveAccountsConfig((n) => { const x = n.accounts.find(z => z.key === key); if (x && !x.accountId) x.accountId = String(accountId); }, 'webhook');
+        logger.info(`[hgcash] accountId ${accountId} guardado en la cuenta "${key}" (webhook)`);
+      }
+      if (key !== _hgActiveKey) return; // el cache de hgcash.accountId es SOLO de la cuenta activa
+    }
     const cfg = await getHgcashConfig();
     if (!cfg.accountId && accountId) {
       await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(accountId) }));
@@ -2155,7 +2171,7 @@ async function resolvePayoutTxId(payout) {
   const reqId = payout.hgTransactionId; // ojo: este campo guarda el id del REQUEST del cash-out
   if (!reqId) return null;
   try {
-    const r = await hgcashPay.getTransactionIdForRequest(reqId);
+    const r = await hgcashPay.getTransactionIdForRequest(reqId, _hgTokenFor(payout.hgAccountKey)); // #194 token de la cuenta que pagó
     if (r.ok && r.transactionId) {
       const txId = String(r.transactionId);
       try { await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTxId: txId } }); } catch (_) {}
@@ -2210,7 +2226,7 @@ async function maybeSendPayoutReceipt(payout) {
     //    se manda sólo el link. Nunca rompe el flujo de pago.
     let photoSent = false;
     try {
-      const pdf = await hgcashPay.fetchReceiptPdf(txId);
+      const pdf = await hgcashPay.fetchReceiptPdf(txId, _hgTokenFor(cur && cur.hgAccountKey)); // #194
       if (pdf.ok && pdf.buffer && pdf.buffer.length) {
         const png = await pdfImage.pdfBufferToPng(pdf.buffer);
         if (png && png.length && png.length < 4 * 1024 * 1024) {
@@ -2977,6 +2993,12 @@ async function hgcashMatchFromMovement(movement) {
     const cfg = await getHgcashConfig();
     if (!cfg.enabled) return;
     if (!movement || movement.direction !== 'Inbound' || movement.matchStatus !== 'pending') return;
+    const _autoOff = _hgMovementAutoOff(movement); // #194 cuenta pausada / modo "solo la en uso" → queda pendiente, sin carga sola
+    if (_autoOff) {
+      if (!movement.chargeError) BankMovement.updateOne({ movementId: movement.movementId, chargeError: null }, { $set: { chargeError: _autoOff } }).catch(() => {});
+      logger.info(`[hgcash] movimiento ${movement.movementId} sin carga automática: ${_autoOff}`);
+      return;
+    }
     if (!_statusAccredited(movement.status, cfg)) return; // todavía no acreditado (status != done)
     if (cfg.currency && movement.currency && String(movement.currency).toUpperCase() !== String(cfg.currency).toUpperCase()) return;
 
@@ -3040,6 +3062,7 @@ async function hgcashMatchFromComprobante(comprobante) {
     }).sort({ createdAt: -1 }).limit(80).lean();
 
     const matches = candidates.filter(m =>
+      !_hgMovementAutoOff(m) && // #194 cuenta pausada / modo "solo la en uso"
       _statusAccredited(m.status, cfg) &&
       _comprobanteMatchesMovement(comprobante, m, cfg)
     );
@@ -3375,8 +3398,26 @@ function getPublicBaseUrl() {
 // Prioridad: panel > SSM. El webhook acepta la firma con CUALQUIERA de los dos secretos
 // (panel o SSM) → durante el cambio de cuenta no se pierde ningún aviso.
 // ⚠️ Si JWT_SECRET cambia, lo guardado no se puede descifrar → se usa SSM (y el panel avisa).
-let _hgcashPanelSecret = null;
-let _hgcashCredMeta = null; // { tokenLast4, secretLast4, updatedBy, updatedAt, decryptError }
+// ============================================
+// #194 CUENTAS hgcash MÚLTIPLES (hasta 3) + cuenta ACTIVA rotable con un botón (réplica #223/#223b de CARGASGIROXactivo)
+// ============================================
+// Config['hgcashAccounts'] = { accounts: [{ key, label, tokenEnc, tokenLast4, secretEnc, secretLast4,
+//   accountId, accountName, cbu, alias, bank, titular, updatedBy, updatedAt }], activeKey, switchedBy, switchedAt }
+// • La ACTIVA paga retiros y bajadas, responde el saldo, y su titular/CBU/alias es lo que ve el
+//   cliente (al activar se escriben Config['cbu'] y hgcash.accountName/cbu/accountId).
+// • TODAS reciben: el webhook acepta la firma de cualquiera de los secretos cargados (una
+//   transferencia a la cuenta "anterior" se acredita igual) y el comprobante se reconoce contra
+//   el CBU/titular de cualquiera. Cada BankMovement queda etiquetado con `accountKey`.
+// • Un pago hecho desde la cuenta A se sigue consultando con el token de A (`hgAccountKey` en
+//   PendingPayout/BankSweep) aunque después se rote a B.
+// • Legacy (una sola cuenta): Config['hgcashCredentials'] se migra sola a la cuenta 'a1' la primera vez.
+// Cifrado: AES-256-GCM con clave derivada de JWT_SECRET (ya en SSM); un dump no las expone.
+// ⚠️ Si JWT_SECRET cambia, lo guardado no se puede descifrar → se usa SSM (y el panel avisa).
+const HG_MAX_ACCOUNTS = 3;
+let _hgAccounts = [];      // descifradas en memoria (token/secret) — se recargan cada 15 s por instancia
+let _hgActiveKey = null;
+let _hgAccountsMeta = { decryptError: false, switchedBy: null, switchedAt: null };
+let _hgcashCredMeta = null; // vista legacy (GET /api/admin/hgcash/credentials) = la cuenta activa
 function _credKey() {
   const base = process.env.JWT_SECRET || JWT_SECRET || '';
   if (!base) return null;
@@ -3396,29 +3437,155 @@ function _credDecrypt(blob) {
   d.setAuthTag(Buffer.from(tag, 'base64'));
   return Buffer.concat([d.update(Buffer.from(data, 'base64')), d.final()]).toString('utf8');
 }
+function _hgNormStored(a) {
+  a = a || {};
+  return {
+    key: String(a.key || '').trim(), label: String(a.label || '').trim().slice(0, 40),
+    tokenEnc: a.tokenEnc || null, tokenLast4: a.tokenLast4 || null, secretEnc: a.secretEnc || null, secretLast4: a.secretLast4 || null,
+    accountId: a.accountId ? String(a.accountId) : null, accountName: String(a.accountName || '').trim().slice(0, 120),
+    cbu: String(a.cbu || '').replace(/\D/g, '').slice(0, 22), alias: String(a.alias || '').trim().slice(0, 60),
+    bank: String(a.bank || '').trim().slice(0, 60), titular: String(a.titular || '').trim().slice(0, 120),
+    incomingEnabled: a.incomingEnabled !== false, // #194 pausada = sus transferencias NO se cargan solas (quedan en la bandeja)
+    updatedBy: a.updatedBy || null, updatedAt: a.updatedAt || null
+  };
+}
+// #194 modo de cargas automáticas: 'all' = por todas las cuentas cargadas · 'active' = solo por la cuenta en uso.
+function _hgNormIncomingMode(v) { return String(v || '').toLowerCase() === 'active' ? 'active' : 'all'; }
+let _hgIncomingMode = 'all';
+// ¿Esta cuenta recibe cargas automáticas? (modo global + pausa por cuenta). key null (SSM) → sí.
+function _hgAccountReceives(a) {
+  if (!a) return true;
+  if (a.incomingEnabled === false) return false;
+  if (_hgIncomingMode === 'active' && a.key !== _hgActiveKey) return false;
+  return true;
+}
+// Motivo por el que un movimiento hgcash NO se carga solo (null = sí se carga). Para el matcheo.
+function _hgMovementAutoOff(m) {
+  if (!m || m.provider === 'finpro' || !_hgAccounts.length) return null;
+  const a = (m.accountKey && _hgAccountByKey(m.accountKey))
+    || (m.accountId && _hgAccounts.find(x => x.accountId && String(x.accountId) === String(m.accountId))) || null;
+  if (!a || _hgAccountReceives(a)) return null;
+  return a.incomingEnabled === false
+    ? `Sin carga automática: la cuenta "${_hgAccountLabel(a)}" está PAUSADA para cargas (panel). Asignala a mano si corresponde.`
+    : `Sin carga automática: solo carga la cuenta en uso y esta entró por "${_hgAccountLabel(a)}". Asignala a mano si corresponde.`;
+}
+// Lee Config['hgcashAccounts']; si no existe, migra lo de la cuenta única (Config['hgcashCredentials']) a 'a1'.
+async function _hgReadAccountsConfig() {
+  const v = await getConfig('hgcashAccounts', null);
+  if (v && Array.isArray(v.accounts)) {
+    return { accounts: v.accounts.map(_hgNormStored).filter(a => a.key), activeKey: v.activeKey || null, switchedBy: v.switchedBy || null, switchedAt: v.switchedAt || null, incomingMode: _hgNormIncomingMode(v.incomingMode) };
+  }
+  const legacy = await getConfig('hgcashCredentials', null);
+  if (!legacy || (!legacy.tokenEnc && !legacy.secretEnc)) return { accounts: [], activeKey: null, switchedBy: null, switchedAt: null, incomingMode: 'all' };
+  const hg = await getHgcashConfig();
+  const cbuCfg = (await getConfig('cbu', null)) || {};
+  const a1 = _hgNormStored({
+    key: 'a1', label: hg.accountName || cbuCfg.titular || 'Cuenta 1',
+    tokenEnc: legacy.tokenEnc || null, tokenLast4: legacy.tokenLast4 || null, secretEnc: legacy.secretEnc || null, secretLast4: legacy.secretLast4 || null,
+    accountId: hg.accountId || null, accountName: hg.accountName || cbuCfg.titular || '', cbu: hg.cbu || cbuCfg.number || '',
+    alias: cbuCfg.alias || '', bank: cbuCfg.bank || '', titular: cbuCfg.titular || hg.accountName || '',
+    updatedBy: legacy.updatedBy || null, updatedAt: legacy.updatedAt || null
+  });
+  try {
+    await setConfig('hgcashAccounts', { accounts: [a1], activeKey: 'a1', migratedFrom: 'hgcashCredentials', migratedAt: new Date() });
+    logger.warn('[hgcash] #194 credenciales del panel (cuenta única) migradas a la cuenta "a1" de Config[hgcashAccounts]');
+  } catch (e) { logger.warn(`[hgcash] migración de cuentas falló: ${e.message}`); }
+  return { accounts: [a1], activeKey: 'a1', switchedBy: null, switchedAt: null, incomingMode: 'all' };
+}
 async function _loadHgcashCredentials() {
   try {
-    const v = await getConfig('hgcashCredentials', null);
-    if (!v || (!v.tokenEnc && !v.secretEnc)) {
-      hgcashPay.setTokenOverride(null); _hgcashPanelSecret = null; _hgcashCredMeta = null; return;
+    const cfg = await _hgReadAccountsConfig();
+    let decryptError = false;
+    const list = [];
+    for (const a of cfg.accounts) {
+      let token = null, secret = null;
+      try { token = a.tokenEnc ? _credDecrypt(a.tokenEnc) : null; } catch (_) { decryptError = true; }
+      try { secret = a.secretEnc ? _credDecrypt(a.secretEnc) : null; } catch (_) { decryptError = true; }
+      list.push(Object.assign({}, a, { token: token || null, secret: secret || null }));
     }
-    let token = null, secret = null, decryptError = false;
-    try { token = v.tokenEnc ? _credDecrypt(v.tokenEnc) : null; } catch (_) { decryptError = true; }
-    try { secret = v.secretEnc ? _credDecrypt(v.secretEnc) : null; } catch (_) { decryptError = true; }
-    hgcashPay.setTokenOverride(token);
-    _hgcashPanelSecret = secret || null;
-    _hgcashCredMeta = { tokenLast4: v.tokenLast4 || null, secretLast4: v.secretLast4 || null, updatedBy: v.updatedBy || null, updatedAt: v.updatedAt || null, decryptError };
+    _hgAccounts = list;
+    _hgActiveKey = (cfg.activeKey && list.some(a => a.key === cfg.activeKey)) ? cfg.activeKey : (list[0] ? list[0].key : null);
+    _hgAccountsMeta = { decryptError, switchedBy: cfg.switchedBy || null, switchedAt: cfg.switchedAt || null };
+    _hgIncomingMode = _hgNormIncomingMode(cfg.incomingMode); // #194
+    const act = _hgActiveAccount();
+    hgcashPay.setTokenOverride(act ? act.token : null);
+    _hgcashCredMeta = act ? { tokenLast4: act.tokenLast4 || null, secretLast4: act.secretLast4 || null, updatedBy: act.updatedBy || null, updatedAt: act.updatedAt || null, decryptError } : null;
     if (decryptError) logger.error('[hgcash] credenciales del panel NO se pudieron descifrar (¿cambió JWT_SECRET?) — se usa SSM');
-  } catch (e) { logger.warn(`[hgcash] no se pudieron leer las credenciales del panel: ${e.message}`); }
+  } catch (e) { logger.warn(`[hgcash] no se pudieron leer las cuentas del panel: ${e.message}`); }
 }
 setTimeout(() => { _loadHgcashCredentials(); }, 8 * 1000);
-setInterval(() => { _loadHgcashCredentials(); }, 60 * 1000);
-function _hgcashWebhookSecrets() {
-  // #182 (owner 2026-10-13, réplica de PAUTANUEVAsantino #323): si hay secreto en el PANEL se
-  // acepta SOLO ese — el de SSM deja de valer, así los avisos de la cuenta hgcash VIEJA
-  // (firmados con el secreto viejo de AWS) se rechazan. Sin secreto en el panel → el de SSM.
-  if (_hgcashPanelSecret) return [_hgcashPanelSecret];
-  return [process.env.HGCASH_WEBHOOK_SECRET || null].filter(Boolean);
+setInterval(() => { _loadHgcashCredentials(); }, 15 * 1000); // #194: 15 s → el cambio de cuenta ACTIVA llega rápido a todas las instancias
+function _hgActiveAccount() { return _hgAccounts.find(a => a.key === _hgActiveKey) || null; }
+function _hgAccountByKey(k) { return k ? (_hgAccounts.find(a => a.key === String(k)) || null) : null; }
+// Token para consultar una operación ya hecha: el del perfil que la originó si sigue cargado;
+// null → el cliente usa el de la cuenta activa (o SSM).
+function _hgTokenFor(key) { const a = _hgAccountByKey(key); return (a && a.token) || null; }
+function _hgAccountLabel(a) { return a ? (a.label || a.titular || a.accountName || ('cuenta ' + a.key)) : ''; }
+// Cuenta por la que entró/salió un movimiento (por accountKey del webhook, o por accountId de hgcash).
+function _hgAccountLabelFor(m) {
+  if (!m || !_hgAccounts.length) return null;
+  const a = (m.accountKey && _hgAccountByKey(m.accountKey))
+    || (m.accountId && _hgAccounts.find(x => x.accountId && String(x.accountId) === String(m.accountId))) || null;
+  return a ? { key: a.key, label: _hgAccountLabel(a), active: a.key === _hgActiveKey } : null;
+}
+function _hgAccountPublic(a) {
+  return { key: a.key, label: _hgAccountLabel(a), active: a.key === _hgActiveKey, hasToken: !!a.token, tokenLast4: a.tokenLast4 || null,
+    hasSecret: !!a.secret, secretLast4: a.secretLast4 || null, accountId: a.accountId || null, accountName: a.accountName || '',
+    cbu: a.cbu || '', alias: a.alias || '', bank: a.bank || '', titular: a.titular || '', updatedBy: a.updatedBy || null, updatedAt: a.updatedAt || null,
+    incomingEnabled: a.incomingEnabled !== false, receives: _hgAccountReceives(a) }; // #194
+}
+function _hgAccountsPayload() {
+  return { accounts: _hgAccounts.map(_hgAccountPublic), activeKey: _hgActiveKey, max: HG_MAX_ACCOUNTS, incomingMode: _hgIncomingMode, tokenSource: hgcashPay.getTokenSource(),
+    ssmToken: !!process.env.HGCASH_API_TOKEN, ssmSecret: !!process.env.HGCASH_WEBHOOK_SECRET, decryptError: !!_hgAccountsMeta.decryptError,
+    switchedBy: _hgAccountsMeta.switchedBy, switchedAt: _hgAccountsMeta.switchedAt, webhookFullUrl: `${getPublicBaseUrl()}/api/hgcash/webhook` };
+}
+// Modifica la config de cuentas (lee → mut(next) → guarda → recarga memoria).
+async function _hgSaveAccountsConfig(mut, by) {
+  const cfg = await _hgReadAccountsConfig();
+  const next = { accounts: cfg.accounts, activeKey: cfg.activeKey, switchedBy: cfg.switchedBy, switchedAt: cfg.switchedAt, incomingMode: cfg.incomingMode || 'all' };
+  await mut(next);
+  next.updatedBy = by || null; next.updatedAt = new Date();
+  await setConfig('hgcashAccounts', next);
+  await _loadHgcashCredentials();
+  return next;
+}
+// La cuenta activa manda sobre: el matcheo (hgcash.accountName/cbu/accountId) y lo que ve el
+// cliente (Config['cbu'] → /api/config/cbu, mensaje de datos de pago). Devuelve avisos.
+async function _hgApplyActiveToConfigs(a) {
+  const warnings = [];
+  try {
+    const hg = await getHgcashConfig();
+    await setConfig('hgcash', Object.assign({}, hg, { accountName: a.accountName || a.titular || hg.accountName || '', cbu: a.cbu || hg.cbu || '', accountId: a.accountId || null }));
+  } catch (e) { warnings.push('No se pudo actualizar el titular/CBU del matcheo: ' + e.message); }
+  if (a.cbu || a.alias || a.titular || a.bank) {
+    try {
+      const cur = (await getConfig('cbu', null)) || {};
+      await setConfig('cbu', { bank: a.bank || cur.bank || '', titular: a.titular || a.accountName || cur.titular || '', number: a.cbu || cur.number || '', alias: a.alias || cur.alias || '' });
+    } catch (e) { warnings.push('No se pudo actualizar el CBU que ve el cliente: ' + e.message); }
+  } else {
+    warnings.push('Esta cuenta no tiene titular/CBU/alias cargados: el cliente sigue viendo los datos de pago anteriores. Cargalos en la card de cuentas hgcash.');
+  }
+  _hgcashBalanceCache = { at: 0, accounts: null };
+  return warnings;
+}
+async function _hgActivateAccount(key, by) {
+  key = String(key || '');
+  const next = await _hgSaveAccountsConfig((n) => {
+    if (!n.accounts.some(a => a.key === key)) throw Object.assign(new Error('Cuenta no encontrada'), { status: 404 });
+    n.activeKey = key; n.switchedBy = by || null; n.switchedAt = new Date();
+  }, by);
+  const a = next.accounts.find(x => x.key === key);
+  const warnings = await _hgApplyActiveToConfigs(a);
+  logger.warn(`[hgcash] #194 cuenta ACTIVA → "${_hgAccountLabel(a)}" (${key}) por ${by}`);
+  return { account: a, warnings };
+}
+function _hgcashWebhookSecrets() { return _hgcashWebhookSecretEntries().map(e => e.secret); }
+// [{ key, secret }] — con cuentas en el panel valen SOLO sus secretos (regla de siempre: el de AWS deja de
+// valer, así la cuenta vieja que ya no está cargada se rechaza). Sin ninguna → el de SSM.
+function _hgcashWebhookSecretEntries() {
+  const ent = _hgAccounts.filter(a => a.secret).map(a => ({ key: a.key, secret: a.secret }));
+  if (ent.length) return ent;
+  return process.env.HGCASH_WEBHOOK_SECRET ? [{ key: null, secret: process.env.HGCASH_WEBHOOK_SECRET }] : [];
 }
 
 // ============================================
@@ -3549,12 +3716,15 @@ function _fanoutSendOne(url, rawBody, headers) {
 
 app.post('/api/hgcash/webhook', async (req, res) => {
   try {
-    const secrets = _hgcashWebhookSecrets(); // #320: panel y/o SSM
-    if (secrets.length) {
+    const secretEntries = _hgcashWebhookSecretEntries(); // #194: secretos de TODAS las cuentas del panel (o SSM)
+    let matchedKey = null; // #194 cuenta por cuyo secreto entró el aviso
+    if (secretEntries.length) {
       const sigHeader = req.get('X-HG-Webhook-Signature') || '';
       const raw = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body || {});
       const provided = sigHeader.toLowerCase().startsWith('sha256=') ? sigHeader.slice(7).toLowerCase() : sigHeader.toLowerCase();
-      const okSig = secrets.some((sec) => safeCompare(crypto.createHmac('sha256', sec).update(raw, 'utf8').digest('hex'), provided));
+      const hit = secretEntries.find((e) => safeCompare(crypto.createHmac('sha256', e.secret).update(raw, 'utf8').digest('hex'), provided));
+      const okSig = !!hit;
+      if (hit) matchedKey = hit.key;
       if (!okSig) {
         // Se loguea el origen (IP, X-Forwarded-By del fan-out de otro proyecto, UA, id/monto
         // del payload) para identificar al emisor de los rechazos.
@@ -3593,7 +3763,7 @@ app.post('/api/hgcash/webhook', async (req, res) => {
 
     // Auto-capturar el accountId de NUESTRA cuenta hgcash (para los pagos salientes)
     // la primera vez que llega un movimiento, si todavía no está en la config.
-    if (p.accountId) { ensureHgcashAccountIdSaved(p.accountId).catch(() => {}); }
+    if (p.accountId) { ensureHgcashAccountIdSaved(p.accountId, matchedKey).catch(() => {}); }
 
     const amountNum = (p.amount !== undefined && p.amount !== null)
       ? (Number(String(p.amount).replace(/[^\d.-]/g, '')) || null) : null;
@@ -3604,6 +3774,7 @@ app.post('/api/hgcash/webhook', async (req, res) => {
       amount: amountNum, amountRaw: (p.amount !== undefined && p.amount !== null) ? String(p.amount) : null,
       currency: p.currency || null, direction: p.direction || null,
       status: p.status || null, type: p.type || null, accountId: p.accountId || null,
+      accountKey: matchedKey || null, // #194 cuenta hgcash (perfil del panel) por la que entró
       fromName: p.fromName || null, fromCBU: p.fromCBU || null, fromCUIT: p.fromCUIT || null,
       fromKey: _bankFromKey(p.fromName), // #152 identidad bancaria normalizada
       toName: p.toName || null, toCBU: p.toCBU || null, toCUIT: p.toCUIT || null,
@@ -3661,14 +3832,14 @@ app.get('/api/payout-receipt/:payoutId', async (req, res) => {
     if (!payout) return res.status(404).send('Comprobante no encontrado.');
     let txId = payout.hgTxId;
     if (!txId && payout.hgTransactionId) {
-      const r = await hgcashPay.getTransactionIdForRequest(payout.hgTransactionId);
+      const r = await hgcashPay.getTransactionIdForRequest(payout.hgTransactionId, _hgTokenFor(payout.hgAccountKey)); // #194
       if (r.ok && r.transactionId) {
         txId = String(r.transactionId);
         try { await PendingPayout.updateOne({ id: payout.id }, { $set: { hgTxId: txId } }); } catch (_) {}
       }
     }
     if (!txId) return res.status(404).send('El comprobante todavía no está disponible. Probá de nuevo en unos minutos.');
-    const rec = await hgcashPay.getReceiptUrl(txId);
+    const rec = await hgcashPay.getReceiptUrl(txId, _hgTokenFor(payout.hgAccountKey)); // #194
     if (!rec.ok || !rec.signedUrl) return res.status(404).send('No se pudo obtener el comprobante. Probá más tarde.');
     return res.redirect(302, rec.signedUrl);
   } catch (e) {
@@ -5621,6 +5792,36 @@ app.post('/api/auth/change-password/pending', authMiddleware, authLimiter, async
   }
 });
 
+// #193 (réplica #247 de SANTINOGANAMOS) PÁGINA DEL CASINO editable en COMANDOS → `/sys_casino_url`.
+// Vacío = la de siempre (JUGAYGANA_PLAY_URL en EB o https://www.jugaygana44.bet). En JUGAYGANA no hay
+// login automático al casino (el modal le copia usuario y clave y abre la página), así que cambia SOLO el
+// link. La PWA lo pide sin caché al abrir el modal del casino (`GET /api/config/casino-url`). Se relee al
+// arrancar, cada 60 s (las otras instancias de EB) y al guardar el comando (esta instancia, al instante).
+// 🔒 Solo el admin general lo cambia: el modal muestra la clave del cliente, un link falso se la robaría.
+const CASINO_URL_DEFAULT = 'https://www.jugaygana44.bet';
+let _casinoUrlOverride = null;
+function getCasinoPlayUrl() {
+  return (_casinoUrlOverride || process.env.JUGAYGANA_PLAY_URL || CASINO_URL_DEFAULT).replace(/\/+$/, '');
+}
+function _cleanCasinoUrl(raw) {
+  const v = String(raw || '').trim().split(/\s+/)[0] || '';
+  if (!v) return '';
+  try {
+    const u = new URL(/^https?:\/\//i.test(v) ? v : 'https://' + v);
+    if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.')) return null;
+    return u.toString().replace(/\/+$/, '');
+  } catch (_) { return null; }
+}
+async function _refreshCasinoUrl() {
+  try {
+    const cmd = await Command.findOne({ name: '/sys_casino_url', isActive: true }).lean();
+    const url = _cleanCasinoUrl(cmd && cmd.response);
+    const prev = getCasinoPlayUrl();
+    _casinoUrlOverride = url || null;
+    if (getCasinoPlayUrl() !== prev) logger.info(`[casino-url] el botón del casino ahora abre ${getCasinoPlayUrl()}`);
+  } catch (e) { logger.warn(`[casino-url] no se pudo leer /sys_casino_url: ${e.message}`); }
+}
+
 // Platform login: obtener token de JUGAYGANA para auto-login
 app.post('/api/auth/platform-login', authMiddleware, async (req, res) => {
   try {
@@ -5792,36 +5993,6 @@ app.post('/api/auth/login-otp-verify', authLimiter, async (req, res) => {
     if (adminRoles.includes(userObj.role)) {
       const adminCookieToken = jwt.sign(
         { userId: userId, username: userObj.username, role: userObj.role, tokenVersion: userObj.tokenVersion ?? 0 },
-// #193 (réplica #247 de SANTINOGANAMOS) PÁGINA DEL CASINO editable en COMANDOS → `/sys_casino_url`.
-// Vacío = la de siempre (JUGAYGANA_PLAY_URL en EB o https://www.jugaygana44.bet). En JUGAYGANA no hay
-// login automático al casino (el modal le copia usuario y clave y abre la página), así que cambia SOLO el
-// link. La PWA lo pide sin caché al abrir el modal del casino (`GET /api/config/casino-url`). Se relee al
-// arrancar, cada 60 s (las otras instancias de EB) y al guardar el comando (esta instancia, al instante).
-// 🔒 Solo el admin general lo cambia: el modal muestra la clave del cliente, un link falso se la robaría.
-const CASINO_URL_DEFAULT = 'https://www.jugaygana44.bet';
-let _casinoUrlOverride = null;
-function getCasinoPlayUrl() {
-  return (_casinoUrlOverride || process.env.JUGAYGANA_PLAY_URL || CASINO_URL_DEFAULT).replace(/\/+$/, '');
-}
-function _cleanCasinoUrl(raw) {
-  const v = String(raw || '').trim().split(/\s+/)[0] || '';
-  if (!v) return '';
-  try {
-    const u = new URL(/^https?:\/\//i.test(v) ? v : 'https://' + v);
-    if (!/^https?:$/.test(u.protocol) || !u.hostname.includes('.')) return null;
-    return u.toString().replace(/\/+$/, '');
-  } catch (_) { return null; }
-}
-async function _refreshCasinoUrl() {
-  try {
-    const cmd = await Command.findOne({ name: '/sys_casino_url', isActive: true }).lean();
-    const url = _cleanCasinoUrl(cmd && cmd.response);
-    const prev = getCasinoPlayUrl();
-    _casinoUrlOverride = url || null;
-    if (getCasinoPlayUrl() !== prev) logger.info(`[casino-url] el botón del casino ahora abre ${getCasinoPlayUrl()}`);
-  } catch (e) { logger.warn(`[casino-url] no se pudo leer /sys_casino_url: ${e.message}`); }
-}
-
         JWT_SECRET,
         { expiresIn: '8h' }
       );
@@ -11894,6 +12065,13 @@ async function initializeData() {
   // Verificar/crear comandos de sistema (mensajes automáticos editables desde COMANDOS)
   const systemCmds = [
     {
+      // #193 NO es un mensaje: a qué página manda el botón del casino (modal → Abrir Casino).
+      name: '/sys_casino_url',
+      description: 'PÁGINA DEL CASINO (no es un mensaje). Escribí SOLO la dirección a la que manda el botón Abrir Casino, por ejemplo https://www.jugaygana44.bet. Si la página cambia o deja de andar, la cambiás acá y listo (tarda hasta 1 minuto). Vacío = la de siempre. Solo el admin general la puede cambiar.',
+      type: 'info',
+      response: ''
+    },
+    {
       name: '/sys_rating_request',
       description: 'Encuesta 👍👎 que se manda al cliente después de una carga o un pago (#132). Vaciarlo = no preguntar.',
       type: 'message',
@@ -12064,13 +12242,6 @@ app.post('/api/movements/deposit', authMiddleware, depositorMiddleware, async (r
             value: parseFloat(amount),
             currency: 'ARS',
             content_name: 'deposit_self_service',
-    {
-      // #193 NO es un mensaje: a qué página manda el botón del casino (modal → Abrir Casino).
-      name: '/sys_casino_url',
-      description: 'PÁGINA DEL CASINO (no es un mensaje). Escribí SOLO la dirección a la que manda el botón Abrir Casino, por ejemplo https://www.jugaygana44.bet. Si la página cambia o deja de andar, la cambiás acá y listo (tarda hasta 1 minuto). Vacío = la de siempre. Solo el admin general la puede cambiar.',
-      type: 'info',
-      response: ''
-    },
             content_type: 'product',
             content_category: metaCapi.valueCategory(parseFloat(amount)),
             order_id: selfServiceOrderId
@@ -16230,46 +16401,167 @@ app.get('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async 
     });
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
+// #194 Validación común de token/secreto (y prueba del token contra hgcash).
+async function _hgValidateCreds(b) {
+  const token = typeof b.token === 'string' ? b.token.trim() : '';
+  const secret = typeof b.webhookSecret === 'string' ? b.webhookSecret.trim() : '';
+  if (token && (token.length < 10 || token.length > 300 || /\s/.test(token))) return { error: 'El token no parece válido' };
+  if (secret && (secret.length < 8 || secret.length > 300 || /\s/.test(secret))) return { error: 'El secreto no parece válido' };
+  if ((token || secret) && !_credKey()) return { error: 'No se puede cifrar ahora (falta JWT_SECRET). Usá SSM.', status: 503 };
+  let accounts = null, apiAccountId = null, apiName = null;
+  if (token) {
+    const t = await hgcashPay.getAccounts(token);
+    if (!t.ok) return { error: 'hgcash rechazó ese token: ' + String(t.error || '').slice(0, 160) };
+    accounts = (t.data || []).map((a) => ({ id: a.id, currency: a.currency, status: a.status, name: a.name || a.holderName || a.alias || null }));
+    const isOper = a => /operativa|operative|active/i.test(String(a.status || ''));
+    const pick = accounts.find(a => String(a.currency || '').toUpperCase() === 'ARS' && isOper(a)) || accounts.find(a => String(a.currency || '').toUpperCase() === 'ARS') || accounts.find(isOper) || accounts[0];
+    if (pick) { apiAccountId = pick.id ? String(pick.id) : null; apiName = pick.name || null; }
+  }
+  return { token, secret, accounts, apiAccountId, apiName };
+}
+// Legacy (panel viejo cacheado): escribe sobre la cuenta ACTIVA (o crea 'a1').
 app.post('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
-    const b = req.body || {};
-    const token = typeof b.token === 'string' ? b.token.trim() : '';
-    const secret = typeof b.webhookSecret === 'string' ? b.webhookSecret.trim() : '';
-    if (!token && !secret) return res.status(400).json({ error: 'Pegá el token de API y/o el secreto del webhook' });
-    if (token && (token.length < 10 || token.length > 300 || /\s/.test(token))) return res.status(400).json({ error: 'El token no parece válido' });
-    if (secret && (secret.length < 8 || secret.length > 300 || /\s/.test(secret))) return res.status(400).json({ error: 'El secreto no parece válido' });
-    if (!_credKey()) return res.status(503).json({ error: 'No se puede cifrar ahora (falta JWT_SECRET). Usá SSM.' });
-    // El token se PRUEBA contra hgcash antes de guardar: si no anda, no se pisa el que funciona.
-    let accounts = null;
-    if (token) {
-      const t = await hgcashPay.getAccounts(token);
-      if (!t.ok) return res.status(400).json({ error: 'hgcash rechazó ese token: ' + String(t.error || '').slice(0, 160) });
-      accounts = (t.data || []).map((a) => ({ id: a.id, currency: a.currency, status: a.status, name: a.name || a.holderName || a.alias || null }));
-    }
-    const prev = (await getConfig('hgcashCredentials', null)) || {};
-    const next = Object.assign({}, prev, { updatedBy: req.user.username, updatedAt: new Date() });
-    if (token) { next.tokenEnc = _credEncrypt(token); next.tokenLast4 = token.slice(-4); }
-    if (secret) { next.secretEnc = _credEncrypt(secret); next.secretLast4 = secret.slice(-4); }
-    await setConfig('hgcashCredentials', next);
-    if (token) {
-      // Cuenta nueva → el accountId cacheado es de la VIEJA: se limpia y se resuelve con el token nuevo (#53).
-      try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: null })); } catch (_) {}
-    }
-    await _loadHgcashCredentials();
-    logger.warn(`[hgcash] credenciales cambiadas desde el panel por ${req.user.username}: ${token ? 'token …' + token.slice(-4) : ''}${token && secret ? ' + ' : ''}${secret ? 'secreto …' + secret.slice(-4) : ''}`);
-    res.json({ success: true, tokenSource: hgcashPay.getTokenSource(), accounts });
+    const v = await _hgValidateCreds(req.body || {});
+    if (v.error) return res.status(v.status || 400).json({ error: v.error });
+    if (!v.token && !v.secret) return res.status(400).json({ error: 'Pegá el token de API y/o el secreto del webhook' });
+    await _hgSaveAccountsConfig((n) => {
+      let a = n.accounts.find(x => x.key === n.activeKey);
+      if (!a) { a = _hgNormStored({ key: 'a1', label: 'Cuenta 1' }); n.accounts.push(a); n.activeKey = 'a1'; }
+      if (v.token) { a.tokenEnc = _credEncrypt(v.token); a.tokenLast4 = v.token.slice(-4); a.accountId = v.apiAccountId || null; if (!a.accountName && v.apiName) a.accountName = v.apiName; }
+      if (v.secret) { a.secretEnc = _credEncrypt(v.secret); a.secretLast4 = v.secret.slice(-4); }
+      a.updatedBy = req.user.username; a.updatedAt = new Date();
+    }, req.user.username);
+    if (v.token) { try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: v.apiAccountId || null })); } catch (_) {} }
+    logger.warn(`[hgcash] credenciales (cuenta activa) cambiadas desde el panel por ${req.user.username}: ${v.token ? 'token …' + v.token.slice(-4) : ''}${v.token && v.secret ? ' + ' : ''}${v.secret ? 'secreto …' + v.secret.slice(-4) : ''}`);
+    res.json({ success: true, tokenSource: hgcashPay.getTokenSource(), accounts: v.accounts });
   } catch (e) { logger.warn(`[hgcash] credentials POST: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.delete('/api/admin/hgcash/credentials', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    await setConfig('hgcashAccounts', { accounts: [], activeKey: null, updatedBy: req.user.username, updatedAt: new Date() });
     await setConfig('hgcashCredentials', { tokenEnc: null, secretEnc: null, tokenLast4: null, secretLast4: null, updatedBy: req.user.username, updatedAt: new Date() });
     try { const cfg = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, cfg, { accountId: null })); } catch (_) {}
     await _loadHgcashCredentials();
-    logger.warn(`[hgcash] credenciales del panel BORRADAS por ${req.user.username} → vuelve a SSM`);
+    logger.warn(`[hgcash] TODAS las cuentas del panel BORRADAS por ${req.user.username} → vuelve a SSM`);
     res.json({ success: true, tokenSource: hgcashPay.getTokenSource() });
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// ============================================
+// #194 CUENTAS hgcash (hasta 3) — listar / guardar / borrar / ACTIVAR
+// ============================================
+// Ver y ACTIVAR: admin, depositor y withdrawer (el encargado rota con un botón desde 🏦 Banco).
+// Cargar o borrar credenciales: solo admin general.
+app.get('/api/admin/hgcash/accounts', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    await _loadHgcashCredentials();
+    res.json(Object.assign(_hgAccountsPayload(), { canEdit: req.user.role === 'admin' }));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/hgcash/accounts', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {};
+    const key = typeof b.key === 'string' ? b.key.trim() : '';
+    const label = String(b.label || '').trim().slice(0, 40);
+    const titular = String(b.titular || '').trim().slice(0, 120);
+    const cbu = String(b.cbu || '').replace(/\D/g, '');
+    const alias = String(b.alias || '').trim().slice(0, 60);
+    const bank = String(b.bank || '').trim().slice(0, 60);
+    if (!label) return res.status(400).json({ error: 'Poné un nombre para la cuenta (ej. "Cuenta Juan")' });
+    if (cbu && cbu.length !== 22) return res.status(400).json({ error: 'El CBU/CVU tiene que tener 22 dígitos (o dejalo vacío)' });
+    const cfg = await _hgReadAccountsConfig();
+    const cur = key ? cfg.accounts.find(a => a.key === key) : null;
+    if (key && !cur) return res.status(404).json({ error: 'Cuenta no encontrada' });
+    if (!cur && cfg.accounts.length >= HG_MAX_ACCOUNTS) return res.status(400).json({ error: `Máximo ${HG_MAX_ACCOUNTS} cuentas: borrá una para agregar otra` });
+    const v = await _hgValidateCreds(b);
+    if (v.error) return res.status(v.status || 400).json({ error: v.error });
+    if (!cur && !v.token) return res.status(400).json({ error: 'Una cuenta nueva necesita el token de API (cash_…)' });
+    const warnings = [];
+    if (!v.secret && !(cur && cur.secretEnc)) warnings.push('Sin secreto del webhook, los avisos de esta cuenta se RECHAZAN: las cargas por esta cuenta no entran solas. Cargalo cuando lo tengas.');
+    let newKey = key;
+    const next = await _hgSaveAccountsConfig((n) => {
+      let a = key ? n.accounts.find(x => x.key === key) : null;
+      if (!a) {
+        newKey = ['a1', 'a2', 'a3', 'a4', 'a5'].find(k => !n.accounts.some(x => x.key === k));
+        a = _hgNormStored({ key: newKey }); n.accounts.push(a);
+        if (!n.activeKey) n.activeKey = newKey;
+      }
+      a.label = label; a.titular = titular; a.cbu = cbu; a.alias = alias; a.bank = bank;
+      a.accountName = String(b.accountName || '').trim().slice(0, 120) || titular || a.accountName || v.apiName || '';
+      if (v.token) { a.tokenEnc = _credEncrypt(v.token); a.tokenLast4 = v.token.slice(-4); a.accountId = v.apiAccountId || a.accountId || null; }
+      if (v.secret) { a.secretEnc = _credEncrypt(v.secret); a.secretLast4 = v.secret.slice(-4); }
+      a.updatedBy = req.user.username; a.updatedAt = new Date();
+    }, req.user.username);
+    const saved = next.accounts.find(x => x.key === newKey);
+    if (next.activeKey === newKey) warnings.push(...await _hgApplyActiveToConfigs(saved)); // la activa manda sobre el CBU del cliente y el matcheo
+    logger.warn(`[hgcash] #194 cuenta "${label}" (${newKey}) ${cur ? 'editada' : 'creada'} por ${req.user.username}${v.token ? ' token …' + v.token.slice(-4) : ''}${v.secret ? ' secreto …' + v.secret.slice(-4) : ''}`);
+    res.json(Object.assign({ success: true, key: newKey, apiAccounts: v.accounts, warnings }, _hgAccountsPayload(), { canEdit: true }));
+  } catch (e) { logger.warn(`[hgcash] accounts POST: ${e.message}`); res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.delete('/api/admin/hgcash/accounts/:key', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const key = String(req.params.key || '');
+    const cfg = await _hgReadAccountsConfig();
+    if (!cfg.accounts.some(a => a.key === key)) return res.status(404).json({ error: 'Cuenta no encontrada' });
+    if (cfg.activeKey === key && cfg.accounts.length > 1) return res.status(400).json({ error: 'Esa cuenta está ACTIVA: activá otra antes de borrarla' });
+    await _hgSaveAccountsConfig((n) => {
+      n.accounts = n.accounts.filter(a => a.key !== key);
+      if (n.activeKey === key) n.activeKey = n.accounts[0] ? n.accounts[0].key : null;
+    }, req.user.username);
+    if (!_hgAccounts.length) { try { const c = await getHgcashConfig(); await setConfig('hgcash', Object.assign({}, c, { accountId: null })); } catch (_) {} }
+    logger.warn(`[hgcash] #194 cuenta ${key} BORRADA por ${req.user.username}${_hgAccounts.length ? '' : ' → sin cuentas en el panel, vuelve a SSM'}`);
+    res.json(Object.assign({ success: true }, _hgAccountsPayload(), { canEdit: true }));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// #194 Modo de cargas automáticas: 'all' (todas las cuentas cargadas) | 'active' (solo la en uso).
+app.post('/api/admin/hgcash/accounts/incoming-mode', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const mode = _hgNormIncomingMode(req.body && req.body.mode);
+    await _hgSaveAccountsConfig((n) => { n.incomingMode = mode; }, req.user.username);
+    const warnings = [];
+    if (!_hgAccounts.some(_hgAccountReceives)) warnings.push('Con esto NINGUNA cuenta recibe cargas automáticas (la cuenta en uso está pausada). Todas las transferencias van a la bandeja para asignar a mano.');
+    logger.warn(`[hgcash] #194 cargas automáticas: ${mode === 'active' ? 'SOLO la cuenta en uso' : 'por TODAS las cuentas'} (${req.user.username})`);
+    res.json(Object.assign({ success: true, warnings }, _hgAccountsPayload(), { canEdit: req.user.role === 'admin' }));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+// #194 Pausar / reanudar las cargas automáticas de UNA cuenta (sus transferencias quedan en la bandeja).
+app.post('/api/admin/hgcash/accounts/:key/incoming', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const key = String(req.params.key || '');
+    const enabled = !(req.body && (req.body.enabled === false || req.body.enabled === 'false'));
+    await _hgSaveAccountsConfig((n) => {
+      const a = n.accounts.find(x => x.key === key);
+      if (!a) throw Object.assign(new Error('Cuenta no encontrada'), { status: 404 });
+      a.incomingEnabled = enabled;
+    }, req.user.username);
+    const a = _hgAccountByKey(key);
+    const warnings = [];
+    if (!_hgAccounts.some(_hgAccountReceives)) warnings.push('Con esto NINGUNA cuenta recibe cargas automáticas. Todas las transferencias van a la bandeja para asignar a mano.');
+    logger.warn(`[hgcash] #194 cuenta "${_hgAccountLabel(a)}" (${key}): cargas automáticas ${enabled ? 'REANUDADAS' : 'PAUSADAS'} (${req.user.username})`);
+    res.json(Object.assign({ success: true, warnings, label: _hgAccountLabel(a) }, _hgAccountsPayload(), { canEdit: req.user.role === 'admin' }));
+  } catch (e) {
+    if (e && e.status === 404) return res.status(404).json({ error: 'Cuenta no encontrada' });
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+app.post('/api/admin/hgcash/accounts/:key/activate', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const key = String(req.params.key || '');
+    const r = await _hgActivateAccount(key, req.user.username);
+    if (!r.account.tokenEnc) r.warnings.push('Esta cuenta no tiene token de API: los retiros automáticos y el saldo no van a andar hasta cargarlo.');
+    res.json(Object.assign({ success: true, warnings: r.warnings, label: _hgAccountLabel(r.account) }, _hgAccountsPayload(), { canEdit: req.user.role === 'admin' }));
+  } catch (e) {
+    if (e && e.status === 404) return res.status(404).json({ error: 'Cuenta no encontrada' });
+    logger.warn(`[hgcash] activate: ${e.message}`); res.status(500).json({ error: 'Error del servidor' });
+  }
 });
 // #326 Reenvío (fan-out) de los avisos de hgcash a otras páginas — desde el panel.
 async function _hgcashFanoutPayload() {
@@ -16427,6 +16719,7 @@ app.get('/api/admin/hgcash/movements', authMiddleware, adminMiddleware, async (r
       }
     } catch (e) { logger.warn(`[hgcash] enriquecer movimientos salientes: ${e.message}`); }
 
+    for (const m of movements) { if (m.provider !== 'finpro') m.hgAccount = _hgAccountLabelFor(m); } // #194
     res.json({ movements, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit) });
   } catch (error) {
     console.error('Error obteniendo movimientos hgcash:', error);
@@ -16500,6 +16793,7 @@ function _bankCanSweep(req) { return ['admin', 'withdrawer'].includes(req.user &
 
 // Enriquecer salientes con el usuario del pago / etiqueta de la bajada.
 async function _bankEnrichMovements(movements) {
+  for (const m of movements) { if (m.provider !== 'finpro') m.hgAccount = _hgAccountLabelFor(m); } // #194
   try {
     const out = movements.filter(m => m.direction === 'Outbound');
     const extIds = out.map(m => m.externalId).filter(e => e && !/^sweep-/.test(e));
@@ -16843,6 +17137,8 @@ app.post('/api/admin/bank/sweeps', authMiddleware, adminMiddleware, async (req, 
       if (!toCUIT && d.cuit) toCUIT = String(d.cuit).replace(/\D/g, '').slice(0, 11);
     }
     if (toCBU.length !== 22) return res.status(400).json({ error: 'CBU/CVU destino inválido (22 dígitos)' });
+    await _loadHgcashCredentials(); // #194 cuenta ACTIVA fresca (el cambio desde otra instancia aplica al instante)
+    const _hgKeySweep = _hgActiveKey;
     const accountId = await resolveHgcashAccountId();
     if (!accountId) return res.status(503).json({ error: 'No se pudo resolver la cuenta hgcash' });
     let balanceBefore = null;
@@ -16852,7 +17148,8 @@ app.post('/api/admin/bank/sweeps', authMiddleware, adminMiddleware, async (req, 
     const sweep = await BankSweep.create({
       id: uuidv4(), amount, toCBU, toName: toName || null, toCUIT, alias, destLabel,
       concept: `Bajada ${destLabel || toName || ''}`.trim().slice(0, 120), note: String(b.note || '').trim().slice(0, 300) || null,
-      requestedBy: req.user.username, requestedByRole: req.user.role, status: 'pending', accountId: String(accountId), balanceBefore
+      requestedBy: req.user.username, requestedByRole: req.user.role, status: 'pending', accountId: String(accountId), balanceBefore,
+      hgAccountKey: _hgKeySweep // #194
     });
     const webhookUrl = `${req.protocol}://${req.get('host')}/api/hgcash/webhook`;
     let result = await hgcashPay.createCashOut({ accountId, amount, toCBU, toName: toName || undefined, toCUIT: toCUIT || undefined, concept: sweep.concept, externalID: `sweep-${sweep.id}`, webhookUrl });
@@ -16896,7 +17193,7 @@ app.post('/api/admin/bank/sweeps/:id/sync', authMiddleware, adminMiddleware, asy
     const sw = await BankSweep.findOne({ id: String(req.params.id) }).lean();
     if (!sw) return res.status(404).json({ error: 'Bajada no encontrada' });
     if (!sw.hgRequestId) return res.status(400).json({ error: 'Esta bajada no tiene request en hgcash' });
-    const st = await hgcashPay.getTransactionStatus(sw.hgRequestId);
+    const st = await hgcashPay.getTransactionStatus(sw.hgRequestId, _hgTokenFor(sw.hgAccountKey)); // #194
     if (!st.ok) return res.status(502).json({ error: 'hgcash no respondió: ' + (st.error || '') });
     await _handleSweepStatusWebhook({ externalID: `sweep-${sw.id}`, id: sw.hgRequestId, status: st.status }, sw.id);
     res.json({ success: true, sweep: await BankSweep.findOne({ id: sw.id }).lean() });
@@ -17258,11 +17555,19 @@ async function resolveHgcashAccountId({ force = false } = {}) {
             await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(pick.id) }));
             logger.info(`[hgcash] accountId resuelto vía API: ${pick.id} (${pick.currency || '?'}/${pick.status || '?'})`);
           }
+          // #194 también en el perfil activo (así los movimientos se etiquetan con su cuenta).
+          const _act = _hgActiveAccount();
+          if (_act && String(_act.accountId || '') !== String(pick.id)) {
+            const _k = _act.key;
+            _hgSaveAccountsConfig((n) => { const x = n.accounts.find(z => z.key === _k); if (x) x.accountId = String(pick.id); }, 'api').catch(() => {});
+          }
           return String(pick.id);
         }
       }
     } catch (_) {}
-    // 2) Fallback: lo cacheado (salvo que estemos forzando un refresh tras 403).
+    // 2) Fallback: lo cacheado en el perfil activo (#194) o en la config (salvo refresh forzado tras 403).
+    const _actAcc = _hgActiveAccount();
+    if (!force && _actAcc && _actAcc.accountId) return _actAcc.accountId;
     if (!force && cfg.accountId) return cfg.accountId;
     // 3) Fallback: último movimiento conocido.
     const mov = await BankMovement.findOne({ accountId: { $ne: null } }).sort({ createdAt: -1 }).select('accountId').lean();
@@ -17420,6 +17725,8 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
     }
 
+    await _loadHgcashCredentials(); // #194 cuenta ACTIVA fresca (el cambio desde otra instancia aplica al instante)
+    const _hgKeyPay = _hgActiveKey;
     let accountId = await resolveHgcashAccountId();
     if (!accountId) return res.status(400).json({ error: 'No se pudo determinar la cuenta hgcash a debitar (accountId).' });
 
@@ -17507,6 +17814,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       $set: {
         hgTransactionId: hgId || null,
         hgStatus,
+        hgAccountKey: _hgKeyPay || null, // #194 cuenta que pagó → su token consulta estado/recibo aunque se rote
         paidVia: 'hgcash',
         status: isDone ? 'paid' : 'paying',
         paidAt: isDone ? new Date() : null
@@ -17749,7 +18057,7 @@ app.post('/api/admin/payouts/:id/sync', authMiddleware, withdrawerMiddleware, as
     const payout = await PendingPayout.findOne({ id: req.params.id }).lean();
     if (!payout) return res.status(404).json({ error: 'Pago no encontrado.' });
     if (!payout.hgTransactionId) return res.status(400).json({ error: 'Este pago no tiene transacción hgcash para consultar.' });
-    const st = await hgcashPay.getTransactionStatus(payout.hgTransactionId);
+    const st = await hgcashPay.getTransactionStatus(payout.hgTransactionId, _hgTokenFor(payout.hgAccountKey)); // #194
     if (!st.ok || !st.status) return res.status(502).json({ error: 'No se pudo consultar el estado en hgcash: ' + (st.error || 's/estado') });
     // Reusa el mapeo del webhook (DONE→paid + aviso + comprobante; ERROR/CANCELLED→failed).
     await handlePayoutStatusWebhook({ externalID: payout.id, id: payout.hgTransactionId, status: st.status });
@@ -17782,7 +18090,7 @@ app.post('/api/admin/payouts/cleanup-old', authMiddleware, withdrawerMiddleware,
       // Si tiene transacción hgcash y ya está DONE, lo dejamos como 'paid' (más fiel) en vez de descartado.
       if (enabled && p.hgTransactionId) {
         try {
-          const st = await hgcashPay.getTransactionStatus(p.hgTransactionId);
+          const st = await hgcashPay.getTransactionStatus(p.hgTransactionId, _hgTokenFor(p.hgAccountKey)); // #194 token de la cuenta que pagó
           const S = (st.ok && st.status) ? String(st.status).toUpperCase() : null;
           if (S === 'DONE') { set = { status: 'paid', hgStatus: 'DONE', paidAt: p.paidAt || new Date(), receiptSentAt: p.receiptSentAt || new Date() }; }
         } catch (_) {}
@@ -18021,6 +18329,13 @@ app.post('/api/admin/commands', authMiddleware, adminMiddleware, async (req, res
     if (!name || !name.startsWith('/')) {
       return res.status(400).json({ error: 'El comando debe empezar con /' });
     }
+    // #193 página del casino: solo el admin general y tiene que ser una dirección web válida (vacía = la de siempre).
+    if (name === '/sys_casino_url') {
+      if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador general puede cambiar la página del casino.' });
+      if (String(response || '').trim() && !_cleanCasinoUrl(response)) {
+        return res.status(400).json({ error: 'Poné sólo la dirección de la página del casino, por ejemplo https://www.jugaygana44.bet' });
+      }
+    }
     
     await Command.findOneAndUpdate(
       { name },
@@ -18034,6 +18349,7 @@ app.post('/api/admin/commands', authMiddleware, adminMiddleware, async (req, res
       { upsert: true, new: true }
     );
     
+    if (name === '/sys_casino_url') await _refreshCasinoUrl(); // #193 esta instancia, al instante
     res.json({ success: true, message: 'Comando guardado correctamente' });
   } catch (error) {
     console.error('Error guardando comando:', error);
@@ -18329,13 +18645,6 @@ app.get('/api/admin/roulette/budget', authMiddleware, adminMiddleware, async (re
       winnersToday,
       dateKey
     });
-    // #193 página del casino: solo el admin general y tiene que ser una dirección web válida (vacía = la de siempre).
-    if (name === '/sys_casino_url') {
-      if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo el administrador general puede cambiar la página del casino.' });
-      if (String(response || '').trim() && !_cleanCasinoUrl(response)) {
-        return res.status(400).json({ error: 'Poné sólo la dirección de la página del casino, por ejemplo https://www.jugaygana44.bet' });
-      }
-    }
   } catch (err) {
     logger.error(`/api/admin/roulette/budget: ${err.message}`);
     res.status(500).json({ error: 'Error del servidor' });
@@ -18349,7 +18658,6 @@ app.put('/api/admin/roulette/budget', authMiddleware, adminMiddleware, async (re
     const budget = Math.max(0, Math.round(Number(dailyBudgetARS) || 0));
     const value = {
       enabled: enabled !== false,
-    if (name === '/sys_casino_url') await _refreshCasinoUrl(); // #193 esta instancia, al instante
       dailyBudgetARS: budget,
       updatedAt: new Date()
     };
@@ -19155,7 +19463,7 @@ async function _pollPayingPayouts() {
     for (const p of paying) {
       if (!p.hgTransactionId) continue;
       try {
-        const st = await hgcashPay.getTransactionStatus(p.hgTransactionId);
+        const st = await hgcashPay.getTransactionStatus(p.hgTransactionId, _hgTokenFor(p.hgAccountKey)); // #194 token de la cuenta que pagó
         if (st.ok && st.status) {
           await handlePayoutStatusWebhook({ externalID: p.id, id: p.hgTransactionId, status: st.status });
         }
@@ -22086,6 +22394,12 @@ app.post('/api/admin/community', authMiddleware, adminMiddleware, async (req, re
 // Mensaje fijo con el que abre el chat de WhatsApp de soporte.
 const SOPORTE_WA_MENSAJE = 'Vengo de AUTOREEMBOLSOS necesito ayuda';
 
+// #193 página del casino (pública: la PWA la pide al abrir el modal del casino).
+app.get('/api/config/casino-url', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ success: true, url: getCasinoPlayUrl() });
+});
+
 app.get('/api/config/soporte-vip', async (req, res) => {
   try {
     const c = (await getConfig('soporteVipTelegram')) || {};
@@ -22394,12 +22708,6 @@ app.get('/api/admin/encuesta/reportes', authMiddleware, adminMiddleware, async (
 // Los topes se fuerzan acá (merge) Y en inactividadService (defensa en profundidad).
 const REFUND_INACT_MAX_PCT = 30;       // tope de % de bono
 const REFUND_INACT_MAX_VIG_HORAS = 2;  // tope de vigencia (horas)
-// #193 página del casino (pública: la PWA la pide al abrir el modal del casino).
-app.get('/api/config/casino-url', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.json({ success: true, url: getCasinoPlayUrl() });
-});
-
 const REGALO_TA_MAX_ARS = 3000;        // tope del regalo de reactivación ticket alto
 const INACTIVIDAD_DEFAULTS = {
   isActive: false,
@@ -22633,6 +22941,7 @@ app.use(errorHandler);
 if (process.env.VERCEL) {
   initializeData().then(() => {
     logger.info('Data initialized for Vercel');
+    _refreshCasinoUrl(); // #193
     // Worker periódico que reprocesa la cola de webhooks a fb-ads.
     fbAdsWebhook.startWorker();
   });
@@ -22667,6 +22976,8 @@ if (process.env.VERCEL) {
     }
 
     await initializeData();
+    await _refreshCasinoUrl(); // #193 página del casino desde COMANDOS
+    setInterval(() => { _refreshCasinoUrl(); }, 60 * 1000);
     await setupRedisAdapter();
     // Worker periódico que reprocesa la cola de webhooks a fb-ads.
     fbAdsWebhook.startWorker();
@@ -22693,6 +23004,4 @@ if (process.env.VERCEL) {
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
   })();
-}    _refreshCasinoUrl(); // #193
-    await _refreshCasinoUrl(); // #193 página del casino desde COMANDOS
-    setInterval(() => { _refreshCasinoUrl(); }, 60 * 1000);
+}

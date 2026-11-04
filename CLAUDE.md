@@ -70,6 +70,10 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
 
 ## Cosas que NO hay que romper (gotchas)
 
+- **Página del casino (#193):** se cambia en COMANDOS → `/sys_casino_url` (solo admin general; vacío = jugaygana44.bet). La PWA la pide en
+  `GET /api/config/casino-url`. JUGAYGANA no tiene login automático al casino: solo cambia el link. Usar `getCasinoPlayUrl()`, nunca el
+  dominio fijo. Test: `node scripts/test-casino-url.js`.
+
 - **JWT_SECRET y otros secrets** se cargan desde AWS SSM en el bootstrap async, NO al
   `require()`. Por eso hay lazy getters en `src/middlewares/auth.js` y rutas.
 - **JUGAYGANA es flaky** (Cloudflare → responde HTML). Hay auto-retry + manejo de HTML
@@ -87,6 +91,16 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   SSM. Toda llamada a hgcash usa `hgcashPay.getToken()`, nunca `process.env` directo; el
   webhook valida con `_hgcashWebhookSecrets()` (panel y/o SSM). Destinos del reenvío de
   webhooks también desde el panel (`Config['hgcashFanout']`).
+- **Cuentas hgcash (hasta 3, #194 — réplica #223/#223b de CARGASGIROXactivo):** hasta 3 cuentas cargadas desde el
+  panel (cifradas en `Config['hgcashAccounts']` con clave derivada de JWT_SECRET; panel > SSM; lo de una sola cuenta de antes se
+  migra solo a `a1`) y UNA activa que se rota con el botón "USAR ESTA" (card "🏦 Cuentas hgcash" de Comandos → Banco automático; también la barra de 🏦 Banco;
+  la pueden tocar admin/depositor/withdrawer). La activa paga y es lo que ve el cliente (al activar se reescribe `Config['cbu']`);
+  **las cargas entran por TODAS** (el webhook acepta cualquiera de los secretos y etiqueta `BankMovement.accountKey`) salvo que el
+  panel diga "solo la en uso" o pause una cuenta (`incomingMode` / `incomingEnabled` → `_hgAccountReceives`; lo pausado queda en la bandeja,
+  no se carga solo — todo matcheo automático nuevo tiene que respetar `_hgMovementAutoOff(m)`). Un pago recuerda su cuenta
+  (`hgAccountKey`): toda consulta nueva a hgcash sobre un pago existente tiene que pasar `_hgTokenFor(x.hgAccountKey)`, y todo
+  flujo nuevo que pague tiene que guardar `hgAccountKey: _hgActiveKey`. No volver a leer `process.env.HGCASH_API_TOKEN` directo:
+  usar `hgcashPay.getToken()` / `_hgcashWebhookSecretEntries()`.
 - **Config sensible desde el panel:** sección "🔐 Config privada" (clave propia hasheada
   en `Config['privateconfigpass']`; hoy: IA de comprobantes en `Config['aiconfig']`,
   prioridad panel > env/SSM > default; SMS Masivo usa esa misma clave). Para una

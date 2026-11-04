@@ -99,6 +99,10 @@
                     <span class="icon icon-terminal"></span>
                     <span>Comandos</span>
                 </a>
+                <a href="#" class="nav-item nav-item-banks-config" data-section="banksConfig" style="display:none" title="Cuentas hgcash, por dónde entran las cargas y salen los retiros, CBU del cliente, movimientos">
+                    <span>🏛️</span>
+                    <span>Bancos configuración</span>
+                </a>
                 <a href="#" class="nav-item" data-section="datos">
                     <span class="icon icon-chart"></span>
                     <span>Datos</span>
@@ -541,7 +545,7 @@
 
             <section id="commandsSection" class="section">
                 <div class="panel-header">
-                    <h2><span class="icon icon-terminal"></span> Comandos y Configuración CBU</h2>
+                    <h2><span class="icon icon-terminal"></span> Comandos y Configuración</h2>
                 </div>
                 <div class="commands-layout">
                     <div class="commands-panel">
@@ -556,30 +560,6 @@
                         </div>
                     </div>
                     <div class="cbu-panel">
-                        <div class="panel-subheader">
-                            <h3>Configuración CBU</h3>
-                        </div>
-                        <div class="cbu-form">
-                            <div class="form-group">
-                                <label>Banco:</label>
-                                <input type="text" id="cbuBank" placeholder="Ej: Banco Nación">
-                            </div>
-                            <div class="form-group">
-                                <label>Titular:</label>
-                                <input type="text" id="cbuTitular" placeholder="Nombre del titular">
-                            </div>
-                            <div class="form-group">
-                                <label>CBU:</label>
-                                <input type="text" id="cbuNumber" placeholder="22 dígitos del CBU">
-                            </div>
-                            <div class="form-group">
-                                <label>Alias:</label>
-                                <input type="text" id="cbuAlias" placeholder="Alias del CBU">
-                            </div>
-                            <button class="btn-primary" onclick="saveCBUConfig()">
-                                <span class="icon icon-save"></span> Guardar CBU
-                            </button>
-                        </div>
                         <!-- SOPORTE de Telegram: uno solo para TODOS los equipos.
                              Los CANALES ya no se cargan acá: viven en la card
                              "👥 Equipos" (uno por equipo + el general), así hay un
@@ -946,6 +926,195 @@
                             <div id="hgcashMovPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:10px;"></div>
                         </div>
                     </div>
+                </div>
+            </section>
+
+            <!-- #195 BANCOS — CONFIGURACIÓN (réplica del #224 de CARGASGIROXactivo): todo lo de bancos salió de COMANDOS a su propia
+                 sección (owner 2026-11-04). Mismos ids/funciones de siempre (CBU del cliente, hgcash, cuentas hgcash, fan-out, movimientos). -->
+            <section id="banksConfigSection" class="section">
+                <div class="panel-header">
+                    <h2>🏛️ Bancos — Configuración</h2>
+                </div>
+                <div class="cbu-panel" id="banksConfigPanel">
+                    <div class="panel-subheader">
+                        <h3>💳 Datos de pago que ve el cliente (CBU)</h3>
+                    </div>
+                    <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">Es lo que la app muestra para transferir. Con cuentas hgcash cargadas, al tocar <b>USAR ESTA</b> se completa solo con el titular/CBU/alias de esa cuenta (#194).</p>
+                        <div class="cbu-form">
+                            <div class="form-group">
+                                <label>Banco:</label>
+                                <input type="text" id="cbuBank" placeholder="Ej: Banco Nación">
+                            </div>
+                            <div class="form-group">
+                                <label>Titular:</label>
+                                <input type="text" id="cbuTitular" placeholder="Nombre del titular">
+                            </div>
+                            <div class="form-group">
+                                <label>CBU:</label>
+                                <input type="text" id="cbuNumber" placeholder="22 dígitos del CBU">
+                            </div>
+                            <div class="form-group">
+                                <label>Alias:</label>
+                                <input type="text" id="cbuAlias" placeholder="Alias del CBU">
+                            </div>
+                            <button class="btn-primary" onclick="saveCBUConfig()">
+                                <span class="icon icon-save"></span> Guardar CBU
+                            </button>
+                        </div>
+                        <!-- Banco automático (hgcash / Urbana) -->
+                        <div class="panel-subheader" style="margin-top: 24px;">
+                            <h3>🏦 Banco automático (hgcash)</h3>
+                        </div>
+                        <div class="cbu-form" id="hgcashConfigForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;">
+                                Carga automática cuando un cliente transfiere al CBU de hgcash y manda el comprobante por el chat.
+                                Matchea por <b>monto + CBU de origen + tiempo</b>. Empezá en <b>modo sombra</b> (detecta y avisa sin cargar)
+                                y pasá a <b>auto</b> cuando confíes.
+                            </p>
+                            <div id="hgcashStatusLine" style="font-size:12px;margin-bottom:10px;color:#aaa;"></div>
+                            <div class="form-group">
+                                <label>Nombre de tu cuenta hgcash (el titular que recibe):</label>
+                                <input type="text" id="hgcashAccountName" placeholder="Ej: DAPA BERGER EUGENIA SOLEDAD" style="width:100%;">
+                                <small style="color:#aaa;font-size:11px;">Es el "Para/toName" que figura en los comprobantes. Se usa para confirmar que la transferencia fue a tu cuenta (hgcash no manda CBU).</small>
+                            </div>
+                            <div class="form-group">
+                                <label>CBU de tu cuenta hgcash (opcional):</label>
+                                <input type="text" id="hgcashCbu" placeholder="CBU de destino (si el comprobante lo muestra)" style="width:100%;">
+                            </div>
+                            <div class="form-group">
+                                <label>Modo:</label>
+                                <select id="hgcashMode" style="width:100%;">
+                                    <option value="shadow">Sombra (detecta y avisa, NO carga)</option>
+                                    <option value="auto">Auto (carga sola con match exacto)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Ventana de match (minutos):</label>
+                                <input type="number" id="hgcashWindow" min="1" max="1440" value="60" style="width:100%;">
+                            </div>
+                            <div class="form-group">
+                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                    <input type="checkbox" id="hgcashEnabled" style="width:auto;"> Activar integración (apagado = no hace nada)
+                                </label>
+                            </div>
+                            <button class="btn-primary" onclick="saveHgcashConfig()">
+                                <span class="icon icon-save"></span> Guardar banco automático
+                            </button>
+
+                            <!-- #194 Cuentas hgcash (hasta 3) + cuenta ACTIVA rotable con un botón (antes: una sola cuenta) -->
+                            <div id="hgcashCredBox" style="margin-top:18px;padding:14px;border:1px solid rgba(212,175,55,0.45);border-radius:10px;background:rgba(212,175,55,0.05);">
+                                <h4 style="margin:0 0 6px;color:#d4af37;font-size:14px;">🏦 Cuentas hgcash (hasta 3) — rotación con un botón</h4>
+                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                    Cargá hasta <b>3 cuentas hgcash</b> (token de API <code>cash_…</code>, secreto del webhook y los datos de pago que ve el cliente).
+                                    La cuenta <b>ACTIVA</b> paga los retiros y las bajadas, responde el saldo y su titular/CBU/alias es lo que ve el cliente.
+                                    <b>Las cargas entran por CUALQUIERA de las cuentas cargadas</b> (si un cliente transfiere a la anterior, se acredita igual).
+                                    El botón <b>USAR ESTA</b> rota al instante; también está en 🏦 Banco para el encargado. Todo se guarda cifrado.
+                                    En cada cuenta de hgcash, configurá el webhook a: <code id="hgcashCredWebhookUrl">…</code>
+                                </p>
+                                <div id="hgcashCredStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
+                                <!-- #194 modo de cargas automáticas -->
+                                <div id="hgAccModeBox" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.2);font-size:12px;">
+                                    <span>⚡ Cargas automáticas:</span>
+                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="hgAccMode" value="all" style="width:auto;" onchange="setHgcashIncomingMode('all')"> por <b>todas</b> las cuentas cargadas</label>
+                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="hgAccMode" value="active" style="width:auto;" onchange="setHgcashIncomingMode('active')"> <b>solo</b> por la cuenta en uso</label>
+                                    <small style="color:#888;">Lo que no se carga solo queda en la bandeja de 🏦 Banco para asignar a mano.</small>
+                                </div>
+                                <div id="hgAccList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;"></div>
+                                <div id="hgAccForm" style="display:none;padding:12px;border:1px dashed rgba(212,175,55,0.5);border-radius:8px;margin-bottom:10px;">
+                                    <h5 id="hgAccFormTitle" style="margin:0 0 8px;color:#d4af37;font-size:13px;">➕ Cuenta nueva</h5>
+                                    <input type="hidden" id="hgAccKey" value="">
+                                    <div class="form-group"><label>Nombre de la cuenta (para reconocerla):</label><input type="text" id="hgAccLabel" placeholder="Ej. Cuenta Juan" maxlength="40" style="width:100%;"></div>
+                                    <div class="form-group"><label>Token de API (cash_…):</label><input type="password" id="hgAccToken" placeholder="(obligatorio en una cuenta nueva; vacío = no cambiarlo)" autocomplete="off" style="width:100%;"></div>
+                                    <div class="form-group"><label>Secreto del webhook:</label><input type="password" id="hgAccSecret" placeholder="(vacío = no cambiarlo)" autocomplete="off" style="width:100%;"><small style="color:#aaa;font-size:11px;">Sin secreto, los avisos de esa cuenta se rechazan y las cargas no entran solas.</small></div>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                        <div class="form-group"><label>Titular (lo ve el cliente):</label><input type="text" id="hgAccTitular" maxlength="120" style="width:100%;"></div>
+                                        <div class="form-group"><label>Banco / billetera:</label><input type="text" id="hgAccBank" maxlength="60" placeholder="Ej. hgcash" style="width:100%;"></div>
+                                        <div class="form-group"><label>CBU/CVU (22 dígitos):</label><input type="text" id="hgAccCbu" maxlength="22" inputmode="numeric" style="width:100%;"></div>
+                                        <div class="form-group"><label>Alias:</label><input type="text" id="hgAccAlias" maxlength="60" style="width:100%;"></div>
+                                    </div>
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                        <button class="btn-primary" onclick="saveHgcashAccount()">🔐 Probar y guardar</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="hgAccCancel()">Cancelar</button>
+                                    </div>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button class="btn btn-secondary btn-sm" id="hgAccAddBtn" onclick="hgAccNew()">➕ Agregar cuenta</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashCredentials()" title="Borra TODAS las cuentas cargadas acá y vuelve a usar el token/secreto de AWS (SSM)">↩️ Borrar todas y volver a AWS (SSM)</button>
+                                    <span id="hgcashCredMsg" style="font-size:12px;color:#aaa;"></span>
+                                </div>
+                            </div>
+
+                            <!-- #326 Reenvío de los avisos de hgcash a otras páginas (misma cuenta hgcash) -->
+                            <div id="hgcashFanoutBox" style="margin-top:18px;padding:14px;border:1px solid rgba(83,189,235,0.45);border-radius:10px;background:rgba(83,189,235,0.05);">
+                                <h4 style="margin:0 0 6px;color:#53bdeb;font-size:14px;">🔁 Reenviar los avisos de hgcash a otras páginas</h4>
+                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                    hgcash permite <b>UNA sola dirección de webhook por cuenta</b>. Si varias páginas comparten la misma cuenta
+                                    hgcash, la página que tiene esa dirección cargada en hgcash le <b>reenvía cada aviso</b> a las demás, y cada una
+                                    carga solo las transferencias de <b>sus</b> clientes (por el comprobante). Poné acá la dirección del webhook de
+                                    cada una de las <b>otras</b> páginas, una por línea (máx. 5). Requisitos en la otra página: el <b>mismo secreto
+                                    del webhook</b> de esta cuenta hgcash y el banco automático activado. Una página que recibe avisos reenviados no
+                                    los vuelve a reenviar (no hay círculos).
+                                </p>
+                                <div id="hgcashFanoutStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
+                                <div class="form-group">
+                                    <label>Direcciones de las otras páginas (una por línea):</label>
+                                    <textarea id="hgcashFanoutUrls" rows="3" placeholder="https://otrapagina.com/api/hgcash/webhook" spellcheck="false" autocomplete="off" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+                                    <small style="color:#aaa;font-size:11px;">La dirección de ESTA página, para cargarla en la otra (o en hgcash): <code id="hgcashFanoutOwnUrl">…</code></small>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button class="btn-primary" onclick="saveHgcashFanout()">💾 Guardar reenvío</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashFanout()" title="Borra lo cargado acá y vuelve a usar HGCASH_FANOUT_URL de AWS (SSM)">↩️ Volver a usar AWS (SSM)</button>
+                                    <span id="hgcashFanoutMsg" style="font-size:12px;color:#aaa;"></span>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Movimientos del banco automático (hgcash) -->
+                        <div id="hgcashMovementsPanel">
+                            <div class="panel-subheader" style="margin-top: 24px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                                <h3 style="margin:0;">🏦 Movimientos del banco</h3>
+                                <select id="hgcashMovFilter" onchange="loadHgcashMovements(1)" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 9px;border-radius:6px;font-size:12px;">
+                                    <option value="">Todos</option>
+                                    <option value="pending">Pendientes (sin match)</option>
+                                    <option value="needs_review">⚠️ Revisar (posible duplicado)</option>
+                                    <option value="shadow_matched">Match (sombra)</option>
+                                    <option value="auto_charged">Cargados (auto)</option>
+                                    <option value="manual_charged">Cargados (manual)</option>
+                                    <option value="duplicate">Duplicados (no cargados)</option>
+                                    <option value="error">Con error</option>
+                                    <option value="ignored">Ignorados (salientes)</option>
+                                </select>
+                                <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
+                                <button class="btn btn-sm" onclick="cleanupOldPayouts()" title="Resolver y ocultar los pagos viejos colgados (en proceso/fallidos de hace más de 2h)" style="margin-left:auto;background:#7a1010;color:#fff;border:none;border-radius:6px;padding:6px 11px;font-size:12px;cursor:pointer;">🧹 Limpiar pagos viejos colgados</button>
+                            </div>
+                            <div id="hgcashBalanceBox" style="margin:10px 0;padding:10px 14px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:13px;color:#dfe;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+                                <span style="opacity:.8;">💰 Saldo hgcash:</span>
+                                <span id="hgcashBalanceVal" style="font-weight:700;">cargando…</span>
+                                <button class="btn btn-secondary btn-sm" onclick="loadHgcashBalance()" title="Actualizar saldo">🔄</button>
+                                <span id="hgcashLiveDot" style="margin-left:auto;font-size:11px;color:#7CFC00;" title="Se actualiza solo cuando entra/cambia un movimiento">● en vivo</span>
+                            </div>
+                            <div style="overflow-x:auto;">
+                                <table class="data-table" style="min-width:1000px;">
+                                    <thead>
+                                        <tr>
+                                            <th>Fecha</th>
+                                            <th>Dir.</th>
+                                            <th>Monto</th>
+                                            <th>Origen</th>
+                                            <th>CBU origen</th>
+                                            <th>Destino</th>
+                                            <th>CBU destino</th>
+                                            <th>Estado</th>
+                                            <th>Usuario</th>
+                                            <th>Coelsa/op</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="hgcashMovBody">
+                                        <tr><td colspan="10" style="color:#888;text-align:center;">—</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div id="hgcashMovPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:10px;"></div>
+                        </div>
                 </div>
             </section>
 

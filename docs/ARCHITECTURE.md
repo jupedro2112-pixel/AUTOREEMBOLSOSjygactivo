@@ -7,7 +7,7 @@
 >
 > Última actualización integral: **2026-07-09** (lectura de punta a punta de todo el
 > repo: server.js completo, clientes JUGAYGANA, 28 modelos, servicios, PWA y panel).
-> Actualización parcial 2026-11-04: **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
+> Actualización parcial 2026-11-04: **sección propia "🏛️ Bancos — Configuración" en el panel (#195, réplica #224 de CARGASGIROXactivo: todo lo de bancos salió de COMANDOS; mismos ids/endpoints)** y **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
 > CARGASGIROXactivo)** — ver "Cuentas hgcash múltiples" en la auto-carga del banco.
 > Los números de línea derivan con cada cambio — usalos como referencia aproximada y
 > confirmá con grep.
@@ -546,7 +546,7 @@ NUNCA asumir respuesta inmediata; reusar estos clientes.
   cuentas antes de resolver (`_loadHgcashCredentials()`). Endpoints: `GET/POST /api/admin/hgcash/accounts`, `DELETE /:key`, `POST /:key/activate`,
   `POST /accounts/incoming-mode`, `POST /:key/incoming` (ver/rotar/modo/pausa: admin, depositor, withdrawer; credenciales: solo admin); legacy
   `POST/DELETE /api/admin/hgcash/credentials` siguen (escriben sobre la activa / borran todas). Panel: card "🏦 Cuentas hgcash (hasta 3)" en
-  Comandos → Banco automático + barra "Cuenta hgcash en uso" en 🏦 Banco; movimientos y bandeja llevan `hgAccount {key,label,active}`.
+  sección **🏛️ Bancos — Configuración** del panel (#195, debajo de Comandos, solo admin general; antes en Comandos → Banco automático) + barra "Cuenta hgcash en uso" en 🏦 Banco; movimientos y bandeja llevan `hgAccount {key,label,active}`.
 
 ## 6. Front-end: PWA cliente y panel admin
 

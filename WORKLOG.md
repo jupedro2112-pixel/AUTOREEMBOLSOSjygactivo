@@ -8,6 +8,18 @@
 
 ## Sesión 2026-11-04
 
+### 195. Sección propia "🏛️ Bancos — Configuración" debajo de COMANDOS (réplica del #224 de CARGASGIROXactivo) — admin-sw v68
+- **Owner:** "lo de separar bancos de comandos, la última modificación de CARGASGIROXactivo, implementala en todas". Es el mismo cambio del #224
+  de CARGASGIROXactivo: solo panel, sin cambios de back ni de endpoints.
+- `index.html`: ítem de menú `data-section="banksConfig"` (`.nav-item-banks-config`, solo admin general) debajo de Comandos y
+  `<section id="banksConfigSection">` con TODO lo de bancos movido tal cual desde COMANDOS (mismos ids y funciones): datos de pago que ve
+  el cliente (card CBU, ahora con nota de que USAR ESTA la completa sola), 🏦 Banco automático (hgcash) con sus credenciales, 🏦 Cuentas hgcash, 🔁 reenvío de avisos y 🏦 Movimientos del banco. COMANDOS queda con lo demás (título "Comandos y Configuración").
+- `admin.js`: `switchSection('banksConfig')` → `loadBanksConfigSection()` (= `loadCBUConfigOnly()` + `loadHgcashConfig()`, que a su vez
+  carga credenciales, cuentas, fan-out y movimientos); `loadCBUConfig()` (COMANDOS) ya no llama `loadHgcashConfig()`;
+  `_hgcashPanelVisible` mira `banksConfigSection` (antes `commandsSection`) para el refresco en vivo de movimientos; al activar una cuenta
+  se recarga la card CBU solo si la sección está abierta.
+- Docs: ARCHITECTURE (panel: dónde vive lo de bancos), CLAUDE.md (gotcha de cuentas hgcash: dónde está).
+
 ### 194. Hasta 3 cuentas hgcash a la vez + cuenta ACTIVA rotable con un botón + qué cuentas cargan solas (réplica #223/#223b de CARGASGIROXactivo) — admin-sw v67
 - **Owner:** "replicá lo de hgcash nuevo de poner más de 1 hgcash disponible en los 8 repos; prolijo, sin romper nada". Antes había UNA sola
   cuenta hgcash cargada desde el panel (un token, un secreto, un titular/CBU) y rotar era pegar credenciales nuevas cada vez.

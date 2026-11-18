@@ -103,6 +103,10 @@
                     <span>🏛️</span>
                     <span>Bancos configuración</span>
                 </a>
+                <a href="#" class="nav-item nav-item-mudanza" data-section="mudanza" style="display:none" title="Pasar a los usuarios de la plataforma vieja a jugaygana.io">
+                    <span>🚚</span>
+                    <span>Mudanza</span>
+                </a>
                 <a href="#" class="nav-item" data-section="datos">
                     <span class="icon icon-chart"></span>
                     <span>Datos</span>
@@ -1115,6 +1119,101 @@
                             </div>
                             <div id="hgcashMovPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:10px;"></div>
                         </div>
+                </div>
+            </section>
+
+            <!-- #197 MUDANZA a jugaygana.io — solo admin general. Todo apagado por defecto. -->
+            <section id="mudanzaSection" class="section">
+                <div class="panel-header">
+                    <h2>🚚 Mudanza a jugaygana.io</h2>
+                </div>
+                <div class="cbu-panel">
+                    <p style="color:#aaa;font-size:12px;line-height:1.6;margin:0 0 12px;">Pasa a cada usuario de la plataforma vieja a <b>jugaygana.io</b> la primera vez que abre la app o hace una carga: se le retira todo el saldo de la vieja y se le carga el mismo monto en la nueva. Desde ese momento todo lo de ese usuario (cargas, retiros, reembolsos, botón del casino) va a la nueva. <b>Mientras el modo esté en "Apagada" no cambia nada.</b></p>
+
+                    <div class="panel-subheader"><h3>1 · Conexión con jugaygana.io</h3></div>
+                    <div id="mudPartnerState" style="font-size:13px;margin:6px 0 10px;color:#ccc;">Cargando…</div>
+                    <div style="display:grid;gap:8px;max-width:560px;">
+                        <input id="mudApiUrl" type="text" placeholder="URL de la API (https://api.jugaygana.io/api/v1)" autocomplete="off" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <input id="mudApiKey" type="password" placeholder="API key (pk_…) — dejar vacío para no cambiarla" autocomplete="new-password" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <input id="mudPlayUrl" type="text" placeholder="Página del casino (https://jugaygana.io)" autocomplete="off" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="mudSavePartner()">Guardar y probar</button>
+                            <button class="btn" onclick="mudTestPartner()">Probar conexión</button>
+                        </div>
+                    </div>
+
+                    <div class="panel-subheader" style="margin-top:22px;"><h3>Equipos (una key por equipo)</h3></div>
+                    <p style="color:#aaa;font-size:12px;line-height:1.6;margin:4px 0 8px;">Cada usuario se crea en jugaygana.io con la key del equipo que le toca según <b>cómo empieza su nombre</b> (por ejemplo, <code>atojuan299</code> empieza con <code>ato</code> → equipo ATOMIC). El que no coincide con ningún inicio se crea con la <b>key general</b> de arriba. Si dos inicios coinciden, gana el más largo.</p>
+                    <div id="mudTeams" style="overflow-x:auto;margin-bottom:10px;"></div>
+                    <div style="display:grid;gap:8px;max-width:560px;">
+                        <input type="hidden" id="mudTeamId">
+                        <input id="mudTeamName" type="text" placeholder="Nombre del equipo (ATOMIC)" autocomplete="off" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <input id="mudTeamPrefixes" type="text" placeholder="Inicios de usuario, separados por coma (ato, atm)" autocomplete="off" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <input id="mudTeamKey" type="password" placeholder="API key del equipo (pk_…)" autocomplete="new-password" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-primary" id="mudTeamSaveBtn" onclick="mudSaveTeam()">Agregar equipo</button>
+                            <button class="btn" id="mudTeamCancelBtn" style="display:none" onclick="mudEditTeam('')">Cancelar</button>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px;font-size:13px;">
+                        <span style="color:#aaa;">¿A qué equipo iría un usuario?</span>
+                        <input id="mudTeamProbe" type="text" placeholder="usuario" oninput="mudProbeTeam()" autocomplete="off" style="padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <b id="mudTeamProbeOut" style="color:#d4af37;"></b>
+                    </div>
+
+                    <div class="panel-subheader" style="margin-top:22px;"><h3>2 · Quiénes se mudan</h3></div>
+                    <div id="mudPausedBanner" style="display:none;background:rgba(255,68,68,.12);border:1px solid #ff4444;color:#ff8a8a;border-radius:8px;padding:10px;margin:8px 0;font-size:13px;"></div>
+                    <div style="display:grid;gap:8px;font-size:14px;margin:8px 0;">
+                        <label><input type="radio" name="mudMode" value="off"> <b>Apagada</b> — nadie se muda</label>
+                        <label><input type="radio" name="mudMode" value="list"> <b>Solo esta lista</b> — para probar con pocos</label>
+                        <label><input type="radio" name="mudMode" value="all"> <b>Todos</b> — cada usuario se muda cuando abre la app o carga</label>
+                    </div>
+                    <textarea id="mudUsernames" rows="3" placeholder="Usuarios de la lista, separados por coma o uno por línea" style="width:100%;max-width:560px;padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;"></textarea>
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0;font-size:14px;">
+                        <span>Tope para mudar solo: $</span>
+                        <input id="mudCap" type="number" min="0" step="1000" style="width:140px;padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <span style="color:#888;font-size:12px;">con más saldo que esto, espera tu aprobación</span>
+                    </div>
+                    <div style="display:grid;gap:6px;font-size:13px;margin:8px 0;">
+                        <label><input type="checkbox" id="mudCreateMissing"> Crear al usuario en jugaygana.io (en su equipo) al mudarlo. Destildar solo si los usuarios los copia la plataforma.</label>
+                        <label><input type="checkbox" id="mudNewUsers"> Los que se registran desde ahora se crean directo en jugaygana.io</label>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="mudSaveConfig()">Guardar</button>
+                        <button class="btn" id="mudPauseBtn" onclick="mudTogglePause()">Pausar</button>
+                    </div>
+
+                    <div class="panel-subheader" style="margin-top:22px;"><h3>3 · Rollover de los bonos en jugaygana.io</h3></div>
+                    <p style="color:#aaa;font-size:12px;margin:4px 0 8px;">Cuántas veces hay que jugar un bono antes de poder retirarlo. No aplica a devoluciones de retiros ni a comisiones de referidos.</p>
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px;">
+                        <label><input type="checkbox" id="mudRollOn"> Activado</label>
+                        <select id="mudRollX" style="padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;"></select>
+                        <button class="btn" onclick="mudSaveRollover()">Guardar</button>
+                        <span id="mudRollNote" style="color:#ffcc66;font-size:12px;"></span>
+                    </div>
+
+                    <div class="panel-subheader" style="margin-top:22px;"><h3>4 · Mudar a un usuario ahora</h3></div>
+                    <p style="color:#aaa;font-size:12px;margin:4px 0 8px;">Lo muda en el momento, sin importar el modo ni el tope. Sirve para la primera prueba y para aprobar a los que superan el tope.</p>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <input id="mudOneUser" type="text" placeholder="usuario" autocomplete="off" style="padding:9px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <button class="btn btn-primary" onclick="mudMigrateOne()">Mudar ahora</button>
+                    </div>
+
+                    <div class="panel-subheader" style="margin-top:22px;"><h3>5 · Estado</h3></div>
+                    <div id="mudStats" style="font-size:13px;color:#ccc;margin:6px 0 10px;"></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                        <select id="mudFilter" onchange="mudLoadList()" style="padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                            <option value="">Todos</option>
+                            <option value="review">🛑 En revisión</option>
+                            <option value="deposit_pending">⏳ Carga pendiente</option>
+                            <option value="held">Frenadas</option>
+                            <option value="failed">Fallidas (se reintentan)</option>
+                            <option value="done">Mudados</option>
+                        </select>
+                        <input id="mudSearch" type="text" placeholder="buscar usuario" style="padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;">
+                        <button class="btn" onclick="loadMudanzaSection()">Actualizar</button>
+                    </div>
+                    <div id="mudList" style="overflow-x:auto;"></div>
                 </div>
             </section>
 

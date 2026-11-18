@@ -499,6 +499,21 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // #197 MUDANZA a jugaygana.io (Partner API). `platform` dice contra qué plataforma opera
+  // ESTE usuario: 'jugaygana' (la de siempre, default) o 'partner' (jugaygana.io). Lo cambia
+  // únicamente el motor de mudanza (src/services/platform.js) o el alta cuando la mudanza
+  // está en modo "todos". Los campos jugaygana* NO se tocan (sirven para el netwin viejo).
+  platform: { type: String, enum: ['jugaygana', 'partner'], default: 'jugaygana', index: true },
+  platformMigratedAt: { type: Date, default: null },
+  // Candado de la mudanza en curso: mientras esté en true, las operaciones de plata del
+  // usuario se rechazan con code 'migrating' (nada se envía a ninguna plataforma).
+  platformMigrating: { type: Boolean, default: false },
+  platformMigratingAt: { type: Date, default: null },
+  // La contraseña real ya se replicó en jugaygana.io (se hace una vez, en un login).
+  partnerPasswordSynced: { type: Boolean, default: false },
+  // Equipo de jugaygana.io bajo el que existe el jugador ('default' = key general). Se fija al
+  // crearlo/encontrarlo allá: de ahí en más TODA operación firma con la key de ese equipo.
+  partnerTeam: { type: String, default: null, index: true },
   // Auditoría liviana de cambios de etiquetas: quién agregó/quitó qué y cuándo.
   tagHistory: [{
     tag: { type: String },

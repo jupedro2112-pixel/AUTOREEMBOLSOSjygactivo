@@ -4,7 +4,125 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-10-29**
+> **Última actualización: 2026-11-18**
+
+## Sesión 2026-11-18
+
+### 197. 🚚 MUDANZA a jugaygana.io IMPLEMENTADA usuario por usuario (todo APAGADO por defecto) + pruebas en vivo de la plataforma nueva
+- **Owner (2026-11-18):** "va a ser una mudanza a una página completamente nueva, quiero que se mantenga toda la app con todos sus
+  usuarios… que ellos ni cuenta se den: cuando quieran cargar, que ya se les cargue en la página nueva y que al apretar el botón entren
+  directo logueados; si tiene saldo, que se le retire todo y se le pase a la nueva". Decisión final: **"vamos con eso, tope 200.000"**.
+  La copia de usuarios de jugaygana44 → jugaygana.io la hace el dueño de la plataforma, respetando el árbol de agentes; **al cierre de
+  esta sesión todavía NO estaba terminada**.
+- **Estado: código escrito, validado con `node --check` y con un test en frío; NADA activado, nada commiteado (el owner avisa).**
+  Con la mudanza en "Apagada" (default) y sin credenciales, la app opera 100% sobre JUGAYGANA igual que antes.
+- **Lo probado EN VIVO contra jugaygana.io** (con dos keys de prueba que NO están en el repo):
+  - La Base URL real es **`https://api.jugaygana.io/api/v1`**. El panel de la plataforma mostraba `https://api-1gx.com/api/v1`, que
+    rechaza las keys con 401 (el owner ya lo corrigió en el panel). Sitio del jugador: `https://jugaygana.io`; panel: `admin.jugaygana.io`.
+  - `GET /config` (2026-11-18): `bonus_engine: classic`; rollover prendido con multiplicadores `[0,1,2,3,5,10]`; bono prendido, bono
+    suelto prendido, multiplicadores `[0,2,3,5,10,20,40]`, porcentajes `[10,20,50,100]`, fijo de 2 a 1.000.000, `claim_required: true`,
+    sin reglas automáticas; **wager apagado**. Acá **x3 SÍ está permitido** (en 1girox no).
+  - Carga $10 → saldo 10; misma `reference` otra vez → `duplicate:true`, sin doble carga; retiro de $15 con $10 → `insufficient_funds`;
+    retiro de $10 ok; repetido → `duplicate`.
+  - Una key creada por un usuario SIN fichas (el superadmin) da `insufficient_funds` en toda carga: la key definitiva tiene que ser de
+    un **agente con fichas** (se probó con el agente `santinoprueba`, fondeado con $10.000).
+  - La key de un agente **sí LEE** (jugador + stats) a los jugadores de su sub-agente (distinto de 1girox). Operaciones de PLATA sobre
+    jugadores de un sub-agente: **sin probar**. Un jugador de otro agente no se ve (404).
+  - Quedaron en la plataforma tres jugadores de prueba en $0: `zzprueba_029612`, `zzdirecto_030136`, `zzsantino_030360`.
+- **Cambio de plan del owner (misma sesión):** "hago que NO copien los usuarios y que vaya mudando automático, separando el árbol según
+  el inicio del usuario… entra `atojuan299` con $10.560, se le crea el usuario en el equipo ATOMIC (a esa key), se le pasa el saldo y
+  apretando casino ya entra a jugaygana.io… y si no detecta ningún inicio, se crea con una key que no reconoce equipo". Entonces:
+  - **EQUIPOS:** cada equipo de jugaygana.io tiene **su propia API key** y uno o más **inicios de username** (gana el más largo; sin
+    coincidencia → equipo `default` = la key general). Se cargan en el panel (`Config['platformPartner'].teams`, key cifrada, se prueba
+    contra la plataforma antes de guardar). Evita depender de operar plata sobre sub-agentes con una sola key (nunca se probó).
+  - **La app CREA al jugador al mudarlo** (`createMissing` ahora default `true`), con la key de su equipo y clave provisoria; la clave
+    real se replica en su próximo login (`plat.migrateThenSyncPassword`). `User.partnerTeam` queda fijo cuando el jugador existe allá:
+    todo lo posterior firma con ESA key (`plat.keyResolver` inyectado en `girox.setKeyResolver`) aunque cambie la tabla de inicios.
+    Un equipo con usuarios no se puede borrar.
+  - Equipo sin key → `held:team_no_key`. El nombre ya existe con otra key → `held:foreign`. Si no se puede resolver el equipo se firma
+    con una key inválida a propósito (401, nada se mueve) en vez de la key de otro equipo.
+  - **Sin fichas se frena SOLO ese equipo** (`pausedTeams` en `Config['platformMigration']`), los demás siguen; se reanuda desde el panel.
+  - **El botón del casino espera la mudanza:** `/api/platform/info` devuelve `sso:true` también si al usuario le toca mudarse, y
+    `/api/platform/session` muda y espera hasta ~20 s (`plat.prepareCasino`). Si la cuenta sigue actualizándose responde `pending` y la
+    PWA no abre nada (nunca la página vieja con el saldo ya retirado).
+- **Diseño (por qué así):** las dos plataformas CONVIVEN. Cada usuario tiene `User.platform` (`'jugaygana'` default | `'partner'`) y la
+  fachada `src/services/platform.js` (`plat` en server.js) manda cada operación a la plataforma de ESE usuario. Para quien sigue en
+  JUGAYGANA llama a la misma función del cliente viejo con los mismos argumentos. Así se puede activar de a poco y volver atrás apagando.
+- **Cómo se muda un usuario** (`plat.migrateUser`): candado atómico en `User.platformMigrating` → ¿existe en la nueva? → saldo en la
+  vieja → si supera el **tope ($200.000)** espera aprobación → retiro de TODO en la vieja → carga del mismo monto en la nueva con
+  reference fija `vip-mig-<userId>-r<round>` y `no_bonus` → `User.platform='partner'`. Libro: modelo nuevo `PlatformMigration`.
+  - Nunca se carga en la nueva sin retiro CONFIRMADO en la vieja. Retiro ambiguo → estado `review` + Telegram + nota en el chat; lo
+    resuelve el admin ("el retiro SÍ/NO se hizo"). No se reintenta solo.
+  - Retirado de la vieja y la nueva no responde → `deposit_pending`: el usuario queda con candado (sus operaciones devuelven
+    `code:'migrating'`, ve su saldo igual) y un tick de 60 s reintenta con la MISMA reference hasta que entra.
+  - La nueva sin fichas (`insufficient_funds`) → la mudanza se **pausa sola** + Telegram.
+  - Frenadas (`held`): `cap`, `not_in_new` (todavía no copiado), `new_has_balance` (¿la copia vino con saldo? no se duplica),
+    `invalid_username` (la nueva exige 3–18 `[A-Za-z0-9_]`), `foreign` (existe bajo otro agente).
+  - 1 h y 25 h después de mudar se relee el saldo en la vieja: si apareció plata (apuesta que pagó tarde) avisa y el panel la traslada.
+  - **Disparos:** abrir la app (`/api/auth/verify`, login, `/api/platform/info`; en segundo plano, 1 por minuto por usuario) y la
+    carga (se muda ANTES y la carga ya entra en la nueva).
+- **Qué cambia para un usuario mudado:** cargas/retiros/regalos por la Partner API en pesos con `reference`; error transitorio (red,
+  429, 5xx) → `ambiguous:true` (mismo contrato #151); retiros contra `available` (rollover); regalos como bono con el **rollover global**
+  (`Config['bonusRolloverGlobal']`, default prendido **x3**, misma regla que el gemelo) salvo devolución de retiro y comisión de
+  referidos; netwin de reembolsos/referidos = tramo viejo (si el período empieza antes de su mudanza) + `GET /stats` de la nueva
+  (casino + deportes; `PARTNER_NETWIN_SCOPE=casino` para solo casino); botón del casino = link de entrada directa (SSO, 60 s).
+- **References estables** (un reintento no duplica): hgcash `vip-hg-<chargeKey>` · bono app `vip-hgbono-…` · lote en carga
+  `vip-hglote-…` · reembolsos `vip-rf-<daily|weekly|monthly>:<período>-<userId>` · retiro `vip-payout-<id>` · devolución
+  `vip-payoutref-<id>[-chips|-bonus]` · ruleta `vip-roulette-<spinId>` · lote de fichas `vip-nbatch-<batchId>-<userId>` · comisión
+  `vip-refcom-<período>-<referidor>-p<n>`. Cargas/retiros/bonos manuales del panel y fueguito: reference nueva por llamada.
+- **Panel:** sección **🚚 Mudanza** (solo admin general): conexión (URL, key cifrada en `Config['platformPartner']`, página del casino;
+  "Guardar y probar"), modo Apagada / Solo esta lista / Todos, tope, pausa, "crear al que no exista", "los que se registran van directo a
+  la nueva", rollover global, "Mudar a un usuario ahora" (saltea modo y tope: sirve para la primera prueba y para aprobar), estado y
+  lista con acciones. Endpoints `/api/admin/platform/*` (todos re-chequean `role === 'admin'`).
+- **PWA:** `VIP.ui.goToPlatform` abre la pestaña dentro del toque y la manda al link de `POST /api/platform/session`. SW v77,
+  `ui.js?v=77`. Panel: `admin-sw` v69.
+- **Archivos:** nuevos `src/services/giroxService.js` (copia del gemelo + `lookupPlayer` tri-estado + `no_bonus` en el alta),
+  `src/services/platform.js`, `src/models/PlatformMigration.js`, `src/utils/bonusRollover.js`, `scripts/check-tdz.js`,
+  `scripts/test-platform-migration.js`. Tocados: `server.js`, `src/models/User.js`, `referralCalculationService.js`,
+  `referralPayoutService.js`, PWA y panel.
+- **Verificado:** `node --check` en todo lo tocado; `node scripts/check-tdz.js` ok; `node scripts/test-platform-migration.js` → 47/47
+  (apagada, lista, todos, tope, crear/no crear, saldo previo en la nueva, retiro ambiguo, nueva caída, sin fichas, transitorio, saldo
+  cero, equipos por inicio con key propia, equipo sin key, nombre en otro equipo, pausa por equipo, botón del casino). **NO verificado:** nada corrió contra un server real (no hay node_modules en Tails) ni se mudó un usuario de verdad.
+- **Pasos para activar (orden):** 1) desplegar en Render (pruebas); 2) 🚚 Mudanza → cargar URL + key GENERAL + página →
+  "Guardar y probar", y después cada EQUIPO (nombre, inicios, key); 3) "Mudar a un usuario ahora" con una cuenta propia con poco saldo y revisar las dos plataformas, una carga, un
+  retiro, un reembolso y el botón del casino; 4) modo "Solo esta lista" con pocos; 5) "Todos".
+- **Pendientes:** el owner carga en el panel los equipos (inicios + key de un agente CON fichas por equipo) — los agentes tienen que
+  existir antes en jugaygana.io; si igual la plataforma copia usuarios, tienen que venir con saldo $0 y bajo el agente del equipo que
+  les toca por inicio (si no, quedan `foreign`); usernames con punto, guion o más de 18 caracteres no entran en la nueva (quedan
+  frenados: decidir qué hacer); publicistas (pool de sesiones de JUGAYGANA) siguen creando en la vieja y se mudan como cualquiera; el cierre diario no cruza el saldo del cajero de la nueva
+  (la API no lo da).
+
+### 196. 📚 Partner API de 1girox / jugaygana.io cargada COMPLETA en `docs/1girox/` (solo documentación y código de referencia — sin cambios en lo que corre)
+- **Owner:** "cargá la API completa de todo lo que sabés (manual Partner API v1.20) en AUTOREEMBOLSOSjygactivo: hoy usa jugaygana y quiero
+  pasar a una copia llamada jugaygana.io, que usa la misma API de 1girox; que quede toda la información de la A a la Z para después hacer
+  la mudanza sin perder nada; sin romper nada de lo actual". Lo hizo la sesión del gemelo **CARGASGIROXactivo** (que corre sobre esa API
+  desde el 2026-07-31), leyendo su código, su WORKLOG y el inventario real de este repo.
+- **Qué se agregó (todo archivos NUEVOS bajo `docs/1girox/`; ningún archivo de código existente fue tocado, nada se importa desde `server.js`):**
+  - `README.md` — índice, la API en una pantalla y las cinco reglas de plata.
+  - `PARTNER-APIv1.20.pdf` (manual oficial, 19 pág.) + `PARTNER-APIv1.20.txt` (texto crudo) + **`PARTNER-API-v1.20.md`** (transcripción
+    completa en Markdown: los 15 endpoints, errores, buenas prácticas, historial 1.0→1.20 y una tabla resumen endpoint → función del cliente).
+  - **`CONOCIMIENTO-EN-PRODUCCION.md`** — lo que el manual NO dice: idempotencia por `reference` (tabla de prefijos y por qué), instalaciones
+    y keys, rate limit por key y el incidente del lag, altas y jerarquía (la master no ve a los jugadores de un sub-agente; username tomado
+    por otra estructura), rollover/bonos/reclamos (dos listas de multiplicadores, bono 0 = regalo directo, bono sobre bono pisa), wager
+    (solo por `/promo`; nunca `wager_*` en el depósito), netwin (signo, 92 días, hora AR, batch por key), SSO, lo que la API no tiene, panel
+    vs API, variables de entorno, diagnóstico y la lista de lo que hay que verificar en jugaygana.io.
+  - **`PLAN-MUDANZA.md`** — específico de ESTE repo: inventario de los 4 clientes JUGAYGANA + 2 servicios con el conteo de call sites,
+    mapa función por función (viejo → nuevo, con la trampa de cada uno), diferencias de fondo (reference obligatoria, `ambiguous` del #151
+    → reintento con la misma reference, retiros contra `available`, la plataforma no crea al jugador en la carga, reglas de username,
+    netwin, publicistas, bonos, lo que se pierde), jugadores y **saldos**, propuesta de interruptor (`src/services/platform.js` +
+    `Config['platformProvider']`), orden de trabajo, checklist de prueba y preguntas abiertas para el owner.
+  - `codigo-referencia/` — copia tal cual del gemelo (commit `f26b135`): `giroxService.js` (cliente único), `giroxUserLinkService.js`,
+    `giroxPublisherKeys.js`, campos de `User`/`Campaign`, utils (rangos de fecha, rangos de reembolso, rollover, cashback, wager, VIP),
+    `migrate-users-to-girox.js`, tests en frío, `check-tdz.js`, 3 especificaciones y `server-extractos.js.txt` (13 bloques del `server.js`
+    del gemelo: resolvers, SSO, health, un claim de reembolso completo, débito del retiro, etc.). Vive en `docs/` a propósito: no corre desde ahí.
+  - **`codigo-referencia/scripts/probar-partner-api.js`** (nuevo): radiografía de SOLO LECTURA de una instalación (conexión/key, `GET /config`,
+    `GET /agents`, y con `--player=` saldo + netwin), sin dependencias (corre en Tails). Probado contra un servidor falso local (key buena,
+    key mala, URL muerta); **no** se probó contra jugaygana.io porque todavía no hay Base URL ni key.
+- **Lo que NO se sabe todavía (bloquea empezar la mudanza):** Base URL y API key de jugaygana.io, sitio del jugador, qué feats tiene
+  prendidos esa instalación y **si los jugadores y sus saldos ya existen ahí** (la Partner API no transfiere saldos entre plataformas:
+  `PLAN-MUDANZA.md` §5). La mudanza "con 2 clicks" es viable para el interruptor de plataforma, no para la creación de jugadores ni los saldos.
+- **Validación:** `node --check` de todo el código copiado y del script nuevo; `git status` = solo `docs/1girox/` nuevo + estos 3 docs.
+  Sin deploy: no cambia nada del server ni del front.
 
 ## Sesión 2026-11-04
 

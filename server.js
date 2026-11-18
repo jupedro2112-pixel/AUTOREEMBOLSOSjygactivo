@@ -448,6 +448,12 @@ jugaygana.setCashierBalanceHook((info) => {
   } catch (_) {}
 });
 const jugayganaService = require('./src/services/jugayganaService');
+// #197 MUDANZA a jugaygana.io: `plat` es la fachada que manda cada operación a la plataforma
+// de ESE usuario (User.platform). Para quien sigue en JUGAYGANA llama a los clientes de
+// siempre con los mismos argumentos. `girox` = cliente de la Partner API (jugaygana.io).
+const plat = require('./src/services/platform');
+const girox = require('./src/services/giroxService');
+const bonusRollover = require('./src/utils/bonusRollover');
 // Pool de sesiones JUGAYGANA por publicista — se usa cuando un publisher_admin
 // crea un usuario y la campaña tiene credenciales propias configuradas.
 const jugayganaPublisherSessions = require('./src/services/jugayganaPublisherSessions');
@@ -2453,7 +2459,7 @@ async function _installBonusDeviceFree(user) {
 // mano). Devuelve { applied, amount, kind: 'install_100'|'app_20'|null, hasApp }.
 // preBalance = saldo ANTES de acreditar la carga (null si no se pudo leer): con
 // más de HGCASH_APP_BONUS_SKIP_BALANCE_ARS el 20% NO se da (skippedForBalance).
-async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
+async function _hgcashApplyAppBonus(user, amount, preBalance = null, refKey = null) {
   const out = { applied: false, amount: 0, kind: null, hasApp: false, noticeOk: false, skippedForBalance: false, preBalance: preBalance, cfg: HGCASH_APP_BONUS_DEFAULTS };
   try {
     out.hasApp = _rouletteHasAppInstalled(user);
@@ -2519,7 +2525,7 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null) {
     // Pausa anti rate-limit de JUGAYGANA entre la carga principal y el bonus
     // (misma causa documentada del bug "carga sí, bonus no" del flujo manual).
     await new Promise(r => setTimeout(r, 700));
-    const credit = await jugaygana.creditUserBalance(user.username, bonusAmount, user.jugayganaUserId || null);
+    const credit = await plat.creditUserBalance(user.username, bonusAmount, user.jugayganaUserId || null, { reference: refKey ? `vip-hgbono-${refKey}` : null, description: `Bono automático ${pct}% (app)` }); // #197 reference estable
     if (credit && credit.ambiguous) {
       // #151: el bono puede haber entrado. NO se devuelve el cupón (evita cobrarlo dos veces).
       await _alertMoneyAmbiguous(`Bono automático ${pct}% (app)`, user.id, user.username, bonusAmount, credit.error);
@@ -2771,13 +2777,13 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
           // UN solo intento (sin retry): esta lectura es best-effort y corre en el
           // camino crítico de la carga — con JUGAYGANA lento, 3 intentos con
           // backoff sumaban hasta ~40s de demora visible para el cliente.
-          const preRes = await jugayganaMovements.getUserBalanceWithRetry(user.username, { maxAttempts: 1 });
+          const preRes = await plat.getUserBalanceWithRetry(user.username, { maxAttempts: 1 });
           if (preRes && preRes.success) preBalance = Number(preRes.balance);
         }
       }
     } catch (_) {}
 
-    const result = await jugaygana.depositToUser(user.username, Number(amount), assign ? `Carga asignada desde bandeja (hgcash) por ${agentLabel}` : 'Carga automática (hgcash)', user.jugayganaUserId || null);
+    const result = await plat.depositToUser(user.username, Number(amount), assign ? `Carga asignada desde bandeja (hgcash) por ${agentLabel}` : 'Carga automática (hgcash)', user.jugayganaUserId || null, { reference: `vip-hg-${chargeKey || movement.movementId}` }); // #197: misma transferencia = misma reference
     if (!result.success && result.ambiguous) {
       // #151 AMBIGUO: NO liberar el candado ni reintentar (podría duplicar la carga).
       // Movimiento y comprobante quedan en needs_review para que un agente verifique.
@@ -2830,7 +2836,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
         `🚨 MULTICUENTA CONFIRMADA POR BANCO: la transferencia viene de ${_dupBank.holder}, que YA cargó en la cuenta @${_dupBank.matchedUsername || _dupBank.matchedUserId}. La carga se acredita SIN bonos automáticos (ni 100% primera carga, ni 20%, ni lote). Verificá y bloqueá si corresponde.`);
       logger.warn(`[multicuenta-banco] hgcash: ${user.username} fondeado por "${_dupBank.holder}" (ya usado por ${_dupBank.matchedUsername}) → carga sin bonos automáticos`);
     } else {
-      appBonus = await _hgcashApplyAppBonus(user, Number(amount), preBalance);
+      appBonus = await _hgcashApplyAppBonus(user, Number(amount), preBalance, chargeKey || movement.movementId);
     }
     // #149 BONO DE LOTE AUTOMÁTICO en la carga hgcash: solo si NO hubo bono de app
     // (nunca se suman entre sí). Reserva atómica → crédito → settle; si falla, se
@@ -2840,7 +2846,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
       if (_lcH.claimed) {
         const _lcAmt = _loteBonusAmount(Number(amount), _lcH.pct, _loteCfgFor(_lcH, await getHgcashAppBonusConfig())); // #172 tope global / #189 tope propio del lote
         await new Promise(r => setTimeout(r, 700));
-        const _lcRes = _lcAmt > 0 ? await jugaygana.creditUserBalance(user.username, _lcAmt, user.jugayganaUserId || null).catch(() => null) : null;
+        const _lcRes = _lcAmt > 0 ? await plat.creditUserBalance(user.username, _lcAmt, user.jugayganaUserId || null, { reference: `vip-hglote-${chargeKey || movement.movementId}`, description: 'Bono de lote (carga hgcash)' }).catch(() => null) : null;
         if (_lcRes && _lcRes.success) {
           await settleAutoPromoPercent(_lcH, Number(amount), _lcAmt);
           appBonus = Object.assign({}, appBonus, { applied: true, amount: _lcAmt, pct: _lcH.pct, kind: 'lote', loteLabel: _lcH.label, loteScope: _lcH.scope });
@@ -2870,7 +2876,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
     // Mensaje al cliente (usa /sys_deposit o /sys_deposit_bonus si hubo bono).
     let newBalance = null;
     try {
-      const balRes = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+      const balRes = await plat.getUserBalanceWithRetry(user.username);
       if (balRes.success) newBalance = balRes.balance;
     } catch (_) {}
     const balStr = newBalance !== null ? `$${newBalance}` : 'actualizándose 🔄';
@@ -4511,8 +4517,20 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
     }
     
     // Crear usuario en JUGAYGANA PRIMERO
+    // #197: con "usuarios nuevos en la plataforma nueva" prendido, el alta va a jugaygana.io.
+    const _regOnPartner = await _newUsersOnPartner();
+    if (_regOnPartner && !plat.isValidPartnerUsername(username)) {
+      return res.status(400).json({ error: 'El usuario tiene que tener entre 3 y 18 caracteres: solo letras, números y guion bajo.' });
+    }
     let jgResult = null;
     try {
+      if (_regOnPartner) {
+        const pr = await girox.createPlatformUser({ username, password });
+        jgResult = pr.success
+          ? { success: true, user: {}, _partner: true }
+          : { success: false, alreadyExists: !!pr.alreadyExists, error: girox.errToString(pr.error), code: pr.code, transient: !pr.alreadyExists && (pr.httpStatus == null || pr.httpStatus === 429 || pr.httpStatus >= 500) };
+        if (jgResult.transient) jgResult.error = 'La plataforma no está respondiendo en este momento. Probá de nuevo en 1-2 minutos.';
+      } else
       jgResult = await jugaygana.syncUserToPlatform({
         username: username,
         password: password
@@ -4602,7 +4620,9 @@ app.post('/api/auth/register', authLimiter, registerIpLimiter, async (req, res) 
       isActive: true,
       jugayganaUserId: jgResult.jugayganaUserId || jgResult.user?.user_id,
       jugayganaUsername: jgResult.jugayganaUsername || jgResult.user?.user_name,
-      jugayganaSyncStatus: jgResult.alreadyExists ? 'linked' : 'synced',
+      jugayganaSyncStatus: jgResult._partner ? 'not_applicable' : (jgResult.alreadyExists ? 'linked' : 'synced'),
+      // #197: alta directa en jugaygana.io
+      ...(jgResult._partner ? { platform: 'partner', platformMigratedAt: new Date(), partnerPasswordSynced: true, partnerTeam: plat.teamForUsername(username) } : {}),
       // Campos de referido
       referralCode: newReferralCode,
       referredByUserId: isValidReferral ? referrer.id : null,
@@ -5166,6 +5186,9 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     // Intentar login en JUGAYGANA para obtener token de sesión (best-effort).
     // Admin roles have no counterpart in JUGAYGANA, so skip entirely.
     let jugayganaToken = null;
+    // #197: login de un jugador → mudanza en segundo plano (si le toca) y, si ya está mudado,
+    // réplica de su clave real en jugaygana.io (una sola vez).
+    if (userObj.role === 'user') plat.migrateThenSyncPassword(userId, password || null);
     if (!isAdminRole(userObj.role)) {
       try {
         const jgLogin = await jugayganaService.loginAsUser(userObj.username, password);
@@ -5324,6 +5347,8 @@ app.get('/api/auth/verify', authMiddleware, async (req, res) => {
     if (!user) {
       return res.status(401).json({ error: 'Usuario no encontrado' });
     }
+    // #197: abrir la app es uno de los momentos en que se muda al usuario (segundo plano, si le toca).
+    if (user.role === 'user') plat.migrateInBackground(user.id, 'app_open');
     
     res.json({
       valid: true,
@@ -5461,7 +5486,7 @@ async function syncPasswordToJugaygana(user, newPassword, context) {
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const jgResult = await jugayganaService.changeUserPasswordAsAdmin(user.username, newPassword);
+      const jgResult = await plat.changeUserPasswordAsAdmin(user.username, newPassword);
       if (jgResult.success) {
         logger.info(`[pwd-sync] Sincronizada con JUGAYGANA (${context}) para ${user.username} en intento ${attempt}/${MAX_ATTEMPTS}`);
         return { success: true, attempts: attempt };
@@ -5854,6 +5879,341 @@ app.post('/api/auth/platform-login', authMiddleware, async (req, res) => {
     logger.error(`Error en platform-login: ${error.message}`);
     res.status(500).json({ error: 'Error del servidor' });
   }
+});
+
+
+// ============================================================================
+// #197 MUDANZA A JUGAYGANA.IO (Partner API) — usuario por usuario
+// ============================================================================
+// Todo APAGADO por defecto: sin credenciales cargadas o con el modo en "off", la app
+// opera 100% sobre JUGAYGANA como siempre. El motor vive en src/services/platform.js.
+//
+// Credenciales de la plataforma nueva: `Config['platformPartner']` = { apiUrl, apiKeyEnc,
+// apiKeyLast4, playUrl } (la key cifrada con JWT_SECRET, igual que hgcash). El panel MANDA
+// sobre las env vars GIROX_API_URL / GIROX_API_KEY / GIROX_PLAY_URL (el cliente las lee
+// de process.env en cada request, así que alcanza con pisarlas acá).
+const _partnerEnvBase = {
+  url: process.env.GIROX_API_URL || '', key: process.env.GIROX_API_KEY || '', play: process.env.GIROX_PLAY_URL || ''
+};
+let _partnerEnvBaseTaken = false;
+let _partnerTeamsMeta = [];
+let _partnerMeta = { source: 'none', apiUrl: null, playUrl: null, apiKeyLast4: null, updatedBy: null, updatedAt: null, decryptError: false };
+async function _loadPartnerCredentials() {
+  try {
+    // Los secrets de SSM entran en el bootstrap async: la foto de las env "de base" se toma
+    // en la primera carga (8 s después del arranque), no al require().
+    // Mientras el panel NO esté pisando las env, lo que haya en process.env ES la base (SSM/EB).
+    if (!_partnerEnvBaseTaken) {
+      _partnerEnvBase.url = process.env.GIROX_API_URL || ''; _partnerEnvBase.key = process.env.GIROX_API_KEY || ''; _partnerEnvBase.play = process.env.GIROX_PLAY_URL || '';
+    }
+    const c = await getConfig('platformPartner', null);
+    let key = null, decryptError = false;
+    if (c && c.apiKeyEnc) { try { key = _credDecrypt(c.apiKeyEnc); } catch (_) { decryptError = true; } }
+    const url = (c && c.apiUrl) || _partnerEnvBase.url;
+    const useKey = key || _partnerEnvBase.key;
+    const play = (c && c.playUrl) || _partnerEnvBase.play || 'https://jugaygana.io';
+    if (url) process.env.GIROX_API_URL = url; else delete process.env.GIROX_API_URL;
+    if (useKey) process.env.GIROX_API_KEY = useKey; else delete process.env.GIROX_API_KEY;
+    process.env.GIROX_PLAY_URL = play;
+    _partnerEnvBaseTaken = !!(key || (c && (c.apiUrl || c.playUrl))); // true = las env están pisadas por el panel
+    _partnerMeta = {
+      source: key ? 'panel' : (_partnerEnvBase.key ? 'env' : 'none'),
+      apiUrl: url || null, playUrl: play,
+      apiKeyLast4: key ? (c.apiKeyLast4 || String(key).slice(-4)) : (_partnerEnvBase.key ? String(_partnerEnvBase.key).slice(-4) : null),
+      updatedBy: (c && c.updatedBy) || null, updatedAt: (c && c.updatedAt) || null, decryptError
+    };
+    // EQUIPOS: una key por equipo (cifrada). Se le pasan descifradas al motor, que elige por el inicio del username.
+    const teams = [];
+    for (const t of ((c && Array.isArray(c.teams)) ? c.teams : [])) {
+      let tk = null;
+      if (t.apiKeyEnc) { try { tk = _credDecrypt(t.apiKeyEnc); } catch (_) { decryptError = true; } }
+      teams.push({ id: t.id, name: t.name, prefixes: t.prefixes || [], key: tk });
+    }
+    plat.setTeams(teams);
+    _partnerTeamsMeta = ((c && Array.isArray(c.teams)) ? c.teams : []).map(t => ({
+      id: t.id, name: t.name, prefixes: t.prefixes || [], apiKeyLast4: t.apiKeyLast4 || null,
+      hasKey: !!(teams.find(x => x.id === t.id) || {}).key, updatedBy: t.updatedBy || null, updatedAt: t.updatedAt || null
+    }));
+    _partnerMeta.decryptError = decryptError;
+    if (decryptError) logger.error('[partner] alguna API key del panel NO se pudo descifrar (¿cambió JWT_SECRET?)');
+  } catch (e) { logger.warn(`[partner] no se pudieron leer las credenciales: ${e.message}`); }
+}
+setTimeout(() => { _loadPartnerCredentials(); }, 8 * 1000);
+setInterval(() => { _loadPartnerCredentials(); }, 30 * 1000);
+
+// Alertas y notas del motor de mudanza.
+plat.setHooks({
+  alert: async (text) => {
+    logger.warn(`[mudanza] ${text}`);
+    if (telegramAlert.isEnabled()) await telegramAlert.send(`<b>${telegramAlert.esc(_projectLabel())}</b> — MUDANZA\n${telegramAlert.esc(text)}`);
+  },
+  note: (userId, username, content) => _emitAdminOnlyChatNote(userId, username, content),
+  loadTeams: () => _loadPartnerCredentials() // primera operación tras el arranque: leer las keys de los equipos antes de firmar
+});
+
+// ROLLOVER GLOBAL de bonos en la plataforma nueva (misma regla que el gemelo sobre 1girox):
+// Config['bonusRolloverGlobal'] = { enabled, x }, default encendido x3. Aplica a todo bono
+// automático salvo devoluciones de retiro y comisiones de referidos (ignoreGlobalRollover).
+let _grCache = null, _grAt = 0;
+async function getGlobalBonusRollover({ fresh = false } = {}) {
+  if (!fresh && _grCache && (Date.now() - _grAt) < 30000) return _grCache;
+  const raw = await getConfig('bonusRolloverGlobal', null).catch(() => null);
+  let allowed = null;
+  try { const pc = await girox.getPlatformConfig(); allowed = pc && pc.bonus && pc.bonus.multipliers; } catch (_) {}
+  _grCache = bonusRollover.resolveGlobalRollover(raw, allowed); _grAt = Date.now();
+  return _grCache;
+}
+girox.setRolloverResolver(async () => { const g = await getGlobalBonusRollover(); return g.enabled ? g.effective : null; });
+
+// Disparos de la mudanza + tick (cada instancia; todo es idempotente por candados atómicos).
+setInterval(() => { plat.migrationTick().catch(() => {}); }, 60 * 1000);
+
+/** ¿Los usuarios NUEVOS se crean directo en la plataforma nueva? */
+async function _newUsersOnPartner() {
+  try {
+    const cfg = await plat.getMigrationConfig();
+    return cfg.newUsersOnPartner === true && plat.partnerEnabled();
+  } catch (_) { return false; }
+}
+
+// Lo que necesita la PWA para el botón del casino: si este usuario ya entra con link directo.
+app.get('/api/platform/info', authMiddleware, async (req, res) => {
+  try {
+    const u = await User.findOne({ id: req.user.userId }).select('id role platform').lean();
+    if (u && u.role === 'user') plat.migrateInBackground(u.id, 'app_open');
+    const partner = !!(u && u.platform === 'partner');
+    // `sso` también es true si a este usuario le toca mudarse: así el botón del casino pasa por
+    // /api/platform/session, que espera a que la mudanza termine antes de abrir nada.
+    const soon = !partner && !!u && u.role === 'user' && await plat.wouldMigrate(u);
+    res.json({ success: true, sso: partner || soon, url: partner ? girox.getPlayUrl() : getCasinoPlayUrl() });
+  } catch (e) { res.json({ success: true, sso: false, url: getCasinoPlayUrl() }); }
+});
+// Entrada directa al casino (link de un solo uso, 60 s). Solo usuarios ya mudados.
+app.post('/api/platform/session', authMiddleware, async (req, res) => {
+  try {
+    // Si le toca mudarse, se muda ACÁ y se espera: nunca se le abre la plataforma vieja con el saldo ya retirado.
+    const prep = await plat.prepareCasino(req.user.userId);
+    if (prep.pending) return res.json({ success: false, pending: true, message: plat.MIGRATING_MSG });
+    if (!prep.partner) return res.json({ success: false, url: getCasinoPlayUrl() });
+    const r = await plat.createCasinoSession(req.user.username);
+    if (r.success) return res.json({ success: true, url: r.redirectUrl });
+    if (r.notPartner) return res.json({ success: false, url: getCasinoPlayUrl() });
+    logger.warn(`[partner] SSO de ${req.user.username} falló: ${r.error}`);
+    res.json({ success: false, url: r.playUrl || girox.getPlayUrl(), error: 'No se pudo abrir la sesión directa' });
+  } catch (e) {
+    logger.error(`[partner] /api/platform/session: ${e.message}`);
+    res.json({ success: false, url: getCasinoPlayUrl() });
+  }
+});
+
+// ---------- Panel (solo admin general) ----------
+function _platAdminOnly(req, res) {
+  if (!req.user || req.user.role !== 'admin') { res.status(403).json({ error: 'Solo el administrador general' }); return false; }
+  return true;
+}
+app.get('/api/admin/platform/status', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    await _loadPartnerCredentials();
+    const [cfg, stats, rollover] = await Promise.all([plat.getMigrationConfig({ fresh: true }), plat.migrationStats(), getGlobalBonusRollover({ fresh: true })]);
+    res.json({ success: true, partner: Object.assign({ enabled: plat.partnerEnabled() }, _partnerMeta), teams: _partnerTeamsMeta, config: cfg, stats, rollover });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/platform/partner', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const b = req.body || {};
+    const cur = (await getConfig('platformPartner', null)) || {};
+    const next = Object.assign({}, cur);
+    if (b.apiUrl !== undefined) {
+      const u = String(b.apiUrl || '').trim().replace(/\/+$/, '');
+      if (u && !/^https:\/\/[^\s]+$/i.test(u)) return res.status(400).json({ error: 'La URL de la API tiene que empezar con https://' });
+      next.apiUrl = u || null;
+    }
+    if (b.playUrl !== undefined) {
+      const p = _cleanCasinoUrl(b.playUrl);
+      if (p === null) return res.status(400).json({ error: 'La página del casino no es una dirección válida' });
+      next.playUrl = p || null;
+    }
+    if (b.clearKey === true) { next.apiKeyEnc = null; next.apiKeyLast4 = null; }
+    else if (b.apiKey !== undefined && String(b.apiKey).trim()) {
+      const k = String(b.apiKey).trim();
+      if (!/^pk_[A-Za-z0-9_]{10,}$/.test(k)) return res.status(400).json({ error: 'La API key no tiene el formato esperado (pk_…)' });
+      next.apiKeyEnc = _credEncrypt(k); next.apiKeyLast4 = k.slice(-4);
+    }
+    next.updatedBy = req.user.username; next.updatedAt = new Date();
+    await setConfig('platformPartner', next);
+    await _loadPartnerCredentials();
+    const ping = plat.partnerEnabled() ? await girox.ping() : { ok: false, estado: 'sin_configurar', detalle: 'Falta la URL o la key' };
+    logger.warn(`[partner] credenciales actualizadas por ${req.user.username} — prueba: ${ping.estado}`);
+    res.json({ success: true, partner: Object.assign({ enabled: plat.partnerEnabled() }, _partnerMeta), ping });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/platform/partner/test', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    await _loadPartnerCredentials();
+    const ping = await girox.ping();
+    let config = null;
+    if (ping.ok) { try { config = await girox.getPlatformConfig({ force: true }); } catch (_) {} }
+    res.json({ success: true, ping, config });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// EQUIPOS: nombre + inicios de username + API key propia. Alta / edición (con `id`).
+app.post('/api/admin/platform/teams', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const b = req.body || {};
+    const cur = (await getConfig('platformPartner', null)) || {};
+    const teams = Array.isArray(cur.teams) ? cur.teams.slice() : [];
+    const name = String(b.name || '').trim().slice(0, 40);
+    if (!name) return res.status(400).json({ error: 'Poné el nombre del equipo' });
+    const prefixes = Array.from(new Set((Array.isArray(b.prefixes) ? b.prefixes : String(b.prefixes || '').split(/[\s,;]+/))
+      .map(x => String(x || '').trim().toLowerCase()).filter(Boolean)));
+    if (!prefixes.length) return res.status(400).json({ error: 'Poné al menos un inicio de usuario (por ejemplo: ato)' });
+    for (const pre of prefixes) {
+      if (!/^[a-z0-9_]{1,18}$/.test(pre)) return res.status(400).json({ error: `El inicio "${pre}" no es válido: solo letras, números y guion bajo` });
+    }
+    const idx = b.id ? teams.findIndex(t => t.id === String(b.id)) : -1;
+    if (b.id && idx < 0) return res.status(404).json({ error: 'Equipo no encontrado' });
+    for (const t of teams) {
+      if (idx >= 0 && t.id === teams[idx].id) continue;
+      const clash = (t.prefixes || []).find(x => prefixes.includes(x));
+      if (clash) return res.status(400).json({ error: `El inicio "${clash}" ya es del equipo ${t.name}` });
+      if (String(t.name).toLowerCase() === name.toLowerCase()) return res.status(400).json({ error: 'Ya hay un equipo con ese nombre' });
+    }
+    const team = idx >= 0 ? Object.assign({}, teams[idx]) : { id: 't' + uuidv4().replace(/-/g, '').slice(0, 8) };
+    team.name = name; team.prefixes = prefixes;
+    const k = String(b.apiKey || '').trim();
+    let keyTest = null;
+    if (k) {
+      if (!/^pk_[A-Za-z0-9_]{10,}$/.test(k)) return res.status(400).json({ error: 'La API key no tiene el formato esperado (pk_…)' });
+      if (!girox.getBaseUrl()) return res.status(400).json({ error: 'Primero cargá la URL de la API (paso 1)' });
+      // Se prueba ANTES de guardar: una key rechazada no entra.
+      const probe = await girox.readPlayerWithKey(k, 'zz_probe_' + Date.now().toString(36).slice(-8));
+      if (probe.code !== 'player_not_found') {
+        return res.status(400).json({ error: 'La plataforma no aceptó esa key: ' + girox.errToString(probe.error || probe.code || 'sin respuesta') });
+      }
+      keyTest = 'ok';
+      team.apiKeyEnc = _credEncrypt(k); team.apiKeyLast4 = k.slice(-4);
+    } else if (!team.apiKeyEnc) {
+      return res.status(400).json({ error: 'Falta la API key del equipo' });
+    }
+    team.updatedBy = req.user.username; team.updatedAt = new Date();
+    if (idx >= 0) teams[idx] = team; else teams.push(team);
+    await setConfig('platformPartner', Object.assign({}, cur, { teams }));
+    await _loadPartnerCredentials();
+    logger.warn(`[partner] equipo ${team.name} (${prefixes.join(', ')}) ${idx >= 0 ? 'editado' : 'creado'} por ${req.user.username}`);
+    res.json({ success: true, teams: _partnerTeamsMeta, keyTest });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/admin/platform/teams/:id', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const id = String(req.params.id);
+    const used = await User.countDocuments({ partnerTeam: id });
+    if (used > 0) return res.status(400).json({ error: `No se puede borrar: ${used} usuarios ya están en jugaygana.io con la key de este equipo. Sin esa key no se les puede cargar ni retirar.` });
+    const cur = (await getConfig('platformPartner', null)) || {};
+    const teams = (Array.isArray(cur.teams) ? cur.teams : []).filter(t => t.id !== id);
+    await setConfig('platformPartner', Object.assign({}, cur, { teams }));
+    await _loadPartnerCredentials();
+    logger.warn(`[partner] equipo ${id} borrado por ${req.user.username}`);
+    res.json({ success: true, teams: _partnerTeamsMeta });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Reanudar la mudanza de un equipo que se frenó sola (sin fichas).
+app.post('/api/admin/platform/teams/:id/resume', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const cfg = await plat.getMigrationConfig({ fresh: true });
+    const pt = Object.assign({}, cfg.pausedTeams); delete pt[String(req.params.id)];
+    const next = await plat.saveMigrationConfig({ pausedTeams: pt }, req.user.username);
+    res.json({ success: true, config: next });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/platform/migration/config', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const b = req.body || {};
+    const patch = {};
+    if (b.mode !== undefined) {
+      if (!['off', 'list', 'all'].includes(b.mode)) return res.status(400).json({ error: 'Modo inválido' });
+      if (b.mode !== 'off' && !plat.partnerEnabled()) return res.status(400).json({ error: 'Primero cargá la URL y la key de jugaygana.io' });
+      patch.mode = b.mode;
+    }
+    if (b.usernames !== undefined) {
+      patch.usernames = (Array.isArray(b.usernames) ? b.usernames : String(b.usernames || '').split(/[\s,;]+/)).map(x => String(x || '').trim().replace(/^@/, '')).filter(Boolean);
+    }
+    if (b.capARS !== undefined) {
+      const n = Number(b.capARS);
+      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Tope inválido' });
+      patch.capARS = n;
+    }
+    if (b.paused !== undefined) { patch.paused = b.paused === true; patch.pausedReason = b.paused === true ? `Pausada por ${req.user.username}` : null; }
+    if (b.createMissing !== undefined) patch.createMissing = b.createMissing === true;
+    if (b.newUsersOnPartner !== undefined) {
+      if (b.newUsersOnPartner === true && !plat.partnerEnabled()) return res.status(400).json({ error: 'Primero cargá la URL y la key de jugaygana.io' });
+      patch.newUsersOnPartner = b.newUsersOnPartner === true;
+    }
+    const cfg = await plat.saveMigrationConfig(patch, req.user.username);
+    logger.warn(`[mudanza] config cambiada por ${req.user.username}: ${JSON.stringify(Object.assign({}, patch, patch.usernames ? { usernames: patch.usernames.length + ' usuarios' } : {}))}`);
+    res.json({ success: true, config: cfg });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/platform/migrations', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const rows = await plat.listMigrations({ status: req.query.status || null, q: req.query.q || null, limit: req.query.limit || 100 });
+    res.json({ success: true, migrations: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Mudar YA a un usuario puntual (saltea modo / lista / pausa / tope). Sirve para la primera
+// prueba y para aprobar a los que superan el tope.
+app.post('/api/admin/platform/migrate-user', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    if (!plat.partnerEnabled()) return res.status(400).json({ error: 'Primero cargá la URL y la key de jugaygana.io' });
+    const name = String((req.body && req.body.username) || '').trim().replace(/^@/, '');
+    const u = name ? await findUserByUsernameCI(name) : null;
+    if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (u.role !== 'user') return res.status(400).json({ error: 'Solo se mudan cuentas de jugador' });
+    const r = await plat.migrateUser(u.id, { force: true, trigger: 'admin', by: req.user.username });
+    const m = (await plat.listMigrations({ q: u.username, limit: 5 })).find(x => x.userId === u.id) || null;
+    logger.warn(`[mudanza] ${req.user.username} forzó la mudanza de ${u.username}: ${r.status}`);
+    res.json({ success: true, result: r, migration: m });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/platform/migrations/:userId/resolve', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const w = req.body && req.body.withdrawn;
+    if (w !== true && w !== false) return res.status(400).json({ error: 'Indicá si el retiro en JUGAYGANA se hizo o no' });
+    const r = await plat.resolveReview(String(req.params.userId), { withdrawn: w, by: req.user.username });
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    logger.warn(`[mudanza] ${req.user.username} resolvió la revisión de ${req.params.userId}: retiro ${w ? 'SÍ' : 'NO'} hecho`);
+    res.json({ success: true, result: r.result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/platform/migrations/:userId/residual', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const b = req.body || {};
+    const r = (b.reference && b.amount)
+      ? await plat.retryResidualDeposit(String(req.params.userId), Number(b.amount), String(b.reference))
+      : await plat.moveOldResidual(String(req.params.userId), req.user.username);
+    if (!r.ok) return res.status(400).json(Object.assign({ error: r.error }, r));
+    res.json(Object.assign({ success: true }, r));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/platform/rollover', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const b = req.body || {};
+    const x = Math.round(Number(b.x));
+    if (!bonusRollover.BONUS_ROLLOVER_OPTIONS.includes(x)) return res.status(400).json({ error: 'Rollover inválido' });
+    await setConfig('bonusRolloverGlobal', { enabled: b.enabled !== false, x, updatedBy: req.user.username, updatedAt: new Date() });
+    res.json({ success: true, rollover: await getGlobalBonusRollover({ fresh: true }) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ============================================
@@ -8834,7 +9194,9 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
       return _origJson(body);
     };
 
-    const userInfo = await jugaygana.getUserInfoByName(username);
+    // #197: saldo desde la plataforma del usuario (para quien sigue en JUGAYGANA es la misma lectura de siempre).
+    const _rsBal = await plat.getUserBalance(username, { display: true });
+    const userInfo = (_rsBal && _rsBal.success) ? { balance: _rsBal.balance } : null;
     const currentBalance = userInfo ? userInfo.balance : 0;
 
     // Rangos de fechas (zona horaria Argentina)
@@ -8865,10 +9227,10 @@ app.get('/api/refunds/status', authMiddleware, async (req, res) => {
     // plataforma no responde para un período, ese netLoss queda en 0 (no se preview de más).
     const jgId = await resolveJugayganaUserId(userId, username);
     const [dN, wN, mN, curN] = await Promise.all([
-      referralRevenueService.getUserNetwinForDateRange(username, jgId, dailyFrom, dailyTo, 'refund-daily'),
-      referralRevenueService.getUserNetwinForDateRange(username, jgId, weeklyFrom, weeklyTo, 'refund-weekly'),
-      referralRevenueService.getUserNetwinForDateRange(username, jgId, monthlyFrom, monthlyTo, 'refund-monthly'),
-      referralRevenueService.getUserNetwinForDateRange(username, jgId, curMonthFrom, curMonthTo, 'refund-tier')
+      plat.getUserNetwinForDateRange(username, jgId, dailyFrom, dailyTo, 'refund-daily'),
+      plat.getUserNetwinForDateRange(username, jgId, weeklyFrom, weeklyTo, 'refund-weekly'),
+      plat.getUserNetwinForDateRange(username, jgId, monthlyFrom, monthlyTo, 'refund-monthly'),
+      plat.getUserNetwinForDateRange(username, jgId, curMonthFrom, curMonthTo, 'refund-tier')
     ]);
     const dailyNetLoss = dN.success ? Math.max(0, Number(dN.totalGgr) || 0) : 0;
     const weeklyNetLoss = wN.success ? Math.max(0, Number(wN.totalGgr) || 0) : 0;
@@ -9016,7 +9378,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
       }
 
       // NETWIN/GGR REAL de ayer (apostado − ganado), misma fuente que referidos.
-      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-daily');
+      const netRes = await plat.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-daily');
       if (!netRes.success) {
         logger.warn(`[REFUND] daily — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
         return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
@@ -9047,7 +9409,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
         const _lastDay = new Date(_dy, _dm, 0).getDate();
         tierRange = jugaygana.getMonthToDateRangeForDateArgentina(`${dateStr.slice(0, 7)}-${String(_lastDay).padStart(2, '0')}`);
       }
-      const tierRes = await referralRevenueService.getUserNetwinForDateRange(
+      const tierRes = await plat.getUserNetwinForDateRange(
         username, jugayganaUserId,
         new Date(tierRange.fromEpoch * 1000), new Date(tierRange.toEpoch * 1000),
         'refund-tier'
@@ -9099,7 +9461,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
       // diario se reclama 7 veces más seguido.
       let depositResult;
       try {
-        depositResult = await jugaygana.creditUserBalance(username, refundAmount, jugayganaUserId);
+        depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso diario' });
       } catch (creditErr) {
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         logger.error(`[REFUND] daily — excepción al acreditar a ${username}, reserva liberada: ${creditErr.message}`);
@@ -9229,7 +9591,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
       const toDate = new Date(toEpoch * 1000);
 
       // NETWIN/GGR REAL del período (apostado − ganado), misma fuente que referidos.
-      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-weekly');
+      const netRes = await plat.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-weekly');
       if (!netRes.success) {
         logger.warn(`[REFUND] weekly — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
         return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
@@ -9268,7 +9630,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         const _lastDay = new Date(_wy, _wm, 0).getDate();
         tierRange = jugaygana.getMonthToDateRangeForDateArgentina(`${fromDateStr.slice(0, 7)}-${String(_lastDay).padStart(2, '0')}`);
       }
-      const tierRes = await referralRevenueService.getUserNetwinForDateRange(
+      const tierRes = await plat.getUserNetwinForDateRange(
         username, jugayganaUserId,
         new Date(tierRange.fromEpoch * 1000), new Date(tierRange.toEpoch * 1000),
         'refund-tier'
@@ -9313,7 +9675,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         throw e;
       }
 
-      const depositResult = await jugaygana.creditUserBalance(username, refundAmount, jugayganaUserId);
+      const depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso semanal' });
 
       if (!depositResult.success && depositResult.ambiguous) {
         // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
@@ -9428,7 +9790,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
       const toDate = new Date(toEpoch * 1000);
 
       // NETWIN/GGR REAL del período (apostado − ganado), misma fuente que referidos.
-      const netRes = await referralRevenueService.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-monthly');
+      const netRes = await plat.getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, 'refund-monthly');
       if (!netRes.success) {
         logger.warn(`[REFUND] monthly — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
         return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
@@ -9485,7 +9847,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         throw e;
       }
 
-      const depositResult = await jugaygana.creditUserBalance(username, refundAmount, jugayganaUserId);
+      const depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso mensual' });
 
       if (!depositResult.success && depositResult.ambiguous) {
         // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
@@ -9694,7 +10056,7 @@ app.post('/api/admin/refund-tiers', authMiddleware, adminMiddleware, async (req,
 app.get('/api/balance', authMiddleware, async (req, res) => {
   try {
     const username = req.user.username;
-    const result = await jugayganaMovements.getUserBalance(username);
+    const result = await plat.getUserBalance(username);
     
     if (result.success) {
       res.json({
@@ -9736,7 +10098,7 @@ app.get('/api/balance/live', authMiddleware, async (req, res) => {
         updatedAt: new Date(cached.ts).toISOString()
       });
     }
-    const result = await jugayganaMovements.getUserBalance(username);
+    const result = await plat.getUserBalance(username);
 
     if (result.success) {
       _balanceLiveCache.set(username, { balance: result.balance, ts: Date.now() });
@@ -9767,7 +10129,7 @@ app.get('/api/movements', authMiddleware, async (req, res) => {
     const username = req.user.username;
     const { startDate, endDate, page = 1 } = req.query;
     
-    const result = await jugayganaMovements.getUserMovements(username, {
+    const result = await plat.getUserMovements(username, {
       startDate,
       endDate,
       page: parseInt(page),
@@ -9829,7 +10191,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
     }
     const _bankRelease = (toStatus, extra) => _bankReleaseClaim(_bankMovementId, _bankClaimed, toStatus, extra);
 
-    const result = await jugaygana.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
+    const result = await plat.depositToUser(user.username, parseFloat(amount), description, user.jugayganaUserId || null);
 
     if (!result.success && result.ambiguous) {
       await _bankRelease('needs_review', { matchedUserId: user.id, matchedUsername: user.username, chargeError: 'AMBIGUO: verificar en JUGAYGANA si la carga manual entró' });
@@ -9892,7 +10254,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         // ShowUsers (causa documentada de fallas por paginación / scoping de
         // sub-agentes). Si el usuario no tiene jugayganaUserId persistido
         // (legacy), creditUserBalance cae al lookup tradicional.
-        bonusJgResult = await jugaygana.creditUserBalance(
+        bonusJgResult = await plat.creditUserBalance(
           user.username,
           parseFloat(bonus),
           user.jugayganaUserId || null
@@ -9951,7 +10313,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           const _loteAmt = _loteBonusAmount(parseFloat(amount), _lc.pct, _loteCfg); // #172 tope
           const _loteCapNote = _loteCapTxt(_lc.pct, _loteCfg);
           await new Promise(r => setTimeout(r, 700));
-          const _lcRes = await jugaygana.creditUserBalance(user.username, _loteAmt, user.jugayganaUserId || null).catch(() => null);
+          const _lcRes = await plat.creditUserBalance(user.username, _loteAmt, user.jugayganaUserId || null).catch(() => null);
           if (_lcRes && _lcRes.success && _loteAmt > 0) {
             _loteClaim = _lc;
             await settleAutoPromoPercent(_lc, parseFloat(amount), _loteAmt);
@@ -10068,7 +10430,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
       // histórico donde un fallo transitorio post-depósito hacía que el server
       // mandara "Tu nuevo saldo es $0" engañoso (el depósito SÍ se aplicó pero
       // getUserBalance falló y defaulteábamos a 0).
-      const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+      const balanceResult = await plat.getUserBalanceWithRetry(user.username);
       let newBalance = null;
       if (balanceResult.success) {
         newBalance = balanceResult.balance;
@@ -10403,7 +10765,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
 app.get('/api/admin/balance/:username', authMiddleware, adminMiddleware, async (req, res) => {
   try {
     const { username } = req.params;
-    const result = await jugayganaMovements.getUserBalance(username);
+    const result = await plat.getUserBalance(username);
     
     if (result.success) {
       res.json({ balance: result.balance });
@@ -10446,7 +10808,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
       });
     }
 
-    const result = await jugaygana.withdrawFromUser(user.username, amount, description);
+    const result = await plat.withdrawFromUser(user.username, amount, description);
     
     if (result.success) {
       await recordUserActivity(user.id, 'withdrawal', amount);
@@ -10455,7 +10817,7 @@ app.post('/api/admin/withdrawal', authMiddleware, withdrawerMiddleware, async (r
 
       // Obtener saldo actualizado del usuario. Reintenta para evitar "saldo $0"
       // engañoso cuando getUserBalance falla transitoriamente post-retiro.
-      const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(user.username);
+      const balanceResult = await plat.getUserBalanceWithRetry(user.username);
       let newBalance = null;
       if (balanceResult.success) {
         newBalance = balanceResult.balance;
@@ -10603,7 +10965,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
 
     // Pasamos jugayganaUserId guardado para saltearse el lookup en ShowUsers.
     // Bypasea el bug "user not found" por paginación / scoping de sub-agentes.
-    const depositResult = await jugaygana.creditUserBalance(
+    const depositResult = await plat.creditUserBalance(
       resolvedUsername,
       bonusAmount,
       bonusUser.jugayganaUserId || null
@@ -10631,7 +10993,7 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
       });
 
       // Obtener saldo actualizado para incluirlo en el mensaje (con retry)
-      const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(resolvedUsername);
+      const balanceResult = await plat.getUserBalanceWithRetry(resolvedUsername);
       const newBalance = balanceResult.success ? balanceResult.balance : null;
       if (!balanceResult.success) {
         logger.warn(`[bonus] getUserBalanceWithRetry falló para ${resolvedUsername} tras bonus $${bonusAmount}. error=${balanceResult.error}`);
@@ -12221,7 +12583,7 @@ app.post('/api/movements/deposit', authMiddleware, depositorMiddleware, async (r
       return res.status(400).json({ error: 'Monto mínimo $100' });
     }
     
-    const result = await jugaygana.depositToUser(
+    const result = await plat.depositToUser(
       username,
       amount,
       `Depósito desde Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
@@ -12297,7 +12659,7 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
     }
     withdrawLockAcquired = true;
 
-    const result = await jugaygana.withdrawFromUser(
+    const result = await plat.withdrawFromUser(
       username,
       amountNum,
       `Retiro desde Sala de Juegos - ${new Date().toLocaleString('es-AR')}`
@@ -12337,7 +12699,7 @@ app.post('/api/movements/withdraw', authMiddleware, async (req, res) => {
 app.get('/api/movements/balance', authMiddleware, async (req, res) => {
   try {
     const username = req.user.username;
-    const result = await jugayganaMovements.getUserBalance(username);
+    const result = await plat.getUserBalance(username);
 
     if (result.success) {
       res.json({ balance: result.balance });
@@ -12425,14 +12787,15 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
     // descuento falla y no se paga — y al rechazar no hay que devolver nada.
     // CON retry (2 intentos): JUGAYGANA es flaky y a veces el lookup de saldo tarda/falla;
     // el reintento entra la mayoría de las veces. Cada intento ya falla rápido (timeout 12s).
-    const balanceResult = await jugayganaMovements.getUserBalanceWithRetry(username, { maxAttempts: 2, baseDelayMs: 400 });
+    const balanceResult = await plat.getUserBalanceWithRetry(username, { maxAttempts: 2, baseDelayMs: 400 });
     if (!balanceResult.success) {
       return res.status(503).json({
         error: 'La plataforma está demorada en este momento. Esperá unos segundos y volvé a intentar el retiro.',
         code: 'PLATFORM_SLOW'
       });
     }
-    const available = Number(balanceResult.balance) || 0;
+    // #197: con rollover en la plataforma nueva lo retirable es `available`, no `balance`.
+    const available = Number(plat.withdrawable(balanceResult)) || 0;
     if (available < amountNum) {
       return res.status(400).json({
         error: available <= 0
@@ -13159,7 +13522,7 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
       try { return JSON.stringify(value); } catch { return String(value); }
     };
 
-    const bonusResult = await jugayganaMovements.makeBonus(username, rewardAmount, rewardDesc + ' - Sala de Juegos');
+    const bonusResult = await plat.makeBonus(username, rewardAmount, rewardDesc + ' - Sala de Juegos');
 
     if (!bonusResult.success) {
       // La acreditación falló → DEVOLVER el premio a pendiente para que el cliente
@@ -17354,7 +17717,7 @@ async function _referralNetwinMonth(u, range) {
     let jgId = u.jugayganaUserId || null;
     if (!jgId) { try { jgId = await resolveJugayganaUserId(u.id, u.username); } catch (_) {} }
     if (jgId) {
-      const r = await referralRevenueService.getUserNetwinForDateRange(u.username, jgId, range.from, range.to, 'ref-dashboard');
+      const r = await plat.getUserNetwinForDateRange(u.username, jgId, range.from, range.to, 'ref-dashboard');
       if (r && r.success) ggr = Number(r.totalGgr) || 0;
     }
   } catch (_) {}
@@ -17641,8 +18004,11 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   //    el saldo" aunque el cliente y su saldo existieran. 3 intentos (500/1000ms),
   //    igual que el resto de lecturas de saldo del server. Si aun así falla, el
   //    payout queda 'failed' (re-pagable desde el panel) y NO se descontó nada.
-  const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
-  const avail = (balRes && balRes.success) ? (Number(balRes.balance) || 0) : null;
+  const balRes = await plat.getUserBalanceWithRetry(payout.username);
+  // #197: `avail` = lo RETIRABLE (en la plataforma nueva, con rollover, puede ser menos que el
+  // saldo); `balBefore` = saldo total, para comparar contra el saldo de después (anti-fantasma).
+  const avail = (balRes && balRes.success) ? (Number(plat.withdrawable(balRes)) || 0) : null;
+  const balBefore = (balRes && balRes.success) ? (Number(balRes.balance) || 0) : null;
   if (avail === null) {
     // Decisión del owner (2026-09-14): sin lectura de saldo NO se descuenta ni se paga,
     // aunque tengamos el id guardado — el cliente pudo haber perdido el saldo que tenía
@@ -17660,8 +18026,8 @@ async function _deductChipsAtConfirm(payout, agentUser) {
     return { ok: false, insufficient: true, balance: avail };
   }
   // 3) Descontar en JUGAYGANA.
-  const w = await jugaygana.withdrawFromUser(payout.username, amt, `Retiro confirmado - ${payout.username}`, jgId);
-  if (w && !w.success && !w.ambiguous && /not enough money|insufficient|saldo insuficiente/i.test(jugaygana.errToString(w.error || ''))) {
+  const w = await plat.withdrawFromUser(payout.username, amt, `Retiro confirmado - ${payout.username}`, jgId, { reference: `vip-payout-${payout.id}` }); // #197
+  if (w && !w.success && !w.ambiguous && (w.code === 'insufficient_funds' || w.code === 'rollover_locked' || /not enough money|insufficient|saldo insuficiente/i.test(jugaygana.errToString(w.error || '')))) {
     // #161: la API rechazó por fondos (llegamos acá sin poder leer el saldo antes).
     await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'cancelled', error: 'Saldo insuficiente al confirmar (rechazado por JUGAYGANA)', balanceBefore: avail, debitConfirmed: false } });
     await _notifyInsufficientAndCloseChat(payout, avail != null ? avail : 0, agentUser);
@@ -17682,9 +18048,12 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   // 4) Verificar el descuento (anti-fantasma): el saldo tiene que haber bajado.
   let after = null, deducted = false;
   try {
-    const a = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
-    if (a && a.success) { after = Number(a.balance) || 0; deducted = (avail - after) >= (amt - 1); }
+    const a = await plat.getUserBalanceWithRetry(payout.username);
+    if (a && a.success) { after = Number(a.balance) || 0; deducted = (balBefore - after) >= (amt - 1); }
   } catch (_) {}
+  // #197: en la plataforma nueva, `duplicate` = ese descuento (misma reference = mismo payout)
+  // YA estaba hecho de un intento anterior: es la confirmación, aunque el saldo no baje ahora.
+  if (!deducted && w.success && w.duplicate === true) deducted = true;
   // #161: si el saldo DESPUÉS no se pudo leer pero JUGAYGANA respondió JSON success al
   // WithdrawMoney, esa respuesta ES la confirmación del descuento (la verificación por
   // saldo existe para los casos HTML/timeout, que vienen marcados `verifiedByBalance`).
@@ -17862,13 +18231,13 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
         const user = await User.findOne({ id: payout.userId });
         const jgId = (user && user.jugayganaUserId) || null;
         let ok = false, data = null;
-        try { const r = await jugaygana.depositToUser(payout.username, W, 'Devolución de retiro rechazado', jgId); if (r && r.success) { ok = true; data = r.data; } } catch (e) { logger.error(`[payout-cancel] devolución (deductAtPay) falló payout=${id}: ${e.message}`); }
+        try { const r = await plat.depositToUser(payout.username, W, 'Devolución de retiro rechazado', jgId, { reference: `vip-payoutref-${payout.id}`, noAutoMigrate: true }); if (r && r.success) { ok = true; data = r.data; } } catch (e) { logger.error(`[payout-cancel] devolución (deductAtPay) falló payout=${id}: ${e.message}`); }
         if (ok) {
           await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true } });
           try {
             await Transaction.create({ id: uuidv4(), type: 'deposit', amount: W, username: payout.username, userId: payout.userId, description: 'Devolución de retiro rechazado', adminId: req.user.userId, adminUsername: req.user.username, adminRole: req.user.role, transactionId: data?.transfer_id || data?.transferId, metadata: { source: 'payout_refund', refundKind: 'chips', payoutId: payout.id }, timestamp: new Date() });
           } catch (_) {}
-          try { const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username); const uSock = connectedUsers.get(payout.userId); if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance }); } catch (_) {}
+          try { const balRes = await plat.getUserBalanceWithRetry(payout.username); const uSock = connectedUsers.get(payout.userId); if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance }); } catch (_) {}
           await _emitAdminOnlyChatNote(payout.userId, payout.username, `↩️ Retiro RECHAZADO: se devolvió $${W.toLocaleString('es-AR')} en fichas (el pago había fallado tras descontar).`);
           return res.json({ success: true, chipsReturned: true });
         }
@@ -17945,11 +18314,11 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
     let bonusOk = bonusPart <= 0; // sin parte de bonus  → ya "ok"
     try {
       if (chipsPart > 0) {
-        const r = await jugaygana.depositToUser(payout.username, chipsPart, 'Devolución de retiro rechazado (fichas)', jgId);
+        const r = await plat.depositToUser(payout.username, chipsPart, 'Devolución de retiro rechazado (fichas)', jgId, { reference: `vip-payoutref-${payout.id}-chips`, noAutoMigrate: true });
         if (r && r.success) { chipsOk = true; await mkRefundTx(chipsPart, 'chips', r.data); }
       }
       if (bonusPart > 0) {
-        const r = await jugaygana.creditUserBalance(payout.username, bonusPart, jgId);
+        const r = await plat.creditUserBalance(payout.username, bonusPart, jgId, { reference: `vip-payoutref-${payout.id}-bonus`, description: 'Devolución de retiro rechazado (bonus)', ignoreGlobalRollover: true });
         if (r && r.success) { bonusOk = true; await mkRefundTx(bonusPart, 'bonus', r.data); }
       }
     } catch (e) {
@@ -17960,7 +18329,7 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
     if (refunded) {
       await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true } });
       try {
-        const balRes = await jugayganaMovements.getUserBalanceWithRetry(payout.username);
+        const balRes = await plat.getUserBalanceWithRetry(payout.username);
         const uSock = connectedUsers.get(payout.userId);
         if (uSock && balRes.success) uSock.emit('balance_updated', { balance: balRes.balance });
       } catch (_) {}
@@ -19095,7 +19464,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     // Hay premio → auto-credit jugaygana.
     let credit;
     try {
-      credit = await jugaygana.creditUserBalance(username, prizeARS);
+      credit = await plat.creditUserBalance(username, prizeARS, null, { reference: `vip-roulette-${spinDoc.id}`, description: 'Premio ruleta diaria' });
     } catch (e) {
       credit = { success: false, error: e.message };
     }
@@ -19304,7 +19673,7 @@ app.post('/api/admin/roulette/:id/retry-credit', authMiddleware, adminMiddleware
 
     let credit;
     try {
-      credit = await jugaygana.creditUserBalance(spin.username, spin.prizeARS);
+      credit = await plat.creditUserBalance(spin.username, spin.prizeARS, null, { reference: `vip-roulette-${spin.id}`, description: 'Premio ruleta diaria' }); // #197: misma reference que el giro original → el reintento no duplica
     } catch (e) {
       credit = { success: false, error: e.message };
     }
@@ -20553,7 +20922,7 @@ async function _creditNotifBatchGift(uDoc, batch) {
   // el saldo antes de acreditar a mano. Nunca doble pago automático.
   let credit;
   try {
-    credit = await jugaygana.creditUserBalance(uDoc.username, batch.amount, uDoc.jugayganaUserId || null);
+    credit = await plat.creditUserBalance(uDoc.username, batch.amount, uDoc.jugayganaUserId || null, { reference: `vip-nbatch-${batch.id}-${uDoc.id}`, description: 'Regalo de lote' });
   } catch (e) {
     logger.warn(`[notif-batch] crédito de fichas EXCEPCIÓN para ${uDoc.username} (lote ${batch.id}): ${e.message}`);
     return { ok: false, retryable: false, reason: 'error de red — VERIFICAR en JUGAYGANA si entró antes de acreditar a mano' };

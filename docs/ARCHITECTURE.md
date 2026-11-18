@@ -7,7 +7,7 @@
 >
 > Última actualización integral: **2026-07-09** (lectura de punta a punta de todo el
 > repo: server.js completo, clientes JUGAYGANA, 28 modelos, servicios, PWA y panel).
-> Actualización parcial 2026-11-04: **sección propia "🏛️ Bancos — Configuración" en el panel (#195, réplica #224 de CARGASGIROXactivo: todo lo de bancos salió de COMANDOS; mismos ids/endpoints)** y **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
+> Actualización parcial 2026-11-18: §10 nueva — mudanza PLANEADA a jugaygana.io / Partner API, material en `docs/1girox/` (#196; nada implementado). Antes, 2026-11-04: **sección propia "🏛️ Bancos — Configuración" en el panel (#195, réplica #224 de CARGASGIROXactivo: todo lo de bancos salió de COMANDOS; mismos ids/endpoints)** y **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
 > CARGASGIROXactivo)** — ver "Cuentas hgcash múltiples" en la auto-carga del banco.
 > Los números de línea derivan con cada cambio — usalos como referencia aproximada y
 > confirmá con grep.
@@ -22,6 +22,7 @@
 7. Motores automáticos / crons
 8. Convenciones importantes
 9. Trampas / "no rompas esto"
+10. Mudanza planeada a jugaygana.io (Partner API) — no implementada
 
 ---
 
@@ -745,3 +746,84 @@ El backfill de `usernameLower` corre en CADA arranque (idempotente) y setea
 - **`checkUsernameAvailability` (PWA)**: existe pero no se dispara — mejora pendiente.
 - **vercel.json es un artefacto** de un deploy anterior; el deploy real es AWS EB.
 - **Env DB_PASSWORD ya no se usa** (sección Base de Datos eliminada 2026-07-09).
+
+## 10. Mudanza a jugaygana.io (Partner API) — implementada usuario por usuario, APAGADA por defecto (#197, 2026-11-18)
+
+Todo lo de §4 describe JUGAYGANA y sigue vigente: **las dos plataformas conviven**. Qué plataforma usa cada usuario lo dice
+`User.platform` (`'jugaygana'` default | `'partner'` = jugaygana.io). Material de la API en `docs/1girox/` (manual v1.20, lo aprendido
+en el gemelo, y §15 de `CONOCIMIENTO-EN-PRODUCCION.md` con lo medido en jugaygana.io).
+
+### 10.1 Piezas
+
+| Pieza | Qué es |
+|---|---|
+| `src/services/giroxService.js` | cliente de la Partner API (copia del gemelo). Lee `GIROX_API_URL` / `GIROX_API_KEY` / `GIROX_PLAY_URL` de `process.env` en cada request. Agregados propios: `lookupPlayer` (found / not_found / error) y `no_bonus:true` en el alta |
+| `src/services/platform.js` (`plat`) | **fachada + motor de mudanza**. Mismos nombres y firmas que los clientes viejos + un `opts` final (`reference`, `description`, `ignoreGlobalRollover`, `noAutoMigrate`) |
+| `src/models/PlatformMigration.js` | libro de la mudanza, uno por usuario |
+| `User.platform`, `platformMigratedAt`, `platformMigrating(At)`, `partnerPasswordSynced` | marca y candado por usuario |
+| `User.partnerTeam` | equipo de jugaygana.io bajo el que existe el jugador (`'default'` = key general). Se fija al crearlo/encontrarlo allá |
+| `Config['platformMigration']` | `{ mode: off/list/all, usernames[], capARS: 200000, paused, pausedReason, createMissing (default true), newUsersOnPartner, pausedTeams{teamId: motivo} }` (cache 10 s) |
+| `Config['platformPartner']` | `{ apiUrl, apiKeyEnc, apiKeyLast4, playUrl, teams[{ id, name, prefixes[], apiKeyEnc, apiKeyLast4 }] }` — keys cifradas con `_credEncrypt`; las de equipos se pasan descifradas con `plat.setTeams`; `_loadPartnerCredentials` (8 s + cada 30 s) la vuelca a `process.env.GIROX_*`. Panel > env |
+| `Config['bonusRolloverGlobal']` | `{ enabled, x }` default prendido x3; `getGlobalBonusRollover()` lo ajusta a los multiplicadores que permite la plataforma y se inyecta con `girox.setRolloverResolver` |
+
+### 10.2 La fachada
+
+- Usuario en `'jugaygana'` → llamada idéntica al cliente viejo (`jugaygana.depositToUser`, `jugaygana.withdrawFromUser`,
+  `jugaygana.creditUserBalance`, `jugayganaMovements.getUserBalance(WithRetry)` / `makeBonus` / `getUserMovements`,
+  `referralRevenueService.getUserNetwinForDateRange`, `jugayganaService.changeUserPasswordAsAdmin`).
+- Usuario en `'partner'` → `giroxService`, montos en pesos, siempre con `reference` (la del caller o una generada). Error transitorio
+  (sin status, 429, 5xx) ⇒ `{ success:false, ambiguous:true }`; rechazo de negocio ⇒ fallo común con `code`.
+- Usuario con candado ⇒ `{ success:false, code:'migrating' }` sin tocar ninguna plataforma. El saldo, mientras la carga en la nueva
+  está pendiente, devuelve el monto debido.
+- Saldo de un usuario en la nueva trae además `available` (lo retirable con rollover): usar `plat.withdrawable(res)` para validar retiros.
+- Netwin de un usuario mudado = JUGAYGANA (solo si el rango empieza antes de `platformMigratedAt`) + `GET /stats` de la nueva. Si una de
+  las dos partes falla, falla todo (no se paga con la mitad de los datos).
+- Siguen directo contra JUGAYGANA (no pasan por la fachada): altas (`syncUserToPlatform`), `loginAsUser`, import en el login,
+  `lookupUserOrError`, pool de publicistas, rangos de fecha.
+
+### 10.2b Equipos (una API key por equipo)
+
+- `plat.teamForUsername(u)`: el inicio más largo que coincida (sin distinguir mayúsculas) elige el equipo; sin coincidencia → `'default'`.
+- `plat.keyResolver(username)` está inyectado en `girox.setKeyResolver`: TODA operación por username firma con la key del equipo del
+  usuario (`User.partnerTeam` si ya está fijado; si no, el del inicio). Cache 60 s por username. `null` = key general.
+- Equipo sin key o imposible de resolver → devuelve una key inválida a propósito: 401, no se opera con la key de otro equipo.
+- Recién arrancado el server, la primera operación espera a `_loadPartnerCredentials` (hook `loadTeams`).
+- Un equipo con usuarios (`User.partnerTeam`) no se puede borrar: sin su key esos jugadores quedan inoperables.
+
+### 10.3 Mudanza de un usuario (`plat.migrateUser(userId, {trigger, force, by})`)
+
+1. Elegibilidad: rol `user`, modo y lista, no pausada, plataforma nueva configurada. `force` (admin) saltea modo/lista/pausa/tope.
+2. Candado atómico (`findOneAndUpdate` sobre `platformMigrating`); uno colgado se pisa a los 10 min.
+3. Equipo por inicio (sin key → `held:team_no_key`). `lookupPlayer` en la nueva con esa key: no existe → se CREA con clave provisoria
+   (`createMissing`, default; apagado → `held:not_in_new`); nombre tomado con otra key → `held:foreign`; saldo ≥ $1 →
+   `held:new_has_balance`. Confirmado que existe → `User.partnerTeam` queda fijo.
+4. Saldo en la vieja; mayor al tope → `held:cap` + Telegram.
+5. Se persiste `phase:'withdrawing'` y recién ahí se retira todo en la vieja. Ambiguo → `review`. Rechazo → `failed` (reintenta a los 2 min).
+6. `phase:'withdrawn'` → carga en la nueva (`vip-mig-<userId>-r<round>`, `noBonus`). Falla → `deposit_pending` con candado;
+   `insufficient_funds` además frena ESE equipo (`pausedTeams`).
+7. `User.platform='partner'`, `status:'done'`, recheck del saldo viejo a la hora y al día.
+
+`plat.migrationTick()` (cada 60 s, cada instancia, claims atómicos): reintenta `deposit_pending`, destraba `running` colgadas
+(`withdrawing` → `review`; `withdrawn` → `deposit_pending`) y hace el recheck. Disparos: `/api/auth/verify`, login,
+`/api/platform/info` (segundo plano, throttle 60 s por usuario) y `plat.depositToUser` (espera la mudanza y relee la ruta).
+
+### 10.4 Endpoints
+
+- Jugador: `GET /api/platform/info` → `{ sso, url }` (`sso` también si le toca mudarse); `POST /api/platform/session` → muda si
+  hace falta, espera (`plat.prepareCasino`, ~20 s) y devuelve `{ url }` (link de un solo uso) o `{ pending:true }`.
+- Equipos (admin general): `POST /api/admin/platform/teams` (alta/edición, prueba la key), `DELETE …/teams/:id`, `POST …/teams/:id/resume`.
+- Admin general: `GET /api/admin/platform/status`; `POST …/partner`, `…/partner/test`, `…/migration/config`, `…/migrate-user`,
+  `…/migrations/:userId/resolve`, `…/migrations/:userId/residual`, `…/rollover`; `GET …/migrations`.
+- Registro: con `newUsersOnPartner` el alta va a `girox.createPlatformUser` y el usuario nace con `platform:'partner'`.
+
+### 10.5 Trampas
+
+- Todo flujo NUEVO de plata usa `plat.*`, nunca los clientes directo, y pasa una `reference` estable si tiene un id natural.
+- `giroxService.getUserInfoByName` devuelve `null` también cuando falla la API: para decidir usar `lookupPlayer`.
+- `_deductChipsAtConfirm` compara contra el saldo total (`balBefore`) para el anti-fantasma y contra `available` para "¿le alcanza?";
+  en la nueva, `duplicate:true` cuenta como descuento confirmado.
+- Los períodos de referidos de la nueva se anclan a `-03:00` dentro de `plat.getUserRevenueForPeriod` (el `getPeriodRange` de este
+  repo usa la hora del proceso).
+- La API no tiene historial de movimientos ni saldo del agente: `getUserMovements` devuelve `not_supported` y el cierre diario no cruza
+  el cajero de la nueva.
+- Tests: `node scripts/test-platform-migration.js` (motor en frío) y `node scripts/check-tdz.js`.

@@ -294,7 +294,19 @@ async function executePayoutsForPeriod(periodKey, options = {}) {
         `referrerUserId=${refId} paymentType=${payoutType} paymentApplied=false`
       );
 
-      const creditResult = await jugayganaService.bonus(
+      // #197 MUDANZA: la comisión se acredita en la plataforma del referidor. En jugaygana.io va
+      // con reference ESTABLE (período + referidor + nº de pago: un reintento no duplica) y SIN
+      // rollover global (es plata ganada, no un bono promocional).
+      if (referrer.platformMigrating === true) {
+        throw new Error('La cuenta del referidor se está actualizando de plataforma. Reintentá en unos minutos.');
+      }
+      const creditResult = referrer.platform === 'partner'
+        ? await require('./platform').creditUserBalance(referrer.username, totalAmount, null, {
+            reference: `vip-refcom-${periodKey}-${refId}-p${payoutIndex}`,
+            description,
+            ignoreGlobalRollover: true
+          })
+        : await jugayganaService.bonus(
         jugayganaUsername,
         totalAmount,
         description

@@ -46,9 +46,22 @@ Git remote de ESTE clon: `github.com/jupedro2112-pixel/AUTOREEMBOLSOSjygactivo` 
 vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, ex
 `VIPCARGASANTINObackupviejo`). Confirmar con `git remote -v`. Git user: jupedro2112-pixel.
 
+> **MUDANZA a jugaygana.io (#197, 2026-11-18) — IMPLEMENTADA usuario por usuario, APAGADA por defecto.** Las dos plataformas
+> conviven: `User.platform` (`'jugaygana'` | `'partner'`) dice cuál usa cada usuario y **`src/services/platform.js` (`plat` en
+> server.js)** rutea. La mudanza de un usuario (retiro total en la vieja → carga en jugaygana.io, tope $200.000) se dispara al abrir la
+> app o cargar, y se controla desde el panel **🚚 Mudanza** (solo admin general). Con el modo en "Apagada" nada cambia. Detalle en
+> `docs/ARCHITECTURE.md` §10 y WORKLOG #197; la API en `docs/1girox/` (lo medido en jugaygana.io: `CONOCIMIENTO-EN-PRODUCCION.md` §15).
+> La app CREA al jugador en jugaygana.io al mudarlo, con la **key del equipo** que le toca por el inicio de su username (sin
+> coincidencia → key general); `User.partnerTeam` lo deja fijo y `plat.keyResolver` firma todo lo suyo con esa key.
+> Las API keys NO van en ningún archivo del repo: se cargan desde el panel.
+
 ## Estructura
 
-- `server.js` (~15.7k líneas) — entry point. ~180 rutas, authMiddleware inline (~L2477),
+- `docs/1girox/` — documentación y código de referencia de la Partner API (1girox / jugaygana.io).
+  No lo importa nadie; es el mapa de la mudanza (ver la nota de arriba).
+- `src/services/platform.js` — fachada de plataforma + motor de mudanza (#197). `src/services/giroxService.js` — cliente de la
+  Partner API (jugaygana.io). `src/models/PlatformMigration.js` — libro de la mudanza.
+- `server.js` (~23k líneas) — entry point. ~180 rutas, authMiddleware inline (~L2477),
   Socket.IO (~L7325), motores cron por setInterval (~L14100+), bootstrap async con SSM
   (final del archivo). Comentario dice "en migración" pero en la práctica sigue
   creciendo acá. (Los números de línea derivan con cada cambio — usar grep.)
@@ -74,6 +87,12 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `GET /api/config/casino-url`. JUGAYGANA no tiene login automático al casino: solo cambia el link. Usar `getCasinoPlayUrl()`, nunca el
   dominio fijo. Test: `node scripts/test-casino-url.js`.
 
+- **Plata SIEMPRE por `plat.*` (#197):** `plat.depositToUser / withdrawFromUser / creditUserBalance / makeBonus /
+  getUserBalance(WithRetry) / getUserNetwinForDateRange` (misma firma que los clientes viejos + `opts` al final). No llamar a
+  `jugaygana.depositToUser` ni a `girox.*` directo desde un flujo: se le manda plata a la plataforma equivocada. Si el flujo tiene un
+  id natural, pasar `opts.reference` estable (`vip-<flujo>-<id>`); devolución o comisión → `ignoreGlobalRollover:true`. Un resultado
+  `code:'migrating'` = la cuenta se está mudando: no se movió nada, tratarlo como fallo común. Para validar un retiro usar
+  `plat.withdrawable(saldo)`, no `saldo.balance`. Test: `node scripts/test-platform-migration.js`.
 - **JWT_SECRET y otros secrets** se cargan desde AWS SSM en el bootstrap async, NO al
   `require()`. Por eso hay lazy getters en `src/middlewares/auth.js` y rutas.
 - **JUGAYGANA es flaky** (Cloudflare → responde HTML). Hay auto-retry + manejo de HTML

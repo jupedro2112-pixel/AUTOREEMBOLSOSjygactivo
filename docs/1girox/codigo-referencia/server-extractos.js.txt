@@ -1,0 +1,910 @@
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Hooks y resolvers que server.js le inyecta al cliente (saldo del cajero, rollover global, regalos como wager)
+// (server.js de CARGASGIROXactivo, líneas 462-548 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+// clientes de JUGAYGANA. Montos en PESOS (sin ×100) e idempotencia por `reference`.
+const girox = require('./src/services/giroxService');
+// #184 Rollover GLOBAL de bonos (parte pura) + identidad del titular del comprobante.
+// ⚠️ TIENEN que ir ANTES del bloque del rollover global de abajo (lo usa a nivel
+// superior): el 2026-09-16 estaban más abajo y el server no arrancaba
+// ("Cannot access 'bonusRollover' before initialization"). scripts/check-tdz.js lo vigila.
+const bonusRollover = require('./src/utils/bonusRollover');
+const bonusKind = require('./src/utils/bonusKind'); // #226 bono normal vs bono wager
+const { holderKey: _holderKey } = require('./src/utils/holderKey');
+// #183: cada operación de plata exitosa contra 1girox reporta el saldo del CAJERO
+// → CashierSnapshot (cruce sistema ↔ 1girox del cierre diario). Best-effort.
+// ⚠️ Hoy la Partner API NO informa el saldo del agente: el hook queda cableado y
+// no guarda nada hasta que 1girox lo agregue (el cierre lo muestra como sin_datos).
+girox.setCashierBalanceHook((info) => {
+  try {
+    CashierSnapshot.create({ at: info.at || new Date(), balance: Number(info.balance), opAmount: Number(info.opAmount || 0), opKind: info.opKind || null, username: info.username || null })
+      .catch(e => logger.warn(`[cajero] snapshot no guardado: ${e.message}`));
+  } catch (_) {}
+});
+// #184 ROLLOVER GLOBAL DE BONOS (ESPEC-ROLLOVER-GLOBAL-Y-MULTICUENTA-TITULAR.md §A):
+// un solo multiplicador para TODOS los regalos/bonos (bonus del agente, bono
+// manual, código de bienvenida, lotes, fueguito, reembolso en vivo, reembolsos,
+// rakeback, nivel VIP, ruleta). Config['bonusRolloverGlobal'] = { enabled, x }.
+// Default x3 encendido. Opciones: 0, 2, 3, 5, 10. Si la plataforma no permite el
+// elegido (bonus.multipliers), se usa el permitido más cercano hacia ARRIBA (y
+// el panel lo avisa). Excluidos a propósito: comisiones de referidos y
+// devoluciones de retiro rechazado (no son bonos: es plata del cliente/referidor).
+// Sin cache a propósito (multi-instancia). El resolver se inyecta en giroxService,
+// que lo aplica en los 3 puntos por donde pasa todo bono.
+const BONUS_ROLLOVER_OPTIONS = bonusRollover.BONUS_ROLLOVER_OPTIONS;
+async function getGlobalBonusRollover() {
+  let raw = null;
+  try { raw = await getConfig('bonusRolloverGlobal', null); } catch (_) {}
+  let allowed = null;
+  try {
+    const cfg = await girox.getPlatformConfig();
+    allowed = cfg.success && cfg.config && cfg.config.bonus && cfg.config.bonus.multipliers;
+  } catch (_) {}
+  return bonusRollover.resolveGlobalRollover(raw, allowed);
+}
+// Rollover a usar en un flujo (para mensajes/registros): el GLOBAL si está
+// encendido, si no el propio del flujo. Coincide con lo que acredita el cliente.
+async function applyGlobalRollover(flowValue) {
+  let g = null;
+  try { g = await getGlobalBonusRollover(); } catch (_) {}
+  return bonusRollover.pickRollover(g, flowValue);
+}
+girox.setRolloverResolver(async () => {
+  const g = await getGlobalBonusRollover();
+  return g.enabled ? g.effective : null;
+});
+
+// ============================================
+// #226/#227 BONO NORMAL vs BONO WAGER (saldo promocional de 1girox)
+// ============================================
+// Card "🎟️ Tipo de bono: normal o wager" (panel → COMANDOS, guardar solo admin general).
+// Config['bonusKind'] = { enabled, fallback 'normal'|'skip', flows{ <flujo>: 'normal'|
+// 'wager' } } — default TODO NORMAL y apagado (= el sistema se comporta exactamente
+// como antes). Flujos: bonos de CARGA (install, publisher, roulette, story, lote) y
+// regalos SIN carga (refund, cashback, roulette_cash, fire, rakeback, vip_levelup,
+// lote_fichas, welcome_code, manual_bonus). La parte pura vive en
+// src/utils/bonusKind.js (test en frío: node scripts/test-bonus-kind.js).
+//
+// CÓMO SE DA EL WAGER (#227, probado contra la API el 2026-11-13): SIEMPRE con el
+// PROMOCIONAL SUELTO `girox.creditPromo` (POST /players/{u}/promo), que da saldo
+// promocional de verdad con el motor de bonos en "clásico" y en "unificado" y es
+// idempotente por reference. ⚠️ NO mandar wager_percent / wager_amount adentro del
+// depósito: con el motor "unificado" 1girox lo convierte en BONO REAL sin rollover.
+//   - En una CARGA: el depósito sale como siempre (con el bono NORMAL adjunto de los
+//     bonos que van como normal) y DESPUÉS `_wagerAfterDeposit` acredita el
+//     promocional de los que van como wager, por el monto que calculamos nosotros
+//     (reference estable `vip-depwager-<txId>` / `vip-hgw-<movimiento>`).
+//   - En un REGALO sin carga: el caller pasa `giftFlow` a creditGift /
+//     creditUserBalance y el cliente de la API lo rutea solo (resolver de abajo).
+// Sin cache a propósito (multi-instancia: el cambio del panel aplica al instante).
+async function getBonusKindConfig() {
+  let raw = null;
+  try { raw = await getConfig('bonusKind', null); } catch (_) {}
+  return bonusKind.normalizeConfig(raw);
+}
+// Regalos SIN carga: el cliente de la API pregunta acá si ese flujo va como wager.
+girox.setGiftKindResolver(async (flow) => {
+  const cfg = await getBonusKindConfig();
+  return bonusKind.flowIsWager(cfg, flow) ? { fallback: cfg.fallback } : null;
+});
+const WAGER_FLOW_SHORT = { agent: 'elegido por el agente', install: 'bono por instalar la app', publisher: 'bono de 1ª carga por publicista', roulette: 'ruleta diaria', story: 'historia', lote: 'lote con regalo' };
+// Plan de los bonos AUTOMÁTICOS de una carga. `items` = [{kind, pct, amount}].
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Resolver username → API key del dueño del jugador (ruteo por publicista, cache 60 s)
+// (server.js de CARGASGIROXactivo, líneas 760-795 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ============================================================
+// RUTEO DE OPERACIONES 1GIROX POR DUEÑO DEL JUGADOR (fix 2026-08-05)
+// ============================================================
+// La key MASTER no ve por Partner API a los jugadores creados bajo un
+// publicista (sub-agente): depositar/consultar devolvía player_not_found aunque
+// el panel web sí lo permita. Este resolver le dice a giroxService con qué key
+// firmar cada operación: si el usuario tiene `giroxOwnerCampaign` (se setea en
+// el alta del publisher_admin cuando el jugador se creó con SU key), se usa la
+// key de esa campaña; si no, la master de siempre. Cache 60s por username
+// (TTL corto a propósito: multi-instancia, y un cambio de key pega rápido).
+const _giroxKeyCache = new Map();
+const GIROX_KEY_CACHE_TTL_MS = 60 * 1000;
+girox.setKeyResolver(async (username) => {
+  const now = Date.now();
+  const hit = _giroxKeyCache.get(username);
+  if (hit && (now - hit.ts) < GIROX_KEY_CACHE_TTL_MS) return hit.key;
+  let key = null;
+  const u = await User.findOne({ username })
+    .select('giroxOwnerCampaign role').lean();
+  if (u && u.role === 'user' && u.giroxOwnerCampaign) {
+    const c = await Campaign.findOne({ code: u.giroxOwnerCampaign, isActive: { $ne: false } })
+      .select('+giroxApiKey +giroxApiKeysExtra').lean();
+    if (c && c.giroxApiKey) {
+      // POOL de keys del mismo publicista: con extras se devuelve el ARRAY
+      // [principal, ...extras] y giroxService elige la key con más lugar libre
+      // (una vez por operación). Sin extras, el string de siempre.
+      const extras = (Array.isArray(c.giroxApiKeysExtra) ? c.giroxApiKeysExtra : []).filter(Boolean);
+      key = extras.length ? [c.giroxApiKey, ...extras] : c.giroxApiKey;
+    }
+  }
+  _giroxKeyCache.set(username, { key, ts: now });
+  if (_giroxKeyCache.size > 5000) _giroxKeyCache.clear(); // backstop anti-fuga
+  return key;
+});
+// Rangos de fecha en hora argentina para los períodos de reembolso.
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Login: réplica de la contraseña en la plataforma, una sola vez por usuario
+// (server.js de CARGASGIROXactivo, líneas 5970-6002 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+    //
+    // Los usuarios migrados desde JUGAYGANA se crearon en 1girox con una contraseña
+    // RANDOM: la local está en bcrypt y es irrecuperable. Eso no deja a nadie afuera
+    // (al casino se entra por SSO, sin contraseña), pero conviene que la clave quede
+    // igual en los dos lados por si alguna vez entran directo a la plataforma.
+    //
+    // El login es el ÚNICO momento en que tenemos la contraseña en texto plano, así
+    // que se aprovecha para replicarla — una sola vez por usuario (`giroxPasswordSynced`).
+    //
+    // Fire-and-forget a propósito: si la plataforma está lenta o caída, el usuario
+    // igual entra a VIPCARGAS. Nunca bloquea ni demora el login.
+    //
+    // ACTIVADO por defecto (`GIROX_SYNC_PASSWORD_ON_LOGIN=0` para apagarlo si hiciera
+    // falta). Es necesario porque hay jugadores creados con contraseña RANDOM: los que
+    // migró el script, y los que la carga auto-crea cuando no existían en la
+    // plataforma. Sin este sync, esos usuarios no podrían entrar nunca a 1girox.com
+    // por fuera del SSO.
+    // Corre UNA sola vez por usuario (`giroxPasswordSynced`), así que no es un costo
+    // recurrente; el pico se reparte a medida que la gente va entrando.
+    // Nota: este endpoint cierra las sesiones abiertas del jugador en el casino — por
+    // eso se hace sólo una vez y no en cada login.
+    if (process.env.GIROX_SYNC_PASSWORD_ON_LOGIN !== '0' &&
+        !isAdminRole(userObj.role) && userObj.giroxPasswordSynced !== true) {
+      girox.changeUserPassword(userObj.username, password)
+        .then(async (r) => {
+          if (r && r.success) {
+            await User.updateOne({ id: userId }, { $set: { giroxPasswordSynced: true } });
+            logger.info(`[girox] contraseña sincronizada para ${userObj.username}`);
+          } else {
+            logger.warn(`[girox] no se pudo sincronizar la contraseña de ${userObj.username}: ${r && r.error}`);
+          }
+        })
+        .catch((e) => logger.warn(`[girox] sync de contraseña falló para ${userObj.username}: ${e.message}`));
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: SSO — POST /api/platform/session (botón CASINO) con auto-reparación player_not_found
+// (server.js de CARGASGIROXactivo, líneas 6660-6746 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+// El `redirect_url` lleva un código de UN SOLO USO que vence a los 60 segundos →
+// el front tiene que redirigir apenas lo recibe. No se cachea ni se persiste.
+//
+// Cupo propio POR USUARIO (no por IP): con CGNAT de las telefónicas argentinas,
+// limitar por IP dejaría a barrios enteros compartiendo cupo. Además protege el
+// presupuesto de 60 req/min de la Partner API contra un cliente que spamee el botón.
+const platformSessionLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.user && req.user.userId) ? ('u:' + req.user.userId) : req.ip,
+  validate: { keyGeneratorIpFallback: false },
+  message: { error: 'Demasiados intentos de entrar al casino. Esperá un momento.' }
+});
+
+async function platformSessionHandler(req, res) {
+  try {
+    // Si falta la config, se corta acá con un log EXPLÍCITO. Sin esto, el fallo se ve
+    // como "el botón CASINO no abre" y hay que ir a adivinar por qué.
+    if (!girox.isEnabled()) {
+      logger.error('[girox-sso] IMPOSIBLE: la Partner API no está configurada — ' +
+        `GIROX_API_URL=${process.env.GIROX_API_URL ? 'ok' : 'FALTA'} ` +
+        `GIROX_API_KEY=${process.env.GIROX_API_KEY ? 'ok' : 'FALTA'}. ` +
+        'Revisar GET /api/admin/girox/health.');
+      return res.status(503).json({ error: 'El casino no está disponible en este momento. Escribinos por chat.' });
+    }
+
+    const user = await User.findOne({ id: req.user.userId }).select('id username isBlocked isActive giroxSyncStatus');
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+    if (user.isBlocked) {
+      return res.status(403).json({ error: 'Tu cuenta está bloqueada. Contactá al soporte.' });
+    }
+    if (user.isActive === false) {
+      return res.status(403).json({ error: 'Tu cuenta está inactiva. Contactá al soporte.' });
+    }
+
+    let session = await girox.createSession(user.username);
+
+    // AUTO-REPARACIÓN: si el jugador todavía no existe en la plataforma (usuario que
+    // el script de migración no alcanzó, o creado mientras la migración corría), se
+    // crea al vuelo y se reintenta UNA vez. La contraseña es random a propósito: el
+    // acceso al casino es por SSO, y la clave real se sincroniza en el próximo login
+    // o cambio de contraseña del usuario (ver syncPasswordToPlatform).
+    if (!session.success && session.code === 'player_not_found') {
+      logger.warn(`[girox-sso] ${user.username} no existe en la plataforma — creando al vuelo`);
+      const provisional = crypto.randomBytes(12).toString('base64url');
+      const sync = await girox.syncUserToPlatform({ username: user.username, password: provisional });
+      if (!sync.success) {
+        logger.error(`[girox-sso] no se pudo crear a ${user.username}: ${sync.error}`);
+        // Username tomado por OTRA estructura (cuenta ya rota de este tipo): dejarla
+        // MARCADA para que se vea en el panel (réplica #205). No se puede rescatar:
+        // recrearla no la mueve de rama → username nuevo + bloquear/anotar la vieja.
+        if (sync.code === 'username_taken_foreign') {
+          await User.updateOne({ id: user.id }, { $set: {
+            giroxSyncStatus: 'error',
+            giroxSyncError: String(sync.error).slice(0, 500)
+          } }).catch(() => {});
+        }
+        return res.status(502).json({ error: 'No pudimos abrir tu cuenta en el casino. Escribinos por chat y lo resolvemos.' });
+      }
+      await User.updateOne({ id: user.id }, { $set: { giroxSyncStatus: sync.alreadyExists ? 'linked' : 'synced' } }).catch(() => {});
+      session = await girox.createSession(user.username);
+    }
+
+    if (!session.success) {
+      logger.error(`[girox-sso] falló para ${user.username}: ${session.error} (${session.code})`);
+      return res.status(502).json({ error: 'El casino no está respondiendo. Reintentá en un momento.' });
+    }
+
+    res.json({
+      success: true,
+      redirectUrl: session.redirectUrl,
+      platformUrl: girox.getPlayUrl()
+    });
+  } catch (error) {
+    logger.error(`Error en platform session (SSO): ${error.message}`);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+}
+
+app.post('/api/platform/session', authMiddleware, platformSessionLimiter, platformSessionHandler);
+// Alias histórico (el front viejo lo nombraba así). Mismo handler.
+app.post('/api/auth/platform-login', authMiddleware, platformSessionLimiter, platformSessionHandler);
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Diagnóstico — GET /api/admin/girox/health y /test-sso
+// (server.js de CARGASGIROXactivo, líneas 7788-7957 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+// ============================================
+// DIAGNÓSTICO DE LA PLATAFORMA (1girox)
+// ============================================
+// GET /api/admin/girox/health
+// Dice en un solo lugar QUÉ está configurado y QUÉ responde la plataforma. Es lo
+// primero que hay que mirar cuando "no se crea el usuario" o "el botón CASINO no
+// entra": el 99% de las veces es una variable de entorno que falta.
+// NUNCA devuelve la API key ni la contraseña del panel — sólo si están presentes.
+app.get('/api/admin/girox/health', authMiddleware, adminMiddleware, async (req, res) => {
+  const out = {
+    partnerApi: {
+      configurada: girox.isEnabled(),
+      baseUrl: girox.getBaseUrl() || null,
+      apiKeyPresente: !!process.env.GIROX_API_KEY,
+      sitioDeJuego: girox.getPlayUrl()
+    },
+    // El netwin (reembolsos y referidos) ahora sale de la MISMA Partner API
+    // (GET /players/{username}/stats, v1.8). Ya no hace falta el panel de
+    // administración ni sus credenciales: se fueron GIROX_ADMIN_USER/PASS.
+    netwin: {
+      fuente: 'Partner API (/players/{username}/stats)',
+      alcance: 'casino'
+    },
+    pruebas: {}
+  };
+
+  // Falta lo básico → no tiene sentido probar nada contra la red.
+  if (!out.partnerApi.configurada) {
+    out.diagnostico = 'FALTA CONFIGURAR LA PARTNER API. ' +
+      (!out.partnerApi.baseUrl ? 'Falta GIROX_API_URL (la Base URL que tiene que dar 1girox). ' : '') +
+      (!out.partnerApi.apiKeyPresente ? 'Falta GIROX_API_KEY. ' : '') +
+      'Sin esto NO funciona nada: ni el alta de jugadores, ni las cargas, ni los retiros, ni el botón CASINO.';
+    return res.json(out);
+  }
+
+  // Prueba real contra la Partner API.
+  // ⚠️ Usa girox.ping(), NO getUserInfoByName: esta última devuelve null ante
+  // CUALQUIER fallo (404, 401, timeout), así que no distingue "el jugador no existe"
+  // de "la key fue rechazada" — y este chequeo llegó a informar "key válida" mientras
+  // el alta de usuarios fallaba con 401.
+  let pong = null;
+  try {
+    pong = await girox.ping();
+    out.pruebas.consultaJugador = `${pong.estado.toUpperCase()} — ${pong.detalle}` +
+      (pong.httpStatus ? ` (HTTP ${pong.httpStatus})` : '');
+  } catch (e) {
+    out.pruebas.consultaJugador = 'FALLÓ: ' + e.message;
+  }
+
+  // Configuración del sitio (feats habilitados, multiplicadores válidos, límites del
+  // bono). Sirve para ver de un vistazo si rollover/bonos están prendidos.
+  try {
+    const cfg = await girox.getPlatformConfig();
+    if (cfg.success) {
+      const c = cfg.config || {};
+      out.pruebas.configuracion = 'OK';
+      out.configuracionPlataforma = {
+        rolloverHabilitado: !!(c.rollover && c.rollover.enabled),
+        bonosHabilitados: !!(c.bonus && c.bonus.enabled),
+        bonoSueltoHabilitado: !!(c.bonus && c.bonus.standalone_enabled),
+        bonoDebeReclamarse: !!(c.bonus && c.bonus.claim_required),
+        multiplicadoresRollover: (c.rollover && c.rollover.multipliers) || null,
+        limitesBonoFijo: c.bonus ? { min: c.bonus.fixed_min, max: c.bonus.fixed_max } : null,
+        // Cómo se acreditan reembolsos/ruleta/rakeback/VIP/referidos (2026-09-07):
+        // bono 0 = figuran como BONO en el panel de 1girox; requiere bono suelto
+        // habilitado + 0 en multiplicadores; montos fuera de min/max caen a depósito.
+        regalosComoBono: girox.getGiftModeSummary(),
+        multiplicadoresBono: (c.bonus && c.bonus.multipliers) || null
+      };
+    } else {
+      out.pruebas.configuracion = 'FALLÓ: ' + cfg.error;
+    }
+  } catch (e) {
+    out.pruebas.configuracion = 'FALLÓ: ' + e.message;
+  }
+
+  // Estado de la base de usuarios respecto de la plataforma.
+  try {
+    // ⚠️ `pendientes` tiene que incluir a los usuarios que NI SIQUIERA TIENEN el campo:
+    // los que ya existían antes de la migración nunca pasaron por un `create`, así que
+    // el default del schema no se les aplicó y `giroxSyncStatus` no existe en el
+    // documento. Contando sólo `'pending'` los números no cerraban (77 usuarios pero
+    // 2 pendientes) y parecía que faltaba menos trabajo del que falta.
+    const yaEnPlataforma = { role: 'user', giroxSyncStatus: { $in: ['synced', 'linked'] } };
+    out.usuarios = {
+      total: await User.countDocuments({ role: 'user' }),
+      enLaPlataforma: await User.countDocuments(yaEnPlataforma),
+      pendientes: await User.countDocuments({
+        role: 'user',
+        giroxSyncStatus: { $nin: ['synced', 'linked', 'error', 'invalid_username', 'not_applicable'] }
+      }),
+      conError: await User.countDocuments({ role: 'user', giroxSyncStatus: 'error' }),
+      usernameInvalido: await User.countDocuments({ role: 'user', giroxSyncStatus: 'invalid_username' }),
+      sinIdDePlataforma: await User.countDocuments({ ...yaEnPlataforma, giroxUserId: { $in: [null, 0] } })
+    };
+    // Guía de qué hacer, en vez de sólo tirar números.
+    if (out.usuarios.pendientes > 0) {
+      out.usuarios.siguientePaso =
+        `Hay ${out.usuarios.pendientes} usuarios que todavía no existen en la plataforma. ` +
+        'Migralos con: node scripts/migrate-users-to-girox.js --execute ' +
+        '(probá primero sin --execute, y después con --limit=5).';
+    }
+  } catch (_) {}
+
+  if (pong && pong.ok) {
+    out.diagnostico = 'La Partner API responde correctamente y la API key es válida.';
+  } else if (pong && pong.estado === 'key_rechazada') {
+    out.diagnostico =
+      '🔴 LA PLATAFORMA RECHAZA LA API KEY (401). La URL responde, pero esa key no es de ' +
+      'esa instalación. Dos causas posibles: (a) GIROX_API_URL apunta a la Partner API de ' +
+      'OTRA marca, o (b) la key se regeneró/desactivó desde el panel (Clientes de API). ' +
+      'Pedile a 1girox la Base URL de TU instalación, o generá una key nueva y cargala.';
+  } else {
+    out.diagnostico = 'La Partner API NO responde como se espera — revisá GIROX_API_URL y GIROX_API_KEY. ' +
+      'Detalle: ' + ((pong && pong.detalle) || 'sin detalle');
+  }
+
+  res.json(out);
+});
+
+// GET /api/admin/girox/test-sso?username=XXXX
+// Diagnóstico del login único. Pide UN link de acceso y lo devuelve CRUDO, sin
+// redirigir ni consumirlo, para poder abrirlo a mano y ver qué pasa.
+//
+// Sirve para separar dos cosas que desde el front no se distinguen:
+//   (a) el link nace inválido/vencido  → problema de la plataforma o de cómo lo pedimos
+//   (b) el link es válido pero se rompe al usarlo → problema del navegador (iframe,
+//       cookies, doble carga)
+// Si al abrir este link A MANO, en el acto, también dice "El enlace expiró", entonces
+// es (a) y hay que reclamarle a 1girox.
+app.get('/api/admin/girox/test-sso', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const username = String(req.query.username || '').trim();
+    if (!username) {
+      return res.status(400).json({ error: 'Falta ?username=' });
+    }
+    const t0 = Date.now();
+    const session = await girox.createSession(username);
+    const ms = Date.now() - t0;
+
+    if (!session.success) {
+      return res.json({
+        ok: false,
+        username,
+        tardoMs: ms,
+        error: session.error,
+        code: session.code,
+        httpStatus: session.httpStatus,
+        queHacer: 'La plataforma no emitió el link. Revisá que el jugador exista en 1girox.'
+      });
+    }
+
+    res.json({
+      ok: true,
+      username,
+      tardoMs: ms,
+      redirectUrl: session.redirectUrl,
+      tieneToken: !!session.token,
+      queHacer: [
+        '1. COPIÁ el redirectUrl de arriba y pegalo en el navegador AHORA MISMO (el código vence en 60s y es de un solo uso).',
+        '2. Si entra al casino logueado → el link está bien; el problema es cómo lo abre la app (iframe/cookies).',
+        '3. Si dice "El enlace expiró" incluso abriéndolo al instante → el código nace inválido. Es un problema de 1girox: pasales este dato.',
+        '4. NO lo abras dos veces: el segundo intento SIEMPRE va a decir que expiró, porque es de un solo uso.'
+      ]
+    });
+  } catch (err) {
+    logger.error(`[girox/test-sso] ${err.message}`);
+    res.status(500).json({ error: 'Error del servidor', detalle: err.message });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: _refundReference: por qué la reference del reembolso sale del PERÍODO
+// (server.js de CARGASGIROXactivo, líneas 8812-8838 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+  for (const period of ['weekly', 'monthly']) {
+    const n = Number(cfg && cfg[period]);
+    out[period] = (Number.isFinite(n) && n >= 0) ? Math.round(n) : REFUND_MINIMUMS_DEFAULT[period];
+  }
+  return out;
+}
+
+/**
+ * Llave de idempotencia del reembolso para 1girox.
+ *
+ * ⚠️ TIENE QUE DERIVARSE DEL PERÍODO, NO DEL id del RefundClaim. Motivo: si la
+ * acreditación falla, el handler BORRA el RefundClaim para que el usuario pueda
+ * reintentar — y en el reintento se genera un id nuevo. Si la reference saliera de
+ * ese id, un fallo FALSO (la carga se acreditó pero la respuesta se perdió por
+ * timeout) daría una reference distinta en el reintento y 1girox acreditaría DOS
+ * VECES. Derivándola del período, el reintento manda la MISMA reference y la
+ * plataforma responde `duplicate:true` sin volver a pagar.
+ *
+ * `periodKey` ya es único por usuario+tipo+período ('daily:2026-07-30',
+ * 'weekly:2026-07-21', 'monthly:2026-07'), así que periodo+userId identifica la
+ * operación de forma estable para siempre.
+ */
+function _refundReference(periodKey, userId) {
+  const safe = String(periodKey).replace(/[^\w.-]/g, '-');
+  return `vip-rf-${safe}-${userId}`.slice(0, 100); // la API limita la reference a 100 chars
+}
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Diagnóstico — GET /api/admin/girox/stats-raw
+// (server.js de CARGASGIROXactivo, líneas 9263-9276 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+app.get('/api/admin/girox/stats-raw', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const username = String((req.query && req.query.username) || '').trim();
+    if (!username) return res.status(400).json({ error: 'Falta ?username=' });
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+    const to = new Date();
+    const from = new Date(Date.now() - days * 86400000);
+    const r = await girox.getPlayerStats(username, from, to, 'stats-raw', { fresh: true, includeRaw: true });
+    if (!r.success) return res.status(502).json({ error: r.error || 'stats falló' });
+    res.json({ parsed: { netwin: r.netwin, casinoNetwin: r.casinoNetwin, wagered: r.wagered, payout: r.payout,
+      bonusGranted: r.bonusGranted, bonusStillLocked: r.bonusStillLocked }, raw: r.raw });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Ejemplo completo de flujo de plata: POST /api/refunds/claim/daily (reserva atómica → netwin fresh → crédito con reference estable → rollback)
+// (server.js de CARGASGIROXactivo, líneas 9426-9581 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const username = req.user.username;
+    
+    if (!await acquireRefundLock(userId, 'daily')) {
+      return res.json({
+        success: false,
+        message: '⏳ Ya estás procesando un reembolso. Por favor espera...',
+        canClaim: true,
+        processing: true
+      });
+    }
+    
+    try {
+      const status = await refunds.canClaimDailyRefund(userId);
+      
+      if (!status.canClaim) {
+        return res.json({
+          success: false,
+          message: 'Ya reclamaste tu reembolso diario. Vuelve mañana!',
+          canClaim: false,
+          nextClaim: status.nextClaim
+        });
+      }
+      
+      // NOTA: acá antes se resolvía el ID numérico del jugador y se ABORTABA si no
+      // se conseguía ("Tu cuenta no está vinculada"). Ya no hace falta: desde la
+      // Partner API v1.8 el netwin se pide por USERNAME. Ese gate hoy sólo serviría
+      // para negarle el reembolso a alguien que sí puede cobrarlo.
+      // El ID igual se guarda más abajo, gratis, con el que devuelve el propio stats.
+
+      const { fromEpoch, toEpoch, dateStr } = periodRanges.getYesterdayRangeArgentinaEpoch();
+      const fromDate = new Date(fromEpoch * 1000);
+      const toDate = new Date(toEpoch * 1000);
+
+      // NETWIN REAL del período (apostado − ganado), misma fuente que referidos.
+      // El reembolso es sobre la PÉRDIDA REAL de juego, NO sobre cargas − retiros.
+      const netRes = await girox.getPlayerStats(username, fromDate, toDate, 'refund-daily', { fresh: true });
+      if (!netRes.success) {
+        logger.warn(`[REFUND] daily — no se pudo leer NETWIN de ${username}: ${netRes.error || 's/detalle'}`);
+        return res.json({ success: false, message: 'No pudimos calcular tu pérdida en este momento (la plataforma está demorada). Probá en unos minutos.', canClaim: true });
+      }
+      // netwin POSITIVO = el jugador perdió. Sólo casino (decisión del owner).
+      // ESPEC §5: se descuenta el bono OTORGADO en el período (`bonus.granted`
+      // oficial): lo que perdió de regalos no genera reembolso.
+      const netLoss = Math.max(0, (Number(netRes.casinoNetwin) || 0) - (Number(netRes.bonusGranted) || 0));
+      logger.info('[REFUND] daily — usuario:', username, 'apostado:', netRes.wagered,
+        'pagado:', netRes.payout, 'netwin(casino):', netRes.casinoNetwin, 'bono otorgado:', netRes.bonusGranted || 0, 'netLoss:', netLoss);
+
+      // El propio stats devuelve el ID numérico del jugador: se guarda de paso,
+      // sin gastar una request extra. Lo usan el panel y los reportes.
+      if (netRes.playerId) {
+        User.updateOne({ id: userId, giroxUserId: null }, { $set: { giroxUserId: netRes.playerId } }).catch(() => {});
+      }
+
+      if (netLoss === 0) {
+        logger.info('[REFUND] daily — sin pérdida real para:', username);
+        return res.json({
+          success: false,
+          message: 'No tenés pérdida en el período. El reembolso aplica solo sobre lo que perdiste jugando.',
+          canClaim: true,
+          netAmount: 0
+        });
+      }
+
+      // El % sale del RANGO que le corresponde a la pérdida de ESTE período,
+      // con la escalera del DIARIO (editable desde el panel). Ver refundTiers.js.
+      const _calc = refundTiers.calcRefund(netLoss, (await getRefundTiersByPeriod()).daily);
+      const dailyPct = _calc.pct;
+      // ESPEC §5: lo ya cobrado como reembolso EN VIVO dentro del período se descuenta.
+      let _cbkPaidD = 0;
+      try { _cbkPaidD = await _cashbackPaidBetween(userId, fromDate, toDate); } catch (_) {}
+      const refundAmount = Math.max(0, _calc.amount - _cbkPaidD);
+      if (_cbkPaidD > 0) logger.info(`[REFUND] daily — ${username}: descuento reembolso en vivo $${_cbkPaidD} (bruto $${_calc.amount} → $${refundAmount})`);
+
+      logger.info('[REFUND] daily — calculado para', username, 'netLoss:', netLoss,
+        'rango:', _calc.tier.name, 'pct:', dailyPct, 'refund:', refundAmount);
+
+      // CANDADO REAL contra doble cobro: RESERVAR el reclamo (índice único
+      // userId+type+periodKey) ANTES de acreditar. Antes se acreditaba y RECIÉN
+      // DESPUÉS se creaba el RefundClaim → el índice único sólo evitaba la fila
+      // duplicada, NO el doble pago (si el lock Redis caía en multi-instancia, dos
+      // requests acreditaban y el segundo create fallaba con la plata ya duplicada).
+      // Ahora el create atómico ES la barrera: si ya existe (E11000) → abortar sin pagar.
+      const _refundClaimId = uuidv4();
+      const _refundPeriodKey = 'daily:' + dateStr;
+      try {
+        await RefundClaim.create({
+          id: _refundClaimId, userId, username, type: 'daily',
+          amount: refundAmount, netAmount: netLoss, percentage: dailyPct,
+          period: dateStr, periodKey: _refundPeriodKey, claimedAt: new Date()
+        });
+      } catch (e) {
+        if (e && e.code === 11000) {
+          return res.json({ success: false, message: 'Ya reclamaste tu reembolso diario. Vuelve mañana!', canClaim: false });
+        }
+        throw e;
+      }
+
+      const depositResult = await girox.creditUserBalance(username, refundAmount, _refundReference(_refundPeriodKey, userId), { giftFlow: 'refund' }); // #227
+
+      if (!depositResult.success) {
+        // No se pudo acreditar → liberar la reserva para permitir reintentar.
+        await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
+        return res.json({
+          success: false,
+          message: 'Error al acreditar el reembolso: ' + depositResult.error,
+          canClaim: true
+        });
+      }
+
+      // Persistir el transactionId real ahora que la acreditación salió OK.
+      const _refundTxId = depositResult.data?.transfer_id || depositResult.data?.transferId;
+      if (_refundTxId) await RefundClaim.updateOne({ id: _refundClaimId }, { $set: { transactionId: _refundTxId } }).catch(() => {});
+
+      // Guardar transacción para el dashboard
+      await Transaction.create({
+        id: uuidv4(),
+        type: 'refund',
+        amount: refundAmount,
+        username,
+        description: `Reembolso diario (${dateStr})`,
+        transactionId: _refundTxId,
+        ...(depositResult && depositResult.creditedAs === 'wager' ? { metadata: { creditedAs: 'wager' } } : {}), // #227 regalo dado como saldo promocional
+        timestamp: new Date()
+      });
+
+      // Meta CAPI — RefundClaim (señal de fricción / usuario que pierde plata).
+      try {
+        const u = await User.findOne({ id: userId }).lean();
+        metaCapi.track(
+          'RefundClaim',
+          { email: u && u.email, phone: u && u.phone, externalId: userId, fbc: u && u.metaFbc, fbp: u && u.metaFbp },
+          { value: refundAmount, currency: 'ARS', content_name: 'refund_daily', period: dateStr },
+          { eventId: req.body && req.body.metaEventId, req }
+        );
+      } catch (e) { /* tracking nunca bloquea */ }
+
+      res.json({
+        success: true,
+        message: `¡Reembolso diario de $${refundAmount} acreditado!${await _giftNote(depositResult, { short: true })}`, // #186
+        amount: refundAmount,
+        percentage: dailyPct,
+        netAmount: netLoss,
+        nextClaim: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      });
+    } finally {
+      setTimeout(() => releaseRefundLock(userId, 'daily'), 3000);
+    }
+  } catch (error) {
+    console.error('Error reclamando reembolso diario:', error);
+    res.json({ success: false, message: 'Error del servidor', canClaim: true });
+  }
+});
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Saldo — GET /api/balance y /api/balance/live
+// (server.js de CARGASGIROXactivo, líneas 10362-10417 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+app.get('/api/balance', authMiddleware, async (req, res) => {
+  try {
+    const username = req.user.username;
+    const result = await girox.getUserBalance(username);
+    
+    if (result.success) {
+      res.json({
+        balance: result.balance,
+        // Con el rollover activo, `balance` NO es lo que el cliente puede retirar.
+        // Se exponen los dos para que el front pueda mostrar el saldo total pero
+        // avisar cuánto está bloqueado (y no ofrecer un retiro que va a fallar).
+        // `claimableTotal` > 0 significa que tiene un bono ganado esperando que lo
+        // reclame en el casino: plata suya que todavía no ve en el saldo.
+        available: result.available,
+        locked: result.locked,
+        claimableTotal: result.claimableTotal,
+        wager: result.wager != null ? result.wager : null, // #226 saldo PROMOCIONAL (aparte del balance; null = feat apagado)
+        username: result.username
+      });
+    } else {
+      res.status(400).json({ error: result.error });
+    }
+  } catch (error) {
+    console.error('Error obteniendo balance:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+app.get('/api/balance/live', authMiddleware, async (req, res) => {
+  try {
+    const username = req.user.username;
+    const result = await girox.getUserBalance(username);
+    
+    if (result.success) {
+      await User.updateOne(
+        { username },
+        { balance: result.balance }
+      );
+      
+      res.json({
+        balance: result.balance,
+        available: result.available,
+        locked: result.locked,
+        claimableTotal: result.claimableTotal,
+        wager: result.wager != null ? result.wager : null, // #226 saldo PROMOCIONAL (aparte del balance; null = feat apagado)
+        username: result.username,
+        updatedAt: new Date().toISOString()
+      });
+    } else {
+      res.status(400).json({ error: result.error });
+    }
+  } catch (error) {
+    console.error('Error obteniendo balance en tiempo real:', error);
+    res.status(500).json({ error: 'Error del servidor' });
+  }
+});
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: getGiroxBonusMultiplier: multiplicador de bono válido según GET /config
+// (server.js de CARGASGIROXactivo, líneas 10445-10469 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+// confundir con `rollover.multipliers`, que es la de los DEPÓSITOS (bug del
+// primer intento: leía esa otra lista y elegía 1, que para bonos no está
+// permitido → "The selected multiplier is invalid").
+// En la config real del owner (2026-08-05): bonus.multipliers = [0,2,5,10,20,40].
+// El 0 es EL valor deseado por default: bono SIN rollover = tipado como Bono en
+// el panel pero retirable como siempre (el comportamiento histórico de los
+// bonos manuales del agente). Prioridad: GIROX_BONUS_MULTIPLIER (env/SSM) si la
+// plataforma lo permite; si no, 0 si está permitido; si no, el menor permitido.
+async function getGiroxBonusMultiplier() {
+  try { const g = await getGlobalBonusRollover(); if (g.enabled) return g.effective; } catch (_) {} // #184
+  let allowed = null;
+  try {
+    const cfg = await girox.getPlatformConfig();
+    const raw = cfg.success && cfg.config && cfg.config.bonus && cfg.config.bonus.multipliers;
+    if (Array.isArray(raw) && raw.length) {
+      allowed = raw.map(Number).filter((n) => Number.isFinite(n) && n >= 0).sort((a, b) => a - b);
+      if (!allowed.length) allowed = null;
+    }
+  } catch (_) { /* config no disponible: se sigue con la env */ }
+  const envVal = Number(process.env.GIROX_BONUS_MULTIPLIER);
+  const envOk = Number.isFinite(envVal) && envVal >= 0;
+  if (envOk && (!allowed || allowed.includes(envVal))) return envVal;
+  if (allowed) return allowed.includes(0) ? 0 : allowed[0];
+  return envOk ? envVal : 0;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: _creditGiftWithRollover (fueguito / reembolso en vivo)
+// (server.js de CARGASGIROXactivo, líneas 14318-14338 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+//   mult > 0  → /bonus con ese multiplier SI: bono suelto habilitado, mult ∈
+//               bonus.multipliers, monto dentro de fixed_min/max y el jugador
+//               NO tiene bono activo (bonus_locked + claimable = 0 — otorgar otro
+//               lo PISA y le debita el resto, regla "bono sobre bono").
+//               Si algo no se cumple → depósito CON multiplier (candado igual,
+//               figura como Carga), que es lo que hacía hasta hoy. Un error
+//               transitorio del /bonus se devuelve tal cual (el caller restaura
+//               el premio y el cliente reintenta con la MISMA reference).
+// Desde 2026-09-11 lo usa también el reembolso en vivo (ESPEC §4.4) con
+// label 'CASHBACK' — por eso el nombre genérico; `_creditFireReward` es alias.
+async function _creditGiftWithRollover(username, amount, desc, ref, mult, label = 'FIRE_REWARD', giftFlow = null) {
+  // #184: la lógica vive en giroxService.creditGift (mismo contrato que el gemelo):
+  // aplica el rollover GLOBAL si está encendido (pisa `mult`), guard de bono
+  // activo, prechecks contra GET /config y fallback a depósito con multiplier.
+  // #227: `giftFlow` = flujo del regalo para COMANDOS → Tipo de bono (puede salir como wager).
+  const r = await girox.creditGift(username, amount, { rolloverX: mult, reference: ref, description: desc, giftFlow: giftFlow || undefined });
+  if (r && r.success && r.via === 'deposit') {
+    logger.warn(`[${label}] ${username} $${amount} fue por DEPÓSITO con rollover x${r.rolloverApplied} (figura como Carga) — ${r.fallbackReason || 's/motivo'}`);
+  }
+  return r;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: _deductChipsAtConfirm: débito del retiro contra available + verificación anti-retiro-fantasma
+// (server.js de CARGASGIROXactivo, líneas 20610-20698 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+      { status: 'closed', assignedTo: null, closedAt: new Date(), closedBy: (agentUser && agentUser.userId) || 'system', updatedAt: new Date() },
+      { upsert: true }
+    );
+    notifyAdmins('chat_closed', { userId: payout.userId, by: (agentUser && agentUser.username) || 'sistema', adminId: (agentUser && agentUser.userId) || 'system', isPaymentsTab: true });
+  } catch (e) {
+    logger.warn(`[payout-deduct] aviso insuficiente/cierre falló: ${e.message}`);
+  }
+}
+
+// Descuenta las fichas al CONFIRMAR el pago (flujo deductAtPay). Devuelve:
+//   { ok:true }                     -> descontado y CONFIRMADO; sigue el pago.
+//   { ok:false, insufficient:true } -> saldo insuficiente: ya avisó al cliente + cerró chat + canceló el payout.
+//   { ok:false, error }             -> no se pudo descontar/confirmar: ya marcó 'failed' + nota al agente.
+async function _deductChipsAtConfirm(payout, agentUser) {
+  const amt = Number(payout.amount);
+  const user = await User.findOne({ id: payout.userId });
+
+  // 1) Saldo RETIRABLE del cliente.
+  // ⚠️ Se usa `available`, no `balance`: con el feat de rollover activo en 1girox el
+  // jugador puede tener saldo que todavía NO puede retirar (objetivo de apuestas
+  // pendiente). Si validáramos contra el total, la plataforma rechazaría el retiro con
+  // `rollover_locked` y el pago quedaría colgado. Sin rollover, `available` == `balance`.
+  // fresh:true — el "saldo antes" de la verificación anti-fantasma no puede salir
+  // del cache: un valor viejo marcaría un retiro real como fallido (o cancelaría
+  // uno válido por "saldo insuficiente").
+  const balRes = await girox.getUserBalance(payout.username, { fresh: true });
+  const avail = (balRes && balRes.success)
+    ? (Number(balRes.available != null ? balRes.available : balRes.balance) || 0)
+    : null;
+  if (avail === null) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo leer el saldo para descontar' } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo leer el saldo del cliente para descontar $${amt.toLocaleString('es-AR')}. Reintentá en unos minutos.`);
+    return { ok: false, error: 'No se pudo verificar el saldo del cliente. Reintentá.' };
+  }
+  // 2) ¿Tiene saldo? Si se jugó las fichas → avisar al cliente, cerrar chat, cancelar.
+  if (avail < amt) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'cancelled', error: `Saldo insuficiente al confirmar (disponible $${avail})`, balanceBefore: avail, debitConfirmed: false } });
+    await _notifyInsufficientAndCloseChat(payout, avail, agentUser);
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `❌ Retiro de $${amt.toLocaleString('es-AR')} NO pagado: saldo insuficiente al confirmar (disponible $${avail.toLocaleString('es-AR')}). Se avisó al cliente y se cerró el chat para que solicite de nuevo.`);
+    return { ok: false, insufficient: true, balance: avail };
+  }
+  // 3) Descontar en JUGAYGANA.
+  // `reference` = el id del payout: único por solicitud de retiro y estable entre
+  // reintentos. Si el descuento se hizo pero la respuesta se perdió, reintentar con
+  // la misma reference NO vuelve a debitarle las fichas al cliente.
+  const w = await girox.withdrawFromUser(payout.username, amt, `Retiro confirmado - ${payout.username}`, `vip-payout-${payout.id}`);
+  if (!w || !w.success) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'No se pudo descontar: ' + ((w && w.error) || '') } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ No se pudo descontar las fichas ($${amt.toLocaleString('es-AR')}) en JUGAYGANA: ${(w && w.error) || 's/detalle'}. Reintentá.`);
+    return { ok: false, error: 'No se pudo descontar las fichas: ' + ((w && w.error) || '') };
+  }
+  // 4) Verificar el descuento (anti-fantasma): el saldo tiene que haber bajado.
+  // ⚠️ Se compara `available` contra `available`. Antes se leía `available` para el
+  // "antes" y `balance` para el "después": con rollover activo esa mezcla da
+  // `avail - after = amt - locked`, o sea que la verificación FALLA siempre que haya
+  // algo bloqueado. Y fallar acá es lo peor que puede pasar: el retiro YA se ejecutó
+  // (las fichas se descontaron), el payout se marca `failed` con debitConfirmed:false
+  // y, si el agente lo rechaza, la devolución se saltea por "no se descontó nada"
+  // → el cliente se queda sin fichas Y sin plata.
+  let after = null, deducted = false;
+  try {
+    const a = await girox.getUserBalanceWithRetry(payout.username, { fresh: true });
+    if (a && a.success) {
+      after = Number(a.available != null ? a.available : a.balance) || 0;
+      deducted = (avail - after) >= (amt - 1);
+    }
+  } catch (_) {}
+  if (!deducted) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', balanceBefore: avail, balanceAfter: after, debitConfirmed: false, error: 'Descuento no confirmado' } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ El descuento de $${amt.toLocaleString('es-AR')} NO se pudo confirmar (saldo antes $${avail.toLocaleString('es-AR')} → después ${after == null ? '¿?' : '$' + Number(after).toLocaleString('es-AR')}). Verificá en JUGAYGANA antes de pagar manual. NO devuelvas a ciegas.`);
+    return { ok: false, error: 'No se pudo confirmar el descuento. Revisá el saldo en 1girox.' };
+  }
+  // 5) Descuento confirmado → registrar Transaction + marcar el payout.
+  await PendingPayout.updateOne({ id: payout.id }, { $set: { balanceBefore: avail, balanceAfter: after, debitConfirmed: true, withdrawalTxId: w.data?.transfer_id || w.data?.transferId || null } });
+  try { await recordUserActivity(payout.userId, 'withdrawal', amt); } catch (_) {}
+  try {
+    await Transaction.create({
+      id: uuidv4(), type: 'withdrawal', amount: amt,
+      username: payout.username, userId: payout.userId,
+      description: `Retiro confirmado a ${payout.titular || ''} (${payout.alias || payout.cbu || ''})`,
+      adminId: agentUser && agentUser.userId, adminUsername: agentUser && agentUser.username, adminRole: agentUser && agentUser.role,
+      transactionId: w.data?.transfer_id || w.data?.transferId,
+      metadata: { source: 'self_service', confirmedAtPay: true, payoutId: payout.id },
+      timestamp: new Date()
+    });
+  } catch (_) {}
+  try { if (after != null) io.to(`user_${payout.userId}`).emit('balance_updated', { balance: after }); } catch (_) {}
+  return { ok: true, balanceAfter: after };
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXTRACTO: Radiografía de boot [girox] config:
+// (server.js de CARGASGIROXactivo, líneas 27060-27090 al 2026-11-18)
+// ═══════════════════════════════════════════════════════════════════════════
+      console.error('⛔ FATAL: JWT_SECRET no configurado. El servidor no puede arrancar.');
+      process.exit(1);
+    }
+    // Secret corto: solo se advierte, NO se aborta. Abortar dejaría la
+    // producción caída si el JWT_SECRET configurado es corto. Se recomienda
+    // usar 32+ caracteres (cambiarlo invalida las sesiones vigentes).
+    if (JWT_SECRET.length < 32) {
+      console.warn('⚠️  ADVERTENCIA: JWT_SECRET es corto (' + JWT_SECRET.length + ' caracteres). Se recomienda 32+ para mayor seguridad.');
+    }
+
+    // Radiografía de la config de 1girox (a stdout para que quede en los logs
+    // de EB): permite verificar tras cada deploy que las keys de consultas y
+    // los techos por carril quedaron como se esperaba.
+    try {
+      console.log(
+        `[girox] config: key master ${girox.isEnabled() ? 'OK' : 'FALTA'} · ` +
+        `keys consultas cargadas: ${girox.getReadsKeysSummary()} · ` +
+        `GIROX_MAX_RPM=${girox.getMasterMaxRpm()} · ` +
+        `publicistas=${girox.getPublisherMaxRpm()}/min (+${girox.getPublisherKeyOverridesCount()} overrides) · ` +
+        `cache jugador=${girox.getPlayerCacheTtlMs()}ms · ` +
+        `regalos=${girox.getGiftModeSummary()}`
+      );
+    } catch (e) {
+      console.warn('[girox] radiografía de config falló:', e.message);
+    }
+    try { const _np = await _metaPixelsLoad(); if (_np) console.log(`[meta-pixels] ${_np} píxel(es) del panel cargados`); } catch (_) {} // #214
+    try {
+      console.log(`[MetaCAPI] pixels: ${metaCapi.destinationsSummary()}`);
+    } catch (e) {
+      console.warn('[MetaCAPI] radiografía de pixels falló:', e.message);
+    }

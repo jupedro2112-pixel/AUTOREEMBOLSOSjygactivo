@@ -647,6 +647,8 @@ function setupRoleBasedUI() {
     // #195 Bancos — Configuración: solo admin general (credenciales, cuentas, movimientos)
     const banksCfgNav = document.querySelector('.nav-item-banks-config');
     if (banksCfgNav) banksCfgNav.style.display = role === 'admin' ? '' : 'none';
+    const mudNav = document.querySelector('.nav-item-mudanza'); // #197
+    if (mudNav) mudNav.style.display = role === 'admin' ? '' : 'none';
 
     // #155 Banco: admin general, cargas y pagos
     const bankNavItem = document.querySelector('.nav-item-bank');
@@ -4588,6 +4590,7 @@ function switchSection(section) {
         }
     }
     if (section === 'commands') loadCommands();
+    if (section === 'mudanza') { if (currentAdmin?.role !== 'admin') { showToast('No tienes permiso para acceder a esta sección', 'error'); return; } loadMudanzaSection(); } // #197
     if (section === 'banksConfig') { if (currentAdmin?.role !== 'admin') { showToast('No tienes permiso para acceder a esta sección', 'error'); return; } loadBanksConfigSection(); } // #195
     if (section === 'datos') loadDatos();
     if (section === 'notifications') loadNotificationsPanel();
@@ -15247,3 +15250,211 @@ async function _notifMaybeSchedule(payload) {
     return true;
 }
 window.updateNotifScheduleUI = updateNotifScheduleUI;
+
+
+// ============================================================
+// #197 MUDANZA a jugaygana.io (solo admin general)
+// ============================================================
+let _mudState = null;
+const _MUD_STATUS = { running: 'En curso', done: '✅ Mudado', failed: 'Falló (se reintenta)', held: 'Frenada', review: '🛑 Revisión', deposit_pending: '⏳ Carga pendiente' };
+const _MUD_REASON = { cap: 'supera el tope', not_in_new: 'no existe en jugaygana.io', new_has_balance: 'ya tiene saldo en jugaygana.io', invalid_username: 'nombre no válido en jugaygana.io', foreign: 'el nombre ya existe en otro equipo', team_no_key: 'su equipo no tiene key' };
+function _mudTeamName(id) { if (!id || id === 'default') return 'General'; const t = ((_mudState && _mudState.teams) || []).find(x => x.id === id); return t ? t.name : id; }
+function _mudMoney(n) { return '$' + Number(n || 0).toLocaleString('es-AR'); }
+async function _mudPost(url, body) {
+    const r = await authFetch(url, { method: 'POST', body: JSON.stringify(body || {}) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Error');
+    return j;
+}
+async function loadMudanzaSection() {
+    try {
+        const r = await authFetch('/api/admin/platform/status');
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Error');
+        _mudState = j;
+        const p = j.partner || {}, c = j.config || {}, st = j.stats || {}, ro = j.rollover || {};
+        const ps = document.getElementById('mudPartnerState');
+        if (ps) ps.innerHTML = p.enabled
+            ? `✅ Conectada — <b>${escapeHtml(p.apiUrl || '')}</b> · key …${escapeHtml(p.apiKeyLast4 || '')} (${p.source === 'panel' ? 'cargada acá' : 'del servidor'})${p.decryptError ? ' · <span style="color:#ff6666">la key guardada no se pudo leer, cargala de nuevo</span>' : ''}`
+            : '⚪ Sin configurar: cargá la URL y la key.';
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+        set('mudApiUrl', p.apiUrl); set('mudPlayUrl', p.playUrl); set('mudApiKey', '');
+        document.querySelectorAll('input[name="mudMode"]').forEach(el => { el.checked = el.value === (c.mode || 'off'); });
+        set('mudUsernames', (c.usernames || []).join(', ')); set('mudCap', c.capARS);
+        const cm = document.getElementById('mudCreateMissing'); if (cm) cm.checked = c.createMissing === true;
+        const nu = document.getElementById('mudNewUsers'); if (nu) nu.checked = c.newUsersOnPartner === true;
+        const pb = document.getElementById('mudPausedBanner');
+        if (pb) { pb.style.display = c.paused ? '' : 'none'; pb.textContent = c.paused ? ('⛔ Mudanza PAUSADA' + (c.pausedReason ? ': ' + c.pausedReason : '')) : ''; }
+        const pbtn = document.getElementById('mudPauseBtn'); if (pbtn) pbtn.textContent = c.paused ? 'Reanudar' : 'Pausar';
+        const sel = document.getElementById('mudRollX');
+        if (sel) sel.innerHTML = (ro.options || [0, 2, 3, 5, 10]).map(x => `<option value="${x}" ${x === ro.x ? 'selected' : ''}>${x === 0 ? 'x0 (sin rollover)' : 'x' + x}</option>`).join('');
+        const ron = document.getElementById('mudRollOn'); if (ron) ron.checked = ro.enabled !== false;
+        const rn = document.getElementById('mudRollNote'); if (rn) rn.textContent = ro.snapped ? `La plataforma no permite x${ro.x}: se usa x${ro.effective}` : '';
+        const bs = st.byStatus || {}, hr = st.heldByReason || {};
+        const sd = document.getElementById('mudStats');
+        if (sd) sd.innerHTML = `<b>${st.migratedUsers || 0}</b> mudados de <b>${st.totalUsers || 0}</b> usuarios · faltan ${st.pendingUsers || 0} · saldo trasladado ${_mudMoney(st.movedARS)}`
+            + `<br>🛑 En revisión: <b>${bs.review || 0}</b> · ⏳ Carga pendiente: <b>${bs.deposit_pending || 0}</b> · Frenadas: <b>${bs.held || 0}</b>`
+            + (bs.held ? ' (' + Object.keys(hr).map(k => `${escapeHtml(_MUD_REASON[k] || k)}: ${hr[k]}`).join(' · ') + ')' : '');
+        mudRenderTeams(); mudEditTeam('');
+        mudLoadList();
+    } catch (e) { showToast('No se pudo cargar la mudanza: ' + e.message, 'error'); }
+}
+async function mudLoadList() {
+    const box = document.getElementById('mudList'); if (!box) return;
+    try {
+        const status = (document.getElementById('mudFilter') || {}).value || '';
+        const q = ((document.getElementById('mudSearch') || {}).value || '').trim();
+        const r = await authFetch('/api/admin/platform/migrations?limit=200' + (status ? '&status=' + encodeURIComponent(status) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
+        const j = await r.json();
+        const rows = j.migrations || [];
+        if (!rows.length) { box.innerHTML = '<p style="color:#888;font-size:13px;">Sin registros.</p>'; return; }
+        box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="text-align:left;color:#888;"><th style="padding:6px;">Usuario</th><th>Equipo</th><th>Estado</th><th>Saldo</th><th>Detalle</th><th>Fecha</th><th></th></tr></thead><tbody>'
+            + rows.map(m => {
+                const uid = escapeHtml(m.userId), un = escapeHtml(m.username);
+                let act = '';
+                if (m.status === 'review') act = `<button class="btn" onclick="mudResolve('${uid}','${un}',true)">El retiro SÍ se hizo</button> <button class="btn" onclick="mudResolve('${uid}','${un}',false)">NO se hizo</button>`;
+                else if (m.status === 'held' || m.status === 'failed') act = `<button class="btn" onclick="mudForce('${un}')">${m.reason === 'cap' ? 'Aprobar y mudar' : 'Mudar ahora'}</button>`;
+                else if (m.status === 'done' && m.oldResidual > 0) act = `<button class="btn" onclick="mudResidual('${uid}','${un}')">Pasar ${_mudMoney(m.oldResidual)} que le quedaron</button>`;
+                const det = (m.status === 'held' ? (_MUD_REASON[m.reason] || m.reason || '') : '') + (m.lastError && m.status !== 'done' ? ' ' + m.lastError : '');
+                return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${m.updatedAt ? new Date(m.updatedAt).toLocaleString('es-AR') : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
+            }).join('') + '</tbody></table>';
+    } catch (e) { box.innerHTML = '<p style="color:#ff6666;font-size:13px;">No se pudo cargar la lista.</p>'; }
+}
+async function mudSavePartner() {
+    try {
+        const body = { apiUrl: document.getElementById('mudApiUrl').value.trim(), playUrl: document.getElementById('mudPlayUrl').value.trim() };
+        const k = document.getElementById('mudApiKey').value.trim(); if (k) body.apiKey = k;
+        const j = await _mudPost('/api/admin/platform/partner', body);
+        showToast(j.ping && j.ping.ok ? '✅ Guardado. La plataforma responde y la key es válida.' : '⚠️ Guardado, pero la prueba falló: ' + ((j.ping && j.ping.detalle) || ''), j.ping && j.ping.ok ? 'success' : 'error');
+        loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudTestPartner() {
+    try {
+        const j = await _mudPost('/api/admin/platform/partner/test');
+        showToast(j.ping && j.ping.ok ? '✅ La plataforma responde y la key es válida.' : '❌ ' + ((j.ping && j.ping.detalle) || 'No responde'), j.ping && j.ping.ok ? 'success' : 'error');
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudSaveConfig() {
+    try {
+        const mode = (document.querySelector('input[name="mudMode"]:checked') || {}).value || 'off';
+        const prev = (_mudState && _mudState.config && _mudState.config.mode) || 'off';
+        if (mode === 'all' && prev !== 'all' && !confirm('Vas a prender la mudanza para TODOS los usuarios: cada uno se muda (con su saldo) cuando abra la app o haga una carga. ¿Confirmás?')) return;
+        await _mudPost('/api/admin/platform/migration/config', {
+            mode, usernames: document.getElementById('mudUsernames').value,
+            capARS: Number(document.getElementById('mudCap').value || 0),
+            createMissing: document.getElementById('mudCreateMissing').checked,
+            newUsersOnPartner: document.getElementById('mudNewUsers').checked
+        });
+        showToast('✅ Guardado', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudTogglePause() {
+    try {
+        const paused = !(_mudState && _mudState.config && _mudState.config.paused);
+        await _mudPost('/api/admin/platform/migration/config', { paused });
+        showToast(paused ? '⛔ Mudanza pausada' : '▶️ Mudanza reanudada', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudSaveRollover() {
+    try {
+        await _mudPost('/api/admin/platform/rollover', { enabled: document.getElementById('mudRollOn').checked, x: Number(document.getElementById('mudRollX').value) });
+        showToast('✅ Rollover guardado', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+function _mudResultText(r) {
+    const s = r && r.status;
+    if (s === 'done') return '✅ Mudado' + (r.amount ? ' — se trasladaron ' + _mudMoney(r.amount) : '');
+    if (s === 'held') return 'Frenada: ' + (_MUD_REASON[r.reason] || r.reason || '');
+    if (s === 'review') return '🛑 Quedó en revisión: el retiro en la plataforma vieja no se pudo confirmar';
+    if (s === 'deposit_pending') return '⏳ Se retiró de la vieja y la carga en la nueva está pendiente (se reintenta sola)';
+    if (s === 'busy') return 'Ya hay una mudanza en curso para ese usuario';
+    return 'No se pudo mudar' + (r && r.error ? ': ' + r.error : '');
+}
+async function mudForce(username) {
+    if (!confirm('¿Mudar a ' + username + ' ahora? Se le retira todo el saldo de la plataforma vieja y se le carga en jugaygana.io.')) return;
+    try {
+        const j = await _mudPost('/api/admin/platform/migrate-user', { username });
+        showToast(_mudResultText(j.result), j.result && j.result.status === 'done' ? 'success' : 'error'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+function mudMigrateOne() {
+    const u = (document.getElementById('mudOneUser').value || '').trim().replace(/^@/, '');
+    if (!u) { showToast('Escribí el usuario', 'error'); return; }
+    mudForce(u);
+}
+async function mudResolve(userId, username, withdrawn) {
+    const msg = withdrawn
+        ? 'Confirmás que en la plataforma VIEJA el retiro de ' + username + ' SÍ se hizo (el saldo bajó). Se le va a cargar ese monto en jugaygana.io.'
+        : 'Confirmás que en la plataforma VIEJA el retiro de ' + username + ' NO se hizo (el saldo sigue igual). La mudanza se va a reintentar.';
+    if (!confirm(msg)) return;
+    try {
+        const j = await _mudPost('/api/admin/platform/migrations/' + encodeURIComponent(userId) + '/resolve', { withdrawn });
+        showToast(withdrawn ? _mudResultText(j.result) : 'Listo, se reintenta sola', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudResidual(userId, username) {
+    if (!confirm('¿Pasar a jugaygana.io el saldo que le quedó a ' + username + ' en la plataforma vieja?')) return;
+    try {
+        const j = await _mudPost('/api/admin/platform/migrations/' + encodeURIComponent(userId) + '/residual');
+        showToast(j.amount ? '✅ Se trasladaron ' + _mudMoney(j.amount) : 'No tenía saldo en la vieja', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+function mudRenderTeams() {
+    const box = document.getElementById('mudTeams'); if (!box || !_mudState) return;
+    const teams = _mudState.teams || [], paused = (_mudState.config && _mudState.config.pausedTeams) || {}, byTeam = (_mudState.stats && _mudState.stats.byTeam) || {};
+    const row = (id, name, pre, key, canEdit) => {
+        const p = paused[id];
+        return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${escapeHtml(name)}</b></td><td>${pre}</td><td>${key}</td><td>${byTeam[id] || 0}</td>`
+            + `<td>${p ? '<span style="color:#ff8a8a;">⛔ ' + escapeHtml(p) + '</span>' : '<span style="color:#7bd88f;">Activo</span>'}</td>`
+            + `<td style="white-space:nowrap;">${p ? `<button class="btn" onclick="mudResumeTeam('${escapeHtml(id)}')">Reanudar</button> ` : ''}${canEdit ? `<button class="btn" onclick="mudEditTeam('${escapeHtml(id)}')">Editar</button> <button class="btn" onclick="mudDeleteTeam('${escapeHtml(id)}')">Borrar</button>` : ''}</td></tr>`;
+    };
+    const p = _mudState.partner || {};
+    box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="text-align:left;color:#888;"><th style="padding:6px;">Equipo</th><th>Inicios</th><th>Key</th><th>Mudados</th><th>Estado</th><th></th></tr></thead><tbody>'
+        + row('default', 'General', '<span style="color:#888;">todo lo que no coincide</span>', p.apiKeyLast4 ? '…' + escapeHtml(p.apiKeyLast4) : '<span style="color:#ff6666;">sin key</span>', false)
+        + teams.map(t => row(t.id, t.name, (t.prefixes || []).map(x => `<code>${escapeHtml(x)}</code>`).join(' '), t.hasKey ? '…' + escapeHtml(t.apiKeyLast4 || '') : '<span style="color:#ff6666;">sin key</span>', true)).join('')
+        + '</tbody></table>';
+}
+function mudEditTeam(id) {
+    const t = id ? ((_mudState && _mudState.teams) || []).find(x => x.id === id) : null;
+    const set = (i, v) => { const el = document.getElementById(i); if (el) el.value = v || ''; };
+    set('mudTeamId', t ? t.id : ''); set('mudTeamName', t ? t.name : ''); set('mudTeamPrefixes', t ? (t.prefixes || []).join(', ') : ''); set('mudTeamKey', '');
+    const k = document.getElementById('mudTeamKey'); if (k) k.placeholder = t ? 'API key del equipo — dejar vacío para no cambiarla' : 'API key del equipo (pk_…)';
+    const b = document.getElementById('mudTeamSaveBtn'); if (b) b.textContent = t ? 'Guardar cambios' : 'Agregar equipo';
+    const c = document.getElementById('mudTeamCancelBtn'); if (c) c.style.display = t ? '' : 'none';
+}
+async function mudSaveTeam() {
+    try {
+        const body = { id: document.getElementById('mudTeamId').value || undefined, name: document.getElementById('mudTeamName').value.trim(), prefixes: document.getElementById('mudTeamPrefixes').value };
+        const k = document.getElementById('mudTeamKey').value.trim(); if (k) body.apiKey = k;
+        const j = await _mudPost('/api/admin/platform/teams', body);
+        showToast(j.keyTest === 'ok' ? '✅ Equipo guardado. La plataforma aceptó la key.' : '✅ Equipo guardado', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudDeleteTeam(id) {
+    if (!confirm('¿Borrar el equipo ' + _mudTeamName(id) + '? Los usuarios con ese inicio que todavía no se mudaron pasarían a crearse con la key general.')) return;
+    try {
+        const r = await authFetch('/api/admin/platform/teams/' + encodeURIComponent(id), { method: 'DELETE' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'Error');
+        showToast('Equipo borrado', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+async function mudResumeTeam(id) {
+    try { await _mudPost('/api/admin/platform/teams/' + encodeURIComponent(id) + '/resume'); showToast('▶️ Equipo reanudado', 'success'); loadMudanzaSection(); }
+    catch (e) { showToast(e.message, 'error'); }
+}
+function mudProbeTeam() {
+    const out = document.getElementById('mudTeamProbeOut'); if (!out) return;
+    const u = (document.getElementById('mudTeamProbe').value || '').trim().toLowerCase().replace(/^@/, '');
+    if (!u) { out.textContent = ''; return; }
+    let best = null, len = 0;
+    ((_mudState && _mudState.teams) || []).forEach(t => (t.prefixes || []).forEach(p => { if (p.length > len && u.startsWith(p)) { best = t; len = p.length; } }));
+    out.textContent = '→ ' + (best ? best.name : 'General (key general)') + (/^[a-z0-9_]{3,18}$/.test(u) ? '' : ' · ⚠️ ese nombre no es válido en jugaygana.io');
+}
+window.mudRenderTeams = mudRenderTeams; window.mudEditTeam = mudEditTeam; window.mudSaveTeam = mudSaveTeam;
+window.mudDeleteTeam = mudDeleteTeam; window.mudResumeTeam = mudResumeTeam; window.mudProbeTeam = mudProbeTeam;
+window.loadMudanzaSection = loadMudanzaSection; window.mudLoadList = mudLoadList; window.mudSavePartner = mudSavePartner;
+window.mudTestPartner = mudTestPartner; window.mudSaveConfig = mudSaveConfig; window.mudTogglePause = mudTogglePause;
+window.mudSaveRollover = mudSaveRollover; window.mudForce = mudForce; window.mudMigrateOne = mudMigrateOne;
+window.mudResolve = mudResolve; window.mudResidual = mudResidual;

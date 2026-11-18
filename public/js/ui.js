@@ -1044,11 +1044,55 @@ VIP.ui._loadCasinoUrl = function() {
       .then(function (j) { if (j && typeof j.url === 'string' && /^https?:\/\//i.test(j.url)) VIP.ui._casinoUrl = j.url; })
       .catch(function () {});
   } catch (_) {}
+  VIP.ui._loadPlatformInfo();
+};
+// #197: si la cuenta ya opera en la plataforma nueva, "Abrir Casino" entra con sesión iniciada
+// (link de un solo uso que arma el servidor). `_casinoSso` lo dice el servidor por usuario.
+VIP.ui._casinoSso = false;
+VIP.ui._casinoSsoUrl = '';
+VIP.ui._loadPlatformInfo = function() {
+  try {
+    if (!VIP.state || !VIP.state.currentToken) { VIP.ui._casinoSso = false; return; }
+    fetch(VIP.config.API_URL + '/api/platform/info', { cache: 'no-store', headers: { 'Authorization': 'Bearer ' + VIP.state.currentToken } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        VIP.ui._casinoSso = !!(j && j.sso === true);
+        VIP.ui._casinoSsoUrl = (j && j.sso === true && typeof j.url === 'string' && /^https?:\/\//i.test(j.url)) ? j.url : '';
+      })
+      .catch(function () {});
+  } catch (_) {}
 };
 VIP.ui._loadCasinoUrl();
 
 VIP.ui.goToPlatform = function() {
-  window.open(VIP.ui._casinoUrl || 'https://www.jugaygana44.bet', '_blank');
+  var plain = VIP.ui._casinoUrl || 'https://www.jugaygana44.bet';
+  if (!VIP.ui._casinoSso || !VIP.state || !VIP.state.currentToken) {
+    window.open(plain, '_blank');
+    VIP.ui.closePlatformModal();
+    return;
+  }
+  // La pestaña se abre YA, dentro del toque (si se espera al servidor, el bloqueador de
+  // pop-ups la frena); después se la manda al link de entrada directa.
+  var fallback = VIP.ui._casinoSsoUrl || plain; // sin link directo: la página que le corresponde hoy a esta cuenta
+  var w = null;
+  try { w = window.open('about:blank', '_blank'); } catch (_) {}
+  var go = function (url) {
+    try { if (w && !w.closed) { w.location.href = url; return; } } catch (_) {}
+    window.location.href = url;
+  };
+  fetch(VIP.config.API_URL + '/api/platform/session', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + VIP.state.currentToken }, body: '{}' })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      // La cuenta todavía se está actualizando: no se abre nada (ni la página vieja).
+      if (j && j.pending === true) {
+        try { if (w && !w.closed) w.close(); } catch (_) {}
+        VIP.ui.showToast(j.message || 'Estamos actualizando tu cuenta. Probá de nuevo en un minuto.', 'info');
+        return;
+      }
+      if (j && j.success === true) VIP.ui._casinoSso = true;
+      go((j && typeof j.url === 'string' && /^https?:\/\//i.test(j.url)) ? j.url : fallback);
+    })
+    .catch(function () { go(fallback); });
   VIP.ui.closePlatformModal();
 };
 

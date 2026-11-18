@@ -94,7 +94,8 @@ async function calculateCommissionsForPeriod(periodKey, options = {}) {
       const jgUsername = u.jugayganaUsername || u.username;
       const jgUserId = u.jugayganaUserId || null;
       try {
-        const r = await referralRevenueService.getUserRevenueForPeriod(jgUsername, periodKey, jgUserId);
+        // #197: por la plataforma de ESE referido (para quien sigue en JUGAYGANA es la llamada de siempre).
+        const r = await require('./platform').getUserRevenueForPeriod(u, periodKey);
         return [u.id, r];
       } catch (err) {
         return [u.id, { success: false, error: err.message }];
@@ -294,7 +295,7 @@ async function calculateCommissionsForPeriod(periodKey, options = {}) {
       // leemos del Map. Fallback defensivo por si el usuario no estaba en el
       // batch (no debería pasar para no-excluidos).
       const revenueResult = revenueByReferredId.get(referredUser.id)
-        || await referralRevenueService.getUserRevenueForPeriod(jugayganaUsername, periodKey, jugayganaUserId);
+        || await require('./platform').getUserRevenueForPeriod(referredUser, periodKey);
 
       if (!revenueResult.success) {
         const authDetail = revenueResult.authDetail || null;

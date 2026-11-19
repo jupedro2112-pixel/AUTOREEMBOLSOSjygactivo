@@ -6792,6 +6792,10 @@ app.post('/api/auth/platform-login', authMiddleware, async (req, res) => {
       return res.status(401).json({ error: 'Contraseña incorrecta' });
     }
 
+    // #203: un usuario mudado ya no opera en JUGAYGANA (cuenta cerrada): acá no se intenta entrar a la vieja.
+    if (user.platform === 'partner') {
+      return res.status(410).json({ error: 'Tu cuenta ya está en la plataforma nueva: entrá desde el botón del casino.', platform: 'partner' });
+    }
     const jgLogin = await jugayganaService.loginAsUser(user.username, password);
     if (!jgLogin.success) {
       return res.status(502).json({ error: `No se pudo iniciar sesión en la plataforma: ${jgLogin.error}` });

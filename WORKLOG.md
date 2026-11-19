@@ -8,6 +8,16 @@
 
 ## Sesión 2026-11-19
 
+### 203. 🔎 Auditoría: ¿queda algo de la JUGAYGANA vieja disponible para un usuario ya mudado?
+- **Owner:** "quiero que todas las funciones del viejo JUGAYGANA no estén disponibles para los que están mudados (reembolsos, cambio de clave, cargar bono…)".
+- **Resultado (inventario de TODAS las llamadas directas a los 4 clientes viejos en server.js y servicios):** plata (cargas, retiros, bonos,
+  reembolsos, comisiones) y saldo van por `plat.*` → plataforma nueva. Los 6 cambios de clave (usuario, olvido, admin, publicista) pasan por
+  `syncPasswordToJugaygana` → `plat.changeUserPasswordAsAdmin` → cambian la de jugaygana.io, no la vieja. El login ya no entra a la vieja (#198).
+- **Único hueco, cerrado:** `POST /api/auth/platform-login` (no lo usa el front) intentaba entrar a la vieja sin mirar la plataforma → ahora 410 para mudados.
+- **Lo que SÍ sigue leyendo la vieja, a propósito (solo lectura):** el netwin del tramo ANTERIOR a la mudanza dentro del mismo período
+  (`plat.getUserNetwinForDateRange` / `getUserRevenueForPeriod`), para que el reembolso y la comisión de referidos no pierdan lo jugado antes
+  de mudarse. Se apaga solo cuando el período ya no toca la fecha de mudanza. Si el owner lo quiere cortar del todo, es en esas dos funciones.
+
 ### 202. 🟣 FINPRO como segundo banco con API (réplica #217–#220 de CARGASGIROXactivo) + hasta 3 cuentas Finpro + "🏦 Bancos automáticos" — admin-sw v73
 - **Owner:** "quiero replicar tal cual toda la implementación de FINPRO de CARGASGIROXactivo… que se puedan usar ambos; ahora se pueden usar 3 hgcash,
   quiero también 3 FINPRO, elegir cuál usar, cuál dejar de respaldo, que cargue automático la finpro o la hgcash. Todo completo, prolijo, con prueba y error."

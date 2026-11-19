@@ -31,9 +31,10 @@ const S = {
     async set(k, v) { if (k === 'bankShown') S.shown = v; if (k === 'bankProvider') S.provider = v; }
   },
   _hgAccountLabel: (x) => x.label, _fpAccountLabel: (x) => x.label,
-  BankMovement: { aggregate: async (p) => { const m = p[0].$match; const id = (m.provider === 'finpro' ? 'finpro:' : 'hgcash:') + m.accountKey; return usage[id] ? [usage[id]] : []; } },
+  BankMovement: { aggregate: async (p) => { const m = p[0].$match; const id = (m.provider === 'finpro' ? 'finpro:' : 'hgcash:') + m.$or[0].accountKey; S.lastMatch = m; return usage[id] ? [usage[id]] : []; } },
   hgcashPay: { getAccounts: async (tok) => (down.has('hgcash:' + tok.slice(2)) ? { ok: false, error: 'timeout' } : { ok: true, data: [] }) },
   finpro: { getBalance: async ({ ctx }) => (down.has('finpro:' + ctx.key) ? { ok: false, httpStatus: 503, error: 'caído' } : { ok: true, balance: 1 }) },
+  _fpAccountCvus: (x) => (x.fromCvu ? [x.fromCvu] : []),
   _fpHasCreds: (x) => !!x.apiKey, _fpCtx: (x) => ({ key: x.key }), _fpReadyPayouts: (x) => !!x.apiKey && String(x.fromCvu || '').length === 22,
   getBankShown: async () => S.shown,
   getHgcashConfig: async () => ({ enabled: S.hgEnabled }), getFinproConfig: async () => ({ enabled: S.fpEnabled }),
@@ -139,6 +140,16 @@ t('rota desde Finpro (la que ve el cliente) hacia otra cuenta Finpro', async () 
   reset(); S.shown = 'finpro'; S._fpAccounts.push({ key: 'f2', label: 'FP dos', apiKey: 'k2', account: '20', fromCvu: CVU(6) }); down.add('finpro:f1');
   await tick(); await tick(); const r = await tick();
   assert.ok(r.ok); assert.strictEqual(S._fpActiveKey, 'f2'); assert.strictEqual(S._hgActiveKey, 'a1');
+});
+t('lo que entró cuenta también los movimientos sin cuenta anotada (por CVU / única cuenta del banco)', async () => {
+  reset({ limits: { 'finpro:f1': { day: 5, month: 0 } } }); S.shown = 'finpro';
+  await tick();
+  const m = S.lastMatch;
+  assert.strictEqual(m.$or[0].accountKey, 'f1'); assert.strictEqual(m.$or[1].accountKey, null);
+  assert.ok(m.$or[1].$or.some((o) => o.toCBU && o.toCBU.$in[0] === CVU(5))); assert.ok(m.$or[1].$or.some((o) => Object.keys(o).length === 0), 'única cuenta Finpro: se le atribuye todo lo sin cuenta');
+  reset({ limits: { 'hgcash:a1': { day: 5, month: 0 } } });
+  await tick();
+  assert.ok(!S.lastMatch.$or[1] || !S.lastMatch.$or[1].$or.some((o) => Object.keys(o).length === 0), 'con 2 cuentas hgcash lo sin cuenta NO se reparte a ciegas');
 });
 t('día y mes en hora Argentina', async () => {
   const st = X._rotPeriodStarts(Date.UTC(2026, 11, 1, 2, 30)); // 30-nov 23:30 AR

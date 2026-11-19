@@ -8,6 +8,12 @@
 
 ## Sesión 2026-11-19
 
+### 210. 🔁 Rotación: "Entró hoy" de Finpro contaba de menos
+- Owner: entraron $7.100 por Finpro y la tabla decía $3.000. `_rotUsage` solo sumaba movimientos con `accountKey` = la cuenta; un movimiento
+  de Finpro puede quedar con `accountKey:null` (la cuenta no se pudo resolver al ingresarlo). Ahora también suma los sin cuenta que
+  coinciden por CVU destino / id de cuenta, o todos los sin cuenta cuando ese banco tiene UNA sola cuenta; y usa `amountRaw` si `amount` es null.
+- ⚠️ Hipótesis, no verificada contra la base (no hay acceso desde acá): si sigue contando de menos, mirar el movimiento faltante en Diagnóstico.
+
 ### 209. 🟣 Finpro: fuera los carteles de "URL de desarrollo"
 - Owner confirmó con plata real (cargas automáticas Y retiros pagados) que `https://mw-dev.finpro.com.ar` + bankId `creedence` es PRODUCCIÓN
   para su cuenta. Se sacaron el cartel amarillo de la cuenta, el de "Bancos automáticos", el aviso al guardar y el texto del campo URL. SW v78.

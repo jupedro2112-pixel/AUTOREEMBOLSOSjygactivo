@@ -17816,11 +17816,28 @@ function _rotPeriodStarts(now = Date.now()) {
 // Lo que ENTRÓ por una cuenta hoy y este mes (todas las transferencias entrantes, cargadas o no).
 async function _rotUsage(slot) {
   const st = _rotPeriodStarts();
-  const match = { direction: 'Inbound', accountKey: slot.key, createdAt: { $gte: st.month },
-    provider: slot.provider === 'finpro' ? 'finpro' : { $in: ['hgcash', null] } };
+  // #210: un movimiento puede haber quedado SIN `accountKey` (entró antes de poder saber la cuenta):
+  // se lo atribuye por el CVU destino / id de cuenta, y si de ese banco hay UNA sola cuenta, a esa.
+  const a = slot.acc || {};
+  const isFp = slot.provider === 'finpro';
+  const orphan = [];
+  if (isFp) {
+    const cvus = _fpAccountCvus(a);
+    if (cvus.length) orphan.push({ toCBU: { $in: cvus } });
+    if (a.account) orphan.push({ accountId: String(a.account) });
+    if (_fpAccounts.length === 1) orphan.push({});
+  } else {
+    if (a.accountId) orphan.push({ accountId: String(a.accountId) });
+    if (a.cbu) orphan.push({ toCBU: String(a.cbu) });
+    if (_hgAccounts.length === 1) orphan.push({});
+  }
+  const match = { direction: 'Inbound', createdAt: { $gte: st.month }, provider: isFp ? 'finpro' : { $in: ['hgcash', null] },
+    $or: [{ accountKey: slot.key }].concat(orphan.length ? [{ accountKey: null, $or: orphan }] : []) };
+  // Monto: `amount`, o el texto original si el número no se pudo leer.
+  const amt = { $ifNull: ['$amount', { $convert: { input: '$amountRaw', to: 'double', onError: 0, onNull: 0 } }] };
   const rows = await BankMovement.aggregate([
     { $match: match },
-    { $group: { _id: null, month: { $sum: { $ifNull: ['$amount', 0] } }, day: { $sum: { $cond: [{ $gte: ['$createdAt', st.day] }, { $ifNull: ['$amount', 0] }, 0] } } } }
+    { $group: { _id: null, month: { $sum: amt }, day: { $sum: { $cond: [{ $gte: ['$createdAt', st.day] }, amt, 0] } } } }
   ]);
   const r = rows[0] || {};
   return { day: Math.round(Number(r.day) || 0), month: Math.round(Number(r.month) || 0) };

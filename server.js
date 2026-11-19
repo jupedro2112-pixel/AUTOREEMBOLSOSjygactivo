@@ -3695,7 +3695,7 @@ async function _hgApplyActiveToConfigs(a) {
   } else if (a.cbu || a.alias || a.titular || a.bank) {
     try {
       const cur = (await getConfig('cbu', null)) || {};
-      await setConfig('cbu', { bank: a.bank || cur.bank || '', titular: a.titular || a.accountName || cur.titular || '', number: a.cbu || cur.number || '', alias: a.alias || cur.alias || '' });
+      await setConfig('cbu', { bank: a.bank || '', titular: a.titular || a.accountName || '', number: a.cbu || '', alias: a.alias || '' }); // #212: nunca hereda CBU/alias/titular de la cuenta anterior (mandaría la plata ahí)
     } catch (e) { warnings.push('No se pudo actualizar el CBU que ve el cliente: ' + e.message); }
   } else {
     warnings.push('Esta cuenta no tiene titular/CBU/alias cargados: el cliente sigue viendo los datos de pago anteriores. Cargalos en la card de cuentas hgcash.');
@@ -18203,7 +18203,8 @@ app.post('/api/admin/finpro/accounts', authMiddleware, adminMiddleware, async (r
     if (apiKeyNew.length > 400 || apiSecretNew.length > 400 || webhookSecretNew.length > 400) return res.status(400).json({ error: 'La API Key / Secret / secreto del webhook no parecen válidos (demasiado largos).' });
     if (webhookSecretNew && webhookSecretNew.length < 16) return res.status(400).json({ error: 'El secreto de firma de los webhooks tiene que tener al menos 16 caracteres.' });
     const fromCvu = String(b.fromCvu || '').replace(/\D/g, '');
-    if (fromCvu && fromCvu.length !== 22) return res.status(400).json({ error: 'Nuestro CVU tiene que tener 22 dígitos.' });
+    if (fromCvu.length !== 22) return res.status(400).json({ error: 'Cargá nuestro CVU de la cuenta (22 dígitos): sin eso no se puede guardar.' }); // #212
+    if (!String(b.alias || '').trim()) return res.status(400).json({ error: 'Cargá el alias de la cuenta: sin eso no se puede guardar.' });
     const account = String(b.account || '').trim().slice(0, 40);
     let extraList = [];
     if (b.extraCvus) {
@@ -18541,7 +18542,9 @@ app.post('/api/admin/hgcash/accounts', authMiddleware, adminMiddleware, async (r
     const alias = String(b.alias || '').trim().slice(0, 60);
     const bank = String(b.bank || '').trim().slice(0, 60);
     if (!label) return res.status(400).json({ error: 'Poné un nombre para la cuenta (ej. "Cuenta Juan")' });
-    if (cbu && cbu.length !== 22) return res.status(400).json({ error: 'El CBU/CVU tiene que tener 22 dígitos (o dejalo vacío)' });
+    // #212: sin CBU y alias propios no se guarda (el cliente vería datos de OTRA cuenta al rotar).
+    if (cbu.length !== 22) return res.status(400).json({ error: 'Cargá el CBU/CVU de la cuenta (22 dígitos): sin eso no se puede guardar.' });
+    if (!alias) return res.status(400).json({ error: 'Cargá el alias de la cuenta: sin eso no se puede guardar.' });
     const cfg = await _hgReadAccountsConfig();
     const cur = key ? cfg.accounts.find(a => a.key === key) : null;
     if (key && !cur) return res.status(404).json({ error: 'Cuenta no encontrada' });

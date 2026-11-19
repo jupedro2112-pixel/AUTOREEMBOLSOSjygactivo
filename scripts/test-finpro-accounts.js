@@ -185,13 +185,16 @@ t('sin cuentas: nada cargado y los bancos por defecto', async () => {
   assert.strictEqual(r.body.incoming, 'none'); assert.strictEqual(r.body.payouts, 'hgcash');
 });
 t('alta: credenciales malas NO se guardan', async () => {
-  const r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro 1', apiKey: 'k-mala', apiSecret: 's1', fromCvu: CVU1 } });
+  const r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro 1', apiKey: 'k-mala', apiSecret: 's1', fromCvu: CVU1, alias: 'uno.alias' } });
   assert.strictEqual(r.code, 400); assert.ok(/rechazó/.test(r.body.error));
   assert.strictEqual(configStore.has('finproAccounts'), false);
 });
 t('alta: validaciones de forma (CVU, secreto corto, URL, rol)', async () => {
   world.tokens.k1 = true; world.balances.k1 = 1000; world.holders[CVU1] = 'TITULAR UNO SA';
-  const base = { label: 'Finpro 1', apiKey: 'k1', apiSecret: 's1' };
+  const base = { label: 'Finpro 1', apiKey: 'k1', apiSecret: 's1', fromCvu: CVU1, alias: 'uno.alias' };
+  // #212: sin CVU o sin alias no se guarda
+  assert.ok(/CVU/.test((await call('POST /api/admin/finpro/accounts', { body: Object.assign({}, base, { fromCvu: '' }) })).body.error));
+  assert.ok(/alias/.test((await call('POST /api/admin/finpro/accounts', { body: Object.assign({}, base, { alias: ' ' }) })).body.error));
   assert.strictEqual((await call('POST /api/admin/finpro/accounts', { body: Object.assign({}, base, { fromCvu: '123' }) })).code, 400);
   assert.strictEqual((await call('POST /api/admin/finpro/accounts', { body: Object.assign({}, base, { webhookSecret: 'corto' }) })).code, 400);
   assert.strictEqual((await call('POST /api/admin/finpro/accounts', { body: Object.assign({}, base, { baseUrl: 'http://inseguro.example' }) })).code, 400);
@@ -212,11 +215,11 @@ t('alta de la primera cuenta: queda EN USO, cifrada y con titular', async () => 
 t('segunda y tercera cuenta; la cuarta se rechaza; CVU repetido se rechaza', async () => {
   world.tokens.k2 = true; world.balances.k2 = 2000; world.holders[CVU2] = 'TITULAR DOS SRL';
   world.tokens.k3 = true; world.balances.k3 = 3000;
-  let r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro dup', apiKey: 'k2', apiSecret: 's2', fromCvu: CVU1 } });
+  let r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro dup', apiKey: 'k2', apiSecret: 's2', fromCvu: CVU1, alias: 'dup.alias' } });
   assert.strictEqual(r.code, 400); assert.ok(/ya está cargado/.test(r.body.error));
   r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro 2', apiKey: 'k2', apiSecret: 's2', webhookSecret: SEC2, fromCvu: CVU2, account: '2002', alias: 'dos.alias' } });
   assert.strictEqual(r.body.key, 'f2'); assert.strictEqual(r.body.activeKey, 'f1', 'la nueva queda de respaldo');
-  r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro 3', apiKey: 'k3', apiSecret: 's3', fromCvu: CVU3, account: '3003' } });
+  r = await call('POST /api/admin/finpro/accounts', { body: { label: 'Finpro 3', apiKey: 'k3', apiSecret: 's3', fromCvu: CVU3, account: '3003', alias: 'tres.alias' } });
   assert.strictEqual(r.body.key, 'f3');
   assert.ok(r.body.warnings.some((w) => /secreto de firma/.test(w)), 'avisa que sin secreto no llegan solas');
   world.tokens.k4 = true;
@@ -475,19 +478,17 @@ t('pago: destino = nuestra propia cuenta, o sin CVU de origen → no sale', asyn
   let r = await payCall('w16');
   assert.strictEqual(r.code, 400); assert.strictEqual(transfers().length, 0); assert.strictEqual(row('w16').status, 'pending_review');
   // Con pagos EN PROCESO de la cuenta 2 no se le puede cambiar el CVU/credenciales (se consultan con esos datos)…
-  r = await call('POST /api/admin/finpro/accounts', { body: { key: 'f2', label: 'Finpro DOS', fromCvu: '', account: '2002' } });
+  r = await call('POST /api/admin/finpro/accounts', { body: { key: 'f2', label: 'Finpro DOS', fromCvu: '0000009900000000000099', account: '2002', alias: 'dos.alias' } });
   assert.strictEqual(r.code, 400); assert.ok(/EN PROCESO/.test(r.body.error));
   // …pero el nombre/alias sí.
   r = await call('POST /api/admin/finpro/accounts', { body: { key: 'f2', label: 'Finpro DOS', fromCvu: CVU2, account: '2002', alias: 'dos.nuevo' } });
   assert.strictEqual(r.code, 200, JSON.stringify(r.body));
   const held = PendingPayout.rows.filter((x) => x.status === 'paying' && x.fpAccountKey === 'f2');
   held.forEach((x) => { x.status = 'paid'; });
-  r = await call('POST /api/admin/finpro/accounts', { body: { key: 'f2', label: 'Finpro DOS', fromCvu: '', account: '2002' } });
-  assert.strictEqual(r.code, 200, JSON.stringify(r.body));
+  // #212: una cuenta ya no se puede guardar sin CVU (ni sin alias).
+  r = await call('POST /api/admin/finpro/accounts', { body: { key: 'f2', label: 'Finpro DOS', fromCvu: '', account: '2002', alias: 'dos.nuevo' } });
+  assert.strictEqual(r.code, 400); assert.ok(/CVU/.test(r.body.error));
   held[0].status = 'paying'; // se deja uno en proceso para la prueba de borrado
-  newPayout('w17');
-  r = await payCall('w17');
-  assert.strictEqual(r.code, 400); assert.ok(/CVU de origen/.test(r.body.error)); assert.strictEqual(transfers().length, 0);
 });
 t('borrar la cuenta que pagó un retiro EN PROCESO está bloqueado', async () => {
   await call('POST /api/admin/finpro/accounts/:key/activate', { params: { key: 'f1' } });

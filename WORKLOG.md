@@ -8,6 +8,12 @@
 
 ## Sesión 2026-11-19
 
+### 212. 🏦 Una cuenta de banco no se guarda sin su CBU/CVU y su alias
+- Owner: "que no se pueda cargar la cuenta sin cargar el alias y/o CBU previamente".
+- `POST /api/admin/hgcash/accounts` exige CBU de 22 dígitos + alias; `POST /api/admin/finpro/accounts` exige nuestro CVU de 22 + alias (alta y edición).
+- Además `_hgApplyActiveToConfigs` ya NO hereda banco/titular/CBU/alias de la cuenta anterior al reescribir `Config['cbu']` (un alias viejo
+  mandaba la plata a la otra cuenta). Finpro ya no heredaba. Test: `test-finpro-accounts.js` actualizado (43).
+
 ### 211. 🕒 Panel: las últimas fechas que usaban el reloj de la PC → hora Argentina, y horas en 24 hs
 - Owner: "que el horario que tome sea horario Argentina, no el de Tails". Quedaban 6 `new Date(x).toLocaleString('es-AR')` sin zona
   (config privada, aprendizaje, auditoría) → `fmtFechaHoraAR`. Además los helpers de hora pasan a `hourCycle:'h23'`: el navegador de Tails

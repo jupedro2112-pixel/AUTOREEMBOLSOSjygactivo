@@ -8062,6 +8062,7 @@ async function _auditConfigForPanel() {
     minScoreAlert: a.minScoreAlert, alertFlags: a.alertFlags,
     rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false, ratingCooldownHours: a.ratingCooldownHours,
     extraRules: a.extraRules || '',
+    learnQuestionsEnabled: a.learnQuestionsEnabled === true, // #215 la IA NO pregunta salvo que el dueño lo prenda
     learnEnabled: a.learnEnabled !== false, learnHourART: a.learnHourART, learnMinScore: a.learnMinScore, learnMaxChats: a.learnMaxChats,
     learnMaxProposalsPerDay: a.learnMaxProposalsPerDay, learnMaxQuestionsPerDay: a.learnMaxQuestionsPerDay,
     telegramTokenSet: !!(a.telegram && a.telegram.botToken),
@@ -8106,6 +8107,7 @@ app.post('/api/admin/private-config/audit', authMiddleware, adminMiddleware, pri
       rulesEnabled: a.rulesEnabled !== false, ratingEnabled: a.ratingEnabled !== false,
       ratingCooldownHours: num(a.ratingCooldownHours, cur.ratingCooldownHours, 0, 168),
       extraRules: a.extraRules !== undefined ? String(a.extraRules || '').slice(0, 8000) : (cur.extraRules || ''),
+      learnQuestionsEnabled: a.learnQuestionsEnabled !== undefined ? a.learnQuestionsEnabled === true : cur.learnQuestionsEnabled === true, // #215
       learnEnabled: a.learnEnabled !== undefined ? a.learnEnabled !== false : cur.learnEnabled !== false,
       learnHourART: num(a.learnHourART, cur.learnHourART, 0, 23), learnMinScore: num(a.learnMinScore, cur.learnMinScore, 5, 10), learnMaxChats: num(a.learnMaxChats, cur.learnMaxChats, 3, 1000),
       learnMaxProposalsPerDay: num(a.learnMaxProposalsPerDay, cur.learnMaxProposalsPerDay, 0, 30), learnMaxQuestionsPerDay: num(a.learnMaxQuestionsPerDay, cur.learnMaxQuestionsPerDay, 0, 30),
@@ -8208,6 +8210,26 @@ function _learnAutoClosePending(store) {
   return n;
 }
 
+// #215 Preguntas APAGADAS (default): las dudas pendientes se cierran solas (quedan en la memoria como
+// "no insistir") para que el panel no las siga mostrando. Devuelve cuántas cerró.
+function _learnCloseQuestions(store) {
+  let n = 0;
+  for (const p of store) {
+    if (p.status !== 'pending' || p.kind !== 'question') continue;
+    p.status = 'rejected'; p.resolvedAt = new Date(); p.resolvedBy = 'sistema (preguntas apagadas)'; n++;
+  }
+  return n;
+}
+// #215 Para DUDAS el filtro de repetidas es más estricto que para propuestas: con que compartan
+// buena parte de las palabras clave ya es "el mismo tema" (la IA repreguntaba lo mismo reformulado).
+function _learnSameTopic(a, b) {
+  if (_learnSimilar(a, b)) return true;
+  const wa = _learnWords(a), wb = _learnWords(b);
+  if (wa.size < 4 || wb.size < 4) return false;
+  let inter = 0; for (const w of wa) if (wb.has(w)) inter++;
+  return inter / (wa.size + wb.size - inter) >= 0.3 || inter / Math.min(wa.size, wb.size) >= 0.6;
+}
+
 async function _runAuditLearn(trigger) {
   const cfg = await _getAuditConfig();
   if (cfg.learnEnabled === false && trigger !== 'manual') return { skipped: 'apagado' };
@@ -8244,16 +8266,22 @@ async function _runAuditLearn(trigger) {
   const closed = _learnAutoClosePending(store);
   if (closed) logger.info(`[audit-learn] ${closed} pendiente(s) cerradas solas por repetir algo ya resuelto`);
   const maxP = Number(cfg.learnMaxProposalsPerDay) > 0 ? Number(cfg.learnMaxProposalsPerDay) : 6;
-  const maxQ = Number(cfg.learnMaxQuestionsPerDay) > 0 ? Number(cfg.learnMaxQuestionsPerDay) : 4;
+  // #215: sin el interruptor prendido NO hay preguntas (cupo 0) y las que quedaron pendientes se cierran.
+  const askOn = cfg.learnQuestionsEnabled === true;
+  if (!askOn) { const cq = _learnCloseQuestions(store); if (cq) logger.info(`[audit-learn] preguntas apagadas: ${cq} duda(s) pendiente(s) cerradas`); }
+  const maxQ = askOn ? Math.max(0, Math.round(Number(cfg.learnMaxQuestionsPerDay)) || 0) : 0;
   const memLine = (p) => {
-    const t = String(p.text || '').slice(0, 220);
+    const t = String(p.text || '').slice(0, 160);
     if (p.status === 'answered') return `- [RESPONDIDA] ${t} → respuesta del dueño: ${String(p.answer || p.finalText || '').slice(0, 220)}`;
     if (p.status === 'rejected') return `- [RECHAZADA por el dueño, no insistir] ${t}`;
     if (p.status === 'accepted') return `- [YA INCORPORADA al contexto] ${t}`;
     return `- [PENDIENTE de respuesta, no repetir] ${t}`;
   };
   const byStatus = (st, n) => store.filter(p => p.status === st).slice(0, n).map(memLine);
-  const memory = [].concat(byStatus('answered', 120), byStatus('rejected', 120), byStatus('pending', 60), byStatus('accepted', 60)).join('\n');
+  // #215: antes la memoria se cortaba (60 pendientes / 12.000 letras) y con 2 meses de historial la IA ya
+  // no veía lo viejo → repreguntaba. Ahora van hasta 250 por estado y el prompt admite 40.000 letras.
+  const memory = [].concat(byStatus('answered', 250), byStatus('rejected', 250), byStatus('pending', 250), byStatus('accepted', 120)).join('\n');
+  const knownQ = store.filter(p => p.kind === 'question').map(p => p.text);
   const known = store.map(p => p.text).concat(String(learned.doc || '').split('\n'), String(cfg.extraRules || '').split('\n')).filter(Boolean);
   const exists = (t) => !String(t || '').trim() || known.some(k => _learnSimilar(k, t));
   const added = []; const summaries = []; let model = null; let calls = 0;
@@ -8275,7 +8303,8 @@ async function _runAuditLearn(trigger) {
     }
     for (const q of r.questions) {
       if (added.filter(x => x.kind === 'question').length >= maxQ) break;
-      if (exists(q.question)) continue;
+      if (exists(q.question) || knownQ.some(k => _learnSameTopic(k, q.question))) continue; // #215 mismo tema que una duda anterior
+      knownQ.push(q.question);
       const item = { id: uuidv4(), kind: 'question', text: q.question, why: q.context, status: 'pending', at: new Date(), dayKey };
       store.unshift(item); added.push(item); known.push(q.question);
     }
@@ -8372,7 +8401,8 @@ app.post('/api/admin/private-config/audit/learned', authMiddleware, adminMiddlew
     const store = (await getConfig('auditproposals', null)) || [];
     const log = (await getConfig('auditlearnlog', null)) || [];
     // #156: al abrir el panel se cierran solas las pendientes que repiten algo ya resuelto.
-    const closed = _learnAutoClosePending(store);
+    let closed = _learnAutoClosePending(store);
+    if ((await _getAuditConfig()).learnQuestionsEnabled !== true) closed += _learnCloseQuestions(store); // #215
     if (closed) { await setConfig('auditproposals', store); logger.info(`[audit-learn] panel: ${closed} pendiente(s) repetidas cerradas solas`); }
     res.json({ success: true, doc: learned.doc || '', updatedAt: learned.updatedAt || null, pending: store.filter(p => p.status === 'pending'), autoClosed: closed, lastRuns: log.slice(0, 5), facts: await _systemFactsForAi() });
   } catch (error) { res.status(500).json({ error: 'Error del servidor' }); }

@@ -5376,6 +5376,7 @@ function renderPrivateAuditConfig(a) {
     set('pcAuditSessionGap', a.sessionGapMinutes);
     set('pcTgToken', ''); chk('pcTgTokenClear', false); set('pcTgChatId', a.telegramChatId || '');
     set('pcAuditExtraRules', a.extraRules || '');
+    chk('pcLearnQuestions', a.learnQuestionsEnabled === true); // #215
     chk('pcLearnEnabled', a.learnEnabled !== false); set('pcLearnHour', a.learnHourART); set('pcLearnMinScore', a.learnMinScore); set('pcLearnMaxChats', a.learnMaxChats);
     set('pcLearnMaxProposals', a.learnMaxProposalsPerDay != null ? a.learnMaxProposalsPerDay : 6); set('pcLearnMaxQuestions', a.learnMaxQuestionsPerDay != null ? a.learnMaxQuestionsPerDay : 4);
     loadLearnedContext();
@@ -5401,6 +5402,7 @@ async function savePrivateAuditConfig() {
         sessionGapMinutes: v('pcAuditSessionGap'),
         alertFlags: Array.from(document.querySelectorAll('.pcAuditFlag:checked')).map(x => x.value),
         extraRules: v('pcAuditExtraRules') || '',
+        learnQuestionsEnabled: c('pcLearnQuestions'), // #215
         learnEnabled: c('pcLearnEnabled'), learnHourART: v('pcLearnHour'), learnMinScore: v('pcLearnMinScore'), learnMaxChats: v('pcLearnMaxChats'),
         learnMaxProposalsPerDay: v('pcLearnMaxProposals'), learnMaxQuestionsPerDay: v('pcLearnMaxQuestions'),
         telegramChatId: (v('pcTgChatId') || '').trim()

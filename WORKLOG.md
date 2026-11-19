@@ -8,6 +8,17 @@
 
 ## Sesión 2026-11-19
 
+### 215. 📚 Aprendizaje diario: la IA deja de PREGUNTAR (apagado por defecto) y no repite temas
+- **Owner:** "que estas preguntas ya no pregunte más; después de 2 meses pregunta cosas iguales, 10 de 15 son parecidas, y son cosas que
+  puede entender con el contexto general".
+- **Por qué repetía:** (1) la memoria que va al prompt se cortaba (60 pendientes, 12.000 letras): con 2 meses de historial lo viejo ya no
+  llegaba; (2) el filtro de repetidas pedía 50% de palabras en común: dos dudas del mismo tema reformuladas pasaban (hasta en la misma tanda).
+- **Ahora:** `auditConfig.learnQuestionsEnabled` (default **false**) → cupo de dudas 0, el prompt lo dice explícito, y las dudas pendientes se
+  cierran solas (quedan `rejected` = "no insistir") al correr el análisis o abrir el panel. Tilde nuevo en Config privada → Aprendizaje.
+  Si se prende: memoria completa (250 por estado, 40.000 letras), filtro por TEMA para dudas (`_learnSameTopic`: 30% de palabras o 60% de
+  inclusión, contra TODAS las dudas históricas) y el prompt obliga a deducir del contexto antes de preguntar y a una sola duda por tema.
+- Las propuestas de contexto siguen igual. SW v82. No probado contra la IA real (solo `node --check`).
+
 ### 214. 💸 Botones del retiro en el chat sin nombre de banco
 - Owner: que no diga "Pagar por Finpro". Quedan: **💸 Pagar $X** (o **🔁 Pagar nuevamente $X** si el intento anterior falló) ·
   **🏦 Pagar con otro banco** (el otro banco con API, #213; solo si está listo) · **✅ Ya lo pagué por fuera** (marca pagado a mano).

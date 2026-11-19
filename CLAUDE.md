@@ -98,6 +98,9 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `plat.withdrawable(saldo)`, no `saldo.balance`; si el saldo viene con `migrating:true` es "reintentá en un minuto", nunca "saldo
   insuficiente" (#201). El candado `User.platformMigrating` solo se suelta donde no hay plata en tránsito (ver ARCHITECTURE §10.3b).
   Test: `node scripts/test-platform-migration.js`.
+- **Rollover por tipo de regalo (#205):** todo regalo/bono nuevo pasa `opts.rolloverFlow` (`refund`/`fire`/`roulette`/`bonoAuto`/`bonoManual`,
+  o uno nuevo sumado a `GIFT_ROLLOVER_FLOWS` en server.js) a `plat.creditUserBalance/makeBonus`; el owner lo prende/apaga en COMANDOS.
+  Sin flujo cae al rollover global. Plata del cliente (devolución, comisión) sigue con `ignoreGlobalRollover:true`.
 - **Corte fijo 1-ene-2027 (#204):** desde esa fecha un usuario mudado NO suma lo jugado en la JUGAYGANA vieja (reembolsos / referidos):
   `OLD_NETWIN_CUTOFF_MS` en `platform.js`, hardcodeado a pedido del owner ("irremovible"). No convertirlo en config ni moverlo sin que lo pida.
 - **JWT_SECRET y otros secrets** se cargan desde AWS SSM en el bootstrap async, NO al

@@ -751,6 +751,17 @@
                             <div id="hgAppBonusMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>
 
+                        <!-- #205 Rollover por tipo de regalo (solo admin general) -->
+                        <div class="panel-subheader" style="margin-top: 24px; display:none;" id="giftRolloverHeader">
+                            <h3>🔒 Rollover de regalos y bonos</h3>
+                        </div>
+                        <div id="giftRolloverForm" style="display:none;">
+                            <p style="color:#aaa;font-size:12px;margin:4px 0 10px;">Elegí, para cada cosa que se regala, si entra <b>libre</b> (se puede retirar al instante) o <b>con rollover</b> (hay que jugar el monto esa cantidad de veces antes de poder retirarlo). Solo aplica a los usuarios que ya están en jugaygana.io. Las devoluciones de retiros y las comisiones de referidos nunca llevan rollover. Los regalos de lote usan el rollover que se elige al crear cada lote.</p>
+                            <div id="giftRolloverRows"></div>
+                            <button class="btn-primary" style="margin-top:10px;" onclick="saveGiftRollover()">💾 Guardar rollover</button>
+                            <div id="giftRolloverMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
+                        </div>
+
                         <!-- Premios del Fueguito (solo admin general) -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="fireMilestonesHeader">
                             <h3>🔥 Premios del Fueguito</h3>
@@ -1182,8 +1193,8 @@
                         <button class="btn" id="mudPauseBtn" onclick="mudTogglePause()">Pausar</button>
                     </div>
 
-                    <div class="panel-subheader" style="margin-top:22px;"><h3>3 · Rollover de los bonos en jugaygana.io</h3></div>
-                    <p style="color:#aaa;font-size:12px;margin:4px 0 8px;">Cuántas veces hay que jugar un bono antes de poder retirarlo. No aplica a devoluciones de retiros ni a comisiones de referidos.</p>
+                    <div class="panel-subheader" style="margin-top:22px;"><h3>3 · Rollover general de los bonos en jugaygana.io</h3></div>
+                    <p style="color:#aaa;font-size:12px;margin:4px 0 8px;">Valor de base para los bonos. El rollover de cada tipo de regalo (reembolsos, fueguito, ruleta, bonos) se elige en <b>COMANDOS → 🔒 Rollover de regalos y bonos</b> y manda sobre este. No aplica a devoluciones de retiros ni a comisiones de referidos.</p>
                     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px;">
                         <label><input type="checkbox" id="mudRollOn"> Activado</label>
                         <select id="mudRollX" style="padding:8px;border-radius:8px;border:1px solid #444;background:#111;color:#fff;"></select>

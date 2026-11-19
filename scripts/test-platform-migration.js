@@ -84,6 +84,7 @@ const girox = {
     neu.refs[ref] = amt; neu.bal[u] = (neu.bal[u] || 0) + amt; return { success: true, data: { transfer_id: ref } };
   },
   withdrawFromUser: async (u, amt, d, ref) => { neu.calls.push(['withdraw', u, amt, ref]); return { success: false, error: 'boom', httpStatus: 503 }; },
+  creditGift: async (u, amt, o) => { neu.calls.push(['gift', u, amt, o.reference, o.rolloverX, o.ignoreGlobalRollover]); neu.bal[u] = (neu.bal[u] || 0) + amt; return { success: true, data: {}, rolloverApplied: o.rolloverX }; },
   creditUserBalance: async (u, amt, ref) => { neu.calls.push(['credit', u, amt, ref]); neu.bal[u] = (neu.bal[u] || 0) + amt; return { success: true, data: {} }; },
   getUserBalance: async (u) => ({ success: true, username: u, balance: neu.bal[u] || 0, available: neu.bal[u] || 0 }),
   getUserBalanceWithRetry: async (u) => ({ success: true, username: u, balance: neu.bal[u] || 0, available: neu.bal[u] || 0 })
@@ -420,6 +421,29 @@ async function cfg(patch) { await plat.saveMigrationConfig(patch, 'test'); }
   girox.lookupPlayer = realLookup;
   r = await plat.depositToUser('cb4', 10, 'x', 7);
   ok(r.success && old.bal.cb4 === 60, 'y su carga entra normal en la vieja, sin esperar a la plataforma caída');
+
+  // #205 Rollover por tipo de regalo
+  {
+    const cfg = { refund: 0, fire: 3, roulette: null };
+    plat.setGiftRolloverResolver(async (flow) => { if (flow === 'boom') throw new Error('x'); return cfg[flow]; });
+    const last = () => neu.calls[neu.calls.length - 1];
+    r = await plat.creditUserBalance('ana', 100, 7, { reference: 'rf-1', rolloverFlow: 'refund' });
+    ok(r.success && last()[0] === 'gift' && last()[4] === 0 && last()[5] === true && r.rolloverApplied === 0, 'reembolso apagado: regalo libre (x0), sin rollover global');
+    r = await plat.makeBonus('ana', 50, 'fueguito', { rolloverFlow: 'fire' });
+    ok(r.success && last()[0] === 'gift' && last()[4] === 3 && r.rolloverApplied === 3, 'fueguito con rollover x3');
+    r = await plat.creditUserBalance('ana', 10, 7, { rolloverFlow: 'bonoAuto', rolloverX: 5 });
+    ok(last()[0] === 'gift' && last()[4] === 5, 'rolloverX explícito (lote) manda sobre el flujo');
+    r = await plat.creditUserBalance('ana', 10, 7, { rolloverFlow: 'roulette' });
+    ok(last()[0] === 'credit', 'flujo sin valor → camino de siempre (rollover global)');
+    r = await plat.creditUserBalance('ana', 10, 7, { rolloverFlow: 'boom' });
+    ok(last()[0] === 'credit', 'config ilegible → rollover global (lado seguro)');
+    r = await plat.creditUserBalance('ana', 10, 7, { rolloverFlow: 'fire', ignoreGlobalRollover: true });
+    ok(last()[0] === 'credit', 'devolución / comisión: nunca toma el rollover del flujo');
+    const oc = old.calls.length;
+    r = await plat.creditUserBalance('cb4', 10, 7, { rolloverFlow: 'fire' });
+    ok(r.success && old.calls.length === oc + 1 && old.calls[oc][0] === 'credit', 'usuario en la vieja: crédito de siempre (ahí no hay rollover)');
+    plat.setGiftRolloverResolver(null);
+  }
 
   // #204 Corte fijo del 1-ene-2027 (hora Argentina): un mudado deja de sumar lo jugado en la vieja.
   {

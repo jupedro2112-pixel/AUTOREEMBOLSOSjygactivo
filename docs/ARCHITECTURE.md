@@ -832,6 +832,12 @@ máximo `BG_MAX_CONCURRENT` (4) por instancia. `migrateUser` no decide equipo si
 `getUserNetwinForDateRange` / `getUserRevenueForPeriod` de un `partner` no suman el tramo de la vieja anterior a la mudanza. No toca a los no
 mudados ni al motor de mudanza (que necesita la vieja para pasar saldos).
 
+### 10.3d Rollover por tipo de regalo (#205)
+`Config['giftRollover']` (COMANDOS → 🔒 Rollover de regalos y bonos; `GET/POST /api/admin/gift-rollover`). Flujos en `GIFT_ROLLOVER_FLOWS`
+(server.js): `refund`, `fire`, `roulette` (def. 0) · `bonoAuto`, `bonoManual` (def. = rollover global). El caller pasa `opts.rolloverFlow`
+(o `opts.rolloverX` explícito, que manda) a `plat.creditUserBalance/makeBonus` → `girox.creditGift`. Sin flujo → rollover global.
+Solo jugaygana.io; en la vieja no hay rollover.
+
 ### 10.4 Endpoints
 
 - Jugador: `GET /api/platform/info` → `{ sso, url }` (`sso` también si le toca mudarse); `POST /api/platform/session` → muda si

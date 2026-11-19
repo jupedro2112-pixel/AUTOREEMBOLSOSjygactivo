@@ -334,10 +334,36 @@ async function withdrawFromUser(username, amount, description = '', jugayganaUse
  *   opts.reference, opts.description
  *   opts.ignoreGlobalRollover  true = plata del cliente (devolución, comisión): sin rollover
  */
+// #205 ROLLOVER POR TIPO DE REGALO (owner 2026-11-19): cada flujo dice qué es (`opts.rolloverFlow`:
+// 'refund' | 'fire' | 'roulette' | 'bonoAuto' | 'bonoManual') y server.js resuelve cuántas veces hay
+// que jugarlo (0 = sin rollover) desde Config['giftRollover'] (panel → COMANDOS). `opts.rolloverX`
+// explícito (lotes: el rollover propio del lote) manda sobre el flujo. Sin flujo ni X → rollover
+// global de siempre. `ignoreGlobalRollover` (devoluciones, comisiones) = nunca rollover.
+// Solo existe en jugaygana.io: la JUGAYGANA vieja no tiene rollover por API.
+let _giftRolloverResolver = null;
+function setGiftRolloverResolver(fn) { _giftRolloverResolver = typeof fn === 'function' ? fn : null; }
+async function _flowRollover(opts) {
+  if (!opts || opts.ignoreGlobalRollover) return undefined;
+  if (opts.rolloverX != null && Number.isFinite(Number(opts.rolloverX))) return Math.max(0, Math.round(Number(opts.rolloverX)));
+  if (!opts.rolloverFlow || !_giftRolloverResolver) return undefined;
+  try {
+    const v = await _giftRolloverResolver(opts.rolloverFlow);
+    return (v == null || !Number.isFinite(Number(v))) ? undefined : Math.max(0, Math.round(Number(v)));
+  } catch (_) { return undefined; } // sin config legible → cae al rollover global (el lado seguro)
+}
+
 async function creditUserBalance(username, amount, jugayganaUserId = null, opts = {}) {
   const route = await _routeStrict(username);
   if (route.migrating) return _migratingResult();
   if (route.provider === 'partner') {
+    const roll = await _flowRollover(opts);
+    if (roll !== undefined) { // #205: rollover decidido por el flujo (0 = regalo directo, retirable)
+      const g = await girox.creditGift(username, amount, {
+        reference: _ref('gift', opts), description: (opts && opts.description) || '',
+        rolloverX: roll, ignoreGlobalRollover: true
+      });
+      return _mapPartnerMoney(g, `el crédito de $${amount}`);
+    }
     const r = await girox.creditUserBalance(username, amount, _ref('gift', opts), {
       description: (opts && opts.description) || '',
       ignoreGlobalRollover: !!(opts && opts.ignoreGlobalRollover)
@@ -1209,6 +1235,7 @@ module.exports = {
   // saldo
   getUserBalance, getUserBalanceWithRetry, withdrawable, getUserMovements,
   // netwin
+  setGiftRolloverResolver,
   getUserNetwinForDateRange, getUserRevenueForPeriod, oldNetwinCut, OLD_NETWIN_CUTOFF_MS,
   // clave / casino
   changeUserPasswordAsAdmin, syncPartnerPasswordOnLogin, createCasinoSession,

@@ -8,6 +8,23 @@
 
 ## Sesión 2026-11-19
 
+### 205. 🔒 Rollover por TIPO de regalo, editable desde COMANDOS (jugaygana.io)
+- **Owner:** "que fueguitos, reembolsos, ruleta y todo lo que se regala se pueda dar con o sin rollover, todo en off pero modificable
+  desde Comandos; y que todos los bonos vayan con rollover".
+- **Antes:** un solo rollover global (def. x3) le caía a TODO regalo de un usuario mudado (reembolsos, ruleta y fueguito incluidos).
+- **Ahora:** `Config['giftRollover']` = `{ refund, fire, roulette, bonoAuto, bonoManual }` (veces a jugar; 0 = libre). Defaults:
+  reembolsos / fueguito / ruleta = **0 (apagado)**; bonos automáticos de la carga y bonos del agente = el rollover global (x3) hasta que se toquen.
+  Card **COMANDOS → 🔒 Rollover de regalos y bonos** (solo admin general), `GET/POST /api/admin/gift-rollover`, cache 30 s.
+- **Cómo viaja:** cada flujo pasa `opts.rolloverFlow` a `plat.creditUserBalance/makeBonus`; `platform._flowRollover` lo resuelve
+  (`plat.setGiftRolloverResolver`, server.js `getGiftRollover`) y acredita por `girox.creditGift({rolloverX, ignoreGlobalRollover:true})`
+  (que ya cuida "bono sobre bono pisa" → depósito con multiplier). `opts.rolloverX` explícito manda (lotes: fichas usan `batch.rolloverX`,
+  el % de lote usa el `rolloverX` del lote si tiene, si no `bonoAuto`). Config ilegible → rollover global (lado seguro).
+  `ignoreGlobalRollover` (devolución de retiro, comisión de referidos) nunca lleva rollover.
+- **Cliente:** el mensaje del reembolso y del fueguito agrega "Entra como bono con rollover xN…" (`_rollNote`); la ruleta devuelve `prize.rolloverX`.
+- **Límite:** solo existe en jugaygana.io. Un usuario todavía en la JUGAYGANA vieja recibe todo libre, como siempre (esa API no tiene rollover).
+- **Cambio de comportamiento a saber:** fichas de lote creadas con rollover 0 ahora entran libres (antes les caía el global x3).
+- **Test:** 7 casos nuevos en `node scripts/test-platform-migration.js`. Panel: `admin-sw.js` v74.
+
 ### 204. ⏰ CORTE FIJO 1-ene-2027: un usuario mudado deja de sumar lo jugado en la JUGAYGANA vieja (reembolsos y referidos)
 - **Owner:** "que el 1 de enero se corte todo eso… dejalo programado porque me voy a olvidar. Programado e irremovible."
 - **Qué hace:** `OLD_NETWIN_CUTOFF_MS` en `src/services/platform.js` = `2027-01-01T00:00:00-03:00`. Desde ese instante,

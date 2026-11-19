@@ -2621,7 +2621,7 @@ async function _hgcashApplyAppBonus(user, amount, preBalance = null, refKey = nu
     // Pausa anti rate-limit de JUGAYGANA entre la carga principal y el bonus
     // (misma causa documentada del bug "carga sí, bonus no" del flujo manual).
     await new Promise(r => setTimeout(r, 700));
-    const credit = await plat.creditUserBalance(user.username, bonusAmount, user.jugayganaUserId || null, { reference: refKey ? `vip-hgbono-${refKey}` : null, description: `Bono automático ${pct}% (app)` }); // #197 reference estable
+    const credit = await plat.creditUserBalance(user.username, bonusAmount, user.jugayganaUserId || null, { reference: refKey ? `vip-hgbono-${refKey}` : null, description: `Bono automático ${pct}% (app)`, rolloverFlow: 'bonoAuto' }); // #197 reference estable
     if (credit && credit.ambiguous) {
       // #151: el bono puede haber entrado. NO se devuelve el cupón (evita cobrarlo dos veces).
       await _alertMoneyAmbiguous(`Bono automático ${pct}% (app)`, user.id, user.username, bonusAmount, credit.error);
@@ -2947,7 +2947,7 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
       if (_lcH.claimed) {
         const _lcAmt = _loteBonusAmount(Number(amount), _lcH.pct, _loteCfgFor(_lcH, await getHgcashAppBonusConfig())); // #172 tope global / #189 tope propio del lote
         await new Promise(r => setTimeout(r, 700));
-        const _lcRes = _lcAmt > 0 ? await plat.creditUserBalance(user.username, _lcAmt, user.jugayganaUserId || null, { reference: `vip-hglote-${chargeKey || movement.movementId}`, description: 'Bono de lote (carga hgcash)' }).catch(() => null) : null;
+        const _lcRes = _lcAmt > 0 ? await plat.creditUserBalance(user.username, _lcAmt, user.jugayganaUserId || null, { reference: `vip-hglote-${chargeKey || movement.movementId}`, description: 'Bono de lote (carga hgcash)', rolloverFlow: 'bonoAuto', rolloverX: _lcH.rolloverX }).catch(() => null) : null;
         if (_lcRes && _lcRes.success) {
           await settleAutoPromoPercent(_lcH, Number(amount), _lcAmt);
           appBonus = Object.assign({}, appBonus, { applied: true, amount: _lcAmt, pct: _lcH.pct, kind: 'lote', loteLabel: _lcH.label, loteScope: _lcH.scope });
@@ -6896,6 +6896,44 @@ async function getGlobalBonusRollover({ fresh = false } = {}) {
 }
 girox.setRolloverResolver(async () => { const g = await getGlobalBonusRollover(); return g.enabled ? g.effective : null; });
 
+// #205 ROLLOVER POR TIPO DE REGALO — Config['giftRollover'] = { refund, fire, roulette, bonoAuto, bonoManual }
+// (cada uno = cuántas veces hay que jugarlo; 0 = sin rollover). Editable en COMANDOS (admin general).
+// Regalos arrancan en 0 (apagado); los bonos, si nadie los tocó, siguen al rollover global (def. x3).
+// Solo aplica a usuarios en jugaygana.io (la JUGAYGANA vieja no tiene rollover por API).
+const GIFT_ROLLOVER_FLOWS = [
+  { key: 'refund', label: '💸 Reembolsos (diario, semanal y mensual)', def: 0 },
+  { key: 'fire', label: '🔥 Premios del fueguito', def: 0 },
+  { key: 'roulette', label: '🎡 Ruleta diaria (premios en plata)', def: 0 },
+  { key: 'bonoAuto', label: '🎁 Bonos automáticos de la carga (bono app y % de lote)', def: null },
+  { key: 'bonoManual', label: '🧑‍💼 Bonos que da un agente (bono de la carga y botón Bonificación)', def: null }
+];
+let _gfrCache = null, _gfrAt = 0;
+async function getGiftRollover({ fresh = false } = {}) {
+  if (!fresh && _gfrCache && (Date.now() - _gfrAt) < 30000) return _gfrCache;
+  const raw = (await getConfig('giftRollover', null).catch(() => null)) || {};
+  const g = await getGlobalBonusRollover({ fresh });
+  const flows = GIFT_ROLLOVER_FLOWS.map((f) => {
+    const saved = raw[f.key];
+    const has = saved != null && bonusRollover.BONUS_ROLLOVER_OPTIONS.includes(Math.round(Number(saved)));
+    const x = has ? Math.round(Number(saved)) : (f.def != null ? f.def : (g.enabled ? g.x : 0));
+    // x > 0 que la plataforma no permite → el permitido más cercano hacia arriba (misma regla que el global).
+    const effective = x > 0 ? bonusRollover.resolveGlobalRollover({ enabled: true, x }, g.allowed).effective : 0;
+    return { key: f.key, label: f.label, x, effective, snapped: effective !== x, isDefault: !has };
+  });
+  _gfrCache = { flows, options: bonusRollover.BONUS_ROLLOVER_OPTIONS.slice() }; _gfrAt = Date.now();
+  return _gfrCache;
+}
+plat.setGiftRolloverResolver(async (flow) => {
+  const c = await getGiftRollover();
+  const f = c.flows.find((x) => x.key === flow);
+  return f ? f.effective : null;
+});
+// Frase para el cliente cuando su regalo entró con rollover ('' si entró libre).
+function _rollNote(credit) {
+  const r = Math.round(Number(credit && credit.rolloverApplied) || 0);
+  return r > 0 ? ` Entra como bono con rollover x${r}: jugalo ${r} ${r === 1 ? 'vez' : 'veces'} y después lo podés retirar.` : '';
+}
+
 // Disparos de la mudanza + tick (cada instancia; todo es idempotente por candados atómicos).
 setInterval(() => { plat.migrationTick().catch(() => {}); }, 60 * 1000);
 
@@ -7152,6 +7190,26 @@ app.post('/api/admin/platform/migrations/:userId/lock-old', authMiddleware, admi
     if (!r.ok) return res.status(400).json({ error: r.error });
     logger.warn(`[mudanza] cuenta vieja cerrada a mano por ${req.user.username} (userId ${req.params.userId})`);
     res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/admin/gift-rollover', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try { res.json(Object.assign({ success: true }, await getGiftRollover({ fresh: true }))); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/admin/gift-rollover', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const b = (req.body && req.body.flows) || {};
+    const out = {};
+    for (const f of GIFT_ROLLOVER_FLOWS) {
+      const x = Math.round(Number(b[f.key]));
+      if (!bonusRollover.BONUS_ROLLOVER_OPTIONS.includes(x)) return res.status(400).json({ error: `Rollover inválido en "${f.label}"` });
+      out[f.key] = x;
+    }
+    await setConfig('giftRollover', Object.assign(out, { updatedBy: req.user.username, updatedAt: new Date() }));
+    logger.info(`[gift-rollover] ${req.user.username} guardó ${JSON.stringify(out)}`);
+    res.json(Object.assign({ success: true }, await getGiftRollover({ fresh: true })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/admin/platform/rollover', authMiddleware, adminMiddleware, async (req, res) => {
@@ -10411,7 +10469,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
       // diario se reclama 7 veces más seguido.
       let depositResult;
       try {
-        depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso diario' });
+        depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso diario', rolloverFlow: 'refund' });
       } catch (creditErr) {
         await RefundClaim.deleteOne({ id: _refundClaimId }).catch(() => {});
         logger.error(`[REFUND] daily — excepción al acreditar a ${username}, reserva liberada: ${creditErr.message}`);
@@ -10477,7 +10535,7 @@ app.post('/api/refunds/claim/daily', authMiddleware, async (req, res) => {
 
       res.json({
         success: true,
-        message: `¡Reembolso diario de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${dailyPct}%)`,
+        message: `¡Reembolso diario de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${dailyPct}%)${_rollNote(depositResult)}`,
         amount: refundAmount,
         percentage: dailyPct,
         tier: tier.key,
@@ -10625,7 +10683,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
         throw e;
       }
 
-      const depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso semanal' });
+      const depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso semanal', rolloverFlow: 'refund' });
 
       if (!depositResult.success && depositResult.ambiguous) {
         // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
@@ -10677,7 +10735,7 @@ app.post('/api/refunds/claim/weekly', authMiddleware, async (req, res) => {
 
       res.json({
         success: true,
-        message: `¡Reembolso semanal de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${weeklyPct}%)`,
+        message: `¡Reembolso semanal de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${weeklyPct}%)${_rollNote(depositResult)}`,
         amount: refundAmount,
         percentage: weeklyPct,
         tier: tier.key,
@@ -10797,7 +10855,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
         throw e;
       }
 
-      const depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso mensual' });
+      const depositResult = await plat.creditUserBalance(username, refundAmount, jugayganaUserId, { reference: `vip-rf-${_refundPeriodKey}-${userId}`, description: 'Reembolso mensual', rolloverFlow: 'refund' });
 
       if (!depositResult.success && depositResult.ambiguous) {
         // #151 AMBIGUO: JUGAYGANA no confirmó y no se pudo verificar por saldo. NO
@@ -10849,7 +10907,7 @@ app.post('/api/refunds/claim/monthly', authMiddleware, async (req, res) => {
 
       res.json({
         success: true,
-        message: `¡Reembolso mensual de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${monthlyPct}%)`,
+        message: `¡Reembolso mensual de $${refundAmount} acreditado! (Rango ${tier.emoji} ${tier.label} — ${monthlyPct}%)${_rollNote(depositResult)}`,
         amount: refundAmount,
         percentage: monthlyPct,
         tier: tier.key,
@@ -11207,7 +11265,8 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
         bonusJgResult = await plat.creditUserBalance(
           user.username,
           parseFloat(bonus),
-          user.jugayganaUserId || null
+          user.jugayganaUserId || null,
+          { rolloverFlow: 'bonoManual', description: 'Bono de la carga (agente)' } // #205
         );
         bonusActuallyApplied = !!(bonusJgResult && bonusJgResult.success);
         if (!bonusActuallyApplied) {
@@ -11263,7 +11322,7 @@ app.post('/api/admin/deposit', authMiddleware, depositorMiddleware, async (req, 
           const _loteAmt = _loteBonusAmount(parseFloat(amount), _lc.pct, _loteCfg); // #172 tope
           const _loteCapNote = _loteCapTxt(_lc.pct, _loteCfg);
           await new Promise(r => setTimeout(r, 700));
-          const _lcRes = await plat.creditUserBalance(user.username, _loteAmt, user.jugayganaUserId || null).catch(() => null);
+          const _lcRes = await plat.creditUserBalance(user.username, _loteAmt, user.jugayganaUserId || null, { rolloverFlow: 'bonoAuto', rolloverX: _lc.rolloverX, description: 'Bono de lote (carga manual)' }).catch(() => null); // #205
           if (_lcRes && _lcRes.success && _loteAmt > 0) {
             _loteClaim = _lc;
             await settleAutoPromoPercent(_lc, parseFloat(amount), _loteAmt);
@@ -11918,7 +11977,8 @@ app.post('/api/admin/bonus', authMiddleware, depositorMiddleware, async (req, re
     const depositResult = await plat.creditUserBalance(
       resolvedUsername,
       bonusAmount,
-      bonusUser.jugayganaUserId || null
+      bonusUser.jugayganaUserId || null,
+      { rolloverFlow: 'bonoManual', description: 'Bonificación (agente)' } // #205
     );
 
     if (depositResult.success) {
@@ -14476,7 +14536,7 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
       try { return JSON.stringify(value); } catch { return String(value); }
     };
 
-    const bonusResult = await plat.makeBonus(username, rewardAmount, rewardDesc + ' - Sala de Juegos');
+    const bonusResult = await plat.makeBonus(username, rewardAmount, rewardDesc + ' - Sala de Juegos', { rolloverFlow: 'fire' }); // #205
 
     if (!bonusResult.success) {
       // La acreditación falló → DEVOLVER el premio a pendiente para que el cliente
@@ -14527,7 +14587,7 @@ app.post('/api/fire/claim-reward', authMiddleware, async (req, res) => {
     res.json({
       success: true,
       reward: rewardAmount,
-      message: `🎉 ¡$${rewardAmount.toLocaleString()} acreditados en tu cuenta!`
+      message: `🎉 ¡$${rewardAmount.toLocaleString()} acreditados en tu cuenta!${_rollNote(bonusResult)}`
     });
   } catch (error) {
     console.error('Error reclamando recompensa Fueguito:', error);
@@ -21125,7 +21185,7 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
     // Hay premio → auto-credit jugaygana.
     let credit;
     try {
-      credit = await plat.creditUserBalance(username, prizeARS, null, { reference: `vip-roulette-${spinDoc.id}`, description: 'Premio ruleta diaria' });
+      credit = await plat.creditUserBalance(username, prizeARS, null, { reference: `vip-roulette-${spinDoc.id}`, description: 'Premio ruleta diaria', rolloverFlow: 'roulette' });
     } catch (e) {
       credit = { success: false, error: e.message };
     }
@@ -21167,7 +21227,8 @@ app.post('/api/roulette/spin', authMiddleware, async (req, res) => {
       success: true,
       prize: {
         prizeARS, prizeLabel: pick.label, emoji: pick.emoji,
-        status: 'credited', transactionId: txId
+        status: 'credited', transactionId: txId,
+        rolloverX: (credit && Number(credit.rolloverApplied)) || 0 // #205
       }
     });
   } catch (err) {
@@ -21334,7 +21395,7 @@ app.post('/api/admin/roulette/:id/retry-credit', authMiddleware, adminMiddleware
 
     let credit;
     try {
-      credit = await plat.creditUserBalance(spin.username, spin.prizeARS, null, { reference: `vip-roulette-${spin.id}`, description: 'Premio ruleta diaria' }); // #197: misma reference que el giro original → el reintento no duplica
+      credit = await plat.creditUserBalance(spin.username, spin.prizeARS, null, { reference: `vip-roulette-${spin.id}`, description: 'Premio ruleta diaria', rolloverFlow: 'roulette' }); // #197: misma reference que el giro original → el reintento no duplica
     } catch (e) {
       credit = { success: false, error: e.message };
     }
@@ -22592,7 +22653,7 @@ async function _creditNotifBatchGift(uDoc, batch) {
   // el saldo antes de acreditar a mano. Nunca doble pago automático.
   let credit;
   try {
-    credit = await plat.creditUserBalance(uDoc.username, batch.amount, uDoc.jugayganaUserId || null, { reference: `vip-nbatch-${batch.id}-${uDoc.id}`, description: 'Regalo de lote' });
+    credit = await plat.creditUserBalance(uDoc.username, batch.amount, uDoc.jugayganaUserId || null, { reference: `vip-nbatch-${batch.id}-${uDoc.id}`, description: 'Regalo de lote', rolloverX: Math.max(0, Number(batch.rolloverX) || 0) }); // #205: el rollover propio del lote (el que se le avisó al cliente)
   } catch (e) {
     logger.warn(`[notif-batch] crédito de fichas EXCEPCIÓN para ${uDoc.username} (lote ${batch.id}): ${e.message}`);
     return { ok: false, retryable: false, reason: 'error de red — VERIFICAR en JUGAYGANA si entró antes de acreditar a mano' };

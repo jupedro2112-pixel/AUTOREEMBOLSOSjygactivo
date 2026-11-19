@@ -5916,6 +5916,8 @@ async function loadCBUConfig() {
     loadHgAppBonus();
     // Cargar los premios del fueguito (solo admin general)
     loadFireMilestones();
+    // Cargar el rollover por tipo de regalo (solo admin general) #205
+    loadGiftRollover();
 }
 
 // ====== Bonos automáticos hgcash: app + notificaciones (solo admin general) ======
@@ -6179,6 +6181,45 @@ async function saveRefundTiers() {
 }
 
 // ====== Premios del Fueguito (solo admin general) ======
+// #205 Rollover por tipo de regalo (COMANDOS, solo admin general)
+function _giftRolloverRender(j) {
+    const body = document.getElementById('giftRolloverRows');
+    if (!body) return;
+    body.innerHTML = (j.flows || []).map((f) => {
+        const opts = (j.options || [0, 2, 3, 5, 10]).map((x) => '<option value="' + x + '"' + (x === f.x ? ' selected' : '') + '>' + (x === 0 ? 'Sin rollover (libre)' : 'Con rollover x' + x) + '</option>').join('');
+        const note = f.snapped ? ' <span style="color:#ffcc66;font-size:11px;">la plataforma no permite x' + f.x + ': se usa x' + f.effective + '</span>' : '';
+        return '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.06);font-size:13px;">'
+            + '<span style="flex:1;min-width:230px;">' + escapeHtml(f.label) + '</span>'
+            + '<select data-gift-roll="' + escapeHtml(f.key) + '" style="padding:7px;border-radius:8px;border:1px solid #444;background:#111;color:' + (f.x > 0 ? '#66ff99' : '#fff') + ';">' + opts + '</select>' + note + '</div>';
+    }).join('');
+}
+async function loadGiftRollover() {
+    const form = document.getElementById('giftRolloverForm');
+    const header = document.getElementById('giftRolloverHeader');
+    try {
+        const r = await authFetch('/api/admin/gift-rollover');
+        if (!r.ok) { if (form) form.style.display = 'none'; if (header) header.style.display = 'none'; return; }
+        if (form) form.style.display = '';
+        if (header) header.style.display = '';
+        _giftRolloverRender(await r.json());
+    } catch (e) { if (form) form.style.display = 'none'; if (header) header.style.display = 'none'; }
+}
+async function saveGiftRollover() {
+    const msg = document.getElementById('giftRolloverMsg');
+    try {
+        const flows = {};
+        document.querySelectorAll('[data-gift-roll]').forEach((el) => { flows[el.getAttribute('data-gift-roll')] = Number(el.value); });
+        const r = await authFetch('/api/admin/gift-rollover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flows }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'No se pudo guardar');
+        _giftRolloverRender(j);
+        if (msg) { msg.style.color = '#66ff99'; msg.textContent = '✅ Guardado. Rige para los regalos que se acrediten desde ahora (hasta 30 segundos de demora).'; }
+        showToast('✅ Rollover guardado', 'success');
+    } catch (e) { if (msg) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + e.message; } showToast(e.message, 'error'); }
+}
+window.loadGiftRollover = loadGiftRollover;
+window.saveGiftRollover = saveGiftRollover;
+
 async function loadFireMilestones() {
     const form = document.getElementById('fireMilestonesForm');
     const header = document.getElementById('fireMilestonesHeader');

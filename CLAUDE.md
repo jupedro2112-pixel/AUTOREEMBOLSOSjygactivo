@@ -53,6 +53,8 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
 > `docs/ARCHITECTURE.md` §10 y WORKLOG #197; la API en `docs/1girox/` (lo medido en jugaygana.io: `CONOCIMIENTO-EN-PRODUCCION.md` §15).
 > La app CREA al jugador en jugaygana.io al mudarlo, con la **key del equipo** que le toca por el inicio de su username (sin
 > coincidencia → key general); `User.partnerTeam` lo deja fijo y `plat.keyResolver` firma todo lo suyo con esa key.
+> Al terminar la mudanza se **cierra la cuenta vieja** de JUGAYGANA con una clave al azar que no se guarda (#198,
+> `plat.lockOldAccount`): nada que necesite la clave del JUGADOR en la vieja puede asumir que un usuario `partner` la tiene.
 > Las API keys NO van en ningún archivo del repo: se cargan desde el panel.
 
 ## Estructura

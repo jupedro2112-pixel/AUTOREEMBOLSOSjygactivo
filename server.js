@@ -5189,7 +5189,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     // #197: login de un jugador → mudanza en segundo plano (si le toca) y, si ya está mudado,
     // réplica de su clave real en jugaygana.io (una sola vez).
     if (userObj.role === 'user') plat.migrateThenSyncPassword(userId, password || null);
-    if (!isAdminRole(userObj.role)) {
+    // #198: un usuario mudado ya no tiene cuenta usable en JUGAYGANA (clave al azar): no intentar entrar ahí.
+    if (!isAdminRole(userObj.role) && userObj.platform !== 'partner') {
       try {
         const jgLogin = await jugayganaService.loginAsUser(userObj.username, password);
         if (jgLogin.success) {
@@ -6151,6 +6152,7 @@ app.post('/api/admin/platform/migration/config', authMiddleware, adminMiddleware
     }
     if (b.paused !== undefined) { patch.paused = b.paused === true; patch.pausedReason = b.paused === true ? `Pausada por ${req.user.username}` : null; }
     if (b.createMissing !== undefined) patch.createMissing = b.createMissing === true;
+    if (b.lockOldAccount !== undefined) patch.lockOldAccount = b.lockOldAccount === true; // #198
     if (b.newUsersOnPartner !== undefined) {
       if (b.newUsersOnPartner === true && !plat.partnerEnabled()) return res.status(400).json({ error: 'Primero cargá la URL y la key de jugaygana.io' });
       patch.newUsersOnPartner = b.newUsersOnPartner === true;
@@ -6203,6 +6205,16 @@ app.post('/api/admin/platform/migrations/:userId/residual', authMiddleware, admi
       : await plat.moveOldResidual(String(req.params.userId), req.user.username);
     if (!r.ok) return res.status(400).json(Object.assign({ error: r.error }, r));
     res.json(Object.assign({ success: true }, r));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// #198: cerrar YA la cuenta vieja (clave al azar en JUGAYGANA) de un usuario mudado.
+app.post('/api/admin/platform/migrations/:userId/lock-old', authMiddleware, adminMiddleware, async (req, res) => {
+  if (!_platAdminOnly(req, res)) return;
+  try {
+    const r = await plat.lockOldAccount(String(req.params.userId), { force: true, by: req.user.username });
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    logger.warn(`[mudanza] cuenta vieja cerrada a mano por ${req.user.username} (userId ${req.params.userId})`);
+    res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/admin/platform/rollover', authMiddleware, adminMiddleware, async (req, res) => {

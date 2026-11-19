@@ -18,6 +18,8 @@ function match(doc, f) {
         if (op === '$ne') return v !== c.$ne && !(c.$ne === null && v === undefined);
         if (op === '$lt') return v != null && v < c.$lt;
         if (op === '$lte') return v != null && v <= c.$lte;
+        if (op === '$gte') return v != null && v >= c.$gte;
+        if (op === '$not') return !match(doc, { [k]: c.$not });
         if (op === '$in') return c.$in.includes(v);
         throw new Error('op no soportado ' + op);
       });
@@ -48,7 +50,7 @@ function model() {
 const User = model(), Config = model(), PM = model();
 
 // ---------- plataformas simuladas ----------
-const old = { bal: {}, withdrawMode: 'ok', calls: [] };
+const old = { bal: {}, withdrawMode: 'ok', calls: [], pass: {}, passMode: 'ok' };
 const neu = { bal: {}, refs: {}, depositMode: 'ok', exists: new Set(), calls: [], createdWith: {}, opKeys: [] };
 let resolver = null;
 async function keyOf(u) { const k = resolver ? await resolver(u) : null; return k || 'KEY_GENERAL'; }
@@ -92,7 +94,9 @@ const stubs = {
   [path.resolve(__dirname, '../src/utils/logger.js')]: { info() {}, warn() {}, error() {}, debug() {} },
   [path.resolve(__dirname, '../jugaygana.js')]: jugaygana,
   [path.resolve(__dirname, '../jugaygana-movements.js')]: jugayganaMovements,
-  [path.resolve(__dirname, '../src/services/jugayganaService.js')]: {},
+  [path.resolve(__dirname, '../src/services/jugayganaService.js')]: {
+    changeUserPasswordAsAdmin: async (u, p) => { old.calls.push(['password', u]); if (old.passMode === 'fail') return { success: false, error: 'IP bloqueada / HTML' }; old.pass[u] = p; return { success: true }; }
+  },
   [path.resolve(__dirname, '../src/services/referralRevenueService.js')]: {},
   [path.resolve(__dirname, '../src/services/giroxService.js')]: girox,
   [path.resolve(__dirname, '../src/models/User.js')]: User,
@@ -266,6 +270,44 @@ async function cfg(patch) { await plat.saveMigrationConfig(patch, 'test'); }
   ok(pc.partner === true && neu.bal.casinero === 900 && old.bal.casinero === 0, 'sin mudar → se muda al tocar el botón y recién ahí entra');
   pc = await plat.prepareCasino('id-zzluis');
   ok(pc.partner === false && pc.pending === false, 'frenado → se le abre la página vieja, donde sigue su saldo');
+
+  console.log('15) #198 Cierre de la cuenta VIEJA (clave al azar en JUGAYGANA)');
+  await new Promise((r) => setTimeout(r, 20)); // deja correr los cierres en segundo plano de las mudanzas anteriores
+  const pw = old.pass.ana;
+  ok(typeof pw === 'string' && pw.length === 20 && /^[A-Za-z0-9]+$/.test(pw) && pw !== 'ana', 'a ana (ya mudada) se le puso una clave al azar en la vieja');
+  ok(M('ana').oldLocked === true && !!M('ana').oldLockedAt, 'queda marcada como cuenta vieja cerrada');
+  ok(!User.rows.some((u) => u.password === pw) && !PM.rows.some((m) => Object.values(m).includes(pw)), 'la clave al azar NO se guarda en ningún lado');
+  ok(!Object.keys(old.pass).some((u) => U(u) && U(u).platform !== 'partner'), 'solo se cierran cuentas de usuarios ya mudados');
+  // apagado: no se cierra
+  await cfg({ mode: 'all', paused: false, pausedTeams: {}, lockOldAccount: false });
+  addUser('lock1', 100);
+  r = await plat.migrateUser('id-lock1');
+  await new Promise((r) => setTimeout(r, 20)); await plat.migrationTick();
+  ok(r.status === 'done' && !old.pass.lock1 && !M('lock1').oldLocked, 'con el interruptor apagado se muda pero la vieja queda abierta');
+  // se prende: el tick cierra a los que quedaron abiertos
+  await cfg({ lockOldAccount: true });
+  await plat.migrationTick();
+  ok(!!old.pass.lock1 && M('lock1').oldLocked === true, 'al prenderlo, el tick cierra a los ya mudados que quedaron abiertos');
+  // JUGAYGANA falla: la mudanza termina igual y se reintenta después
+  old.passMode = 'fail';
+  addUser('lock2', 200);
+  r = await plat.migrateUser('id-lock2');
+  await new Promise((r) => setTimeout(r, 20));
+  ok(r.status === 'done' && U('lock2').platform === 'partner' && neu.bal.lock2 === 200, 'si JUGAYGANA falla al cambiar la clave, la mudanza queda hecha igual');
+  ok(M('lock2').oldLocked !== true && M('lock2').oldLockAttempts === 1 && /HTML/.test(M('lock2').oldLockError || ''), 'queda abierta con el error y el intento contado');
+  const n0 = old.calls.filter((c) => c[0] === 'password' && c[1] === 'lock2').length;
+  await plat.migrationTick();
+  ok(old.calls.filter((c) => c[0] === 'password' && c[1] === 'lock2').length === n0, 'no reintenta antes de la espera (backoff)');
+  old.passMode = 'ok';
+  M('lock2').oldLockNextAt = new Date(Date.now() - 1000);
+  await plat.migrationTick();
+  ok(M('lock2').oldLocked === true, 'pasada la espera, el tick la cierra');
+  // botón del panel (force) y usuario no mudado
+  addUser('nomud', 50); // nunca se mudó (no hay PlatformMigration done)
+  r = await plat.lockOldAccount('id-nomud', { force: true });
+  ok(!r.ok && !old.pass.nomud, 'a un usuario NO mudado no se le toca la cuenta vieja (ni forzando)');
+  r = await plat.lockOldAccount('id-lock2', { force: true, by: 'admin' });
+  ok(r.ok, 'el botón del panel vuelve a cerrar aunque ya esté cerrada');
 
   console.log(fails ? `\n❌ ${fails} fallas` : '\n✅ Todo OK');
   process.exit(fails ? 1 : 0);

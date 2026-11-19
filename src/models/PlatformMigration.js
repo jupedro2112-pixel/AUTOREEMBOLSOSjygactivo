@@ -49,10 +49,18 @@ const platformMigrationSchema = new mongoose.Schema({
   // Revisión posterior: plata que aparece en la vieja DESPUÉS de mudarse (apuesta que pagó tarde).
   oldRecheckAt: { type: Date, default: null },
   oldRecheckCount: { type: Number, default: 0 },
-  oldResidual: { type: Number, default: 0 }
+  oldResidual: { type: Number, default: 0 },
+  // Cierre de la cuenta VIEJA (#198): tras mudarse se le pone en JUGAYGANA una clave al azar que
+  // no se guarda en ningún lado → nadie vuelve a entrar ahí. Lo hace el motor (reintenta solo).
+  oldLocked: { type: Boolean, default: false },
+  oldLockedAt: { type: Date, default: null },
+  oldLockNextAt: { type: Date, default: null },  // próximo intento (null = cuanto antes)
+  oldLockAttempts: { type: Number, default: 0 },
+  oldLockError: { type: String, default: null }
 }, { timestamps: true });
 
 platformMigrationSchema.index({ status: 1, updatedAt: -1 });
 platformMigrationSchema.index({ status: 1, oldRecheckAt: 1 });
+platformMigrationSchema.index({ status: 1, oldLocked: 1, oldLockNextAt: 1 });
 
 module.exports = mongoose.models['PlatformMigration'] || mongoose.model('PlatformMigration', platformMigrationSchema);

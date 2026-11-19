@@ -7,7 +7,7 @@
 >
 > Última actualización integral: **2026-07-09** (lectura de punta a punta de todo el
 > repo: server.js completo, clientes JUGAYGANA, 28 modelos, servicios, PWA y panel).
-> Actualización parcial 2026-11-18: §10 nueva — mudanza PLANEADA a jugaygana.io / Partner API, material en `docs/1girox/` (#196; nada implementado). Antes, 2026-11-04: **sección propia "🏛️ Bancos — Configuración" en el panel (#195, réplica #224 de CARGASGIROXactivo: todo lo de bancos salió de COMANDOS; mismos ids/endpoints)** y **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
+> Actualización parcial 2026-11-19: §10.3 paso 8 — cierre de la cuenta vieja al mudar (#198). 2026-11-18: §10 nueva — mudanza PLANEADA a jugaygana.io / Partner API, material en `docs/1girox/` (#196; nada implementado). Antes, 2026-11-04: **sección propia "🏛️ Bancos — Configuración" en el panel (#195, réplica #224 de CARGASGIROXactivo: todo lo de bancos salió de COMANDOS; mismos ids/endpoints)** y **hasta 3 CUENTAS hgcash con cuenta ACTIVA rotable (#194, réplica #223/#223b de
 > CARGASGIROXactivo)** — ver "Cuentas hgcash múltiples" en la auto-carga del banco.
 > Los números de línea derivan con cada cambio — usalos como referencia aproximada y
 > confirmá con grep.
@@ -802,10 +802,16 @@ en el gemelo, y §15 de `CONOCIMIENTO-EN-PRODUCCION.md` con lo medido en jugayga
 6. `phase:'withdrawn'` → carga en la nueva (`vip-mig-<userId>-r<round>`, `noBonus`). Falla → `deposit_pending` con candado;
    `insufficient_funds` además frena ESE equipo (`pausedTeams`).
 7. `User.platform='partner'`, `status:'done'`, recheck del saldo viejo a la hora y al día.
+8. **#198 Cierre de la cuenta vieja** (`lockOldAccount`, `Config['platformMigration'].lockOldAccount`, default true): en segundo plano,
+   `jugayganaService.changeUserPasswordAsAdmin` con una clave al azar que NO se guarda. Solo con `status:'done'`. Fallo → reintento
+   en el tick (`oldLockNextAt`, backoff 2 min→6 h, Telegram al 6º, tope 30); nunca deshace la mudanza. El login ya no hace
+   `loginAsUser` en JUGAYGANA para usuarios `partner`. Lo que la app hace sobre la vieja (recheck, residuos, netwin) usa la sesión del agente.
 
 `plat.migrationTick()` (cada 60 s, cada instancia, claims atómicos): reintenta `deposit_pending`, destraba `running` colgadas
 (`withdrawing` → `review`; `withdrawn` → `deposit_pending`) y hace el recheck. Disparos: `/api/auth/verify`, login,
 `/api/platform/info` (segundo plano, throttle 60 s por usuario) y `plat.depositToUser` (espera la mudanza y relee la ruta).
+⚠️ Estar en la lista del modo "list" NO dispara nada solo: el tick no busca usuarios para mudar, solo reintenta/destraba/rechequea/cierra
+cuentas viejas. Para mudar ya: "Mudar a un usuario ahora" (`…/migrate-user`, force).
 
 ### 10.4 Endpoints
 
@@ -813,7 +819,7 @@ en el gemelo, y §15 de `CONOCIMIENTO-EN-PRODUCCION.md` con lo medido en jugayga
   hace falta, espera (`plat.prepareCasino`, ~20 s) y devuelve `{ url }` (link de un solo uso) o `{ pending:true }`.
 - Equipos (admin general): `POST /api/admin/platform/teams` (alta/edición, prueba la key), `DELETE …/teams/:id`, `POST …/teams/:id/resume`.
 - Admin general: `GET /api/admin/platform/status`; `POST …/partner`, `…/partner/test`, `…/migration/config`, `…/migrate-user`,
-  `…/migrations/:userId/resolve`, `…/migrations/:userId/residual`, `…/rollover`; `GET …/migrations`.
+  `…/migrations/:userId/resolve`, `…/migrations/:userId/residual`, `…/migrations/:userId/lock-old` (#198), `…/rollover`; `GET …/migrations`.
 - Registro: con `newUsersOnPartner` el alta va a `girox.createPlatformUser` y el usuario nace con `platform:'partner'`.
 
 ### 10.5 Trampas

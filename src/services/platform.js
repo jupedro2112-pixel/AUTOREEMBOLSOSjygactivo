@@ -29,7 +29,13 @@
  *
  * Config (`Config['platformMigration']`, se lee con cache de 10 s — multi-instancia):
  *   { mode: 'off' | 'list' | 'all', usernames: [..], capARS: 200000, paused, pausedReason,
- *     createMissing: true, newUsersOnPartner, pausedTeams: { teamId: motivo } }
+ *     createMissing: true, newUsersOnPartner, pausedTeams: { teamId: motivo }, lockOldAccount: true }
+ *
+ * CIERRE DE LA CUENTA VIEJA (#198): con `lockOldAccount` (default true), al terminar la mudanza se
+ * le cambia la clave en JUGAYGANA por una al azar que NO se guarda → el jugador (ni nadie) puede
+ * volver a entrar a la cuenta vieja. Lo de la app sobre la vieja (recheck de saldo, residuos,
+ * netwin) usa la sesión del AGENTE, no la del jugador, así que sigue andando. Recién DESPUÉS de
+ * la carga confirmada en la nueva; si falla se reintenta en el tick (nunca frena la mudanza).
  *
  * EQUIPOS: cada equipo de jugaygana.io tiene SU API key y uno o más "inicios" de username
  * (atojuan299 → equipo ATOMIC por el inicio "ato"). El usuario se crea con la key de su equipo y
@@ -37,6 +43,7 @@
  * Sin inicio reconocido → equipo 'default' (la key general).
  */
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
 const jugaygana = require('../../jugaygana');
 const jugayganaMovements = require('../../jugaygana-movements');
@@ -56,7 +63,8 @@ const DEFAULT_CFG = Object.freeze({
   pausedReason: null,
   createMissing: true,  // si el jugador no existe en la nueva: true = crearlo en su equipo (default); false = esperar a que lo copien
   pausedTeams: {},      // { <teamId>: motivo } — equipos con la mudanza frenada (p. ej. sin fichas)
-  newUsersOnPartner: false // los que se REGISTRAN desde ahora se crean directo en la nueva
+  newUsersOnPartner: false, // los que se REGISTRAN desde ahora se crean directo en la nueva
+  lockOldAccount: true  // #198: al mudar, clave al azar en la cuenta vieja de JUGAYGANA
 });
 const MIN_MOVE_ARS = 1;                 // por debajo de $1 no se mueve plata (se muda igual)
 const LOCK_STALE_MS = 10 * 60 * 1000;   // una mudanza "running" sin latido por 10 min está colgada
@@ -155,6 +163,7 @@ function _normCfg(raw) {
   if (c.pausedTeams && typeof c.pausedTeams === 'object') for (const k of Object.keys(c.pausedTeams)) if (c.pausedTeams[k]) pt[String(k)] = String(c.pausedTeams[k]).slice(0, 300);
   c.pausedTeams = pt;
   c.newUsersOnPartner = c.newUsersOnPartner === true; // altas nuevas directo en la plataforma nueva
+  c.lockOldAccount = c.lockOldAccount !== false;        // #198: default prendido
   return c;
 }
 async function getMigrationConfig({ fresh = false } = {}) {
@@ -570,7 +579,58 @@ async function _finishDeposit(userId) {
     oldRecheckAt: new Date(now.getTime() + 60 * 60 * 1000), oldRecheckCount: 0
   });
   logger.info(`[platform] MUDADO ${m.username} → jugaygana.io | saldo trasladado ${_money(amount)} ref=${reference}`);
+  // #198: cerrar la cuenta vieja en segundo plano (no demora el botón del casino ni la carga).
+  setImmediate(() => { lockOldAccount(userId).catch((e) => logger.warn(`[platform] cierre de la cuenta vieja de ${m.username}: ${e.message}`)); });
   return { touched: true, status: 'done', amount };
+}
+
+// ------------------------------------------------------------
+// #198 Cierre de la cuenta vieja (clave al azar en JUGAYGANA)
+// ------------------------------------------------------------
+const OLD_LOCK_ALERT_AFTER = 6;              // intentos fallidos antes de avisar por Telegram (una vez)
+const OLD_LOCK_MAX_ATTEMPTS = 30;            // después de esto deja de intentar solo (queda el botón del panel)
+function _oldLockBackoffMs(n) { return Math.min(6 * 60 * 60 * 1000, 2 * 60 * 1000 * Math.pow(2, Math.max(0, n - 1))); }
+function _randomOldPassword() {
+  // Solo letras y números (no sabemos qué caracteres acepta JUGAYGANA), 20 de largo, con al menos uno de cada.
+  const L = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ', D = '23456789', A = L + D;
+  let p = L[crypto.randomInt(L.length)] + D[crypto.randomInt(D.length)];
+  while (p.length < 20) p += A[crypto.randomInt(A.length)];
+  return p.split('').sort(() => crypto.randomInt(3) - 1).join('');
+}
+/**
+ * Le pone a la cuenta VIEJA (JUGAYGANA) de un usuario ya mudado una clave al azar que no se guarda.
+ * Idempotente a efectos prácticos (cambiarla de nuevo es inocuo). `force` = desde el panel: ignora
+ * el interruptor y el tope de intentos.
+ * @returns {{ok:true, already?:true} | {ok:false, error, skipped?:true}}
+ */
+async function lockOldAccount(userId, { force = false, by = null } = {}) {
+  const cfg = await getMigrationConfig();
+  if (!force && !cfg.lockOldAccount) return { ok: false, skipped: true, error: 'El cierre de la cuenta vieja está apagado.' };
+  const m = await PlatformMigration.findOne({ userId }).lean();
+  if (!m || m.status !== 'done') return { ok: false, skipped: true, error: 'La mudanza de ese usuario no está terminada.' };
+  if (m.oldLocked && !force) return { ok: true, already: true };
+  if (!force && (m.oldLockAttempts || 0) >= OLD_LOCK_MAX_ATTEMPTS) return { ok: false, skipped: true, error: 'Demasiados intentos fallidos: usá el botón del panel.' };
+  // Claim: un solo proceso por usuario a la vez (multi-instancia) — corre el próximo intento 3 min.
+  const now = new Date();
+  const claim = await PlatformMigration.findOneAndUpdate(
+    force ? { userId } : { userId, oldLocked: { $ne: true }, $or: [{ oldLockNextAt: null }, { oldLockNextAt: { $lte: now } }] },
+    { $set: { oldLockNextAt: new Date(now.getTime() + 3 * 60 * 1000) } });
+  if (!claim) return { ok: false, skipped: true, error: 'Otro proceso lo está cerrando.' };
+  let r;
+  try {
+    r = await jugayganaService.changeUserPasswordAsAdmin(m.username, _randomOldPassword()); // directo a la VIEJA (plat.* ya rutea a la nueva)
+  } catch (e) { r = { success: false, error: e.message }; }
+  if (r && r.success) {
+    await PlatformMigration.updateOne({ userId }, { $set: { oldLocked: true, oldLockedAt: new Date(), oldLockNextAt: null, oldLockError: null } });
+    logger.info(`[platform] cuenta VIEJA de ${m.username} cerrada (clave al azar en JUGAYGANA)${by ? ' por ' + by : ''}`);
+    return { ok: true };
+  }
+  const err = jugaygana.errToString(r && r.error).slice(0, 300) || 'error desconocido';
+  const n = (m.oldLockAttempts || 0) + 1;
+  await PlatformMigration.updateOne({ userId }, { $set: { oldLockError: err, oldLockAttempts: n, oldLockNextAt: new Date(Date.now() + _oldLockBackoffMs(n)) } });
+  logger.warn(`[platform] no se pudo cerrar la cuenta vieja de ${m.username} (intento ${n}): ${err}`);
+  if (n === OLD_LOCK_ALERT_AFTER) await _alert(`🔐 No se pudo cerrar la cuenta VIEJA de @${m.username} en JUGAYGANA después de ${n} intentos (${err}). Ya está mudado y con su saldo en jugaygana.io; solo falta cambiarle la clave en la vieja. Se sigue reintentando; también hay un botón en el panel → Mudanza.`);
+  return { ok: false, error: err };
 }
 
 /**
@@ -835,6 +895,16 @@ async function migrationTick() {
         await PlatformMigration.updateOne({ userId: m.userId }, { $set: { oldResidual: 0 } });
       }
     }
+    // d) #198: cuentas viejas de usuarios ya mudados que todavía no se cerraron (incluye los mudados
+    //    antes de existir esto, o con el interruptor apagado en su momento). El claim va en lockOldAccount.
+    const cfgNow = await getMigrationConfig();
+    if (cfgNow.lockOldAccount) {
+      const toLock = await PlatformMigration.find({
+        status: 'done', oldLocked: { $ne: true }, oldLockAttempts: { $not: { $gte: OLD_LOCK_MAX_ATTEMPTS } },
+        $or: [{ oldLockNextAt: null }, { oldLockNextAt: { $lte: new Date(now) } }]
+      }).select('userId').limit(3).lean();
+      for (const m of toLock) await lockOldAccount(m.userId).catch((e) => logger.warn(`[platform] cierre de cuenta vieja: ${e.message}`));
+    }
   } catch (e) {
     logger.warn(`[platform] tick de mudanza: ${e.message}`);
   } finally { _tickRunning = false; }
@@ -922,7 +992,7 @@ module.exports = {
   // clave / casino
   changeUserPasswordAsAdmin, syncPartnerPasswordOnLogin, createCasinoSession,
   // mudanza
-  migrateUser, migrateInBackground, resolveReview, migrationTick, moveOldResidual, retryResidualDeposit,
+  migrateUser, migrateInBackground, resolveReview, migrationTick, moveOldResidual, retryResidualDeposit, lockOldAccount,
   migrationStats, listMigrations,
   MIGRATING_MSG
 };

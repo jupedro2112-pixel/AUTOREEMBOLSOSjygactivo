@@ -15283,6 +15283,7 @@ async function loadMudanzaSection() {
         set('mudUsernames', (c.usernames || []).join(', ')); set('mudCap', c.capARS);
         const cm = document.getElementById('mudCreateMissing'); if (cm) cm.checked = c.createMissing === true;
         const nu = document.getElementById('mudNewUsers'); if (nu) nu.checked = c.newUsersOnPartner === true;
+        const lo = document.getElementById('mudLockOld'); if (lo) lo.checked = c.lockOldAccount !== false;
         const pb = document.getElementById('mudPausedBanner');
         if (pb) { pb.style.display = c.paused ? '' : 'none'; pb.textContent = c.paused ? ('⛔ Mudanza PAUSADA' + (c.pausedReason ? ': ' + c.pausedReason : '')) : ''; }
         const pbtn = document.getElementById('mudPauseBtn'); if (pbtn) pbtn.textContent = c.paused ? 'Reanudar' : 'Pausar';
@@ -15315,7 +15316,16 @@ async function mudLoadList() {
                 if (m.status === 'review') act = `<button class="btn" onclick="mudResolve('${uid}','${un}',true)">El retiro SÍ se hizo</button> <button class="btn" onclick="mudResolve('${uid}','${un}',false)">NO se hizo</button>`;
                 else if (m.status === 'held' || m.status === 'failed') act = `<button class="btn" onclick="mudForce('${un}')">${m.reason === 'cap' ? 'Aprobar y mudar' : 'Mudar ahora'}</button>`;
                 else if (m.status === 'done' && m.oldResidual > 0) act = `<button class="btn" onclick="mudResidual('${uid}','${un}')">Pasar ${_mudMoney(m.oldResidual)} que le quedaron</button>`;
-                const det = (m.status === 'held' ? (_MUD_REASON[m.reason] || m.reason || '') : '') + (m.lastError && m.status !== 'done' ? ' ' + m.lastError : '');
+                // #198: estado de la cuenta vieja (clave al azar en JUGAYGANA)
+                let oldTxt = '';
+                if (m.status === 'done') {
+                    if (m.oldLocked) oldTxt = '🔒 Cuenta vieja cerrada';
+                    else {
+                        oldTxt = '🔓 Cuenta vieja abierta' + (m.oldLockError ? ` (${m.oldLockAttempts || 0} intentos: ${m.oldLockError})` : '');
+                        act += ` <button class="btn" onclick="mudLockOld('${uid}','${un}')">Cerrar cuenta vieja</button>`;
+                    }
+                }
+                const det = (m.status === 'held' ? (_MUD_REASON[m.reason] || m.reason || '') : '') + (m.lastError && m.status !== 'done' ? ' ' + m.lastError : '') + (oldTxt ? ' ' + oldTxt : '');
                 return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${m.updatedAt ? new Date(m.updatedAt).toLocaleString('es-AR') : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
             }).join('') + '</tbody></table>';
     } catch (e) { box.innerHTML = '<p style="color:#ff6666;font-size:13px;">No se pudo cargar la lista.</p>'; }
@@ -15344,7 +15354,8 @@ async function mudSaveConfig() {
             mode, usernames: document.getElementById('mudUsernames').value,
             capARS: Number(document.getElementById('mudCap').value || 0),
             createMissing: document.getElementById('mudCreateMissing').checked,
-            newUsersOnPartner: document.getElementById('mudNewUsers').checked
+            newUsersOnPartner: document.getElementById('mudNewUsers').checked,
+            lockOldAccount: (document.getElementById('mudLockOld') || {}).checked !== false
         });
         showToast('✅ Guardado', 'success'); loadMudanzaSection();
     } catch (e) { showToast(e.message, 'error'); }
@@ -15398,6 +15409,14 @@ async function mudResidual(userId, username) {
     try {
         const j = await _mudPost('/api/admin/platform/migrations/' + encodeURIComponent(userId) + '/residual');
         showToast(j.amount ? '✅ Se trasladaron ' + _mudMoney(j.amount) : 'No tenía saldo en la vieja', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+// #198: cambia YA la clave de la cuenta vieja (JUGAYGANA) por una al azar que no se guarda.
+async function mudLockOld(userId, username) {
+    if (!confirm('¿Cerrar la cuenta VIEJA de ' + username + ' en JUGAYGANA? Se le pone una clave al azar que no se guarda: nadie puede volver a entrar ahí. Su cuenta en jugaygana.io no se toca.')) return;
+    try {
+        await _mudPost('/api/admin/platform/migrations/' + encodeURIComponent(userId) + '/lock-old');
+        showToast('🔒 Cuenta vieja cerrada', 'success'); mudLoadList();
     } catch (e) { showToast(e.message, 'error'); }
 }
 function mudRenderTeams() {
@@ -15457,4 +15476,4 @@ window.mudDeleteTeam = mudDeleteTeam; window.mudResumeTeam = mudResumeTeam; wind
 window.loadMudanzaSection = loadMudanzaSection; window.mudLoadList = mudLoadList; window.mudSavePartner = mudSavePartner;
 window.mudTestPartner = mudTestPartner; window.mudSaveConfig = mudSaveConfig; window.mudTogglePause = mudTogglePause;
 window.mudSaveRollover = mudSaveRollover; window.mudForce = mudForce; window.mudMigrateOne = mudMigrateOne;
-window.mudResolve = mudResolve; window.mudResidual = mudResidual;
+window.mudResolve = mudResolve; window.mudResidual = mudResidual; window.mudLockOld = mudLockOld;

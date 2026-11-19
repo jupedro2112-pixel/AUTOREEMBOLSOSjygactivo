@@ -4,7 +4,32 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-11-18**
+> **Última actualización: 2026-11-19**
+
+## Sesión 2026-11-19
+
+### 198. 🔒 Al mudar a jugaygana.io se CIERRA la cuenta vieja de JUGAYGANA (clave al azar que no se guarda) — admin-sw v70
+- **Owner:** "que el usuario del jugaygana viejo se bloquee para que no pueda ingresar más; al hacer la mudanza el viejo queda bloqueado
+  y el nuevo activo con el saldo". Propuso como clave el mismo username: **descartado** (cualquiera que sepa el usuario entraría).
+- **Por qué clave al azar y no "bloquear":** la app no conoce ninguna acción de bloqueo del panel de agentes (`admin.agentesadmin.bet`);
+  sí usa `ChangePassword` (`jugayganaService.changeUserPasswordAsAdmin`). Si el owner captura el request de "bloquear usuario" (F12 →
+  Red, sin el token) se puede sumar como bloqueo real.
+- **Cómo:** `plat.lockOldAccount(userId)` le pone en JUGAYGANA una clave de 20 letras/números al azar (crypto) que **no se guarda en
+  ningún lado**. Va directo a `jugayganaService` (no por `plat.*`, que para un mudado ya rutea a la nueva). Se dispara en segundo plano
+  apenas termina `_finishDeposit` (carga en la nueva CONFIRMADA; nunca antes) y el `migrationTick` reintenta los que quedaron abiertos
+  (claim por `oldLockNextAt`, espera creciente de 2 min hasta 6 h, Telegram al 6º fallo, deja de intentar solo a los 30). Un fallo
+  **nunca** deshace ni frena la mudanza. El tick también cierra a los mudados ANTES de existir esto (p. ej. el de ATOMIC).
+- **Lo que sigue andando sobre la vieja** (usa la sesión del AGENTE, no la del jugador): recheck de saldo a 1 h/25 h, traslado de
+  residuos, netwin viejo de reembolsos/referidos. La clave del jugador en la app no cambia (vive en nuestra base y se replica en jugaygana.io).
+- **Login:** a un usuario `platform:'partner'` ya no se le intenta `loginAsUser` contra JUGAYGANA (fallaría siempre y ensucia logs).
+- **Config:** `Config['platformMigration'].lockOldAccount` (default **true**; la mudanza entera sigue gated por el modo). Panel 🚚 Mudanza:
+  tilde "Al mudar, cerrar la cuenta VIEJA…", en la lista "🔒 Cuenta vieja cerrada" / "🔓 abierta (intentos: error)" + botón
+  **Cerrar cuenta vieja** (`POST /api/admin/platform/migrations/:userId/lock-old`, admin general, fuerza aunque esté apagado).
+- **Modelo:** `PlatformMigration.oldLocked/oldLockedAt/oldLockNextAt/oldLockAttempts/oldLockError` + índice.
+- **Sin probar:** si cambiar la clave corta una sesión YA abierta en la página vieja. Verificado: `node --check`, `check-tdz`,
+  `test-platform-migration.js` (12 casos nuevos en §15, todo OK).
+- **Aclaración del owner (mismo día):** poner a alguien en "Solo esta lista" NO lo muda al instante: se muda al abrir la app, tocar el
+  casino o al cargarle; para hacerlo ya, "Mudar a un usuario ahora".
 
 ## Sesión 2026-11-18
 
@@ -14,7 +39,7 @@
   directo logueados; si tiene saldo, que se le retire todo y se le pase a la nueva". Decisión final: **"vamos con eso, tope 200.000"**.
   La copia de usuarios de jugaygana44 → jugaygana.io la hace el dueño de la plataforma, respetando el árbol de agentes; **al cierre de
   esta sesión todavía NO estaba terminada**.
-- **Estado: código escrito, validado con `node --check` y con un test en frío; NADA activado, nada commiteado (el owner avisa).**
+- **Estado: código escrito, validado con `node --check` y con un test en frío; commiteado en `3558b10`; activación desde el panel (el owner ya cargó equipos y mudó al primero el 2026-11-19).**
   Con la mudanza en "Apagada" (default) y sin credenciales, la app opera 100% sobre JUGAYGANA igual que antes.
 - **Lo probado EN VIVO contra jugaygana.io** (con dos keys de prueba que NO están en el repo):
   - La Base URL real es **`https://api.jugaygana.io/api/v1`**. El panel de la plataforma mostraba `https://api-1gx.com/api/v1`, que

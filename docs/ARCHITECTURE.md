@@ -827,6 +827,11 @@ Reglas: el candado del usuario solo se suelta en estados donde NO hay plata en t
 durante una mudanza: quien valide un retiro tiene que tratarlo como "reintentar", no como saldo insuficiente. Mudanzas en segundo plano:
 máximo `BG_MAX_CONCURRENT` (4) por instancia. `migrateUser` no decide equipo sin la tabla de equipos cargada.
 
+### 10.3c Corte fijo de la lectura de la vieja (#204)
+`OLD_NETWIN_CUTOFF_MS` (`platform.js`) = 1-ene-2027 00:00 ART, **hardcodeado a propósito** (owner: "programado e irremovible"). Desde ahí
+`getUserNetwinForDateRange` / `getUserRevenueForPeriod` de un `partner` no suman el tramo de la vieja anterior a la mudanza. No toca a los no
+mudados ni al motor de mudanza (que necesita la vieja para pasar saldos).
+
 ### 10.4 Endpoints
 
 - Jugador: `GET /api/platform/info` → `{ sso, url }` (`sso` también si le toca mudarse); `POST /api/platform/session` → muda si

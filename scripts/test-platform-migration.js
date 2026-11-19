@@ -421,6 +421,32 @@ async function cfg(patch) { await plat.saveMigrationConfig(patch, 'test'); }
   r = await plat.depositToUser('cb4', 10, 'x', 7);
   ok(r.success && old.bal.cb4 === 60, 'y su carga entra normal en la vieja, sin esperar a la plataforma caída');
 
+  // #204 Corte fijo del 1-ene-2027 (hora Argentina): un mudado deja de sumar lo jugado en la vieja.
+  {
+    const rrs = require('../src/services/referralRevenueService.js');
+    let oldCalls = 0;
+    rrs.getUserNetwinForDateRange = async () => { oldCalls++; return { success: true, totalGgr: 700, totalBets: 1000, totalWins: 300 }; };
+    rrs.getUserRevenueForPeriod = async () => { oldCalls++; return { success: true, totalGgr: 700, totalBets: 1000, totalWins: 300 }; };
+    const realStats = girox.getPlayerStats;
+    girox.getPlayerStats = async () => ({ success: true, netwin: 200, casinoNetwin: 200, wagered: 500, payout: 300 });
+    const realNow = Date.now;
+    const from = new Date('2020-01-01T03:00:00Z'), to = new Date('2020-01-31T03:00:00Z'); // período anterior a la mudanza de ana
+    ok(plat.OLD_NETWIN_CUTOFF_MS === Date.UTC(2027, 0, 1, 3, 0, 0), 'el corte es el 1-ene-2027 00:00 de Argentina');
+    Date.now = () => plat.OLD_NETWIN_CUTOFF_MS - 1000;
+    r = await plat.getUserNetwinForDateRange('ana', 7, from, to, 'monthly');
+    ok(r.success && r.totalGgr === 900 && oldCalls === 1, 'antes del corte: mudado suma vieja (700) + nueva (200)');
+    r = await plat.getUserRevenueForPeriod({ username: 'ana', jugayganaUserId: 7, platform: 'partner', platformMigratedAt: new Date() }, '2020-01');
+    ok(r.success && r.totalGgr === 900 && oldCalls === 2, 'antes del corte: comisión de referidos también suma la vieja');
+    Date.now = () => plat.OLD_NETWIN_CUTOFF_MS;
+    r = await plat.getUserNetwinForDateRange('ana', 7, from, to, 'monthly');
+    ok(r.success && r.totalGgr === 200 && oldCalls === 2, 'desde el corte: solo la nueva y la vieja NI SE CONSULTA');
+    r = await plat.getUserRevenueForPeriod({ username: 'ana', jugayganaUserId: 7, platform: 'partner', platformMigratedAt: new Date() }, '2020-01');
+    ok(r.success && r.totalGgr === 200 && oldCalls === 2, 'desde el corte: comisión de referidos solo con la nueva');
+    r = await plat.getUserNetwinForDateRange('cb4', 7, from, to, 'monthly');
+    ok(r.success && r.totalGgr === 700 && oldCalls === 3, 'un usuario NO mudado sigue leyendo la vieja después del corte');
+    Date.now = realNow; girox.getPlayerStats = realStats;
+  }
+
   console.log(fails ? `\n❌ ${fails} fallas` : '\n✅ Todo OK');
   process.exit(fails ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

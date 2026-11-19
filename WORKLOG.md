@@ -8,6 +8,18 @@
 
 ## Sesión 2026-11-19
 
+### 204. ⏰ CORTE FIJO 1-ene-2027: un usuario mudado deja de sumar lo jugado en la JUGAYGANA vieja (reembolsos y referidos)
+- **Owner:** "que el 1 de enero se corte todo eso… dejalo programado porque me voy a olvidar. Programado e irremovible."
+- **Qué hace:** `OLD_NETWIN_CUTOFF_MS` en `src/services/platform.js` = `2027-01-01T00:00:00-03:00`. Desde ese instante,
+  `plat.getUserNetwinForDateRange` y `plat.getUserRevenueForPeriod` de un usuario `partner` NO consultan la vieja: cuenta solo jugaygana.io.
+  Hasta ese día sigue como en #203 (suma el tramo anterior a la mudanza, para no perder el mensual de noviembre que se cobra en diciembre).
+- **Fijo a propósito:** sin env, sin Config, sin botón. Cambiarlo = tocar esa línea y desplegar. No hace falta deploy el 1 de enero: es por reloj.
+- **Qué NO corta (decisión mía, ver abajo):** los usuarios que todavía NO se mudaron siguen enteros en la vieja, y la mudanza sigue usando la
+  vieja para pasar el saldo. Cortar eso por fecha dejaría plata de rezagados trabada en la vieja.
+- **Efecto a saber:** quien juegue en la vieja en diciembre (entrando directo a la página, sin la app) y se mude después, pierde esa parte en
+  el mensual de diciembre (se cobra en enero) y en la comisión de referidos de diciembre (se calcula en enero). Owner lo aceptó.
+- **Test:** 6 casos nuevos en `node scripts/test-platform-migration.js` (antes / desde el corte / usuario no mudado).
+
 ### 203. 🔎 Auditoría: ¿queda algo de la JUGAYGANA vieja disponible para un usuario ya mudado?
 - **Owner:** "quiero que todas las funciones del viejo JUGAYGANA no estén disponibles para los que están mudados (reembolsos, cambio de clave, cargar bono…)".
 - **Resultado (inventario de TODAS las llamadas directas a los 4 clientes viejos en server.js y servicios):** plata (cargas, retiros, bonos,

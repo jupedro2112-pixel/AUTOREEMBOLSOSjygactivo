@@ -431,6 +431,19 @@ function _fail(error) { return { success: false, error, totalGgr: 0 }; }
  * mudanza) + lo jugado en la nueva. Si cualquiera de las dos partes falla, falla todo:
  * no se paga un reembolso calculado con la mitad de los datos.
  */
+// ------------------------------------------------------------
+// #204 CORTE DEFINITIVO de la lectura de la JUGAYGANA vieja para usuarios MUDADOS (owner 2026-11-19).
+// Hasta esta fecha, el reembolso y la comisión de referidos de un mudado suman lo que jugó en
+// la vieja ANTES de mudarse (dentro del mismo período). Desde el 1 de enero de 2027, 00:00 hora
+// Argentina, un usuario mudado cuenta SOLO lo jugado en jugaygana.io: la vieja ni se consulta.
+// ⚠️ FIJO A PROPÓSITO: sin env, sin Config, sin botón en el panel (pedido del owner: "programado
+// e irremovible"). Para cambiarlo hay que tocar esta línea y desplegar.
+// NO afecta a quien todavía NO se mudó (sigue entero en la vieja) ni a la mudanza en sí (que
+// necesita la vieja para pasar el saldo).
+// ------------------------------------------------------------
+const OLD_NETWIN_CUTOFF_MS = Date.parse('2027-01-01T00:00:00-03:00');
+function oldNetwinCut() { return Date.now() >= OLD_NETWIN_CUTOFF_MS; }
+
 async function getUserNetwinForDateRange(username, jugayganaUserId, fromDate, toDate, periodLabel = 'custom') {
   const route = await routeFor(username);
   if (route.provider !== 'partner') {
@@ -442,7 +455,7 @@ async function getUserNetwinForDateRange(username, jugayganaUserId, fromDate, to
   let oldGgr = 0, oldBets = 0, oldWins = 0, oldUsed = false;
   const migratedAt = route.user && route.user.platformMigratedAt ? new Date(route.user.platformMigratedAt) : null;
   const jgId = jugayganaUserId != null ? jugayganaUserId : (route.user && route.user.jugayganaUserId);
-  if (jgId != null && (!migratedAt || fromDate < migratedAt)) {
+  if (!oldNetwinCut() && jgId != null && (!migratedAt || fromDate < migratedAt)) { // #204: desde el corte no se lee la vieja
     const old = await referralRevenueService.getUserNetwinForDateRange(username, jgId, fromDate, toDate, periodLabel);
     if (!old.success) return _fail(`JUGAYGANA (tramo anterior a la mudanza): ${jugaygana.errToString(old.error)}`);
     oldGgr = Number(old.totalGgr) || 0; oldBets = Number(old.totalBets) || 0; oldWins = Number(old.totalWins) || 0; oldUsed = true;
@@ -478,7 +491,7 @@ async function getUserRevenueForPeriod(user, periodKey) {
   const newGgr = Number(_netwinScope() === 'casino' ? st.casinoNetwin : st.netwin) || 0;
   let old = null;
   const migratedAt = user.platformMigratedAt ? new Date(user.platformMigratedAt) : null;
-  if (jgUserId != null && (!migratedAt || fromDate < migratedAt)) {
+  if (!oldNetwinCut() && jgUserId != null && (!migratedAt || fromDate < migratedAt)) { // #204: desde el corte no se lee la vieja
     old = await referralRevenueService.getUserRevenueForPeriod(jgUsername, periodKey, jgUserId);
     if (!old.success) return old; // con la mitad de los datos no se calcula comisión
   }
@@ -1196,7 +1209,7 @@ module.exports = {
   // saldo
   getUserBalance, getUserBalanceWithRetry, withdrawable, getUserMovements,
   // netwin
-  getUserNetwinForDateRange, getUserRevenueForPeriod,
+  getUserNetwinForDateRange, getUserRevenueForPeriod, oldNetwinCut, OLD_NETWIN_CUTOFF_MS,
   // clave / casino
   changeUserPasswordAsAdmin, syncPartnerPasswordOnLogin, createCasinoSession,
   // mudanza

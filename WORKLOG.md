@@ -10,7 +10,11 @@
 
 ### 206. 🕒 Tabla de 🚚 Mudanza: la fecha salía en la hora de la PC, no en hora Argentina
 - Owner pausó la mudanza y creyó que seguía mudando: la tabla mostraba "05:59" (hora UTC de su Tails = 02:59 AR, de la prueba de "Todos"
-  de la madrugada) y lo leyó como recién. La pausa SÍ frena (`migrateUser` corta con `cfg.paused`). Fix: la columna usa `fmtFechaHoraAR` (#188). SW v75.
+  y aparecían filas "nuevas" cada minuto. Causa real: la columna mostraba `updatedAt`, y el barrido que CIERRA las cuentas viejas de los ya
+  mudados (3 por minuto, `platform.js` barrido d) #198) toca el registro → la fila sube con hora de recién. No es una mudanza: el contador
+  no se movió (196). La pausa SÍ frena (`migrateUser` corta con `cfg.paused`); el cierre de cuentas viejas sigue a propósito.
+- Fix: la columna pasa a "Se mudó" (`finishedAt`, hora Argentina, #188) y el detalle dice a qué hora se cerró la cuenta vieja. SW v75.
+- ⚠️ Error mío en el camino: primero le dije al owner que la hora era de hace 12 h (era formato 12 h del navegador de Tails, hora de recién).
 
 ### 205. 🔒 Rollover por TIPO de regalo, editable desde COMANDOS (jugaygana.io)
 - **Owner:** "que fueguitos, reembolsos, ruleta y todo lo que se regala se pueda dar con o sin rollover, todo en off pero modificable

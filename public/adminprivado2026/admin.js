@@ -15824,7 +15824,7 @@ async function mudLoadList() {
         const j = await r.json();
         const rows = j.migrations || [];
         if (!rows.length) { box.innerHTML = '<p style="color:#888;font-size:13px;">Sin registros.</p>'; return; }
-        box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="text-align:left;color:#888;"><th style="padding:6px;">Usuario</th><th>Equipo</th><th>Estado</th><th>Saldo</th><th>Detalle</th><th>Fecha</th><th></th></tr></thead><tbody>'
+        box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="text-align:left;color:#888;"><th style="padding:6px;">Usuario</th><th>Equipo</th><th>Estado</th><th>Saldo</th><th>Detalle</th><th>Se mudó</th><th></th></tr></thead><tbody>'
             + rows.map(m => {
                 const uid = escapeHtml(m.userId), un = escapeHtml(m.username);
                 let act = '';
@@ -15836,7 +15836,7 @@ async function mudLoadList() {
                 // #198: estado de la cuenta vieja (clave al azar en JUGAYGANA)
                 let oldTxt = '';
                 if (m.status === 'done') {
-                    if (m.oldLocked) oldTxt = '🔒 Cuenta vieja cerrada';
+                    if (m.oldLocked) oldTxt = '🔒 Cuenta vieja cerrada' + (m.oldLockedAt ? ' (' + fmtFechaHoraAR(m.oldLockedAt) + ' hs)' : '');
                     else {
                         oldTxt = '🔓 Cuenta vieja abierta' + (m.oldLockError ? ` (${m.oldLockAttempts || 0} intentos: ${m.oldLockError})` : '');
                         act += ` <button class="btn" onclick="mudLockOld('${uid}','${un}')">Cerrar cuenta vieja</button>`;
@@ -15848,7 +15848,7 @@ async function mudLoadList() {
                 else if (m.status === 'done' && m.residualPhase === 'withdrawn') oldTxt += ' ⏳ Residuo de ' + _mudMoney(m.residualAmount) + ' retirado, cargándose en la nueva';
                 else if (m.status === 'done' && m.residualMoved > 0) oldTxt += ' (+' + _mudMoney(m.residualMoved) + ' de residuos ya trasladados)';
                 const det = (m.status === 'held' ? (_MUD_REASON[m.reason] || m.reason || '') : '') + (m.lastError && m.status !== 'done' ? ' ' + m.lastError : '') + (oldTxt ? ' ' + oldTxt : '');
-                return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${m.updatedAt ? fmtFechaHoraAR(m.updatedAt) + ' hs (AR)' : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
+                return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${(m.finishedAt || m.updatedAt) ? fmtFechaHoraAR(m.finishedAt || m.updatedAt) + ' hs (AR)' : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
             }).join('') + '</tbody></table>';
     } catch (e) { box.innerHTML = '<p style="color:#ff6666;font-size:13px;">No se pudo cargar la lista.</p>'; }
 }

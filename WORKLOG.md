@@ -8,6 +8,13 @@
 
 ## Sesión 2026-11-19
 
+### 208. 🏦 Banco: UNA barra con todas las cuentas (hgcash + Finpro)
+- Owner (captura): en 🏦 Banco el selector solo listaba las cuentas hgcash; la de Finpro no aparecía (su barra propia solo se muestra con
+  Finpro como banco visible y 2+ cuentas Finpro).
+- Nuevo: barra "👁️ El cliente transfiere a…" con todas las cuentas de los dos bancos + USAR ESTA (`GET/POST /api/admin/bank-in-use`,
+  admin/depositor/withdrawer). Elegir una = cuenta EN USO de su banco + `bankShown` a ese banco. Los retiros no se tocan (avisa por cuál salen).
+  Bloquea si la cuenta no tiene CBU/CVU o credenciales; avisa (no bloquea) si ese banco no recibe cargas automáticas o la cuenta está pausada. SW v77.
+
 ### 207. 🔁 Rotación AUTOMÁTICA de cuentas de banco (por caída o por tope) + aviso si transfieren a una cuenta que no está en uso
 - **Owner:** "que se puedan rotar cuentas si una falla… topes de movimiento por día/mes para que cambie a otra automáticamente… y si
   uno envió a un CBU que se cayó, que haga la carga automática siempre que sea cliente y dé un aviso interno".

@@ -3020,6 +3020,14 @@
                     </div>
                 </div>
                 <!-- #194 cuenta hgcash en uso + rotación con un botón (admin, depositor, withdrawer) -->
+                <!-- #208 una sola barra con TODAS las cuentas (hgcash + Finpro) -->
+                <div id="bankInUseBar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;background:rgba(79,195,247,0.08);border:1px solid rgba(79,195,247,0.45);border-radius:10px;font-size:13px;color:#eee;">
+                    <span>👁️ El cliente transfiere a: <b id="bankInUseActive" style="color:#66ff99;">…</b></span>
+                    <select id="bankInUseSel" style="background:rgba(0,0,0,0.40);border:1px solid rgba(79,195,247,0.45);color:#fff;padding:6px 8px;border-radius:6px;font-size:12.5px;"></select>
+                    <button class="btn-primary btn-sm" onclick="bankUseAccount()">🔁 USAR ESTA</button>
+                    <span style="color:#aaa;font-size:12px;">· Retiros salen por <b id="bankInUsePayouts">…</b></span>
+                    <span id="bankInUseMsg" style="font-size:11.5px;color:#aaa;flex-basis:100%;"></span>
+                </div>
                 <div id="bankAccountSwitch" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;background:rgba(212,175,55,0.08);border:1px solid rgba(212,175,55,0.40);border-radius:10px;font-size:12.5px;color:#eee;">
                     <span>🏦 Cuenta hgcash en uso: <b id="bankAccountActive" style="color:#d4af37;">…</b></span>
                     <select id="bankAccountSel" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;"></select>

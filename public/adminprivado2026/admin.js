@@ -6583,6 +6583,42 @@ function _bankAccountSwitchRender(j) {
     const md = document.getElementById('bankAccountMode'); if (md) md.value = j.incomingMode === 'active' ? 'active' : 'all'; // #194
     box.style.display = accs.length > 1 ? 'flex' : 'none';
 }
+// #208 Barra única de 🏦 Banco: todas las cuentas (hgcash + Finpro) y cuál ve el cliente.
+function _bankInUseRender(j) {
+    const bar = document.getElementById('bankInUseBar'); if (!bar) return;
+    const slots = j.slots || [];
+    if (slots.length < 2) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    const cur = slots.find((s) => s.inUse);
+    const act = document.getElementById('bankInUseActive');
+    if (act) act.textContent = cur ? cur.label + ' (' + cur.bank + ')' : (j.shown === 'manual' ? 'una cuenta cargada a mano' : '—');
+    const sel = document.getElementById('bankInUseSel');
+    if (sel) sel.innerHTML = slots.map((s) => '<option value="' + escapeHtml(s.id) + '"' + (s.inUse ? ' selected' : '') + '>' + escapeHtml(s.bank + ' · ' + s.label + (s.inUse ? ' (en uso)' : '')) + '</option>').join('');
+    const po = document.getElementById('bankInUsePayouts'); if (po) po.textContent = j.payoutsLabel || '';
+}
+async function loadBankInUse() {
+    try {
+        const r = await authFetch('/api/admin/bank-in-use');
+        if (!r.ok) { const b = document.getElementById('bankInUseBar'); if (b) b.style.display = 'none'; return; }
+        _bankInUseRender(await r.json());
+    } catch (_) {}
+}
+async function bankUseAccount() {
+    const sel = document.getElementById('bankInUseSel'), msg = document.getElementById('bankInUseMsg');
+    if (!sel || !sel.value) return;
+    try {
+        if (msg) { msg.style.color = '#aaa'; msg.textContent = 'Cambiando…'; }
+        const r = await authFetch('/api/admin/bank-in-use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: sel.value }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'No se pudo cambiar');
+        _bankInUseRender(j);
+        if (msg) { msg.style.color = (j.warnings || []).length ? '#ffcc66' : '#66ff99'; msg.textContent = '✅ Listo: el cliente ya ve esa cuenta.' + ((j.warnings || []).length ? ' ⚠️ ' + j.warnings.join(' ') : ''); }
+        showToast('✅ Cuenta en uso cambiada', 'success');
+        loadBankAccountSwitch(); loadBankFpAccountSwitch();
+    } catch (e) { if (msg) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + e.message; } showToast(e.message, 'error'); }
+}
+window.loadBankInUse = loadBankInUse; window.bankUseAccount = bankUseAccount;
+
 async function loadBankAccountSwitch() {
     try {
         const r = await authFetch('/api/admin/hgcash/accounts');
@@ -14803,6 +14839,7 @@ function loadBankSection() {
     loadBankBalance();
     loadBankAccountSwitch(); // #194 cuenta hgcash en uso + USAR ESTA
     loadBankFpAccountSwitch(); // #202 cuenta Finpro en uso + USAR ESTA
+    loadBankInUse(); // #208 una sola barra con todas las cuentas de los dos bancos
 }
 
 function bankSetTab(tab) {

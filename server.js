@@ -18002,6 +18002,44 @@ app.post('/api/admin/bank-rotation', authMiddleware, adminMiddleware, async (req
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 
+// #208 Un solo selector en 🏦 Banco con TODAS las cuentas (hgcash + Finpro): elegir una = pasa a ser
+// la cuenta EN USO de su banco y la que VE el cliente (cambia `bankShown` si es de otro banco).
+// Los retiros NO se tocan acá (siguen por el banco elegido en "Bancos automáticos").
+async function _bankInUsePayload() {
+  const [hgCfg, fpCfg, cur, shown, provider] = await Promise.all([getHgcashConfig(), getFinproConfig(), _rotCurrent(), getBankShown(), getBankProvider()]);
+  return { shown, payouts: provider, payoutsLabel: _bankLabel(provider),
+    slots: _rotSlots().map((s) => ({ id: s.id, label: s.label, bank: _bankLabel(s.provider), provider: s.provider, inUse: !!cur && cur.id === s.id, blocked: _rotSlotBlocked(s, hgCfg, fpCfg) })) };
+}
+app.get('/api/admin/bank-in-use', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    await _loadFinproCredentials();
+    res.json(Object.assign({ success: true }, await _bankInUsePayload()));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/bank-in-use', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    await _loadHgcashCredentials(); await _loadFinproCredentials();
+    const id = String((req.body && req.body.id) || '');
+    const slot = _rotSlots().find((s) => s.id === id);
+    if (!slot) return res.status(404).json({ error: 'Cuenta no encontrada' });
+    const [hgCfg, fpCfg, prevShown] = await Promise.all([getHgcashConfig(), getFinproConfig(), getBankShown()]);
+    const warnings = [];
+    const why = _rotSlotBlocked(slot, hgCfg, fpCfg);
+    if (why && /no recibe cargas automáticas|pausada/.test(why)) warnings.push(`Ojo: ${why === 'está pausada para cargas' ? 'esta cuenta ' + why : why} → lo que transfieran ahí NO se carga solo (queda en la bandeja).`);
+    else if (why) return res.status(400).json({ error: `No se puede usar "${slot.label}": ${why}.` });
+    const by = req.user.username;
+    if (prevShown !== slot.provider) await Config.set('bankShown', slot.provider, by);
+    const act = slot.provider === 'hgcash' ? await _hgActivateAccount(slot.key, by) : await _fpActivateAccount(slot.key, by);
+    warnings.push(...(act.warnings || []));
+    const provider = await getBankProvider();
+    if (provider !== slot.provider) warnings.push(`Los retiros siguen saliendo por ${_bankLabel(provider)} (se cambia en Bancos configuración → Bancos automáticos).`);
+    logger.warn(`[bank-in-use] ${by}: el cliente ve "${slot.label}" (${_bankLabel(slot.provider)})`);
+    try { _emitHgcashUpdate('rotacion', null); } catch (_) {}
+    res.json(Object.assign({ success: true, warnings }, await _bankInUsePayload()));
+  } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Error del servidor' }); }
+});
 async function _banksPayload() {
   const [hg, fp, provider, shown, cbu] = await Promise.all([getHgcashConfig(), getFinproConfig(), getBankProvider(), getBankShown(), getConfig('cbu', null)]);
   const incoming = hg.enabled && fp.enabled ? 'both' : (hg.enabled ? 'hgcash' : (fp.enabled ? 'finpro' : 'none'));

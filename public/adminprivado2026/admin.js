@@ -2699,10 +2699,10 @@ async function loadPayoutBanner(userId) {
         // #213 pagar ESTE retiro por el otro banco con API (p. ej. si el elegido no tiene saldo)
         const otherName = j.otherBank === 'finpro' ? 'Finpro' : 'hgcash';
         const otherBtn = j.otherReady
-            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\', false, \'' + j.otherBank + '\')" title="Paga este retiro por ' + otherName + (j.otherAccount ? ' · cuenta ' + escapeHtml(j.otherAccount) : '') + ' (los demás siguen por ' + bankName + ')" style="background:#0b6b6b;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-weight:700;font-size:11.5px;cursor:pointer;">💸 Pagar por ' + otherName + '</button>'
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\', false, \'' + j.otherBank + '\')" title="Paga este retiro por ' + otherName + (j.otherAccount ? ' · cuenta ' + escapeHtml(j.otherAccount) : '') + ' (los demás siguen por ' + bankName + ')" style="background:#0b6b6b;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-weight:700;font-size:11.5px;cursor:pointer;">🏦 Pagar con otro banco</button>'
             : '';
         const payBtn = j.payEnabled
-            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">💸 Pagar ' + monto + (j.bankProvider === 'finpro' ? ' <small style="font-weight:600;opacity:.85;">(Finpro)</small>' : '') + '</button>'
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
             : '<span style="color:#ffd;font-size:11px;">Pago automático por ' + bankName + ' no configurado (' + (j.bankProvider === 'finpro' ? 'faltan credenciales o nuestro CVU en la cuenta en uso' : 'falta token') + '). Pagá manual.</span>';
         // "Descartar": SOLO admin general. Limpia un pago viejo ya resuelto SIN devolver fichas ni avisar al cliente.
         const dismissBtn = (currentAdmin?.role === 'admin')
@@ -2725,7 +2725,7 @@ async function loadPayoutBanner(userId) {
 
 async function payPayout(id, confirmOtherBank, provider) {
     // #213 `provider` = pagar ESTE retiro por ese banco (aunque los retiros estén configurados por el otro).
-    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (provider ? ' por ' + (provider === 'finpro' ? 'FINPRO' : 'HGCASH') : '') + '? Se va a transferir al CBU del cliente. Verificá que los datos sean correctos.')) return;
+    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (provider ? ' con el OTRO banco (' + (provider === 'finpro' ? 'Finpro' : 'hgcash') + ')' : '') + '? Se va a transferir al CBU del cliente. Verificá que los datos sean correctos.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
         const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST', body: JSON.stringify(Object.assign(confirmOtherBank ? { confirmOtherBank: true } : {}, provider ? { provider } : {})) });

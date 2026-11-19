@@ -8,6 +8,11 @@
 
 ## Sesión 2026-11-19
 
+### 214. 💸 Botones del retiro en el chat sin nombre de banco
+- Owner: que no diga "Pagar por Finpro". Quedan: **💸 Pagar $X** (o **🔁 Pagar nuevamente $X** si el intento anterior falló) ·
+  **🏦 Pagar con otro banco** (el otro banco con API, #213; solo si está listo) · **✅ Ya lo pagué por fuera** (marca pagado a mano).
+  El banco y la cuenta se ven al pasar el mouse y en la confirmación. SW v81.
+
 ### 213. 🔁 Rotación con destino ELEGIDO + 💸 pagar un retiro por el OTRO banco desde el chat
 - **Rotación:** columna "Al rotar pasa a" por cuenta (`limits[id].next`). Si está elegida, se prueba PRIMERO (aunque sea del otro banco y
   `crossBank` esté apagado: fue elegida a mano); si no está disponible (caída / en su tope / pausada) sigue con el orden de siempre.

@@ -775,160 +775,6 @@
                             </div>
                             <div id="fireMilestonesMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>
-                        <!-- Banco automático (hgcash / Urbana) -->
-                        <div class="panel-subheader" style="margin-top: 24px;">
-                            <h3>🏦 Banco automático (hgcash)</h3>
-                        </div>
-                        <div class="cbu-form" id="hgcashConfigForm">
-                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;">
-                                Carga automática cuando un cliente transfiere al CBU de hgcash y manda el comprobante por el chat.
-                                Matchea por <b>monto + CBU de origen + tiempo</b>. Empezá en <b>modo sombra</b> (detecta y avisa sin cargar)
-                                y pasá a <b>auto</b> cuando confíes.
-                            </p>
-                            <div id="hgcashStatusLine" style="font-size:12px;margin-bottom:10px;color:#aaa;"></div>
-                            <div class="form-group">
-                                <label>Nombre de tu cuenta hgcash (el titular que recibe):</label>
-                                <input type="text" id="hgcashAccountName" placeholder="Ej: DAPA BERGER EUGENIA SOLEDAD" style="width:100%;">
-                                <small style="color:#aaa;font-size:11px;">Es el "Para/toName" que figura en los comprobantes. Se usa para confirmar que la transferencia fue a tu cuenta (hgcash no manda CBU).</small>
-                            </div>
-                            <div class="form-group">
-                                <label>CBU de tu cuenta hgcash (opcional):</label>
-                                <input type="text" id="hgcashCbu" placeholder="CBU de destino (si el comprobante lo muestra)" style="width:100%;">
-                            </div>
-                            <div class="form-group">
-                                <label>Modo:</label>
-                                <select id="hgcashMode" style="width:100%;">
-                                    <option value="shadow">Sombra (detecta y avisa, NO carga)</option>
-                                    <option value="auto">Auto (carga sola con match exacto)</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Ventana de match (minutos):</label>
-                                <input type="number" id="hgcashWindow" min="1" max="1440" value="60" style="width:100%;">
-                            </div>
-                            <div class="form-group">
-                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
-                                    <input type="checkbox" id="hgcashEnabled" style="width:auto;"> Activar integración (apagado = no hace nada)
-                                </label>
-                            </div>
-                            <button class="btn-primary" onclick="saveHgcashConfig()">
-                                <span class="icon icon-save"></span> Guardar banco automático
-                            </button>
-
-                            <!-- #194 Cuentas hgcash (hasta 3) + cuenta ACTIVA rotable con un botón (antes: una sola cuenta) -->
-                            <div id="hgcashCredBox" style="margin-top:18px;padding:14px;border:1px solid rgba(212,175,55,0.45);border-radius:10px;background:rgba(212,175,55,0.05);">
-                                <h4 style="margin:0 0 6px;color:#d4af37;font-size:14px;">🏦 Cuentas hgcash (hasta 3) — rotación con un botón</h4>
-                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
-                                    Cargá hasta <b>3 cuentas hgcash</b> (token de API <code>cash_…</code>, secreto del webhook y los datos de pago que ve el cliente).
-                                    La cuenta <b>ACTIVA</b> paga los retiros y las bajadas, responde el saldo y su titular/CBU/alias es lo que ve el cliente.
-                                    <b>Las cargas entran por CUALQUIERA de las cuentas cargadas</b> (si un cliente transfiere a la anterior, se acredita igual).
-                                    El botón <b>USAR ESTA</b> rota al instante; también está en 🏦 Banco para el encargado. Todo se guarda cifrado.
-                                    En cada cuenta de hgcash, configurá el webhook a: <code id="hgcashCredWebhookUrl">…</code>
-                                </p>
-                                <div id="hgcashCredStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
-                                <!-- #194 modo de cargas automáticas -->
-                                <div id="hgAccModeBox" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.2);font-size:12px;">
-                                    <span>⚡ Cargas automáticas:</span>
-                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="hgAccMode" value="all" style="width:auto;" onchange="setHgcashIncomingMode('all')"> por <b>todas</b> las cuentas cargadas</label>
-                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="hgAccMode" value="active" style="width:auto;" onchange="setHgcashIncomingMode('active')"> <b>solo</b> por la cuenta en uso</label>
-                                    <small style="color:#888;">Lo que no se carga solo queda en la bandeja de 🏦 Banco para asignar a mano.</small>
-                                </div>
-                                <div id="hgAccList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;"></div>
-                                <div id="hgAccForm" style="display:none;padding:12px;border:1px dashed rgba(212,175,55,0.5);border-radius:8px;margin-bottom:10px;">
-                                    <h5 id="hgAccFormTitle" style="margin:0 0 8px;color:#d4af37;font-size:13px;">➕ Cuenta nueva</h5>
-                                    <input type="hidden" id="hgAccKey" value="">
-                                    <div class="form-group"><label>Nombre de la cuenta (para reconocerla):</label><input type="text" id="hgAccLabel" placeholder="Ej. Cuenta Juan" maxlength="40" style="width:100%;"></div>
-                                    <div class="form-group"><label>Token de API (cash_…):</label><input type="password" id="hgAccToken" placeholder="(obligatorio en una cuenta nueva; vacío = no cambiarlo)" autocomplete="off" style="width:100%;"></div>
-                                    <div class="form-group"><label>Secreto del webhook:</label><input type="password" id="hgAccSecret" placeholder="(vacío = no cambiarlo)" autocomplete="off" style="width:100%;"><small style="color:#aaa;font-size:11px;">Sin secreto, los avisos de esa cuenta se rechazan y las cargas no entran solas.</small></div>
-                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                                        <div class="form-group"><label>Titular (lo ve el cliente):</label><input type="text" id="hgAccTitular" maxlength="120" style="width:100%;"></div>
-                                        <div class="form-group"><label>Banco / billetera:</label><input type="text" id="hgAccBank" maxlength="60" placeholder="Ej. hgcash" style="width:100%;"></div>
-                                        <div class="form-group"><label>CBU/CVU (22 dígitos):</label><input type="text" id="hgAccCbu" maxlength="22" inputmode="numeric" style="width:100%;"></div>
-                                        <div class="form-group"><label>Alias:</label><input type="text" id="hgAccAlias" maxlength="60" style="width:100%;"></div>
-                                    </div>
-                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                                        <button class="btn-primary" onclick="saveHgcashAccount()">🔐 Probar y guardar</button>
-                                        <button class="btn btn-secondary btn-sm" onclick="hgAccCancel()">Cancelar</button>
-                                    </div>
-                                </div>
-                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                                    <button class="btn btn-secondary btn-sm" id="hgAccAddBtn" onclick="hgAccNew()">➕ Agregar cuenta</button>
-                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashCredentials()" title="Borra TODAS las cuentas cargadas acá y vuelve a usar el token/secreto de AWS (SSM)">↩️ Borrar todas y volver a AWS (SSM)</button>
-                                    <span id="hgcashCredMsg" style="font-size:12px;color:#aaa;"></span>
-                                </div>
-                            </div>
-
-                            <!-- #326 Reenvío de los avisos de hgcash a otras páginas (misma cuenta hgcash) -->
-                            <div id="hgcashFanoutBox" style="margin-top:18px;padding:14px;border:1px solid rgba(83,189,235,0.45);border-radius:10px;background:rgba(83,189,235,0.05);">
-                                <h4 style="margin:0 0 6px;color:#53bdeb;font-size:14px;">🔁 Reenviar los avisos de hgcash a otras páginas</h4>
-                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
-                                    hgcash permite <b>UNA sola dirección de webhook por cuenta</b>. Si varias páginas comparten la misma cuenta
-                                    hgcash, la página que tiene esa dirección cargada en hgcash le <b>reenvía cada aviso</b> a las demás, y cada una
-                                    carga solo las transferencias de <b>sus</b> clientes (por el comprobante). Poné acá la dirección del webhook de
-                                    cada una de las <b>otras</b> páginas, una por línea (máx. 5). Requisitos en la otra página: el <b>mismo secreto
-                                    del webhook</b> de esta cuenta hgcash y el banco automático activado. Una página que recibe avisos reenviados no
-                                    los vuelve a reenviar (no hay círculos).
-                                </p>
-                                <div id="hgcashFanoutStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
-                                <div class="form-group">
-                                    <label>Direcciones de las otras páginas (una por línea):</label>
-                                    <textarea id="hgcashFanoutUrls" rows="3" placeholder="https://otrapagina.com/api/hgcash/webhook" spellcheck="false" autocomplete="off" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
-                                    <small style="color:#aaa;font-size:11px;">La dirección de ESTA página, para cargarla en la otra (o en hgcash): <code id="hgcashFanoutOwnUrl">…</code></small>
-                                </div>
-                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                                    <button class="btn-primary" onclick="saveHgcashFanout()">💾 Guardar reenvío</button>
-                                    <button class="btn btn-secondary btn-sm" onclick="clearHgcashFanout()" title="Borra lo cargado acá y vuelve a usar HGCASH_FANOUT_URL de AWS (SSM)">↩️ Volver a usar AWS (SSM)</button>
-                                    <span id="hgcashFanoutMsg" style="font-size:12px;color:#aaa;"></span>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Movimientos del banco automático (hgcash) -->
-                        <div id="hgcashMovementsPanel">
-                            <div class="panel-subheader" style="margin-top: 24px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                                <h3 style="margin:0;">🏦 Movimientos del banco</h3>
-                                <select id="hgcashMovFilter" onchange="loadHgcashMovements(1)" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 9px;border-radius:6px;font-size:12px;">
-                                    <option value="">Todos</option>
-                                    <option value="pending">Pendientes (sin match)</option>
-                                    <option value="needs_review">⚠️ Revisar (posible duplicado)</option>
-                                    <option value="shadow_matched">Match (sombra)</option>
-                                    <option value="auto_charged">Cargados (auto)</option>
-                                    <option value="manual_charged">Cargados (manual)</option>
-                                    <option value="duplicate">Duplicados (no cargados)</option>
-                                    <option value="error">Con error</option>
-                                    <option value="ignored">Ignorados (salientes)</option>
-                                </select>
-                                <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
-                                <button class="btn btn-sm" onclick="cleanupOldPayouts()" title="Resolver y ocultar los pagos viejos colgados (en proceso/fallidos de hace más de 2h)" style="margin-left:auto;background:#7a1010;color:#fff;border:none;border-radius:6px;padding:6px 11px;font-size:12px;cursor:pointer;">🧹 Limpiar pagos viejos colgados</button>
-                            </div>
-                            <div id="hgcashBalanceBox" style="margin:10px 0;padding:10px 14px;background:rgba(15,138,47,0.10);border:1px solid rgba(15,138,47,0.35);border-radius:8px;font-size:13px;color:#dfe;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-                                <span style="opacity:.8;">💰 Saldo hgcash:</span>
-                                <span id="hgcashBalanceVal" style="font-weight:700;">cargando…</span>
-                                <button class="btn btn-secondary btn-sm" onclick="loadHgcashBalance()" title="Actualizar saldo">🔄</button>
-                                <span id="hgcashLiveDot" style="margin-left:auto;font-size:11px;color:#7CFC00;" title="Se actualiza solo cuando entra/cambia un movimiento">● en vivo</span>
-                            </div>
-                            <div style="overflow-x:auto;">
-                                <table class="data-table" style="min-width:1000px;">
-                                    <thead>
-                                        <tr>
-                                            <th>Fecha</th>
-                                            <th>Dir.</th>
-                                            <th>Monto</th>
-                                            <th>Origen</th>
-                                            <th>CBU origen</th>
-                                            <th>Destino</th>
-                                            <th>CBU destino</th>
-                                            <th>Estado</th>
-                                            <th>Usuario</th>
-                                            <th>Coelsa/op</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="hgcashMovBody">
-                                        <tr><td colspan="10" style="color:#888;text-align:center;">—</td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div id="hgcashMovPagination" style="display:flex;justify-content:center;align-items:center;gap:12px;margin-top:10px;"></div>
-                        </div>
                     </div>
                 </div>
             </section>
@@ -943,7 +789,7 @@
                     <div class="panel-subheader">
                         <h3>💳 Datos de pago que ve el cliente (CBU)</h3>
                     </div>
-                    <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">Es lo que la app muestra para transferir. Con cuentas hgcash cargadas, al tocar <b>USAR ESTA</b> se completa solo con el titular/CBU/alias de esa cuenta (#194).</p>
+                    <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">Es lo que la app muestra para transferir. De qué banco sale se elige abajo, en <b>Bancos automáticos</b> ("El cliente ve…"). Con cuentas hgcash cargadas, al tocar <b>USAR ESTA</b> se completa solo con el titular/CBU/alias de esa cuenta (#194).</p>
                         <div class="cbu-form">
                             <div class="form-group">
                                 <label>Banco:</label>
@@ -965,6 +811,50 @@
                                 <span class="icon icon-save"></span> Guardar CBU
                             </button>
                         </div>
+                        <!-- ============================================================
+                             #202 BANCOS AUTOMÁTICOS: las tres decisiones generales (por dónde ENTRAN las cargas,
+                             por dónde SALEN los retiros y qué cuenta VE el cliente) y, abajo, cada banco en su
+                             propio bloque (hgcash 🟡 / Finpro 🟣), cada uno con hasta 3 cuentas.
+                             ============================================================ -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="banksHeader">
+                            <h3>🏦 Bancos automáticos</h3>
+                        </div>
+                        <div class="cbu-form" id="banksForm">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Hay dos bancos con API: <b style="color:#d4af37;">hgcash</b> y <b style="color:#b388ff;">Finpro</b>, cada uno con hasta 3 cuentas
+                                (una <b>en uso</b> y las otras de <b>respaldo</b>). Acá elegís <b>por cuál entran las cargas</b>, <b>por cuál salen los retiros</b>
+                                y <b>qué cuenta ve el cliente</b> para transferir. Cada banco se configura en su bloque más abajo.
+                            </p>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                                <div style="flex:1;min-width:250px;padding:12px;background:rgba(255,255,255,0.03);border-radius:10px;">
+                                    <div style="font-weight:bold;font-size:13px;margin-bottom:8px;">📥 Cargar solo las transferencias que entran por</div>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksIncoming" value="hgcash" style="width:auto;"> Solo <b style="color:#d4af37;">hgcash</b></label>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksIncoming" value="finpro" style="width:auto;"> Solo <b style="color:#b388ff;">Finpro</b></label>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksIncoming" value="both" style="width:auto;"> <b>Los dos a la vez</b></label>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksIncoming" value="none" style="width:auto;"> Ninguno (todo a mano)</label>
+                                    <small style="color:#aaa;font-size:11px;display:block;margin-top:6px;">Si carga sola o solo avisa (modo sombra) se elige en el bloque de cada banco.</small>
+                                </div>
+                                <div style="flex:1;min-width:250px;padding:12px;background:rgba(255,255,255,0.03);border-radius:10px;">
+                                    <div style="font-weight:bold;font-size:13px;margin-bottom:8px;">💸 Pagar los RETIROS por</div>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksPayouts" value="hgcash" style="width:auto;"> <b style="color:#d4af37;">hgcash</b> (manda comprobante PDF)</label>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksPayouts" value="finpro" style="width:auto;"> <b style="color:#b388ff;">Finpro</b> (el comprobante es el código COELSA)</label>
+                                    <small style="color:#aaa;font-size:11px;display:block;margin-top:6px;">Paga la cuenta EN USO de ese banco. Los pagos ya en curso siguen por el banco y la cuenta con que salieron.</small>
+                                </div>
+                                <div style="flex:1;min-width:250px;padding:12px;background:rgba(255,255,255,0.03);border-radius:10px;">
+                                    <div style="font-weight:bold;font-size:13px;margin-bottom:8px;">👁️ El cliente ve, para transferir, la cuenta de</div>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksShown" value="hgcash" style="width:auto;"> <b style="color:#d4af37;">hgcash</b> (la cuenta en uso)</label>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksShown" value="finpro" style="width:auto;"> <b style="color:#b388ff;">Finpro</b> (la cuenta en uso)</label>
+                                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="banksShown" value="manual" style="width:auto;"> Lo que yo cargue a mano arriba</label>
+                                    <small style="color:#aaa;font-size:11px;display:block;margin-top:6px;">Al tocar <b>USAR ESTA</b> en una cuenta del banco elegido, el CBU/alias que ve el cliente cambia solo.</small>
+                                </div>
+                            </div>
+                            <div id="banksSummary" style="font-size:12px;color:#ccc;line-height:1.7;margin:10px 0;"></div>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                <button type="button" class="btn-primary" onclick="saveBanks()">💾 Guardar bancos</button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="loadBanks()" title="Releer">🔄</button>
+                                <span id="banksMsg" style="font-size:12px;color:#aaa;"></span>
+                            </div>
+                        </div>
                         <!-- Banco automático (hgcash / Urbana) -->
                         <div class="panel-subheader" style="margin-top: 24px;">
                             <h3>🏦 Banco automático (hgcash)</h3>
@@ -1073,6 +963,109 @@
                             </div>
                         </div>
                         <!-- Movimientos del banco automático (hgcash) -->
+                        <!-- ===================== #202 Finpro (segundo banco con API, hasta 3 cuentas) ===================== -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="finproHeader">
+                            <h3 style="color:#b388ff;">🟣 Finpro</h3>
+                        </div>
+                        <div class="cbu-form" id="finproForm" style="border-left:4px solid #b388ff;">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;">
+                                Segundo banco con API, independiente de hgcash. Las transferencias entrantes llegan solas por el <b>webhook de
+                                Finpro</b> (hay que pedir el alta, ver abajo) y se cargan con el <b>mismo matcheo y los mismos candados</b> que hgcash
+                                (bandeja del banco y cierre diario incluidos). Si el webhook todavía no está dado de alta o no llegó, queda el
+                                respaldo: cuando el cliente manda el comprobante, el sistema le <b>pregunta a Finpro</b> si esa transferencia ya está
+                                acreditada (por código COELSA o por monto + fecha) y, si la confirma, la carga; si todavía no acreditó, la vuelve a
+                                consultar cada 2 min durante 90 min. Si entra o no por este banco se elige arriba, en "Bancos automáticos".
+                                ⚠️ Finpro no informa reversiones: una transferencia confirmada se da por firme.
+                            </p>
+                            <div id="finproDevWarn" style="display:none;margin:0 0 10px;padding:8px 10px;border-radius:8px;background:rgba(255,80,80,0.12);border:1px solid rgba(255,80,80,0.5);font-size:12px;font-weight:700;"></div>
+                            <div id="finproStatusLine" style="font-size:12px;margin-bottom:10px;color:#aaa;"></div>
+                            <div class="form-group">
+                                <label>Modo:</label>
+                                <select id="finproMode" style="width:100%;">
+                                    <option value="shadow">Sombra (detecta y avisa, NO carga)</option>
+                                    <option value="auto">Auto (carga sola cuando Finpro confirma la transferencia)</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn-primary" onclick="saveFinproConfig()">💾 Guardar Finpro</button>
+                            <button type="button" class="btn-secondary" onclick="finproDiag()">🔎 Diagnóstico</button>
+                            <span id="finproCfgMsg" style="font-size:12px;color:#aaa;margin-left:8px;"></span>
+                            <div id="finproDiagBox" style="display:none;margin-top:10px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.25);font-size:12px;line-height:1.6;overflow-x:auto;"></div>
+
+                            <div id="finproCredBox" style="margin-top:18px;padding:14px;border:1px solid rgba(179,136,255,0.45);border-radius:10px;background:rgba(179,136,255,0.05);">
+                                <h4 style="margin:0 0 6px;color:#b388ff;font-size:14px;">🔐 Cuentas Finpro (hasta 3) — rotación con un botón</h4>
+                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                    Cargá hasta <b>3 cuentas de Finpro</b>. En Finpro → API generá la <b>API Key</b> y el <b>API Secret</b> (el Secret se muestra UNA
+                                    sola vez; si lo regenerás, el anterior deja de servir) y cargalos acá con el <b>número de cuenta</b> interno, <b>nuestro CVU</b>
+                                    (de ahí salen los retiros y ahí entran las cargas) y el <b>secreto de firma</b> de los webhooks. La cuenta <b>EN USO</b> paga los
+                                    retiros; las demás quedan de <b>respaldo</b>: siguen recibiendo cargas y se cambian con <b>USAR ESTA</b>. Todo se guarda cifrado.
+                                    Antes de guardar se prueba el token y el saldo.
+                                </p>
+                                <div id="finproCredStatus" style="font-size:12px;color:#ccc;margin-bottom:10px;line-height:1.6;">Cargando…</div>
+                                <div id="fpAccModeBox" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.2);font-size:12px;">
+                                    <span>⚡ Cargas automáticas de Finpro:</span>
+                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="fpAccMode" value="all" style="width:auto;" onchange="setFinproIncomingMode('all')"> por <b>todas</b> las cuentas cargadas</label>
+                                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;"><input type="radio" name="fpAccMode" value="active" style="width:auto;" onchange="setFinproIncomingMode('active')"> <b>solo</b> por la cuenta en uso</label>
+                                    <small style="color:#888;">Lo que no se carga solo queda en la bandeja de 🏦 Banco para asignar a mano.</small>
+                                </div>
+                                <div id="fpAccList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px;"></div>
+                                <div id="fpAccForm" style="display:none;padding:12px;border:1px dashed rgba(179,136,255,0.5);border-radius:8px;margin-bottom:10px;">
+                                    <h5 id="fpAccFormTitle" style="margin:0 0 8px;color:#b388ff;font-size:13px;">➕ Cuenta Finpro nueva</h5>
+                                    <input type="hidden" id="fpAccKey" value="">
+                                    <div class="form-group"><label>Nombre de la cuenta (para reconocerla):</label><input type="text" id="fpAccLabel" placeholder="Ej. Finpro 1" maxlength="40" style="width:100%;"></div>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                        <div class="form-group"><label>API Key:</label><input type="password" id="fpAccApiKey" placeholder="(obligatoria en una cuenta nueva)" autocomplete="off" style="width:100%;"></div>
+                                        <div class="form-group"><label>API Secret:</label><input type="password" id="fpAccApiSecret" placeholder="(obligatorio en una cuenta nueva)" autocomplete="off" style="width:100%;"></div>
+                                        <div class="form-group"><label>Banco (bankId de la API):</label><input type="text" id="fpAccBankId" placeholder="creedence" autocomplete="off" style="width:100%;"></div>
+                                        <div class="form-group"><label>N° de cuenta (interno de Finpro, para el saldo):</label><input type="text" id="fpAccAccount" placeholder="número de cuenta" autocomplete="off" style="width:100%;"></div>
+                                        <div class="form-group"><label>Nuestro CVU (22 dígitos):</label><input type="text" id="fpAccFromCvu" maxlength="22" inputmode="numeric" placeholder="0000000000000000000000" autocomplete="off" style="width:100%;"></div>
+                                        <div class="form-group"><label>Otros CVUs nuestros (opcional, separados por coma):</label><input type="text" id="fpAccExtraCvus" placeholder="0000000000000000000000, …" autocomplete="off" style="width:100%;"></div>
+                                    </div>
+                                    <div class="form-group"><label>URL base de la API:</label><input type="text" id="fpAccBaseUrl" placeholder="https://mw-dev.finpro.com.ar" autocomplete="off" style="width:100%;">
+                                        <small style="color:#aaa;font-size:11px;">Vacío = la que figura en la documentación de Finpro (mw-dev.finpro.com.ar, de desarrollo). Cuando Finpro te dé la de producción, cargala acá.</small></div>
+                                    <div class="form-group"><label>Secreto de firma de los webhooks:</label><input type="password" id="fpAccWebhookSecret" placeholder="(vacío = no cambiarlo; mínimo 16 caracteres)" autocomplete="off" style="width:100%;">
+                                        <small style="color:#aaa;font-size:11px;">Con este secreto Finpro firma cada aviso. Sin secreto, los avisos de esta cuenta se rechazan y sus cargas solo entran por comprobante.</small></div>
+                                    <div style="font-size:12px;color:#b388ff;margin:8px 0 4px;font-weight:700;">Lo que ve el cliente cuando esta cuenta está en uso (si en "Bancos automáticos" ve la de Finpro):</div>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                                        <div class="form-group"><label>Titular:</label><input type="text" id="fpAccTitular" maxlength="120" placeholder="(vacío = el que informa Finpro)" style="width:100%;"></div>
+                                        <div class="form-group"><label>Banco / billetera:</label><input type="text" id="fpAccBank" maxlength="60" placeholder="Ej. Finpro" style="width:100%;"></div>
+                                        <div class="form-group"><label>Alias:</label><input type="text" id="fpAccAlias" maxlength="60" style="width:100%;"></div>
+                                    </div>
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                        <button class="btn-primary" onclick="saveFinproAccount()">🔐 Probar y guardar</button>
+                                        <button class="btn btn-secondary btn-sm" onclick="fpAccCancel()">Cancelar</button>
+                                    </div>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button class="btn btn-secondary btn-sm" id="fpAccAddBtn" onclick="fpAccNew()">➕ Agregar cuenta Finpro</button>
+                                    <button class="btn btn-secondary btn-sm" onclick="loadFinproBalance(true)">💰 Ver saldos</button>
+                                    <span id="finproCredMsg" style="font-size:12px;color:#aaa;"></span>
+                                </div>
+                                <div id="finproAccountBox" style="margin-top:10px;font-size:12px;color:#ccc;line-height:1.6;"></div>
+                                <div id="finproWebhookInfo" style="margin:12px 0 0;padding:10px;border-radius:8px;background:rgba(0,0,0,0.25);font-size:12px;line-height:1.6;">
+                                    <b style="color:#b388ff;">🔗 URLs para darle a Finpro</b> (las mismas para todas las cuentas)<br>
+                                    • Webhook <b>secundario</b> (avisos de transferencias de nuestros CVUs — Finpro pide una URL para ENTRANTES y otra para SALIENTES: dales esta misma en las dos): <code id="finproWebhookUrl">…</code><br>
+                                    • Webhook <b>principal</b> (resultado de los <b>retiros</b>; se manda solo como <code>callback_url</code> en cada pago): <code id="finproCallbackUrl">…</code><br>
+                                    <span style="color:#aaa;">Para el alta pediles: activar el webhook principal (<code>callback_url</code>) y el secundario hacia la URL de arriba, con el secreto de firma que cargues en cada cuenta (lo generan ellos o lo definís vos, 16 caracteres o más).</span>
+                                </div>
+                            </div>
+
+                            <div id="finproVerifyBox" style="margin-top:14px;padding:12px;border:1px dashed rgba(179,136,255,0.45);border-radius:10px;">
+                                <h4 style="margin:0 0 6px;color:#b388ff;font-size:13px;">🔎 Verificar una transferencia a mano</h4>
+                                <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 8px;">Le pregunta a Finpro (a todas las cuentas cargadas) si una transferencia entrante ya está acreditada. Solo consulta: no carga nada.</p>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                    <div class="form-group" style="flex:2;min-width:220px;margin:0;"><label>Código COELSA:</label><input type="text" id="finproVfCoelsa" autocomplete="off" style="width:100%;"></div>
+                                    <div class="form-group" style="flex:1;min-width:160px;margin:0;"><label>o código de autorización:</label><input type="text" id="finproVfAuth" autocomplete="off" style="width:100%;"></div>
+                                </div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:flex-end;">
+                                    <div class="form-group" style="flex:1;min-width:120px;margin:0;"><label>o monto ($):</label><input type="number" id="finproVfAmount" min="0" step="0.01" style="width:100%;"></div>
+                                    <div class="form-group" style="flex:1;min-width:180px;margin:0;"><label>fecha/hora aprox.:</label><input type="datetime-local" id="finproVfDate" style="width:100%;"></div>
+                                    <div class="form-group" style="flex:0 0 110px;margin:0;"><label>ventana (min):</label><input type="number" id="finproVfWindow" min="1" max="1440" value="180" style="width:100%;"></div>
+                                    <button type="button" class="btn-secondary" onclick="finproVerifyManual()">🔎 Verificar en Finpro</button>
+                                    <span id="finproVfMsg" style="font-size:12px;color:#aaa;"></span>
+                                </div>
+                                <div id="finproVfResult" style="display:none;margin-top:10px;padding:10px;border-radius:8px;background:rgba(0,0,0,0.25);font-size:12px;line-height:1.6;overflow-x:auto;"></div>
+                            </div>
+                        </div>
                         <div id="hgcashMovementsPanel">
                             <div class="panel-subheader" style="margin-top: 24px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                                 <h3 style="margin:0;">🏦 Movimientos del banco</h3>
@@ -1086,6 +1079,11 @@
                                     <option value="duplicate">Duplicados (no cargados)</option>
                                     <option value="error">Con error</option>
                                     <option value="ignored">Ignorados (salientes)</option>
+                                </select>
+                                <select id="hgcashMovBank" onchange="loadHgcashMovements(1)" title="Banco" style="background:rgba(0,0,0,0.40);border:1px solid rgba(212,175,55,0.40);color:#fff;padding:5px 9px;border-radius:6px;font-size:12px;">
+                                    <option value="">Los dos bancos</option>
+                                    <option value="hgcash">Solo hgcash</option>
+                                    <option value="finpro">Solo Finpro</option>
                                 </select>
                                 <button class="btn btn-secondary btn-sm" onclick="loadHgcashMovements(1)" title="Actualizar">🔄</button>
                                 <button class="btn btn-sm" onclick="cleanupOldPayouts()" title="Resolver y ocultar los pagos viejos colgados (en proceso/fallidos de hace más de 2h)" style="margin-left:auto;background:#7a1010;color:#fff;border:none;border-radius:6px;padding:6px 11px;font-size:12px;cursor:pointer;">🧹 Limpiar pagos viejos colgados</button>
@@ -2992,6 +2990,18 @@
                         <option value="active">solo por la cuenta en uso</option>
                     </select>
                     <span id="bankAccountMsg" style="font-size:11.5px;color:#aaa;"></span>
+                </div>
+                <!-- #202 cuenta Finpro en uso (solo si Finpro está en uso y hay 2+ cuentas) -->
+                <div id="bankFpAccountSwitch" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;background:rgba(179,136,255,0.08);border:1px solid rgba(179,136,255,0.40);border-radius:10px;font-size:12.5px;color:#eee;">
+                    <span>🟣 Cuenta Finpro en uso: <b id="bankFpAccountActive" style="color:#b388ff;">…</b></span>
+                    <select id="bankFpAccountSel" style="background:rgba(0,0,0,0.40);border:1px solid rgba(179,136,255,0.40);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;"></select>
+                    <button class="btn-primary btn-sm" onclick="bankSwitchFpAccount()">🔁 USAR ESTA</button>
+                    <span style="margin-left:6px;">⚡ Cargas automáticas:</span>
+                    <select id="bankFpAccountMode" onchange="setFinproIncomingMode(this.value, 'bank')" style="background:rgba(0,0,0,0.40);border:1px solid rgba(179,136,255,0.40);color:#fff;padding:5px 8px;border-radius:6px;font-size:12px;">
+                        <option value="all">por todas las cuentas</option>
+                        <option value="active">solo por la cuenta en uso</option>
+                    </select>
+                    <span id="bankFpAccountMsg" style="font-size:11.5px;color:#aaa;"></span>
                 </div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;" id="bankTabs">
                     <button class="btn btn-secondary btn-sm bank-tab active" data-tab="pending" onclick="bankSetTab('pending')">⏳ Pendientes <span id="bankTabPendingCount" style="opacity:.8;"></span></button>

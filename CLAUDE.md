@@ -61,6 +61,7 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
 
 - `docs/1girox/` — documentación y código de referencia de la Partner API (1girox / jugaygana.io).
   No lo importa nadie; es el mapa de la mudanza (ver la nota de arriba).
+- `src/services/finproService.js` — cliente de Finpro, el SEGUNDO banco con API (#202; hgcash es el primero). Detalle en `docs/ARCHITECTURE.md` §11.
 - `src/services/platform.js` — fachada de plataforma + motor de mudanza (#197). `src/services/giroxService.js` — cliente de la
   Partner API (jugaygana.io). `src/models/PlatformMigration.js` — libro de la mudanza.
 - `server.js` (~23k líneas) — entry point. ~180 rutas, authMiddleware inline (~L2477),
@@ -124,6 +125,14 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   (`hgAccountKey`): toda consulta nueva a hgcash sobre un pago existente tiene que pasar `_hgTokenFor(x.hgAccountKey)`, y todo
   flujo nuevo que pague tiene que guardar `hgAccountKey: _hgActiveKey`. No volver a leer `process.env.HGCASH_API_TOKEN` directo:
   usar `hgcashPay.getToken()` / `_hgcashWebhookSecretEntries()`.
+- **Dos bancos con API: hgcash y Finpro (#202, réplica #217–#220 de CARGASGIROXactivo + hasta 3 cuentas Finpro):** tres llaves en
+  **🏛️ Bancos — Configuración → 🏦 Bancos automáticos**: por dónde ENTRAN las cargas (`hgcash.enabled` / `Config['finpro'].enabled`), por dónde
+  SALEN los retiros (`getBankProvider()`) y qué cuenta VE el cliente (`getBankShown()`: solo ese banco reescribe `Config['cbu']`). Las cuentas
+  Finpro (`Config['finproAccounts']`, cifradas, panel > SSM) funcionan como las de hgcash: una EN USO, las otras de respaldo. Reglas: un pago
+  existente se consulta con **`_fpCtxFor(p.fpAccountKey)`**, nunca con la cuenta en uso; todo flujo nuevo que pague por Finpro guarda
+  `fpAccountKey`; `_hgMovementAutoOff(m)` ya cubre los dos bancos (seguir usándolo); un `BankMovement` sin `provider` es de hgcash; nunca se
+  reenvía un lote de Finpro sin respuesta (se consulta con `_finproSyncPayout`); un texto nuevo sobre una carga usa `_bankLabel(m.provider)`.
+  Las credenciales NO van en el repo. Tests: `node scripts/test-finpro-accounts.js` y `node scripts/test-finpro-webhook.js`.
 - **Config sensible desde el panel:** sección "🔐 Config privada" (clave propia hasheada
   en `Config['privateconfigpass']`; hoy: IA de comprobantes en `Config['aiconfig']`,
   prioridad panel > env/SSM > default; SMS Masivo usa esa misma clave). Para una

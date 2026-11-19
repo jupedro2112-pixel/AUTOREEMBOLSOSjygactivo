@@ -8,6 +8,66 @@
 
 ## Sesión 2026-11-19
 
+### 202. 🟣 FINPRO como segundo banco con API (réplica #217–#220 de CARGASGIROXactivo) + hasta 3 cuentas Finpro + "🏦 Bancos automáticos" — admin-sw v73
+- **Owner:** "quiero replicar tal cual toda la implementación de FINPRO de CARGASGIROXactivo… que se puedan usar ambos; ahora se pueden usar 3 hgcash,
+  quiero también 3 FINPRO, elegir cuál usar, cuál dejar de respaldo, que cargue automático la finpro o la hgcash. Todo completo, prolijo, con prueba y error."
+- **Qué es:** Finpro queda al lado de hgcash, no lo reemplaza. Tres llaves generales en **🏛️ Bancos — Configuración → 🏦 Bancos automáticos**:
+  1. **Por dónde ENTRAN las cargas:** solo hgcash / solo Finpro / los dos / ninguno (`hgcash.enabled` + `Config['finpro'].enabled`).
+  2. **Por dónde SALEN los retiros:** hgcash o Finpro (`Config['bankProvider']`). Paga la cuenta EN USO de ese banco.
+  3. **Qué cuenta VE el cliente** para transferir: la hgcash en uso / la Finpro en uso / lo cargado a mano (`Config['bankShown']`, NUEVO de este
+     repo; default `hgcash` = igual que antes). Solo el banco elegido reescribe `Config['cbu']` al tocar USAR ESTA.
+- **Cuentas Finpro (hasta 3)** — `Config['finproAccounts']`, mismo modelo que las de hgcash (#194): una **EN USO** (paga retiros, es lo que ve el
+  cliente si `bankShown='finpro'`) y las otras de **RESPALDO** (siguen recibiendo cargas). Botones USAR ESTA / Pausar cargas / Editar / Borrar, modo
+  "todas / solo la en uso", barra "Cuenta Finpro en uso" en 🏦 Banco para el encargado. Cada cuenta: API Key + API Secret + secreto de firma de
+  webhooks (cifrados con la clave derivada de JWT_SECRET), bankId, n° de cuenta, nuestro CVU, otros CVUs, URL base, y titular/banco/alias para
+  el cliente. **Antes de guardar se prueba** token + saldo contra Finpro con los datos nuevos; si falla no se guarda nada.
+- **Cargas:** mismo pipeline que hgcash (`hgcashAutoCarga`: candados, `HgcashCharge` por coelsa, multicuenta bancaria, bonos, bandeja, cierre
+  diario). Entran por (a) el **webhook secundario** `POST /api/finpro/webhook` (firmado HMAC; la cuenta se reconoce por el CVU destino) y (b) la
+  **verificación del comprobante** (se le pregunta a TODAS las cuentas que reciben; re-verifica cada 2 min hasta 90 min). Cada movimiento lleva
+  `provider:'finpro'` + `accountKey`. Modo sombra/auto propio de Finpro.
+- **Retiros:** `POST /api/admin/payouts/:id/pay` deriva a `_payPayoutViaFinpro` si el banco de retiros es Finpro. El pago guarda
+  `fpAccountKey`; estado, callback y sincronización se consultan SIEMPRE con la cuenta que pagó (`_fpCtxFor`), aunque después se rote. Sin
+  respuesta de Finpro → queda "en proceso" y se consulta; nunca se reenvía a ciegas. El comprobante es el código COELSA (Finpro no da PDF).
+- **Decisiones mías (para revisar):**
+  - Un CVU va en UNA sola cuenta (por ahí se sabe a cuál entró la plata); la firma de un webhook vale si coincide con el secreto de CUALQUIER
+    cuenta cargada (Finpro puede usar un secreto por cliente y no por CVU).
+  - No se puede borrar la cuenta EN USO habiendo otras, ni una cuenta con retiros "en proceso" pagados por ella, ni la última si Finpro está en uso.
+  - Verificación por monto que confirma en DOS cuentas transferencias distintas → ambigua (queda para el agente), no se carga.
+  - Un "no lo conozco" de Finpro sobre un lote sin respuesta recién se toma como fallo pasados 2 min del envío.
+  - Si el cliente ve la cuenta de un banco que no recibe cargas automáticas, se guarda pero AVISA (en la confirmación y en la respuesta).
+- **Bug viejo arreglado de paso:** desde el #195 el bloque de hgcash estaba DUPLICADO en el HTML (una copia oculta en COMANDOS con los mismos
+  ids). `getElementById` agarraba la copia oculta → la card visible de Bancos — Configuración no reflejaba ni guardaba bien. Se sacó la copia.
+- **Archivos:** `src/services/finproService.js` (nuevo; copia del hermano + contexto por cuenta `ctx` en todas las operaciones y token por
+  cuenta), `server.js` (bloque Finpro antes del webhook de hgcash; pago antes de `/pay`; endpoints antes de `/api/admin/hgcash/config`),
+  modelos `BankMovement` (`provider`, `processedEvents`), `PendingPayout` (`fp*`), `Comprobante` (`finproVerify*`), panel (index.html + admin.js).
+- **Pruebas (en frío, sin red):** `node scripts/test-finpro-accounts.js` — **43 tests** que corren los bloques REALES de server.js en un sandbox
+  (altas, cifrado, tope de 3, rotación, qué ve el cliente, firma por cuenta, cuenta por CVU, pausa/modo, reentregas, verificación entre cuentas,
+  callbacks firmados/sin firma, pago por la cuenta en uso, consulta con la cuenta que pagó tras rotar, sin-respuesta sin doble pago, rechazo,
+  borrado bloqueado, y todo lo de la revisión de abajo). `node scripts/test-finpro-webhook.js` — 17 tests del servicio. Más `node --check`, `check-tdz`, y revisión independiente del diff.
+- **Revisión independiente del diff (antes de subir) — encontró y se corrigió:**
+  1. *Pago doble por cola:* el poll daba por FALLADO un lote que todavía estaba en la cola de envío (varios retiros seguidos por el mismo CVU o
+     Finpro lento) → el agente lo reintentaba o lo pagaba por otro banco y después salía igual. Ahora un lote "enviando" no se consulta
+     (`_finproInFlight` + tope de 15 min) y los cambios de estado posteriores al envío van atados a ESE lote y a que siga `paying`.
+  2. *Pago doble al cambiar de banco:* un envío a hgcash sin respuesta (timeout) quedaba "fallado"; si se pasaban los retiros a Finpro y se
+     reintentaba, podían pagar los dos. Ahora `PendingPayout.hgSendUnknown` lo marca y Finpro pide confirmación explícita del agente
+     (`needsConfirm` → cartel en el panel); al revés (Finpro sin resultado → hgcash) primero se consulta a Finpro. Si el otro banco avisa DONE
+     de un pago que salió por el otro → alerta "POSIBLE PAGO DOBLE" (chat + Telegram).
+  3. *Editar una cuenta con pagos en proceso:* cambiarle credenciales/URL/banco/CVU hacía que Finpro "no conociera" el lote → bloqueado como el borrado.
+  4. *Respuestas raras de Finpro:* solo un 4xx o un código de error con respuesta 2xx es rechazo seguro; un 5xx o un código desconocido queda
+     "en proceso" y lo resuelve la consulta. Un lote que Finpro informa `failed` ahora se cierra (antes quedaba en proceso para siempre).
+  5. *Aviso tardío:* un ERROR ya no revive un pago cancelado/pagado (aplica también a hgcash: solo `paying` → `failed`).
+  6. *Cargas:* si Finpro confirma una transferencia SIN informar el monto no se carga sola (antes cargaba el monto de la imagen); coincidencia por
+     monto con titular distinto al del comprobante → a revisión; un comprobante cuyo destino es una cuenta hgcash no se le pregunta a Finpro;
+     la verificación respeta la cuenta pausada también cuando el movimiento es nuevo.
+  7. El saldo cacheado ya no guarda la respuesta cruda (era solo para el admin).
+  - **Quedó anotado, sin tocar:** la ruta de pago por hgcash no tiene el guard `debitConfirmed !== true` que sí tiene el hermano (ya estaba así antes del #202).
+- **⚠️ NO verificado:** nada de esto corrió contra Finpro real desde ESTE repo (no hay credenciales ni node_modules en Tails). La lógica de
+  una cuenta es la que ya anda en CARGASGIROXactivo; lo multi-cuenta es nuevo. **Arrancar en modo SOMBRA** y con un retiro chico de prueba.
+- **Para dejarlo andando (owner):** 1) Bancos — Configuración → 🟣 Finpro → ➕ Agregar cuenta (API Key, Secret, n° de cuenta, CVU, secreto de
+  webhook). 2) Darle a Finpro las dos URLs que muestra el panel (webhook secundario para entrantes y salientes; el callback se manda solo).
+  3) ⚠️ La URL base por defecto es la de DESARROLLO de la documentación (`mw-dev.finpro.com.ar`): cargar la de producción que dé Finpro (usar la
+  misma que en CARGASGIROXactivo). 4) 🏦 Bancos automáticos → elegir cargas / retiros / cuenta que ve el cliente. 5) Modo sombra primero, después Auto.
+
 ### 201. 🛡️ Auditoría completa de la mudanza antes de pasar a "Todos" (14 mil usuarios) — 2 revisiones (propia + independiente) — admin-sw v72
 - **Owner:** "chequeá todos los errores que puede haber y solucionalos; es grave un error así para 14 mil usuarios" + "si falla la API que no
   quede en la mitad: que se cancele y pruebe la próxima vez que entre". Respuesta de diseño: eso YA es así en todo lo previo a mover plata;

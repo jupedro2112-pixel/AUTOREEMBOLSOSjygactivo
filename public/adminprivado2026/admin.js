@@ -2590,6 +2590,9 @@ async function loadUserInfo(userId) {
         } else {
             elements.chatUsername.textContent = user.username;
         }
+        // #199: recuadro MUDADO / MUDÁNDOSE (plataforma jugaygana.io)
+        const platBadge = platformBadgeHtml(user);
+        if (platBadge) elements.chatUsername.insertAdjacentHTML('beforeend', ' ' + platBadge);
 
         // Mostrar estado de la app de notificaciones
         if (elements.chatAppStatus) {
@@ -4081,6 +4084,22 @@ function notifUsageCell(user) {
     return `<span style="font-size:.76rem;white-space:nowrap;" title="Bonos / Invitaciones / Regalos recibidos este mes">🎁${fmt(cur.bonos, lim.bonos)} 🎰${fmt(cur.invitaciones, lim.invitaciones)} 🎉${fmt(cur.regalos, lim.regalos)}</span>`;
 }
 
+// #199: recuadro para distinguir a los usuarios mudados a jugaygana.io (User.platform === 'partner').
+// Vacío para los que siguen en JUGAYGANA (la mayoría): así resalta solo lo distinto.
+function platformBadgeHtml(user) {
+    if (!user) return '';
+    const st = 'display:inline-block;border-radius:6px;padding:1px 7px;font-size:10.5px;font-weight:700;letter-spacing:.3px;vertical-align:middle;white-space:nowrap;';
+    if (user.platformMigrating === true) {
+        return `<span title="Se está mudando a jugaygana.io: sus operaciones de plata esperan a que termine" style="${st}background:rgba(255,165,0,.15);border:1px solid #ffa500;color:#ffa500;">⏳ MUDÁNDOSE</span>`;
+    }
+    if (user.platform === 'partner') {
+        const when = user.platformMigratedAt ? ' el ' + new Date(user.platformMigratedAt).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }) : '';
+        return `<span title="Mudado a jugaygana.io${escapeHtml(when)}. Todas sus cargas, retiros y bonos van a la plataforma nueva." style="${st}background:rgba(0,200,255,.14);border:1px solid #00c8ff;color:#00c8ff;">🚚 MUDADO</span>`;
+    }
+    return '';
+}
+window.platformBadgeHtml = platformBadgeHtml;
+
 function renderUsers(users) {
     const tbody = document.getElementById('usersTableBody');
     const adminRole = currentAdmin?.role;
@@ -4159,7 +4178,7 @@ function renderUsers(users) {
 
         return `
         <tr class="${isAdminUser ? 'admin-row' : ''}">
-            <td>${escapeHtml(user.username)}${tagsHtml}</td>
+            <td>${escapeHtml(user.username)} ${platformBadgeHtml(user)}${tagsHtml}</td>
             <td>${escapeHtml(user.accountNumber || user.accountId || '-')}</td>
             <td>${escapeHtml(user.email || '-')}</td>
             <td>${escapeHtml(user.phone || '-')}</td>
@@ -4454,7 +4473,7 @@ function toggleFraudDetail() {
 function blockFromFraud(userId) {
     const id = decodeURIComponent(userId);
     let uname = (elements.chatUsername && elements.chatUsername.textContent) || '';
-    uname = uname.replace(/\s*\(.*$/, '').trim(); // sacar el sufijo de publicista si lo hubiera
+    uname = uname.trim().split(/\s+/)[0] || ''; // solo el username: sin sufijo de publicista ni recuadro MUDADO (#199) — los usernames no llevan espacios
     openBlockModal(id, uname);
 }
 window.toggleFraudDetail = toggleFraudDetail;

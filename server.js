@@ -18536,7 +18536,7 @@ app.get('/api/admin/users', authMiddleware, adminMiddleware, async (req, res) =>
     // GET /api/users/:userId (viewUser/loadUserInfo). Antes viajaba el doc entero
     // (fcmTokens, tagHistory, withdrawalAccount, acquisitionUtm, adminNotes…).
     // ⚠️ Si se agrega una columna nueva a la tabla del panel: sumar el campo acá.
-    const USERS_LIST_FIELDS = 'id username tags accountNumber email phone role balance isActive isBlocked blockReason lastLogin createdAt notificationPlan notifMonthlyCounts phoneVerified loginWithoutPassword';
+    const USERS_LIST_FIELDS = 'id username tags accountNumber email phone role balance isActive isBlocked blockReason lastLogin createdAt notificationPlan notifMonthlyCounts phoneVerified loginWithoutPassword platform platformMigrating platformMigratedAt'; // #199: recuadro MUDADO
     const users = await User.find(query)
       .select(USERS_LIST_FIELDS)
       .sort({ role: 1, username: 1 })

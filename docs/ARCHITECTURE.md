@@ -824,6 +824,10 @@ cuentas viejas. Para mudar ya: "Mudar a un usuario ahora" (`…/migrate-user`, f
 
 ### 10.5 Trampas
 
+- Panel (#199): `platformBadgeHtml(user)` pinta 🚚 MUDADO / ⏳ MUDÁNDOSE en la cabecera del chat y en Usuarios (`USERS_LIST_FIELDS`
+  incluye `platform platformMigrating platformMigratedAt`). La cabecera `#chatUsername` ya no es solo el username: no leer el username
+  de su texto (usar el id/estado del chat).
+
 - Todo flujo NUEVO de plata usa `plat.*`, nunca los clientes directo, y pasa una `reference` estable si tiene un id natural.
 - `giroxService.getUserInfoByName` devuelve `null` también cuando falla la API: para decidir usar `lookupPlayer`.
 - `_deductChipsAtConfirm` compara contra el saldo total (`balBefore`) para el anti-fantasma y contra `available` para "¿le alcanza?";

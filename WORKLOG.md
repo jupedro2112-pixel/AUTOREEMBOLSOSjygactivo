@@ -8,6 +8,17 @@
 
 ## Sesión 2026-11-19
 
+### 199. 🚚 Recuadro MUDADO en el panel (cabecera del chat + tabla de Usuarios) — admin-sw v71
+- **Owner:** "¿después de mudado, la próxima carga entra sí o sí en la nueva o puede entrar en la vieja? Agregá un recuadro MUDADO".
+- **Respuesta (revisado en el código):** sí o sí en la nueva. Toda la plata pasa por `plat.*`, que lee `User.platform` de la base en
+  CADA operación (sin cache; si la base falla, la operación de plata falla en vez de ir a la vieja). El único flujo que no usa `plat.*`
+  (comisión de referidos, `referralPayoutService`) ya ramifica por `referrer.platform`. No hay camino que devuelva a un usuario a la
+  vieja. Lo único que la app no puede impedir: que un agente cargue A MANO desde el panel de agentesadmin.
+- **Hecho:** `platformBadgeHtml(user)` en admin.js: **🚚 MUDADO** (celeste, tooltip con fecha/hora AR) si `platform==='partner'`;
+  **⏳ MUDÁNDOSE** (naranja) si `platformMigrating`; nada para los que siguen en JUGAYGANA. Va al lado del nombre en la cabecera del chat
+  y en la tabla de Usuarios (`USERS_LIST_FIELDS` + `platform platformMigrating platformMigratedAt`). `blockFromFraud` ahora toma solo la
+  primera palabra de la cabecera (antes cortaba solo el sufijo de publicista; con el recuadro se colaba en el username).
+
 ### 198. 🔒 Al mudar a jugaygana.io se CIERRA la cuenta vieja de JUGAYGANA (clave al azar que no se guarda) — admin-sw v70
 - **Owner:** "que el usuario del jugaygana viejo se bloquee para que no pueda ingresar más; al hacer la mudanza el viejo queda bloqueado
   y el nuevo activo con el saldo". Propuso como clave el mismo username: **descartado** (cualquiera que sepa el usuario entraría).

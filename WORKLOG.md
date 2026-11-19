@@ -8,6 +8,10 @@
 
 ## Sesión 2026-11-19
 
+### 206. 🕒 Tabla de 🚚 Mudanza: la fecha salía en la hora de la PC, no en hora Argentina
+- Owner pausó la mudanza y creyó que seguía mudando: la tabla mostraba "05:59" (hora UTC de su Tails = 02:59 AR, de la prueba de "Todos"
+  de la madrugada) y lo leyó como recién. La pausa SÍ frena (`migrateUser` corta con `cfg.paused`). Fix: la columna usa `fmtFechaHoraAR` (#188). SW v75.
+
 ### 205. 🔒 Rollover por TIPO de regalo, editable desde COMANDOS (jugaygana.io)
 - **Owner:** "que fueguitos, reembolsos, ruleta y todo lo que se regala se pueda dar con o sin rollover, todo en off pero modificable
   desde Comandos; y que todos los bonos vayan con rollover".

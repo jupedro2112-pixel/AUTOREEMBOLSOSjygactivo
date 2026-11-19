@@ -15848,7 +15848,7 @@ async function mudLoadList() {
                 else if (m.status === 'done' && m.residualPhase === 'withdrawn') oldTxt += ' ⏳ Residuo de ' + _mudMoney(m.residualAmount) + ' retirado, cargándose en la nueva';
                 else if (m.status === 'done' && m.residualMoved > 0) oldTxt += ' (+' + _mudMoney(m.residualMoved) + ' de residuos ya trasladados)';
                 const det = (m.status === 'held' ? (_MUD_REASON[m.reason] || m.reason || '') : '') + (m.lastError && m.status !== 'done' ? ' ' + m.lastError : '') + (oldTxt ? ' ' + oldTxt : '');
-                return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${m.updatedAt ? new Date(m.updatedAt).toLocaleString('es-AR') : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
+                return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${m.updatedAt ? fmtFechaHoraAR(m.updatedAt) + ' hs (AR)' : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
             }).join('') + '</tbody></table>';
     } catch (e) { box.innerHTML = '<p style="color:#ff6666;font-size:13px;">No se pudo cargar la lista.</p>'; }
 }

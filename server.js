@@ -17791,7 +17791,9 @@ function _rotNorm(raw) {
       if (!/^(hgcash|finpro):[A-Za-z0-9_-]{1,20}$/.test(k)) continue;
       const day = Math.max(0, Math.round(Number(c.limits[k] && c.limits[k].day) || 0));
       const month = Math.max(0, Math.round(Number(c.limits[k] && c.limits[k].month) || 0));
-      if (day || month) lim[k] = { day, month };
+      const nx = String((c.limits[k] && c.limits[k].next) || '');
+      const next = /^(hgcash|finpro):[A-Za-z0-9_-]{1,20}$/.test(nx) && nx !== k ? nx : ''; // #213 a qué cuenta pasa ('' = la siguiente)
+      if (day || month || next) lim[k] = { day, month, next };
     }
   }
   c.limits = lim;
@@ -17912,7 +17914,11 @@ async function _bankRotate(cfg, cur, reason, detail, by = 'rotación automática
   const i = all.findIndex((s) => s.id === cur.id);
   const ordered = all.slice(i + 1).concat(all.slice(0, Math.max(0, i))).filter((s) => s.id !== cur.id);
   // Primero las del mismo banco; las del otro banco solo si está permitido.
-  const cands = ordered.filter((s) => s.provider === cur.provider).concat(cfg.crossBank ? ordered.filter((s) => s.provider !== cur.provider) : []);
+  let cands = ordered.filter((s) => s.provider === cur.provider).concat(cfg.crossBank ? ordered.filter((s) => s.provider !== cur.provider) : []);
+  // #213: si esta cuenta tiene un destino ELEGIDO, se prueba primero (aunque sea del otro banco: fue elegido a mano).
+  // Si ese destino no está disponible, sigue con el orden de siempre.
+  const _pref = cfg.limits[cur.id] && cfg.limits[cur.id].next ? ordered.find((s) => s.id === cfg.limits[cur.id].next) : null;
+  if (_pref) cands = [_pref].concat(cands.filter((s) => s.id !== _pref.id));
   const skipped = [];
   let target = null;
   for (const s of cands) {
@@ -17992,7 +17998,7 @@ async function _bankRotationPayload({ probe = false } = {}) {
   for (const s of _rotSlots()) {
     const usage = await _rotUsage(s).catch(() => ({ day: 0, month: 0 }));
     const row = { id: s.id, provider: s.provider, key: s.key, label: s.label, bank: _bankLabel(s.provider), inUse: !!cur && cur.id === s.id,
-      limit: cfg.limits[s.id] || { day: 0, month: 0 }, usage, blocked: _rotSlotBlocked(s, hgCfg, fpCfg), over: _rotOverLimit(cfg, s, usage), fails: _rotFails.get(s.id) || 0 };
+      limit: cfg.limits[s.id] || { day: 0, month: 0, next: '' }, usage, blocked: _rotSlotBlocked(s, hgCfg, fpCfg), over: _rotOverLimit(cfg, s, usage), fails: _rotFails.get(s.id) || 0 };
     if (probe) { const p = await _rotProbe(s); row.probe = { ok: p.ok, unknown: !!p.unknown, error: p.error || null }; }
     slots.push(row);
   }
@@ -19662,6 +19668,8 @@ app.get('/api/admin/payouts', authMiddleware, withdrawerMiddleware, async (req, 
     const _prov = await getBankProvider(); // #202: el botón Pagar depende del banco elegido
     const _fpAct = _fpActiveAccount() || _fpEnvAccount();
     res.json({ payouts, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit), payEnabled: _prov === 'finpro' ? _fpReadyPayouts(_fpAct) : hgcashPay.isEnabled(), bankProvider: _prov,
+      otherBank: _prov === 'finpro' ? 'hgcash' : 'finpro', otherReady: _prov === 'finpro' ? hgcashPay.isEnabled() : _fpReadyPayouts(_fpAct), // #213 pagar ESTE retiro por el otro banco
+      otherAccount: _prov === 'finpro' ? (_hgActiveAccount() ? _hgAccountLabel(_hgActiveAccount()) : null) : (_fpAct ? _fpAccountLabel(_fpAct) : null),
       bankAccount: _prov === 'finpro' ? (_fpAct ? _fpAccountLabel(_fpAct) : null) : (_hgActiveAccount() ? _hgAccountLabel(_hgActiveAccount()) : null) });
   } catch (error) {
     console.error('Error listando payouts:', error);
@@ -20063,7 +20071,10 @@ async function _finproSyncPayout(p, via) {
 app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    if ((await getBankProvider()) === 'finpro') return _payPayoutViaFinpro(req, res); // #202: el retiro sale por el banco elegido en "Bancos automáticos"
+    // #202: el retiro sale por el banco elegido en "Bancos automáticos"… #213: salvo que el agente elija el otro para ESTE pago
+    // (`body.provider`). Los candados anti doble pago entre bancos de más abajo aplican igual.
+    const _bodyProv = String((req.body && req.body.provider) || '').toLowerCase();
+    if ((BANK_PROVIDERS.includes(_bodyProv) ? _bodyProv : await getBankProvider()) === 'finpro') return _payPayoutViaFinpro(req, res);
     if (!hgcashPay.isEnabled()) {
       return res.status(400).json({ error: 'Pago automático no configurado (falta HGCASH_API_TOKEN). Pagá manual.' });
     }

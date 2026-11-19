@@ -2696,6 +2696,11 @@ async function loadPayoutBanner(userId) {
             ? '<div style="margin-top:5px;font-size:11px;font-weight:800;color:#ffe08a;background:rgba(0,0,0,0.32);padding:5px 8px;border-radius:6px;">⚠️ Descuento NO confirmado en JUGAYGANA — verificá el saldo real antes de pagar. Si rechazás, NO se devuelven fichas automáticamente.</div>'
             : '';
         const bankName = j.bankProvider === 'finpro' ? 'Finpro' : 'hgcash'; // #202 banco elegido para los retiros
+        // #213 pagar ESTE retiro por el otro banco con API (p. ej. si el elegido no tiene saldo)
+        const otherName = j.otherBank === 'finpro' ? 'Finpro' : 'hgcash';
+        const otherBtn = j.otherReady
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\', false, \'' + j.otherBank + '\')" title="Paga este retiro por ' + otherName + (j.otherAccount ? ' · cuenta ' + escapeHtml(j.otherAccount) : '') + ' (los demás siguen por ' + bankName + ')" style="background:#0b6b6b;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-weight:700;font-size:11.5px;cursor:pointer;">💸 Pagar por ' + otherName + '</button>'
+            : '';
         const payBtn = j.payEnabled
             ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">💸 Pagar ' + monto + (j.bankProvider === 'finpro' ? ' <small style="font-weight:600;opacity:.85;">(Finpro)</small>' : '') + '</button>'
             : '<span style="color:#ffd;font-size:11px;">Pago automático por ' + bankName + ' no configurado (' + (j.bankProvider === 'finpro' ? 'faltan credenciales o nuestro CVU en la cuenta en uso' : 'falta token') + '). Pagá manual.</span>';
@@ -2708,8 +2713,8 @@ async function loadPayoutBanner(userId) {
             '<div style="flex:1;min-width:160px;"><strong>RETIRO PENDIENTE: ' + monto + '</strong>' +
             '<div style="font-size:11px;opacity:0.92;">Titular: ' + titular + ' · CBU/alias: ' + dest + '</div>' +
             '<div style="font-size:10.5px;opacity:0.8;">Verificá los datos antes de pagar.</div>' + debitWarn + '</div>' +
-            payBtn +
-            '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">🏦 Pagar con otro banco</button>' +
+            payBtn + otherBtn +
+            '<button onclick="payOtherBank(\'' + escapeHtml(p.id) + '\')" style="background:#1f6feb;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;font-weight:700;cursor:pointer;">✅ Ya lo pagué por fuera</button>' +
             '<button onclick="cancelPayout(\'' + escapeHtml(p.id) + '\')" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:7px;padding:7px 11px;font-size:11.5px;cursor:pointer;">↩️ Rechazar pago</button>' +
             dismissBtn +
             '</div>';
@@ -2718,15 +2723,16 @@ async function loadPayoutBanner(userId) {
     }
 }
 
-async function payPayout(id, confirmOtherBank) {
-    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro? Se va a transferir al CBU del cliente. Verificá que los datos sean correctos.')) return;
+async function payPayout(id, confirmOtherBank, provider) {
+    // #213 `provider` = pagar ESTE retiro por ese banco (aunque los retiros estén configurados por el otro).
+    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (provider ? ' por ' + (provider === 'finpro' ? 'FINPRO' : 'HGCASH') : '') + '? Se va a transferir al CBU del cliente. Verificá que los datos sean correctos.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
-        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST', body: JSON.stringify(confirmOtherBank ? { confirmOtherBank: true } : {}) });
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST', body: JSON.stringify(Object.assign(confirmOtherBank ? { confirmOtherBank: true } : {}, provider ? { provider } : {})) });
         const j = await r.json();
         // #202 Hubo un intento anterior por el OTRO banco que no se sabe si salió: lo confirma el agente.
         if (r.status === 409 && j.needsConfirm && !confirmOtherBank) {
-            if (confirm('⚠️ ' + (j.error || 'Hubo un intento anterior por el otro banco.') + '\n\n¿YA VERIFICASTE que NO salió y querés pagarlo ahora?\n(Si no estás seguro, cancelá: pagar igual puede ser pagar DOS veces.)')) return payPayout(id, true);
+            if (confirm('⚠️ ' + (j.error || 'Hubo un intento anterior por el otro banco.') + '\n\n¿YA VERIFICASTE que NO salió y querés pagarlo ahora?\n(Si no estás seguro, cancelá: pagar igual puede ser pagar DOS veces.)')) return payPayout(id, true, provider);
             return;
         }
         if (r.ok && j.success) {
@@ -6305,8 +6311,9 @@ function _bankRotRender(j) {
                 + '<td>' + st + '</td><td>' + money(s.usage.day) + '</td>'
                 + '<td><input type="number" min="0" step="1000" data-rot-day="' + escapeHtml(s.id) + '" value="' + (s.limit.day || 0) + '" style="' + inp + '"></td>'
                 + '<td>' + money(s.usage.month) + '</td>'
-                + '<td><input type="number" min="0" step="1000" data-rot-month="' + escapeHtml(s.id) + '" value="' + (s.limit.month || 0) + '" style="' + inp + '"></td></tr>';
-        }).join('') : '<tr><td colspan="6" style="padding:8px;color:#aaa;">No hay cuentas cargadas. Cargá al menos dos (hgcash o Finpro) para poder rotar.</td></tr>';
+                + '<td><input type="number" min="0" step="1000" data-rot-month="' + escapeHtml(s.id) + '" value="' + (s.limit.month || 0) + '" style="' + inp + '"></td>'
+                + '<td><select data-rot-next="' + escapeHtml(s.id) + '" style="padding:5px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;font-size:12px;"><option value="">la siguiente disponible</option>' + j.slots.filter((o) => o.id !== s.id).map((o) => '<option value="' + escapeHtml(o.id) + '"' + (s.limit.next === o.id ? ' selected' : '') + '>' + escapeHtml(o.bank + ' · ' + o.label) + '</option>').join('') + '</select></td></tr>';
+        }).join('') : '<tr><td colspan="7" style="padding:8px;color:#aaa;">No hay cuentas cargadas. Cargá al menos dos (hgcash o Finpro) para poder rotar.</td></tr>';
     }
     const msg = document.getElementById('bankRotMsg');
     if (msg && j.shown === 'manual') { msg.style.color = '#ffb74d'; msg.textContent = 'El cliente ve una cuenta cargada a mano ("Bancos automáticos"): con eso no hay nada que rotar.'; }
@@ -6331,6 +6338,7 @@ async function saveBankRotation() {
         const limits = {};
         document.querySelectorAll('[data-rot-day]').forEach((el) => { const id = el.getAttribute('data-rot-day'); limits[id] = limits[id] || {}; limits[id].day = Number(el.value) || 0; });
         document.querySelectorAll('[data-rot-month]').forEach((el) => { const id = el.getAttribute('data-rot-month'); limits[id] = limits[id] || {}; limits[id].month = Number(el.value) || 0; });
+        document.querySelectorAll('[data-rot-next]').forEach((el) => { const id = el.getAttribute('data-rot-next'); limits[id] = limits[id] || {}; limits[id].next = el.value || ''; });
         const body = { enabled: ck('bankRotEnabled'), onFailure: ck('bankRotOnFailure'), onLimit: ck('bankRotOnLimit'), crossBank: ck('bankRotCrossBank'), movePayouts: ck('bankRotMovePayouts'),
             failChecks: Number((document.getElementById('bankRotFailChecks') || {}).value) || 3, limits };
         const r = await authFetch('/api/admin/bank-rotation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

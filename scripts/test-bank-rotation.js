@@ -151,13 +151,24 @@ t('lo que entró cuenta también los movimientos sin cuenta anotada (por CVU / �
   await tick();
   assert.ok(!S.lastMatch.$or[1] || !S.lastMatch.$or[1].$or.some((o) => Object.keys(o).length === 0), 'con 2 cuentas hgcash lo sin cuenta NO se reparte a ciegas');
 });
+t('destino ELEGIDO: va a esa cuenta aunque sea del otro banco; si no está disponible, a la siguiente', async () => {
+  reset({ limits: { 'hgcash:a1': { day: 100, month: 0, next: 'finpro:f1' } } });
+  usage['hgcash:a1'] = { day: 100, month: 100 };
+  let r = await tick();
+  assert.ok(r.ok); assert.strictEqual(S.shown, 'finpro'); assert.strictEqual(S._fpActiveKey, 'f1');
+  reset({ limits: { 'hgcash:a1': { day: 100, month: 0, next: 'finpro:f1' } } });
+  usage['hgcash:a1'] = { day: 100, month: 100 }; down.add('finpro:f1');
+  r = await tick();
+  assert.ok(r.ok); assert.strictEqual(S.shown, 'hgcash'); assert.strictEqual(S._hgActiveKey, 'a2');
+  assert.deepStrictEqual(X._rotNorm({ limits: { 'hgcash:a1': { next: 'hgcash:a1' }, 'hgcash:a2': { next: 'finpro:f1' } } }).limits, { 'hgcash:a2': { day: 0, month: 0, next: 'finpro:f1' } });
+});
 t('día y mes en hora Argentina', async () => {
   const st = X._rotPeriodStarts(Date.UTC(2026, 11, 1, 2, 30)); // 30-nov 23:30 AR
   assert.strictEqual(st.day.toISOString(), '2026-11-30T03:00:00.000Z'); assert.strictEqual(st.month.toISOString(), '2026-11-01T03:00:00.000Z');
 });
 t('config: topes inválidos se descartan', async () => {
   const c = X._rotNorm({ enabled: 'si', failChecks: 99, limits: { 'hgcash:a1': { day: -5, month: 'x' }, 'otro:a1': { day: 5 }, 'finpro:f1': { day: 10.4 } } });
-  assert.strictEqual(c.enabled, false); assert.strictEqual(c.failChecks, 10); assert.deepStrictEqual(c.limits, { 'finpro:f1': { day: 10, month: 0 } });
+  assert.strictEqual(c.enabled, false); assert.strictEqual(c.failChecks, 10); assert.deepStrictEqual(c.limits, { 'finpro:f1': { day: 10, month: 0, next: '' } });
 });
 
 (async () => {

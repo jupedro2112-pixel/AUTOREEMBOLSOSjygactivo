@@ -8,6 +8,15 @@
 
 ## Sesión 2026-11-19
 
+### 213. 🔁 Rotación con destino ELEGIDO + 💸 pagar un retiro por el OTRO banco desde el chat
+- **Rotación:** columna "Al rotar pasa a" por cuenta (`limits[id].next`). Si está elegida, se prueba PRIMERO (aunque sea del otro banco y
+  `crossBank` esté apagado: fue elegida a mano); si no está disponible (caída / en su tope / pausada) sigue con el orden de siempre.
+- **Retiros:** `POST /api/admin/payouts/:id/pay` acepta `body.provider` ('hgcash'|'finpro') para pagar ESE retiro por el otro banco sin
+  cambiar la config general. El banner del chat suma el botón "💸 Pagar por <otro banco>" si ese banco está listo (`otherBank/otherReady`
+  en `GET /api/admin/payouts`). Los candados anti doble pago entre bancos (#202: `needsConfirm` / `confirmOtherBank`) aplican igual.
+- El botón viejo "🏦 Pagar con otro banco" (que solo MARCA pagado a mano) pasa a llamarse "✅ Ya lo pagué por fuera" para no confundirse.
+- Test: `test-bank-rotation.js` (16). SW v80. El pago por el otro banco no está probado contra los bancos reales.
+
 ### 212. 🏦 Una cuenta de banco no se guarda sin su CBU/CVU y su alias
 - Owner: "que no se pueda cargar la cuenta sin cargar el alias y/o CBU previamente".
 - `POST /api/admin/hgcash/accounts` exige CBU de 22 dígitos + alias; `POST /api/admin/finpro/accounts` exige nuestro CVU de 22 + alias (alta y edición).

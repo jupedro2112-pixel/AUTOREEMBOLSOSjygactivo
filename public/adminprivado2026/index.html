@@ -974,6 +974,35 @@
                             </div>
                         </div>
                         <!-- Movimientos del banco automático (hgcash) -->
+                        <!-- ===================== #207 Rotación automática de cuentas ===================== -->
+                        <div class="panel-subheader" style="margin-top: 24px;" id="bankRotHeader">
+                            <h3>🔁 Rotación automática de cuentas</h3>
+                        </div>
+                        <div class="cbu-form" id="bankRotForm" style="border-left:4px solid #4fc3f7;">
+                            <p style="color:#aaa;font-size:12px;line-height:1.5;margin:0 0 10px;">
+                                Cambia sola la cuenta <b>EN USO</b> (la que ve el cliente) cuando la actual <b>se cae</b> o <b>llega a un tope</b> de plata recibida. Pasa a la siguiente cuenta cargada que funcione y avisa por Telegram.
+                                Las cuentas que quedan de respaldo <b>siguen recibiendo</b>: si un cliente transfiere a la anterior, se le carga igual y queda un aviso en su chat
+                                (siempre que arriba, en cada banco, las cargas estén "por todas las cuentas").
+                            </p>
+                            <label style="display:block;margin:6px 0;font-size:13.5px;"><input type="checkbox" id="bankRotEnabled"> <b>Rotación automática encendida</b></label>
+                            <label style="display:block;margin:6px 0;font-size:13px;"><input type="checkbox" id="bankRotOnFailure"> Rotar si la cuenta en uso <b>no responde</b>
+                                <select id="bankRotFailChecks" style="padding:4px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;font-size:12px;">
+                                    <option value="2">2 controles seguidos (~4 min)</option><option value="3">3 controles seguidos (~6 min)</option><option value="5">5 controles seguidos (~10 min)</option>
+                                </select></label>
+                            <label style="display:block;margin:6px 0;font-size:13px;"><input type="checkbox" id="bankRotOnLimit"> Rotar si la cuenta en uso <b>llega a su tope</b> del día o del mes (los topes se cargan abajo; 0 = sin tope)</label>
+                            <label style="display:block;margin:6px 0;font-size:13px;"><input type="checkbox" id="bankRotCrossBank"> Si no queda cuenta del mismo banco, <b>pasar al otro banco</b> (hgcash ↔ Finpro)</label>
+                            <label style="display:block;margin:6px 0 10px 22px;font-size:12.5px;color:#ccc;"><input type="checkbox" id="bankRotMovePayouts"> …y si fue por caída, pasar también los <b>retiros</b> al otro banco</label>
+                            <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+                                <thead><tr style="color:#aaa;text-align:left;"><th style="padding:5px;">Cuenta</th><th>Estado</th><th>Entró hoy</th><th>Tope por día $</th><th>Entró este mes</th><th>Tope por mes $</th></tr></thead>
+                                <tbody id="bankRotRows"></tbody>
+                            </table></div>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+                                <button class="btn-primary" onclick="saveBankRotation()">💾 Guardar rotación</button>
+                                <button class="btn btn-sm" onclick="loadBankRotation(true)">🩺 Probar las cuentas ahora</button>
+                                <span id="bankRotMsg" style="font-size:12px;color:#aaa;"></span>
+                            </div>
+                            <div id="bankRotLog" style="margin-top:10px;font-size:12px;color:#bbb;"></div>
+                        </div>
                         <!-- ===================== #202 Finpro (segundo banco con API, hasta 3 cuentas) ===================== -->
                         <div class="panel-subheader" style="margin-top: 24px;" id="finproHeader">
                             <h3 style="color:#b388ff;">🟣 Finpro</h3>

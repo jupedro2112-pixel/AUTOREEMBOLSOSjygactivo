@@ -8,6 +8,25 @@
 
 ## Sesión 2026-11-19
 
+### 207. 🔁 Rotación AUTOMÁTICA de cuentas de banco (por caída o por tope) + aviso si transfieren a una cuenta que no está en uso
+- **Owner:** "que se puedan rotar cuentas si una falla… topes de movimiento por día/mes para que cambie a otra automáticamente… y si
+  uno envió a un CBU que se cayó, que haga la carga automática siempre que sea cliente y dé un aviso interno".
+- **Qué hay:** card **🏛️ Bancos — Configuración → 🔁 Rotación automática de cuentas** (solo admin general), TODO apagado por defecto.
+  `Config['bankRotation']` = `{ enabled, onFailure, failChecks (2/3/5), onLimit, crossBank, movePayouts, limits:{'hgcash:a1':{day,month}…}, log }`.
+- **Motor (`_bankRotationTick`, cada 2 min por instancia, server.js antes de `_banksPayload`):** mira la cuenta EN USO del banco que ve el
+  cliente (`getBankShown()`; "manual" = no rota). (1) tope: suma de `BankMovement` Inbound de esa cuenta hoy / este mes (hora AR) ≥ tope;
+  (2) caída: N controles seguidos sin respuesta (`_rotProbe`: hgcash `/accounts` con su token + estado de la cuenta; Finpro saldo).
+  Elige la siguiente cuenta que recibe cargas, tiene CBU/CVU para mostrar, responde y no llegó a su tope — primero mismo banco, el otro
+  solo con `crossBank` (cambia `bankShown`; con `movePayouts` y solo por CAÍDA cambia también `bankProvider`). Usa `_hgActivateAccount` /
+  `_fpActivateAccount` (los mismos del botón USAR ESTA). Candado atómico `Config['bankRotationLock']` (5 min) → rota una sola instancia.
+  Avisa por Telegram (también cuando NO hay a dónde rotar, máx. cada 30 min) y guarda los últimos 30 cambios.
+- **Transferencia a una cuenta que no está en uso:** ya se cargaba sola (las cargas entran por TODAS las cuentas, #194/#202). Nuevo: la nota
+  interna del chat agrega "⚠️ transfirió a la cuenta X, que NO es la que está en uso" (`hgcashAutoCarga`).
+- **Límites:** el tope se controla cada 2 min → puede pasarse por lo que entre en ese rato. El contador de fallas es por instancia. Una cuenta
+  Finpro sin número de cuenta no se puede controlar (cuenta como sana). No vuelve sola a la cuenta anterior al otro día. Con "solo la cuenta
+  en uso" en las cargas, lo que llegue a la cuenta anterior queda en la bandeja (no se carga solo).
+- **Sin probar contra los bancos reales.** Test: `node scripts/test-bank-rotation.js` (14 casos). Panel: `admin-sw.js` v76.
+
 ### 206. 🕒 Tabla de 🚚 Mudanza: la fecha salía en la hora de la PC, no en hora Argentina
 - Owner pausó la mudanza y creyó que seguía mudando: la tabla mostraba "05:59" (hora UTC de su Tails = 02:59 AR, de la prueba de "Todos"
   y aparecían filas "nuevas" cada minuto. Causa real: la columna mostraba `updatedAt`, y el barrido que CIERRA las cuentas viejas de los ya

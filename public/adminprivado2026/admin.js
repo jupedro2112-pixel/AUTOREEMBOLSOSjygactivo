@@ -6286,11 +6286,70 @@ async function saveFireMilestones() {
 }
 
 // #195 Sección "🏛️ Bancos — Configuración" (solo admin general): CBU del cliente + todo lo de bancos (réplica #224 de CARGASGIROXactivo).
+// #207 Rotación automática de cuentas de banco
+function _bankRotRender(j) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    set('bankRotEnabled', j.enabled); set('bankRotOnFailure', j.onFailure); set('bankRotOnLimit', j.onLimit); set('bankRotCrossBank', j.crossBank); set('bankRotMovePayouts', j.movePayouts);
+    const fc = document.getElementById('bankRotFailChecks'); if (fc) fc.value = String([2, 3, 5].includes(j.failChecks) ? j.failChecks : 3);
+    const money = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
+    const inp = 'width:120px;padding:5px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;';
+    const body = document.getElementById('bankRotRows');
+    if (body) {
+        body.innerHTML = (j.slots || []).length ? j.slots.map((s) => {
+            let st = s.inUse ? '<b style="color:#66ff99;">EN USO</b>' : 'respaldo';
+            if (s.blocked) st += ' · <span style="color:#ffb74d;">no rota acá: ' + escapeHtml(s.blocked) + '</span>';
+            if (s.over) st += ' · <span style="color:#ff8080;">' + escapeHtml(s.over) + '</span>';
+            if (s.probe) st += s.probe.ok ? (s.probe.unknown ? ' · <span style="color:#aaa;">sin número de cuenta: no se puede controlar</span>' : ' · <span style="color:#66ff99;">responde ✔</span>') : ' · <span style="color:#ff8080;">NO responde: ' + escapeHtml(s.probe.error || '') + '</span>';
+            else if (s.fails) st += ' · <span style="color:#ff8080;">' + s.fails + ' control(es) sin respuesta</span>';
+            return '<tr style="border-top:1px solid rgba(255,255,255,0.07);"><td style="padding:6px 5px;"><b>' + escapeHtml(s.label) + '</b> <span style="color:' + (s.provider === 'finpro' ? '#b388ff' : '#d4af37') + ';font-size:11px;">' + escapeHtml(s.bank) + '</span></td>'
+                + '<td>' + st + '</td><td>' + money(s.usage.day) + '</td>'
+                + '<td><input type="number" min="0" step="1000" data-rot-day="' + escapeHtml(s.id) + '" value="' + (s.limit.day || 0) + '" style="' + inp + '"></td>'
+                + '<td>' + money(s.usage.month) + '</td>'
+                + '<td><input type="number" min="0" step="1000" data-rot-month="' + escapeHtml(s.id) + '" value="' + (s.limit.month || 0) + '" style="' + inp + '"></td></tr>';
+        }).join('') : '<tr><td colspan="6" style="padding:8px;color:#aaa;">No hay cuentas cargadas. Cargá al menos dos (hgcash o Finpro) para poder rotar.</td></tr>';
+    }
+    const msg = document.getElementById('bankRotMsg');
+    if (msg && j.shown === 'manual') { msg.style.color = '#ffb74d'; msg.textContent = 'El cliente ve una cuenta cargada a mano ("Bancos automáticos"): con eso no hay nada que rotar.'; }
+    const log = document.getElementById('bankRotLog');
+    if (log) log.innerHTML = (j.log || []).length ? '<b>Últimos cambios automáticos:</b><br>' + j.log.slice(0, 8).map((e) => '• ' + escapeHtml(fmtFechaHoraAR(e.at)) + ' hs — ' + escapeHtml(e.fromLabel || e.from) + ' → <b>' + escapeHtml(e.toLabel || e.to) + '</b> (' + escapeHtml(e.detail || '') + ')').join('<br>') : 'Todavía no hubo cambios automáticos.';
+}
+async function loadBankRotation(probe) {
+    const form = document.getElementById('bankRotForm'), header = document.getElementById('bankRotHeader'), msg = document.getElementById('bankRotMsg');
+    try {
+        if (probe && msg) { msg.style.color = '#aaa'; msg.textContent = 'Probando las cuentas…'; }
+        const r = await authFetch('/api/admin/bank-rotation' + (probe ? '?probe=1' : ''));
+        if (!r.ok) { if (form) form.style.display = 'none'; if (header) header.style.display = 'none'; return; }
+        if (form) form.style.display = ''; if (header) header.style.display = '';
+        if (msg) msg.textContent = '';
+        _bankRotRender(await r.json());
+    } catch (e) { if (msg) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + e.message; } }
+}
+async function saveBankRotation() {
+    const msg = document.getElementById('bankRotMsg');
+    try {
+        const ck = (id) => !!(document.getElementById(id) || {}).checked;
+        const limits = {};
+        document.querySelectorAll('[data-rot-day]').forEach((el) => { const id = el.getAttribute('data-rot-day'); limits[id] = limits[id] || {}; limits[id].day = Number(el.value) || 0; });
+        document.querySelectorAll('[data-rot-month]').forEach((el) => { const id = el.getAttribute('data-rot-month'); limits[id] = limits[id] || {}; limits[id].month = Number(el.value) || 0; });
+        const body = { enabled: ck('bankRotEnabled'), onFailure: ck('bankRotOnFailure'), onLimit: ck('bankRotOnLimit'), crossBank: ck('bankRotCrossBank'), movePayouts: ck('bankRotMovePayouts'),
+            failChecks: Number((document.getElementById('bankRotFailChecks') || {}).value) || 3, limits };
+        const r = await authFetch('/api/admin/bank-rotation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'No se pudo guardar');
+        _bankRotRender(j);
+        if (msg) { msg.style.color = '#66ff99'; msg.textContent = '✅ Guardado. ' + (j.enabled ? 'La rotación está ENCENDIDA (controla cada 2 minutos).' : 'La rotación está apagada.'); }
+        showToast('✅ Rotación guardada', 'success');
+    } catch (e) { if (msg) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + e.message; } showToast(e.message, 'error'); }
+}
+window.loadBankRotation = loadBankRotation;
+window.saveBankRotation = saveBankRotation;
+
 async function loadBanksConfigSection() {
     loadCBUConfigOnly();
     loadBanks();       // #202 bancos automáticos (cargas / retiros / cuenta que ve el cliente)
     loadHgcashConfig();
     loadFinproCard();  // #202 Finpro (modo + cuentas)
+    loadBankRotation(); // #207 rotación automática
 }
 async function loadCBUConfigOnly() {
     try {

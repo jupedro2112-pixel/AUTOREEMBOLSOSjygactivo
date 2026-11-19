@@ -3068,9 +3068,19 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
         : (appBonus.skippedForBalance
           ? ` ℹ️ SIN bono ${appBonus.cfg.allPct}%: el cliente ya tenía $${Number(appBonus.preBalance).toLocaleString('es-AR')} de saldo antes de la carga (más de $${HGCASH_APP_BONUS_SKIP_BALANCE_ARS.toLocaleString('es-AR')}).`
           : ''));
+    // #207: aviso interno si la plata entró por una cuenta que NO es la que el cliente ve hoy
+    // (transfirió a una cuenta vieja / de respaldo). La carga entra igual.
+    let _offAccNote = '';
+    try {
+      const _isFp = movement.provider === 'finpro';
+      const _mAcc = _isFp ? _fpAccountOfMovement(movement) : ((movement.accountKey && _hgAccountByKey(movement.accountKey)) || null);
+      const _shownBank = await getBankShown();
+      const _inUse = _mAcc && (_isFp ? _fpIsActive(_mAcc) : _mAcc.key === _hgActiveKey) && (_shownBank === 'manual' || _shownBank === (_isFp ? 'finpro' : 'hgcash'));
+      if (_mAcc && !_inUse) _offAccNote = ` ⚠️ OJO: transfirió a la cuenta "${_isFp ? _fpAccountLabel(_mAcc) : _hgAccountLabel(_mAcc)}" (${_bk}), que NO es la que está en uso ahora. Se le cargó igual; avisale cuál es la cuenta actual.`;
+    } catch (_) {}
     await _emitAdminOnlyChatNote(user.id, user.username, assign
-      ? `🏦 ✅ CARGA ASIGNADA desde la bandeja del banco por ${agentLabel} — ${dataDesc}. Acreditado.${bonusNote}`
-      : `🏦 ✅ CARGA AUTOMÁTICA ${_bk} — ${dataDesc}. Acreditado.${bonusNote}`);
+      ? `🏦 ✅ CARGA ASIGNADA desde la bandeja del banco por ${agentLabel} — ${dataDesc}. Acreditado.${bonusNote}${_offAccNote}`
+      : `🏦 ✅ CARGA AUTOMÁTICA ${_bk} — ${dataDesc}. Acreditado.${bonusNote}${_offAccNote}`);
     _emitHgcashUpdate('cargado', movement.movementId);
     logger.info(`[hgcash] ${assign ? 'carga asignada por ' + agentLabel : 'auto-carga'} OK user=${user.username} amount=$${amount} movement=${movement.movementId}`);
     return { ok: true, txId };
@@ -17751,6 +17761,247 @@ app.post('/api/admin/cbu', authMiddleware, adminMiddleware, async (req, res) => 
 // transferir (bankShown → reescribe Config['cbu'] con la cuenta en uso de ese banco).
 // (El checkbox "Activar integración" de la card de hgcash sigue escribiendo hgcash.enabled:
 // son dos vistas de la misma llave.)
+// ============================================
+// #207 ROTACIÓN AUTOMÁTICA DE CUENTAS DE BANCO (por caída o por tope de movimiento)
+// ============================================
+// Config['bankRotation'] = { enabled, onFailure, failChecks, onLimit, crossBank, movePayouts,
+//   limits: { 'hgcash:a1': { day, month }, 'finpro:f1': {…} }, log: [últimos 30 cambios] }
+// Todo APAGADO por defecto. Qué rota: la cuenta EN USO del banco que VE el cliente
+// (`getBankShown()`; con "manual" no hay nada que rotar). Cada 2 min, por instancia:
+//   1) TOPE: lo que ENTRÓ por esa cuenta hoy / este mes (BankMovement Inbound, hora Argentina)
+//      llegó al tope → pasa a la siguiente.
+//   2) CAÍDA: la cuenta no responde `failChecks` controles seguidos (hgcash: /accounts con su
+//      token; Finpro: saldo con sus credenciales) → pasa a la siguiente.
+// La siguiente = la próxima cuenta cargada que recibe cargas, tiene datos para mostrar, responde y
+// no llegó a su tope. Primero las del mismo banco; las del otro banco solo con `crossBank`.
+// El cambio usa los MISMOS caminos que el botón "USAR ESTA" (`_hgActivateAccount` /
+// `_fpActivateAccount`), así que hereda sus reglas (un pago recuerda su cuenta, etc.).
+// Multi-instancia: el cambio se reclama con un candado atómico (Config['bankRotationLock'], 5 min)
+// → rota UNA instancia y no se encadenan dos rotaciones seguidas.
+const BANK_ROT_DEFAULTS = { enabled: false, onFailure: true, failChecks: 3, onLimit: true, crossBank: false, movePayouts: false, limits: {}, log: [] };
+const BANK_ROT_COOLDOWN_MS = 5 * 60 * 1000;
+function _rotNorm(raw) {
+  const c = Object.assign({}, BANK_ROT_DEFAULTS, raw && typeof raw === 'object' ? raw : {});
+  c.enabled = c.enabled === true; c.onFailure = c.onFailure !== false; c.onLimit = c.onLimit !== false;
+  c.crossBank = c.crossBank === true; c.movePayouts = c.movePayouts === true;
+  c.failChecks = Math.min(10, Math.max(2, Math.round(Number(c.failChecks) || 3)));
+  const lim = {};
+  if (c.limits && typeof c.limits === 'object') {
+    for (const k of Object.keys(c.limits)) {
+      if (!/^(hgcash|finpro):[A-Za-z0-9_-]{1,20}$/.test(k)) continue;
+      const day = Math.max(0, Math.round(Number(c.limits[k] && c.limits[k].day) || 0));
+      const month = Math.max(0, Math.round(Number(c.limits[k] && c.limits[k].month) || 0));
+      if (day || month) lim[k] = { day, month };
+    }
+  }
+  c.limits = lim;
+  c.log = Array.isArray(c.log) ? c.log.slice(0, 30) : [];
+  return c;
+}
+async function getBankRotation() { return _rotNorm(await getConfig('bankRotation', null).catch(() => null)); }
+// Todas las cuentas cargadas en el panel, en orden fijo: hgcash a1.. y después Finpro f1..
+function _rotSlots() {
+  const out = [];
+  for (const a of _hgAccounts) out.push({ provider: 'hgcash', key: a.key, id: 'hgcash:' + a.key, label: _hgAccountLabel(a), acc: a });
+  for (const a of _fpAccounts) out.push({ provider: 'finpro', key: a.key, id: 'finpro:' + a.key, label: _fpAccountLabel(a), acc: a });
+  return out;
+}
+// Inicio del día y del mes en hora Argentina (UTC-3 fijo).
+function _rotPeriodStarts(now = Date.now()) {
+  const ar = new Date(now - 3 * 3600 * 1000);
+  const day = Date.UTC(ar.getUTCFullYear(), ar.getUTCMonth(), ar.getUTCDate()) + 3 * 3600 * 1000;
+  const month = Date.UTC(ar.getUTCFullYear(), ar.getUTCMonth(), 1) + 3 * 3600 * 1000;
+  return { day: new Date(day), month: new Date(month) };
+}
+// Lo que ENTRÓ por una cuenta hoy y este mes (todas las transferencias entrantes, cargadas o no).
+async function _rotUsage(slot) {
+  const st = _rotPeriodStarts();
+  const match = { direction: 'Inbound', accountKey: slot.key, createdAt: { $gte: st.month },
+    provider: slot.provider === 'finpro' ? 'finpro' : { $in: ['hgcash', null] } };
+  const rows = await BankMovement.aggregate([
+    { $match: match },
+    { $group: { _id: null, month: { $sum: { $ifNull: ['$amount', 0] } }, day: { $sum: { $cond: [{ $gte: ['$createdAt', st.day] }, { $ifNull: ['$amount', 0] }, 0] } } } }
+  ]);
+  const r = rows[0] || {};
+  return { day: Math.round(Number(r.day) || 0), month: Math.round(Number(r.month) || 0) };
+}
+function _rotOverLimit(cfg, slot, usage) {
+  const l = cfg.limits[slot.id];
+  if (!l) return null;
+  if (l.day > 0 && usage.day >= l.day) return `llegó al tope del DÍA ($${usage.day.toLocaleString('es-AR')} de $${l.day.toLocaleString('es-AR')})`;
+  if (l.month > 0 && usage.month >= l.month) return `llegó al tope del MES ($${usage.month.toLocaleString('es-AR')} de $${l.month.toLocaleString('es-AR')})`;
+  return null;
+}
+// ¿La cuenta responde? { ok, error }. `unknown:true` = no hay con qué controlarla (cuenta como sana).
+async function _rotProbe(slot) {
+  try {
+    if (slot.provider === 'hgcash') {
+      if (!slot.acc.token) return { ok: false, error: 'sin token' };
+      const r = await hgcashPay.getAccounts(slot.acc.token);
+      if (!r.ok) return { ok: false, error: String(r.error || 'sin respuesta').slice(0, 200) };
+      const mine = slot.acc.accountId ? (r.data || []).find((x) => x && String(x.id) === String(slot.acc.accountId)) : null;
+      if (mine && mine.status && /block|suspend|disabl|inactiv|clos|frozen|freez/i.test(String(mine.status))) return { ok: false, error: 'la cuenta figura "' + mine.status + '" en hgcash' };
+      return { ok: true };
+    }
+    if (!_fpHasCreds(slot.acc)) return { ok: false, error: 'sin credenciales' };
+    if (!slot.acc.account) return { ok: true, unknown: true };
+    const b = await finpro.getBalance({ account: slot.acc.account, ctx: _fpCtx(slot.acc) });
+    if (b && b.ok) return { ok: true };
+    return { ok: false, error: String((b && (b.httpStatus ? 'HTTP ' + b.httpStatus + ' ' : '') + (b.error || b.description || '')) || 'sin respuesta').slice(0, 200) };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+// ¿Esta cuenta puede quedar EN USO y mostrarse al cliente? null = sí; texto = por qué no.
+function _rotSlotBlocked(slot, hgCfg, fpCfg) {
+  const a = slot.acc;
+  if (a.incomingEnabled === false) return 'está pausada para cargas';
+  if (slot.provider === 'hgcash') {
+    if (!hgCfg.enabled) return 'hgcash no recibe cargas automáticas';
+    if (!a.token) return 'no tiene token';
+    if (!a.cbu && !a.alias) return 'no tiene CBU ni alias para mostrarle al cliente';
+    return null;
+  }
+  if (!fpCfg.enabled) return 'Finpro no recibe cargas automáticas';
+  if (!_fpHasCreds(a)) return 'no tiene credenciales';
+  if (String(a.fromCvu || '').length !== 22) return 'no tiene CVU para mostrarle al cliente';
+  return null;
+}
+async function _rotCurrent() {
+  const shown = await getBankShown();
+  if (shown !== 'hgcash' && shown !== 'finpro') return null;
+  const key = shown === 'hgcash' ? _hgActiveKey : _fpActiveKey;
+  return _rotSlots().find((s) => s.provider === shown && s.key === key) || null;
+}
+async function _rotAlert(text) {
+  logger.warn('[bank-rotation] ' + text);
+  try { if (telegramAlert.isEnabled()) await telegramAlert.send(`🔁 <b>${telegramAlert.esc(_projectLabel())}</b> — BANCO\n${telegramAlert.esc(text)}`); } catch (_) {}
+}
+async function _rotClaim() {
+  const now = Date.now();
+  try {
+    const r = await Config.findOneAndUpdate(
+      { key: 'bankrotationlock', $or: [{ 'value.at': { $lt: now - BANK_ROT_COOLDOWN_MS } }, { 'value.at': { $exists: false } }, { value: null }] },
+      { $set: { value: { at: now } } });
+    if (r) return true;
+    if (await Config.findOne({ key: 'bankrotationlock' }).select('_id').lean()) return false;
+    await Config.create({ key: 'bankrotationlock', value: { at: now } });
+    return true;
+  } catch (_) { return false; } // otra instancia lo creó / reclamó en el mismo instante
+}
+let _rotNoCandAt = 0;
+/** Pasa a la siguiente cuenta disponible. `by` = quién (cron: 'rotación automática'). */
+async function _bankRotate(cfg, cur, reason, detail, by = 'rotación automática') {
+  const [hgCfg, fpCfg] = await Promise.all([getHgcashConfig(), getFinproConfig()]);
+  const all = _rotSlots();
+  const i = all.findIndex((s) => s.id === cur.id);
+  const ordered = all.slice(i + 1).concat(all.slice(0, Math.max(0, i))).filter((s) => s.id !== cur.id);
+  // Primero las del mismo banco; las del otro banco solo si está permitido.
+  const cands = ordered.filter((s) => s.provider === cur.provider).concat(cfg.crossBank ? ordered.filter((s) => s.provider !== cur.provider) : []);
+  const skipped = [];
+  let target = null;
+  for (const s of cands) {
+    const why = _rotSlotBlocked(s, hgCfg, fpCfg);
+    if (why) { skipped.push(`${s.label}: ${why}`); continue; }
+    const over = cfg.limits[s.id] ? _rotOverLimit(cfg, s, await _rotUsage(s)) : null; // sin tope cargado no se consulta la base
+    if (over) { skipped.push(`${s.label}: ${over}`); continue; }
+    const pr = await _rotProbe(s);
+    if (!pr.ok) { skipped.push(`${s.label}: no responde (${pr.error})`); continue; }
+    target = s; break;
+  }
+  const motivo = reason === 'limit' ? detail : `no responde (${detail})`;
+  if (!target) {
+    if (Date.now() - _rotNoCandAt > 30 * 60 * 1000) {
+      _rotNoCandAt = Date.now();
+      await _rotAlert(`⚠️ La cuenta en uso "${cur.label}" (${_bankLabel(cur.provider)}) ${motivo} y NO hay otra cuenta disponible para rotar.${skipped.length ? ' Descartadas → ' + skipped.join(' · ') : ' No hay más cuentas cargadas.'} Sigue en uso la misma: revisalo a mano.`);
+    }
+    return { ok: false, error: 'sin cuenta disponible', skipped };
+  }
+  if (!(await _rotClaim())) return { ok: false, error: 'otra rotación reciente' };
+  // Otra instancia pudo haber rotado mientras se evaluaba: se relee quién está en uso.
+  await _loadHgcashCredentials(); await _loadFinproCredentials();
+  const now = await _rotCurrent();
+  if (!now || now.id !== cur.id) return { ok: false, error: 'ya rotó' };
+  const warnings = [];
+  let payoutsMoved = false;
+  if (target.provider !== cur.provider) await Config.set('bankShown', target.provider, by);
+  const act = target.provider === 'hgcash' ? await _hgActivateAccount(target.key, by) : await _fpActivateAccount(target.key, by);
+  warnings.push(...(act.warnings || []));
+  if (target.provider !== cur.provider && cfg.movePayouts && reason === 'failure') {
+    const ready = target.provider === 'hgcash' ? !!target.acc.token : _fpReadyPayouts(target.acc);
+    if (ready) { await Config.set('bankProvider', target.provider, by); payoutsMoved = true; }
+    else warnings.push(`Los retiros siguen saliendo por ${_bankLabel(cur.provider)}: la cuenta nueva no está lista para pagar.`);
+  }
+  const entry = { at: new Date(), reason, from: cur.id, fromLabel: cur.label, to: target.id, toLabel: target.label, detail: String(motivo).slice(0, 300), payoutsMoved, by };
+  try {
+    const raw = (await getConfig('bankRotation', null)) || {};
+    await setConfig('bankRotation', Object.assign({}, raw, { log: [entry].concat(Array.isArray(raw.log) ? raw.log : []).slice(0, 30) }));
+  } catch (_) {}
+  _rotFails.delete(cur.id);
+  await _rotAlert(`Se cambió la cuenta EN USO: "${cur.label}" (${_bankLabel(cur.provider)}) → "${target.label}" (${_bankLabel(target.provider)}).\nMotivo: la anterior ${motivo}.\nEl cliente ya ve la cuenta nueva.${payoutsMoved ? ' Los retiros también pasaron a ' + _bankLabel(target.provider) + '.' : ''}${warnings.length ? '\n⚠️ ' + warnings.join(' ') : ''}`);
+  try { _emitHgcashUpdate('rotacion', null); } catch (_) {}
+  return { ok: true, to: target.id, entry, warnings };
+}
+const _rotFails = new Map(); // id → controles fallidos seguidos (por instancia)
+let _rotTickRunning = false;
+async function _bankRotationTick() {
+  if (_rotTickRunning) return null;
+  _rotTickRunning = true;
+  try {
+    const cfg = await getBankRotation();
+    if (!cfg.enabled) return null;
+    const cur = await _rotCurrent();
+    if (!cur) return null;
+    if (cfg.onLimit) {
+      const over = cfg.limits[cur.id] ? _rotOverLimit(cfg, cur, await _rotUsage(cur)) : null;
+      if (over) return await _bankRotate(cfg, cur, 'limit', over);
+    }
+    if (cfg.onFailure) {
+      const pr = await _rotProbe(cur);
+      if (pr.ok) { _rotFails.set(cur.id, 0); return null; }
+      const n = (_rotFails.get(cur.id) || 0) + 1;
+      _rotFails.set(cur.id, n);
+      logger.warn(`[bank-rotation] "${cur.label}" no responde (${n}/${cfg.failChecks}): ${pr.error}`);
+      if (n >= cfg.failChecks) return await _bankRotate(cfg, cur, 'failure', pr.error);
+    }
+    return null;
+  } catch (e) { logger.warn('[bank-rotation] control falló: ' + e.message); return null; }
+  finally { _rotTickRunning = false; }
+}
+setInterval(() => { _bankRotationTick(); }, 2 * 60 * 1000);
+
+async function _bankRotationPayload({ probe = false } = {}) {
+  const cfg = await getBankRotation();
+  const [hgCfg, fpCfg, cur] = await Promise.all([getHgcashConfig(), getFinproConfig(), _rotCurrent()]);
+  const slots = [];
+  for (const s of _rotSlots()) {
+    const usage = await _rotUsage(s).catch(() => ({ day: 0, month: 0 }));
+    const row = { id: s.id, provider: s.provider, key: s.key, label: s.label, bank: _bankLabel(s.provider), inUse: !!cur && cur.id === s.id,
+      limit: cfg.limits[s.id] || { day: 0, month: 0 }, usage, blocked: _rotSlotBlocked(s, hgCfg, fpCfg), over: _rotOverLimit(cfg, s, usage), fails: _rotFails.get(s.id) || 0 };
+    if (probe) { const p = await _rotProbe(s); row.probe = { ok: p.ok, unknown: !!p.unknown, error: p.error || null }; }
+    slots.push(row);
+  }
+  return { enabled: cfg.enabled, onFailure: cfg.onFailure, failChecks: cfg.failChecks, onLimit: cfg.onLimit, crossBank: cfg.crossBank, movePayouts: cfg.movePayouts,
+    shown: await getBankShown(), slots, log: cfg.log };
+}
+app.get('/api/admin/bank-rotation', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    await _loadFinproCredentials();
+    res.json(Object.assign({ success: true }, await _bankRotationPayload({ probe: req.query.probe === '1' })));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+app.post('/api/admin/bank-rotation', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Solo admin general' });
+    const b = req.body || {};
+    const prev = (await getConfig('bankRotation', null)) || {};
+    const next = _rotNorm({ enabled: b.enabled === true, onFailure: b.onFailure !== false, failChecks: b.failChecks, onLimit: b.onLimit !== false,
+      crossBank: b.crossBank === true, movePayouts: b.movePayouts === true, limits: b.limits, log: prev.log });
+    await setConfig('bankRotation', Object.assign(next, { updatedBy: req.user.username, updatedAt: new Date() }));
+    logger.info(`[bank-rotation] ${req.user.username}: ${next.enabled ? 'ENCENDIDA' : 'apagada'} · caída ${next.onFailure ? 'sí (' + next.failChecks + ')' : 'no'} · topes ${next.onLimit ? 'sí' : 'no'} · otro banco ${next.crossBank ? 'sí' : 'no'}`);
+    res.json(Object.assign({ success: true }, await _bankRotationPayload()));
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
+});
+
 async function _banksPayload() {
   const [hg, fp, provider, shown, cbu] = await Promise.all([getHgcashConfig(), getFinproConfig(), getBankProvider(), getBankShown(), getConfig('cbu', null)]);
   const incoming = hg.enabled && fp.enabled ? 'both' : (hg.enabled ? 'hgcash' : (fp.enabled ? 'finpro' : 'none'));

@@ -827,6 +827,12 @@ Reglas: el candado del usuario solo se suelta en estados donde NO hay plata en t
 durante una mudanza: quien valide un retiro tiene que tratarlo como "reintentar", no como saldo insuficiente. Mudanzas en segundo plano:
 máximo `BG_MAX_CONCURRENT` (4) por instancia. `migrateUser` no decide equipo sin la tabla de equipos cargada.
 
+### 11.9 Rotación automática de cuentas de banco (#207)
+`Config['bankRotation']` + `_bankRotationTick` (server.js, cada 2 min). Rota la cuenta EN USO del banco mostrado al cliente por CAÍDA
+(`_rotProbe`, N controles seguidos) o por TOPE diario/mensual de plata entrante (`_rotUsage`). Candidatas: `_rotSlots()` filtradas por
+`_rotSlotBlocked`, tope y probe; otro banco solo con `crossBank`. Cambia con `_hgActivateAccount`/`_fpActivateAccount`; candado
+`Config['bankRotationLock']`. Endpoints `GET/POST /api/admin/bank-rotation` (`?probe=1` prueba las cuentas). Test `scripts/test-bank-rotation.js`.
+
 ### 10.3c Corte fijo de la lectura de la vieja (#204)
 `OLD_NETWIN_CUTOFF_MS` (`platform.js`) = 1-ene-2027 00:00 ART, **hardcodeado a propósito** (owner: "programado e irremovible"). Desde ahí
 `getUserNetwinForDateRange` / `getUserRevenueForPeriod` de un `partner` no suman el tramo de la vieja anterior a la mudanza. No toca a los no

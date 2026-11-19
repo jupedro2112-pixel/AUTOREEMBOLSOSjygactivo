@@ -18254,7 +18254,6 @@ app.post('/api/admin/finpro/accounts', authMiddleware, adminMiddleware, async (r
     if (saved && !saved.webhookSecret) warnings.push('Sin secreto de firma de los webhooks, los avisos de esta cuenta se RECHAZAN: sus cargas solo entran cuando el cliente manda el comprobante (verificación). Cargalo cuando Finpro te lo dé.');
     if (!fromCvu) warnings.push('Sin NUESTRO CVU esta cuenta no puede pagar retiros ni reconocer a qué cuenta entró una transferencia.');
     if (fromCvu && !holder) warnings.push('No se pudo leer el titular de ese CVU en Finpro (se reintenta solo).');
-    if (finpro.isDevUrl(baseUrl || process.env.FINPRO_API_URL || finpro.DEFAULT_BASE_URL)) warnings.push('La URL base es la de DESARROLLO de Finpro (la de la documentación): confirmá con Finpro la de producción y cargala.');
     if (next.activeKey === newKey && (await getBankShown()) === 'finpro') warnings.push(...await _fpApplyShownToCbu(saved)); // la cuenta en uso manda sobre el CBU que ve el cliente
     logger.warn(`[finpro] #202 cuenta "${label}" (${newKey}) ${cur ? 'editada' : 'creada'} por ${req.user.username}${apiKeyNew ? ' key …' + apiKeyNew.slice(-4) : ''}${apiSecretNew ? ' +secret' : ''}${webhookSecretNew ? ' +secreto-webhook' : ''}${fromCvu ? ' cvu…' + fromCvu.slice(-4) : ''}${baseUrl ? ' url=' + baseUrl : ''}`);
     res.json(Object.assign({ success: true, key: newKey, balance, balanceError, holder, warnings }, _fpAccountsPayload(), { canEdit: true }));

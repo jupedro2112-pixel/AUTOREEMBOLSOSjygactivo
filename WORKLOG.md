@@ -8,6 +8,11 @@
 
 ## Sesión 2026-11-19
 
+### 209. 🟣 Finpro: fuera los carteles de "URL de desarrollo"
+- Owner confirmó con plata real (cargas automáticas Y retiros pagados) que `https://mw-dev.finpro.com.ar` + bankId `creedence` es PRODUCCIÓN
+  para su cuenta. Se sacaron el cartel amarillo de la cuenta, el de "Bancos automáticos", el aviso al guardar y el texto del campo URL. SW v78.
+  (`finpro.isDevUrl` y el campo `dev` de los payloads quedan, sin uso visible.)
+
 ### 208. 🏦 Banco: UNA barra con todas las cuentas (hgcash + Finpro)
 - Owner (captura): en 🏦 Banco el selector solo listaba las cuentas hgcash; la de Finpro no aparecía (su barra propia solo se muestra con
   Finpro como banco visible y 2+ cuentas Finpro).

@@ -6658,7 +6658,7 @@ function _bankStatusTxt(key, b) {
             (b.activeAccount ? ' · en uso: <b>' + escapeHtml(b.activeAccount) + '</b>' + (b.fromCvu ? ' (CVU ' + escapeHtml(b.fromCvu) + ')' : ' <span style="color:#ff8080;">sin CVU</span>') : '') +
             ((b.noWebhookSecret || []).length ? ' · <span style="color:#ffb74d;">sin secreto del webhook: ' + escapeHtml(b.noWebhookSecret.join(', ')) + ' (sus entrantes no llegan solas)</span>' : (b.webhookSecret ? ' · firma webhook ✅' : '')) +
             (b.readyPayouts ? '' : ' · <span style="color:#ffb74d;">no puede pagar retiros</span>') +
-            (b.dev ? ' · <span style="color:#ffd479;">URL de desarrollo (confirmar con Finpro)</span>' : '');
+            '';
     }
     const tok = b.token === 'panel' ? (b.accountsCount || 0) + ' cuenta(s) en el panel' : (b.token === 'ssm' ? 'token AWS' : '<span style="color:#ff8080;">sin token</span>');
     const sec = b.secret ? 'firma ✅' : '<span style="color:#ff8080;">sin secreto del webhook</span>';
@@ -6805,7 +6805,7 @@ function _fpAccRender(j) {
                     '<br>' + recv + (a.readyPayouts ? ' · <span style="color:#66ff99;">puede pagar retiros</span>' : ' · <span style="color:#ffb74d;">no puede pagar retiros</span>') +
                     '<br><span style="color:#888;">' + (a.env ? 'credenciales de AWS (SSM)' : 'key ' + (a.apiKeyLast4 ? '…' + escapeHtml(a.apiKeyLast4) : '<span style="color:#ff8080;">FALTA</span>') + ' · secret ' + (a.apiSecretLast4 ? '…' + escapeHtml(a.apiSecretLast4) : '<span style="color:#ff8080;">FALTA</span>')) +
                         ' · webhook ' + (a.hasWebhookSecret ? '…' + escapeHtml(a.webhookSecretLast4 || '✅') : '<span style="color:#ff8080;">sin secreto</span>') +
-                        ' · cuenta ' + (a.account ? escapeHtml(a.account) : '—') + ' · bankId ' + escapeHtml(a.bankId || 'creedence') + (a.dev ? ' · <span style="color:#ffd479;">URL de desarrollo</span>' : '') +
+                        ' · cuenta ' + (a.account ? escapeHtml(a.account) : '—') + ' · bankId ' + escapeHtml(a.bankId || 'creedence') +
                         ((a.extraCvus || []).length ? ' · +' + a.extraCvus.length + ' CVU' : '') + '</span>' +
                 '</div>' +
                 (a.env ? '' : '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
@@ -6989,7 +6989,7 @@ async function finproDiag() {
         if (!r.ok) { box.innerHTML = '<span style="color:#ff8080;">' + escapeHtml(j.error || 'No se pudo leer') + '</span>'; return; }
         const sv = j.service || {}; const tk = sv.token || {}; const cb = j.callbacks || {}; const vf = j.verify || {}; const wh = j.webhooks || {};
         let h = '<b>🔑 Cuentas:</b> ' + ((j.accounts || []).map(function (a) {
-            return (a.active ? '● ' : '') + escapeHtml(a.label) + ' [' + (a.hasCreds ? 'credenciales ✅' : '<span style="color:#ff8080;">sin credenciales</span>') + ' · ' + (a.fromCvu ? 'CVU …' + escapeHtml(String(a.fromCvu).slice(-6)) : '<span style="color:#ff8080;">sin CVU</span>') + ' · ' + (a.hasWebhookSecret ? 'firma ✅' : '<span style="color:#ffb74d;">sin secreto</span>') + ' · ' + (a.receives ? 'recibe' : 'no recibe') + ' · <code>' + escapeHtml(a.effectiveBaseUrl || '') + '</code>' + (a.dev ? ' <span style="color:#ffd479;">(desarrollo)</span>' : '') + ']';
+            return (a.active ? '● ' : '') + escapeHtml(a.label) + ' [' + (a.hasCreds ? 'credenciales ✅' : '<span style="color:#ff8080;">sin credenciales</span>') + ' · ' + (a.fromCvu ? 'CVU …' + escapeHtml(String(a.fromCvu).slice(-6)) : '<span style="color:#ff8080;">sin CVU</span>') + ' · ' + (a.hasWebhookSecret ? 'firma ✅' : '<span style="color:#ffb74d;">sin secreto</span>') + ' · ' + (a.receives ? 'recibe' : 'no recibe') + ' · <code>' + escapeHtml(a.effectiveBaseUrl || '') + '</code>' + ']';
         }).join(' · ') || '<span style="color:#ff8080;">NINGUNA</span>') +
             '<br><b>Token de la cuenta en uso:</b> ' + (tk.has ? 'vigente, vence en ' + Math.round((tk.secondsLeft || 0) / 60) + ' min' : 'sin token todavía (se pide al usarlo)');
         h += '<br><b>📞 Webhook principal (callbacks de retiros)</b> (esta instancia): ' + (cb.received || 0) + ' recibidos · ' + (cb.matched || 0) + ' de nuestros procesos · ' + (cb.signed || 0) + ' firmados OK · ' + (cb.badSignature || 0) + ' con firma inválida · ' + (cb.confirmedFromPayload || 0) + ' resueltos desde el aviso' + (cb.lastAt ? ' · último ' + _fpFecha(cb.lastAt) + ' process ' + escapeHtml(cb.lastProcessId || '—') + ' status ' + escapeHtml(cb.lastStatus || '—') + ' firma ' + escapeHtml(cb.lastSignature || '—') : '');

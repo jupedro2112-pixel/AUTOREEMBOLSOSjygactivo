@@ -932,7 +932,7 @@ consulta. `handlePayoutStatusWebhook` ignora avisos de un banco distinto a `payo
 bandeja traen `hgAccount {key,label,active,bank}` también para Finpro; `GET /api/admin/payouts` trae `bankProvider` y `bankAccount`.
 
 ### 11.6 Trampas
-- La URL base por defecto (`finpro.DEFAULT_BASE_URL`) es la de **desarrollo** de la doc. El panel lo avisa (`dev:true`).
+- La URL base por defecto (`finpro.DEFAULT_BASE_URL` = `mw-dev.finpro.com.ar`) dice "dev" pero es la que funciona en PRODUCCIÓN (owner lo confirmó con cargas y retiros reales, #209). El panel ya no lo avisa.
 - Finpro **no informa reversiones**: una transferencia confirmada se da por firme.
 - Un pago existente se consulta con `_fpCtxFor(p.fpAccountKey)`, nunca con la cuenta en uso. Un flujo nuevo que pague guarda `fpAccountKey`.
 - No reusar un `process_id` salvo que el lote anterior haya sido ACEPTADO por la misma cuenta; nunca reenviar un lote sin respuesta.

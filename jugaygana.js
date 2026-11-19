@@ -1108,7 +1108,17 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
       });
       const retryHeaders = {};
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
-      const retryResp = await client.post('', retryBody, { headers: retryHeaders });
+      // #201: el reintento también puede PROCESARSE y cortar la conexión → mismo trato que el primer envío
+      // (antes caía al catch general y devolvía un rechazo común: la mudanza lo tomaba como "no se hizo").
+      let retryResp;
+      try {
+        retryResp = await client.post('', retryBody, { headers: retryHeaders });
+      } catch (netErr2) {
+        const v = await _verifyMoneyByBalance(username, _before, Number(amount), `carga $${amount}`);
+        if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+        if (v === 'not_applied') return { success: false, error: `Sin respuesta de JUGAYGANA (${netErr2.message}); la carga NO entró — se puede reintentar.` };
+        return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`la carga de $${amount}`, netErr2.message + ' tras renovar sesión') };
+      }
       data = parsePossiblyWrappedJson(retryResp.data);
       if (isHtmlBlocked(data)) {
         const v = await _verifyMoneyByBalance(username, _before, Number(amount), `carga $${amount}`);
@@ -1290,7 +1300,17 @@ async function withdrawFromUser(username, amount, description = '', jugayganaUse
       });
       const retryHeaders = {};
       if (SESSION_COOKIE) retryHeaders.Cookie = SESSION_COOKIE;
-      const retryResp = await client.post('', retryBody, { headers: retryHeaders });
+      // #201: el reintento también puede PROCESARSE y cortar la conexión → mismo trato que el primer envío
+      // (antes caía al catch general y devolvía un rechazo común: la mudanza lo tomaba como "no se hizo").
+      let retryResp;
+      try {
+        retryResp = await client.post('', retryBody, { headers: retryHeaders });
+      } catch (netErr2) {
+        const v = await _verifyMoneyByBalance(username, _before, -Number(amount), `retiro $${amount}`);
+        if (v === 'confirmed') return { success: true, data: { verifiedByBalance: true }, verifiedByBalance: true };
+        if (v === 'not_applied') return { success: false, error: `Sin respuesta de JUGAYGANA (${netErr2.message}); el retiro NO se descontó — se puede reintentar.` };
+        return { success: false, ambiguous: true, error: _AMBIGUOUS_MSG(`el retiro de $${amount}`, netErr2.message + ' tras renovar sesión') };
+      }
       data = parsePossiblyWrappedJson(retryResp.data);
       if (isHtmlBlocked(data)) {
         const v = await _verifyMoneyByBalance(username, _before, -Number(amount), `retiro $${amount}`);

@@ -813,6 +813,20 @@ en el gemelo, y §15 de `CONOCIMIENTO-EN-PRODUCCION.md` con lo medido en jugayga
 ⚠️ Estar en la lista del modo "list" NO dispara nada solo: el tick no busca usuarios para mudar, solo reintenta/destraba/rechequea/cierra
 cuentas viejas. Para mudar ya: "Mudar a un usuario ahora" (`…/migrate-user`, force).
 
+### 10.3b Blindaje (#201) — qué pasa cuando algo falla
+
+| Momento de la falla | Qué hace |
+|---|---|
+| Antes de mover plata (lookup/alta en la nueva, saldo en la vieja, retiro rechazado) | `failed`, sin candado, reintento con espera creciente (`_failedWaitMs`); 3 fallas seguidas abren el cortacorriente 2 min; Telegram al 5º fallo |
+| Retiro en la vieja DUDOSO (ambiguo / proceso muerto en `withdrawing`) | `review` CON candado + `reviewAutoUntil` 15 min; tick b0: saldo intacto → `failed` (se cancela sola); si no → `_reviewToHuman` |
+| Retiro "rechazado" que en realidad se hizo | memo `wdFailBalance/wdFailAmount`; al reintentar, si el saldo bajó ese monto → `review` (no se muda el resto) |
+| Plata retirada y la nueva no responde | `deposit_pending` con candado; tick reintenta con la MISMA reference (20/vuelta); `_finishDeposit` tiene claim propio (`depositClaimAt`) |
+| Plata que aparece en la vieja después | recheck 10 min / 1 h / 1 d / 7 d / 30 d → `moveOldResidual` automático (`residualPhase`), tope → manual |
+
+Reglas: el candado del usuario solo se suelta en estados donde NO hay plata en tránsito. `plat.getUserBalance*` devuelve `migrating:true`
+durante una mudanza: quien valide un retiro tiene que tratarlo como "reintentar", no como saldo insuficiente. Mudanzas en segundo plano:
+máximo `BG_MAX_CONCURRENT` (4) por instancia. `migrateUser` no decide equipo sin la tabla de equipos cargada.
+
 ### 10.4 Endpoints
 
 - Jugador: `GET /api/platform/info` → `{ sso, url }` (`sso` también si le toca mudarse); `POST /api/platform/session` → muda si

@@ -8,6 +8,45 @@
 
 ## Sesión 2026-11-19
 
+### 201. 🛡️ Auditoría completa de la mudanza antes de pasar a "Todos" (14 mil usuarios) — 2 revisiones (propia + independiente) — admin-sw v72
+- **Owner:** "chequeá todos los errores que puede haber y solucionalos; es grave un error así para 14 mil usuarios" + "si falla la API que no
+  quede en la mitad: que se cancele y pruebe la próxima vez que entre". Respuesta de diseño: eso YA es así en todo lo previo a mover plata;
+  el único punto sin "cancelar" es con la plata ya retirada de la vieja (devolverla pasa por la API vieja, que no es idempotente: es más
+  riesgoso que reintentar la carga en la nueva con la misma reference). El owner no objetó; queda así.
+- **Plata (críticos):**
+  - `jugaygana.js` `depositToUser`/`withdrawFromUser`: el POST de reintento tras renovar sesión no tenía try propio → un timeout ahí caía al
+    catch general y devolvía un rechazo COMÚN aunque JUGAYGANA lo hubiera procesado. Ahora verifica por saldo y devuelve `ambiguous` (#151).
+  - Motor: un retiro "rechazado" deja `wdFailBalance/wdFailAmount`; si en el reintento el saldo de la vieja bajó ese monto → **revisión**, no se
+    muda "lo que queda" (antes se perdía lo retirado, sin alerta).
+  - `_finishDeposit` con **claim** (`depositClaimAt`, solo desde `deposit_pending` o `running`+withdrawn/depositing): antes dos procesos (tick de
+    otra instancia + apertura de la app) podían pisar un `done` con `deposit_pending` y volver a trabar a un mudado / pausar el equipo.
+  - `catch` de `migrateUser`: el candado solo se suelta si NO se movió plata (antes soltaba con `deposit_pending` → cargas a la vieja vacía).
+    `plat.depositToUser`: si la mudanza previa tira, relee la ruta; si no puede, `migrating` (nunca la ruta vieja).
+  - **Equipos:** `migrateUser` exige la tabla de equipos cargada (`loadTeams`); sin ella no muda (antes un "ato…" podía quedar fijado a `default`).
+  - `rate_limited_local` de giroxService (pedido que NUNCA salió) ya no se informa como `ambiguous`.
+- **"Si la API falla, se cancela":** cortacorriente (`_apiFail/_breakerOpen`): 3 fallas seguidas de lookup en la nueva / saldo en la vieja →
+  2 min sin arrancar mudanzas nuevas (las cargas no esperan a una plataforma caída). Reintento de `failed` con espera creciente
+  (`_failedWaitMs`, 2 min → 1 h) y Telegram al 5º fallo seguido.
+- **Retiro DUDOSO (antes siempre a una persona):** `_toReview` deja `review` CON candado y `reviewAutoUntil` (15 min); el tick (b0) mira el saldo de
+  la vieja: intacto (±$0,01 vs `oldBalance`) → `failed`, sin candado, se reintenta sola; si no se puede saber al vencer la ventana →
+  `_reviewToHuman` (suelta candado + Telegram + nota). Nunca se auto-confirma "sí se hizo" (el jugador pudo jugarse todo en esa ventana).
+- **Residuos (plata que aparece en la vieja después de mudar):** revisiones a 10 min / 1 h / 1 día / 1 semana / 1 mes (`RECHECK_DELAYS_MS`) y
+  **traslado automático** (`moveOldResidual` con estado persistido `residualPhase` claiming→withdrawing→withdrawn, reference `…-r<n>`,
+  `_finishResidual` reintentado por el tick); mayor al tope → espera aprobación; retiro dudoso → panel "Residuo: SÍ / NO se hizo"
+  (`resolveResidual`, mismo endpoint `/residual` con `{withdrawn}`).
+- **Escala:** cupo de 4 mudanzas en segundo plano por instancia (`BG_MAX_CONCURRENT`; casino y cargas no pasan por el cupo); tick con presupuesto
+  de 45 s por vuelta, 20 cargas pendientes por vuelta en orden; `plat.depositToUser` espera hasta ~12 s si OTRO proceso está mudando al usuario.
+- **Flujos alrededor:** transferencia hgcash con la cuenta mudándose → `hgcashHandleMigratingWait` (no gasta intentos, reintenta la MISMA carga
+  cada 60 s hasta 3 h, nota "no cargar a mano", `BankMovement.migWaitNoted`); pago de retiro / pedido de retiro con cuenta mudándose →
+  "reintentá en un minuto" (antes: cancelado por "saldo insuficiente" y chat cerrado; `balRes.migrating`); devolución de retiro rechazado
+  dudosa → `_alertMoneyAmbiguous` + "no repetir a ciegas" (antes: "completalo a mano" = posible doble devolución).
+- **Sabido y NO cambiado:** comisión de referidos lee la plataforma del referidor y acredita enseguida (ventana de ms; si cae en la vieja la
+  levanta el residuo automático). La clave real del jugador en jugaygana.io se replica solo en un LOGIN (quien entra siempre por token usa el
+  botón/SSO). Los timers de reintento hgcash se pierden si el proceso reinicia (queda en la bandeja con el motivo; asignar a mano funciona).
+  Todo supone que jugaygana.io respeta la `reference` para siempre (probado en vivo el 2026-11-18 con dos envíos seguidos).
+- **Verificado:** `node --check` de todo lo tocado, `check-tdz`, `test-platform-migration.js` (89 casos, todos OK; §7 actualizado, §16–18 nuevos).
+  **NO verificado:** nada de esto corrió contra las plataformas reales.
+
 ### 200. 🐛 El botón del casino abría la página VIEJA mientras la mudanza terminaba por detrás — ahora decide el servidor en el toque — SW v78 / ui.js?v=78
 - **Incidente (owner, azai033, modo "Solo esta lista"):** abrió la app → tocó PÁGINA CASINO → se abrió jugaygana44.bet; la mudanza terminó
   igual (quedó 🚚 MUDADO con $0 en la vieja) pero el jugador ya estaba en la página vieja. "No tiene que haber ninguna chance de que entre al viejo".

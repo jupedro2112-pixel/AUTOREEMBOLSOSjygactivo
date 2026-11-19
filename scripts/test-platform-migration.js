@@ -179,9 +179,26 @@ async function cfg(patch) { await plat.saveMigrationConfig(patch, 'test'); }
   const before = neu.calls.length;
   r = await plat.migrateUser('id-dudoso');
   ok(r.status === 'review' && neu.calls.length === before, 'queda en revisión y NO se carga nada en la nueva');
-  ok(U('dudoso').platform === 'jugaygana' && U('dudoso').platformMigrating === false, 'el usuario sigue en la vieja');
+  ok(U('dudoso').platform === 'jugaygana' && U('dudoso').platformMigrating === true, 'sigue en la vieja y con candado mientras se verifica solo (#201)');
   r = await plat.migrateUser('id-dudoso');
   ok(r.status === 'review' && old.calls.filter((c) => c[0] === 'withdraw' && c[1] === 'dudoso').length === 1, 'no se reintenta sola');
+  const al0 = alerts.length;
+  old.bal.dudoso = 400; // el saldo cambió: no se puede saber solo
+  await plat.migrationTick();
+  ok(M('dudoso').status === 'review' && U('dudoso').platformMigrating === true && alerts.length === al0, 'saldo distinto dentro de la ventana: sigue verificando, sin molestar a nadie todavía');
+  M('dudoso').reviewAutoUntil = new Date(Date.now() - 1000);
+  await plat.migrationTick();
+  ok(M('dudoso').status === 'review' && U('dudoso').platformMigrating === false && alerts.length === al0 + 1 && !M('dudoso').reviewAutoUntil, 'terminada la ventana sin certeza: se suelta el candado y se avisa a una persona');
+  // otro usuario: el saldo quedó intacto → el retiro no se hizo → se cancela sola y se reintenta
+  addUser('dudoso2', 600);
+  r = await plat.migrateUser('id-dudoso2');
+  ok(r.status === 'review' && old.bal.dudoso2 === 600, 'dudoso2: retiro dudoso, saldo intacto en la vieja');
+  await plat.migrationTick();
+  ok(M('dudoso2').status === 'failed' && U('dudoso2').platformMigrating === false && !neu.bal.dudoso2, 'saldo intacto → la mudanza se CANCELA sola (sin persona, sin plata movida)');
+  old.withdrawMode = 'ok'; M('dudoso2').updatedAt = new Date(Date.now() - 3600000);
+  r = await plat.migrateUser('id-dudoso2');
+  ok(r.status === 'done' && neu.bal.dudoso2 === 600 && old.bal.dudoso2 === 0, 'y en su próxima entrada se muda bien');
+  old.withdrawMode = 'ambiguous';
   old.withdrawMode = 'ok'; old.bal.dudoso = 0; // el admin verificó: el retiro SÍ se había hecho
   r = await plat.resolveReview('id-dudoso', { withdrawn: true, by: 'admin' });
   ok(r.ok && U('dudoso').platform === 'partner' && neu.bal.dudoso === 900, 'el admin confirma el retiro → se cargan los 900 en la nueva');
@@ -308,6 +325,101 @@ async function cfg(patch) { await plat.saveMigrationConfig(patch, 'test'); }
   ok(!r.ok && !old.pass.nomud, 'a un usuario NO mudado no se le toca la cuenta vieja (ni forzando)');
   r = await plat.lockOldAccount('id-lock2', { force: true, by: 'admin' });
   ok(r.ok, 'el botón del panel vuelve a cerrar aunque ya esté cerrada');
+
+  console.log('16) #201 Plata que aparece en la vieja después de mudar: se traslada sola');
+  old.passMode = 'ok'; neu.depositMode = 'ok'; old.withdrawMode = 'ok';
+  await cfg({ mode: 'all', paused: false, pausedTeams: {}, capARS: 200000 });
+  addUser('resi1', 1000);
+  r = await plat.migrateUser('id-resi1');
+  ok(r.status === 'done' && neu.bal.resi1 === 1000 && M('resi1').oldRecheckCount === 0, 'mudado; primera revisión programada');
+  ok(M('resi1').oldRecheckAt - Date.now() < 11 * 60 * 1000, 'la primera revisión es a los 10 minutos (no a la hora)');
+  old.bal.resi1 = 350; // apuesta que pagó después
+  M('resi1').oldRecheckAt = new Date(Date.now() - 1000);
+  await plat.migrationTick();
+  ok(old.bal.resi1 === 0 && neu.bal.resi1 === 1350, 'el residuo pasó solo: vieja 0, nueva 1350');
+  ok(M('resi1').residualPhase === null && M('resi1').residualMoved === 350 && M('resi1').residualRef === 'vip-mig-id-resi1-r2', 'queda registrado con reference propia (r2)');
+  // residuo con la nueva caída: queda retirado y se reintenta con la misma reference
+  old.bal.resi1 = 200; neu.depositMode = 'down';
+  M('resi1').oldRecheckAt = new Date(Date.now() - 1000);
+  await plat.migrationTick();
+  ok(old.bal.resi1 === 0 && neu.bal.resi1 === 1350 && M('resi1').residualPhase === 'withdrawn' && M('resi1').residualAmount === 200, 'nueva caída: retirado de la vieja, pendiente de cargar (persistido)');
+  r = await plat.moveOldResidual('id-resi1', 'admin');
+  ok(!r.ok && old.calls.filter((c) => c[0] === 'withdraw' && c[1] === 'resi1').length === 3, 'mientras está pendiente NO se retira de nuevo en la vieja');
+  neu.depositMode = 'ok';
+  M('resi1').residualAt = new Date(Date.now() - 60000);
+  await plat.migrationTick();
+  ok(neu.bal.resi1 === 1550 && M('resi1').residualPhase === null && M('resi1').residualMoved === 550, 'cuando la nueva vuelve, el tick lo carga (una sola vez)');
+  M('resi1').residualPhase = 'withdrawn'; M('resi1').residualAmount = 200; M('resi1').residualRef = 'vip-mig-id-resi1-r3'; M('resi1').residualAt = new Date(Date.now() - 60000);
+  await plat.migrationTick();
+  ok(neu.bal.resi1 === 1550, 'repetir la misma reference no duplica la plata');
+  // retiro ambiguo del residuo → queda para una persona
+  old.bal.resi1 = 90; old.withdrawMode = 'ambiguous';
+  r = await plat.moveOldResidual('id-resi1', 'admin');
+  ok(!r.ok && r.ambiguous && M('resi1').residualPhase === 'withdrawing' && neu.bal.resi1 === 1550, 'retiro ambiguo: no se carga nada y queda a medias para revisar');
+  r = await plat.moveOldResidual('id-resi1', 'admin');
+  ok(!r.ok, 'a medias: no se puede lanzar otro traslado encima');
+  old.withdrawMode = 'ok';
+  r = await plat.resolveResidual('id-resi1', { withdrawn: false, by: 'admin' });
+  ok(r.ok && M('resi1').residualPhase === null && neu.bal.resi1 === 1550, 'resuelto "NO se hizo": se libera sin cargar');
+  r = await plat.moveOldResidual('id-resi1', 'admin');
+  ok(r.ok && r.amount === 90 && neu.bal.resi1 === 1640 && old.bal.resi1 === 0, 'y ahora sí se traslada');
+  // por encima del tope: no se mueve solo
+  await cfg({ capARS: 100 });
+  old.bal.resi1 = 5000; M('resi1').oldRecheckAt = new Date(Date.now() - 1000); M('resi1').oldRecheckCount = 0;
+  await plat.migrationTick();
+  ok(old.bal.resi1 === 5000 && M('resi1').oldResidual === 5000, 'residuo mayor al tope: no se mueve solo, queda para aprobar');
+  await cfg({ capARS: 200000 });
+
+  console.log('17) #201 Cupo de mudanzas en segundo plano');
+  for (let i = 0; i < 10; i++) addUser('bg' + i, 10);
+  for (let i = 0; i < 10; i++) plat.migrateInBackground('id-bg' + i, 'app_open');
+  await new Promise((r) => setTimeout(r, 50));
+  const bgDone = User.rows.filter((u) => /^bg\d/.test(u.username) && u.platform === 'partner').length;
+  ok(bgDone === 4, 'de 10 que abren la app a la vez, se mudan 4 (el cupo); el resto en su próxima apertura (' + bgDone + ')');
+  ok(User.rows.filter((u) => /^bg\d/.test(u.username) && u.platformMigrating).length === 0, 'ninguno de los que no entró queda con candado');
+  plat.migrateInBackground('id-bg9', 'app_open');
+  await new Promise((r) => setTimeout(r, 50));
+  ok(U('bg9').platform === 'partner', 'liberado el cupo, el siguiente se muda (sin esperar el minuto de throttle)');
+  r = await plat.depositToUser('bg8', 100, 'x', 7);
+  ok(r.success && U('bg8').platform === 'partner' && neu.bal.bg8 === 110, 'la carga no depende del cupo: muda y carga en la nueva');
+
+  console.log('18) #201 Hallazgos de la auditoría');
+  old.withdrawMode = 'fail'; neu.depositMode = 'ok';
+  addUser('wdf', 800);
+  r = await plat.migrateUser('id-wdf');
+  ok(r.status === 'failed' && M('wdf').wdFailAmount === 800, 'la vieja "rechaza" el retiro: mudanza cancelada, queda anotado el intento');
+  old.bal.wdf = 0; old.withdrawMode = 'ok'; // en realidad el retiro SÍ se había hecho
+  M('wdf').updatedAt = new Date(Date.now() - 3600000);
+  const depBefore = neu.calls.filter((c) => c[1] === 'wdf').length;
+  r = await plat.migrateUser('id-wdf');
+  ok(r.status === 'review' && U('wdf').platform === 'jugaygana' && neu.calls.filter((c) => c[1] === 'wdf').length === depBefore, 'al reintentar el saldo bajó justo ese monto → REVISIÓN, no se muda "lo que queda" (antes se perdían los 800)');
+  r = await plat.resolveReview('id-wdf', { withdrawn: true, by: 'admin' });
+  ok(r.ok && neu.bal.wdf === 800 && U('wdf').platform === 'partner', 'confirmado por el admin: los 800 entran en la nueva');
+  // rechazo real (saldo intacto): el siguiente intento muda normal
+  old.withdrawMode = 'fail'; addUser('wdf2', 300);
+  await plat.migrateUser('id-wdf2');
+  old.withdrawMode = 'ok'; M('wdf2').updatedAt = new Date(Date.now() - 3600000);
+  r = await plat.migrateUser('id-wdf2');
+  ok(r.status === 'done' && neu.bal.wdf2 === 300, 'rechazo real (saldo intacto): el reintento muda normal');
+  // dos procesos terminando la misma carga a la vez
+  addUser('tripl', 500); neu.depositMode = 'down';
+  await plat.migrateUser('id-tripl');
+  neu.depositMode = 'ok';
+  const d0 = neu.calls.filter((c) => c[0] === 'deposit' && c[1] === 'tripl').length;
+  const rr = await Promise.all([plat.migrateUser('id-tripl'), plat.migrateUser('id-tripl'), plat.migrateUser('id-tripl')]);
+  ok(neu.calls.filter((c) => c[0] === 'deposit' && c[1] === 'tripl').length === d0 + 1 && neu.bal.tripl === 500, 'tres procesos a la vez: UNA sola carga en la nueva');
+  ok(U('tripl').platform === 'partner' && U('tripl').platformMigrating === false && M('tripl').status === 'done' && rr.some((x) => x.status === 'done'), 'queda mudado y sin candado (nadie lo pisa con "pendiente")');
+  // cortacorriente: 3 fallas seguidas de la nueva → no se arrancan mudanzas nuevas
+  const realLookup = girox.lookupPlayer;
+  girox.lookupPlayer = async () => ({ state: 'error', error: 'timeout' });
+  for (const n of ['cb1', 'cb2', 'cb3', 'cb4']) addUser(n, 50);
+  await plat.migrateUser('id-cb1'); await plat.migrateUser('id-cb2'); await plat.migrateUser('id-cb3');
+  let lookups = 0; girox.lookupPlayer = async () => { lookups++; return { state: 'error', error: 'timeout' }; };
+  r = await plat.migrateUser('id-cb4');
+  ok(r.status === 'skip' && lookups === 0 && U('cb4').platformMigrating === false && old.bal.cb4 === 50, 'con la nueva caída (3 fallas seguidas) ni se intenta: el usuario sigue en la vieja intacto');
+  girox.lookupPlayer = realLookup;
+  r = await plat.depositToUser('cb4', 10, 'x', 7);
+  ok(r.success && old.bal.cb4 === 60, 'y su carga entra normal en la vieja, sin esperar a la plataforma caída');
 
   console.log(fails ? `\n❌ ${fails} fallas` : '\n✅ Todo OK');
   process.exit(fails ? 1 : 0);

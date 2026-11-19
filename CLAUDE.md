@@ -94,7 +94,9 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `jugaygana.depositToUser` ni a `girox.*` directo desde un flujo: se le manda plata a la plataforma equivocada. Si el flujo tiene un
   id natural, pasar `opts.reference` estable (`vip-<flujo>-<id>`); devolución o comisión → `ignoreGlobalRollover:true`. Un resultado
   `code:'migrating'` = la cuenta se está mudando: no se movió nada, tratarlo como fallo común. Para validar un retiro usar
-  `plat.withdrawable(saldo)`, no `saldo.balance`. Test: `node scripts/test-platform-migration.js`.
+  `plat.withdrawable(saldo)`, no `saldo.balance`; si el saldo viene con `migrating:true` es "reintentá en un minuto", nunca "saldo
+  insuficiente" (#201). El candado `User.platformMigrating` solo se suelta donde no hay plata en tránsito (ver ARCHITECTURE §10.3b).
+  Test: `node scripts/test-platform-migration.js`.
 - **JWT_SECRET y otros secrets** se cargan desde AWS SSM en el bootstrap async, NO al
   `require()`. Por eso hay lazy getters en `src/middlewares/auth.js` y rutas.
 - **JUGAYGANA es flaky** (Cloudflare → responde HTML). Hay auto-retry + manejo de HTML

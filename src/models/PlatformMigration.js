@@ -50,6 +50,20 @@ const platformMigrationSchema = new mongoose.Schema({
   oldRecheckAt: { type: Date, default: null },
   oldRecheckCount: { type: Number, default: 0 },
   oldResidual: { type: Number, default: 0 },
+  // #201 Robustez del motor:
+  reviewAutoUntil: { type: Date, default: null },  // retiro dudoso: hasta cuándo se re-verifica solo (con candado) antes de pasarlo a una persona
+  wdFailBalance: { type: Number, default: 0 },     // saldo viejo y monto del último retiro que la vieja "rechazó": si al reintentar
+  wdFailAmount: { type: Number, default: 0 },      //   el saldo bajó ese monto, el retiro en realidad se hizo → revisión (no se muda el resto)
+  depositClaimAt: { type: Date, default: null },   // un solo proceso a la vez carga en la nueva (claim optimista)
+  // #201 Traslado de un residuo (plata que apareció en la vieja después de mudarse), con estado persistido:
+  //   null → nada en curso | 'withdrawing' → retirando en la vieja (si queda colgado: revisión humana)
+  //   'withdrawn' → retirado, falta la carga en la nueva (el tick la reintenta con la misma residualRef)
+  residualPhase: { type: String, default: null },
+  residualAmount: { type: Number, default: 0 },
+  residualRef: { type: String, default: null },
+  residualAt: { type: Date, default: null },
+  residualMoved: { type: Number, default: 0 },   // total de residuos ya trasladados
+  residualAlertedAt: { type: Date, default: null },
   // Cierre de la cuenta VIEJA (#198): tras mudarse se le pone en JUGAYGANA una clave al azar que
   // no se guarda en ningún lado → nadie vuelve a entrar ahí. Lo hace el motor (reintenta solo).
   oldLocked: { type: Boolean, default: false },

@@ -68,9 +68,37 @@ const DEFAULT_CFG = Object.freeze({
 });
 const MIN_MOVE_ARS = 1;                 // por debajo de $1 no se mueve plata (se muda igual)
 const LOCK_STALE_MS = 10 * 60 * 1000;   // una mudanza "running" sin latido por 10 min está colgada
-const FAILED_RETRY_MS = 2 * 60 * 1000;
+const FAILED_RETRY_MS = 2 * 60 * 1000;       // base: se duplica con cada intento fallido (tope 1 h) — ver _failedWaitMs
+const FAILED_ALERT_AFTER = 5;                // intentos fallidos seguidos antes de avisar por Telegram (una vez)
+function _failedWaitMs(attempts) { return Math.min(60 * 60 * 1000, FAILED_RETRY_MS * Math.pow(2, Math.max(0, (attempts || 1) - 1))); }
+// #201 "Si la API falla, se cancela y se prueba la próxima": cortacorriente. Con 3 fallas seguidas de jugaygana.io
+// (o de JUGAYGANA) ANTES de mover plata, no se arrancan mudanzas nuevas por 2 minutos (nadie queda a medias y las
+// cargas no esperan a una plataforma caída). El primer éxito lo cierra.
+const BREAKER_FAILS = 3;
+const BREAKER_OPEN_MS = 2 * 60 * 1000;
+let _apiFailStreak = 0;
+let _breakerUntil = 0;
+function _apiFail(what) {
+  _apiFailStreak++;
+  if (_apiFailStreak >= BREAKER_FAILS && Date.now() >= _breakerUntil) {
+    _breakerUntil = Date.now() + BREAKER_OPEN_MS;
+    logger.warn(`[platform] ${_apiFailStreak} fallas seguidas (${what}): no se arrancan mudanzas nuevas por ${BREAKER_OPEN_MS / 60000} min`);
+  }
+}
+function _apiOk() { _apiFailStreak = 0; }
+function _breakerOpen() { return Date.now() < _breakerUntil; }
+// #201: un retiro DUDOSO en la vieja se re-verifica solo durante esta ventana (con el usuario con candado, para que
+// el saldo no lo mueva la app). Saldo intacto = el retiro no se hizo → se cancela sola. Si no se puede saber → persona.
+const REVIEW_AUTO_MS = 15 * 60 * 1000;
 const HELD_RETRY_MS = 30 * 60 * 1000;   // not_in_new / cap se re-evalúan solos cada 30 min
 const APP_OPEN_THROTTLE_MS = 60 * 1000;
+// #201: revisiones del saldo de la vieja después de mudar (cada espera cuenta desde la revisión anterior).
+const RECHECK_DELAYS_MS = [10 * 60 * 1000, 60 * 60 * 1000, 24 * 60 * 60 * 1000, 7 * 24 * 60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000]; // 10 min · 1 h · 1 día · 1 semana · 1 mes (apuestas deportivas que cierran tarde)
+// #201: mudanzas en SEGUNDO PLANO (abrió la app / login) simultáneas por instancia. Con "Todos" y miles de usuarios
+// entrando a la vez, sin tope se satura a las dos plataformas (429 / Cloudflare) y todo termina en reintentos.
+// El botón del casino y las cargas NO pasan por este tope (el usuario está esperando).
+const BG_MAX_CONCURRENT = 4;
+let _bgRunning = 0;
 const MIGRATING_MSG = 'Estamos actualizando tu cuenta. Probá de nuevo en un minuto.';
 const PARTNER_USERNAME_RE = /^[A-Za-z0-9_]{3,18}$/;
 
@@ -232,7 +260,7 @@ function _mapPartnerMoney(r, what) {
   if (r && r.success) { r.platform = 'partner'; return r; }
   const code = (r && r.code) || 'unknown';
   const st = r ? r.httpStatus : null;
-  const neverSent = code === 'not_configured' || code === 'invalid_amount' || code === 'invalid_username';
+  const neverSent = code === 'not_configured' || code === 'invalid_amount' || code === 'invalid_username' || code === 'rate_limited_local'; // #201: el freno local NO envió nada → no es ambiguo
   const transient = !neverSent && (st == null || st === 429 || Number(st) >= 500);
   const err = girox.errToString((r && r.error) || 'Error de la plataforma');
   if (transient) {
@@ -266,7 +294,21 @@ async function depositToUser(username, amount, description = '', jugayganaUserId
       // Se relee SIEMPRE que la mudanza haya hecho algo: si quedó a mitad de camino el usuario
       // tiene el candado puesto y esta carga NO debe ir a la plataforma vieja.
       if (m && m.status !== 'skip') route = await _routeStrict(username);
-    } catch (e) { logger.warn(`[platform] mudanza previa a la carga de ${username} falló: ${e.message}`); }
+    } catch (e) {
+      logger.warn(`[platform] mudanza previa a la carga de ${username} falló: ${e.message}`);
+      // #201: la ruta leída ANTES de la mudanza ya no vale (pudo haberle retirado el saldo). Se relee; si no se puede, no se carga.
+      try { route = await _routeStrict(username); } catch (_) { return _migratingResult(); }
+    }
+  }
+  // #201: si OTRO proceso lo está mudando en este momento, se espera un rato corto a que termine
+  // (lo normal son segundos) en vez de rebotar la carga.
+  if (route.migrating && route.user) {
+    for (let i = 0; i < 8 && route.migrating; i++) {
+      const pm = await PlatformMigration.findOne({ userId: route.user.id }).select('status').lean().catch(() => null);
+      if (!pm || pm.status !== 'running') break; // deposit_pending / review: no se resuelve en segundos
+      await _sleep(1500);
+      route = await _routeStrict(username);
+    }
   }
   if (route.migrating) return _migratingResult();
   if (route.provider === 'partner') {
@@ -349,7 +391,7 @@ async function getUserBalance(username, opts = {}) {
   const route = await routeFor(username);
   if (route.migrating && route.user) { const p = await _pendingBalance(route.user); if (p) return p; }
   if (route.provider === 'partner') return _partnerBalance(username, { fresh: !(opts && opts.display) });
-  return jugayganaMovements.getUserBalance(username);
+  return _flagMigrating(await jugayganaMovements.getUserBalance(username), route);
 }
 async function getUserBalanceWithRetry(username, opts = {}) {
   const route = await routeFor(username);
@@ -357,7 +399,13 @@ async function getUserBalanceWithRetry(username, opts = {}) {
   if (route.provider === 'partner') {
     return _partnerBalance(username, { fresh: !(opts && opts.display), retry: true, maxAttempts: (opts && opts.maxAttempts) || 3, baseDelayMs: (opts && opts.baseDelayMs) || 500 });
   }
-  return jugayganaMovements.getUserBalanceWithRetry(username, opts);
+  return _flagMigrating(await jugayganaMovements.getUserBalanceWithRetry(username, opts), route);
+}
+// #201: mudanza en curso sin plata en tránsito todavía (o justo retirándose): el saldo leído puede estar a mitad de
+// camino. Se marca `migrating` para que quien valida un retiro no lo tome como "saldo insuficiente".
+function _flagMigrating(res, route) {
+  if (res && route && route.migrating) { try { res.migrating = true; } catch (_) {} }
+  return res;
 }
 /** Lo que el usuario puede RETIRAR según un resultado de saldo de esta fachada. */
 function withdrawable(balRes) {
@@ -530,10 +578,30 @@ async function _hold(user, reason, detail, alertText) {
   }
   return { touched: false, status: 'held', reason };
 }
-async function _failSoft(user, detail) {
-  await _mig(user.id, { status: 'failed', phase: 'check', lastError: String(detail || '').slice(0, 300) }, { $inc: { attempts: 1 } });
+async function _failSoft(user, detail, extraSet) {
+  const m = await _mig(user.id, Object.assign({ status: 'failed', phase: 'check', lastError: String(detail || '').slice(0, 300) }, extraSet || {}), { $inc: { attempts: 1 } });
   await _unlockUser(user.id);
+  // #201: una mudanza que falla una y otra vez no puede pasar desapercibida.
+  if (m && m.attempts === FAILED_ALERT_AFTER) {
+    await _alert(`⚠️ La mudanza de @${user.username} ya falló ${m.attempts} veces seguidas (${String(detail || '').slice(0, 200)}). No se movió plata y sigue operando en la plataforma vieja. Se sigue reintentando cada vez más espaciado; mirala en el panel → Mudanza.`);
+  }
   return { touched: false, status: 'failed', error: detail };
+}
+/**
+ * #201 Retiro DUDOSO en la vieja: queda en revisión CON candado y el tick lo re-verifica por saldo durante
+ * REVIEW_AUTO_MS. Recién si no se puede saber se libera el candado y se avisa a una persona.
+ */
+async function _toReview(userId, detail) {
+  await _mig(userId, { status: 'review', lastError: String(detail || '').slice(0, 300), reviewAutoUntil: new Date(Date.now() + REVIEW_AUTO_MS) });
+  await User.updateOne({ id: userId }, { $set: { platformMigrating: true, platformMigratingAt: new Date() } }).catch(() => {});
+  return { touched: false, status: 'review' };
+}
+async function _reviewToHuman(m) {
+  await PlatformMigration.updateOne({ userId: m.userId, status: 'review' }, { $set: { reviewAutoUntil: null } });
+  await _unlockUser(m.userId);
+  const txt = `🛑 MUDANZA de @${m.username} en REVISIÓN: JUGAYGANA no confirmó el retiro de ${_money(m.amount)} para trasladar el saldo y no se pudo verificar solo. NO se cargó nada en jugaygana.io. Mirá en JUGAYGANA si el retiro se hizo y resolvelo en el panel → Mudanza.`;
+  await _alert(txt);
+  await _note(m.userId, m.username, txt);
 }
 
 /**
@@ -546,14 +614,26 @@ async function _finishDeposit(userId) {
   if (m.status === 'done') return { touched: true, status: 'done' };
   const amount = Number(m.amount) || 0;
   const reference = m.reference || `vip-mig-${userId}-r${m.round || 1}`;
-  await _mig(userId, { status: 'running', phase: 'depositing', reference });
+  // #201: UN solo proceso a la vez hace esta carga (tick de otra instancia + apertura de la app + panel). Sin esto,
+  // el que pierde podía pisar con "pendiente" una mudanza que el otro ya había terminado. Claim optimista sobre
+  // depositClaimAt, y solo desde un estado donde el retiro en la vieja YA está confirmado.
+  const DEPOSIT_CLAIM_STALE_MS = 4 * 60 * 1000;
+  if (m.depositClaimAt && (Date.now() - new Date(m.depositClaimAt).getTime()) < DEPOSIT_CLAIM_STALE_MS) return { touched: false, status: 'busy' };
+  const claimAt = new Date();
+  const mine = await PlatformMigration.findOneAndUpdate(
+    { userId, depositClaimAt: m.depositClaimAt || null, $or: [{ status: 'deposit_pending' }, { status: 'running', phase: { $in: ['withdrawn', 'depositing'] } }] },
+    { $set: { status: 'running', phase: 'depositing', reference, depositClaimAt: claimAt, lockedAt: new Date() } });
+  if (!mine) return { touched: false, status: 'busy' };
   let newTransferId = null;
   if (amount >= MIN_MOVE_ARS) {
     const r = await girox.depositToUser(m.username, amount, 'Saldo trasladado desde la plataforma anterior', reference, { noBonus: true });
     if (!r.success) {
       const err = girox.errToString(r.error);
       const prev = m.status;
-      await _mig(userId, { status: 'deposit_pending', phase: 'withdrawn', lastError: `${r.code || ''} ${err}`.trim().slice(0, 300) }, { $inc: { attempts: 1 } });
+      // Solo si la mudanza sigue siendo de ESTE proceso (otro pudo terminarla mientras tanto → no se pisa).
+      const still = await PlatformMigration.findOneAndUpdate({ userId, status: 'running', depositClaimAt: claimAt },
+        { $set: { status: 'deposit_pending', phase: 'withdrawn', depositClaimAt: null, lockedAt: new Date(), lastError: `${r.code || ''} ${err}`.trim().slice(0, 300) }, $inc: { attempts: 1 } });
+      if (!still) return { touched: false, status: 'busy', error: err };
       // El usuario queda con el candado puesto (no opera en ninguna de las dos hasta que entre).
       await User.updateOne({ id: userId }, { $set: { platformMigrating: true, platformMigratingAt: new Date() } }).catch(() => {});
       if (r.code === 'insufficient_funds') {
@@ -575,8 +655,8 @@ async function _finishDeposit(userId) {
   await User.updateOne({ id: userId }, { $set: { platform: 'partner', platformMigratedAt: now, platformMigrating: false, platformMigratingAt: null, partnerTeam: m.team || DEFAULT_TEAM } });
   _forgetTeam(m.username);
   await _mig(userId, {
-    status: 'done', phase: 'done', reason: null, lastError: null, newTransferId, finishedAt: now,
-    oldRecheckAt: new Date(now.getTime() + 60 * 60 * 1000), oldRecheckCount: 0
+    status: 'done', phase: 'done', reason: null, lastError: null, newTransferId, finishedAt: now, depositClaimAt: null, attempts: 0, reviewAutoUntil: null,
+    oldRecheckAt: new Date(now.getTime() + RECHECK_DELAYS_MS[0]), oldRecheckCount: 0
   });
   logger.info(`[platform] MUDADO ${m.username} → jugaygana.io | saldo trasladado ${_money(amount)} ref=${reference}`);
   // #198: cerrar la cuenta vieja en segundo plano (no demora el botón del casino ni la carga).
@@ -642,6 +722,12 @@ async function migrateUser(userId, opts = {}) {
   const cfg = await getMigrationConfig();
   // Atajo barato: con la mudanza apagada y sin force, ni se toca la base.
   if (!force && (cfg.mode === 'off' || cfg.paused || !partnerEnabled())) return { touched: false, status: 'skip' };
+  // #201: plataforma fallando → no se arranca nada nuevo (las que ya movieron plata siguen por el tick).
+  if (!force && _breakerOpen()) return { touched: false, status: 'skip', reason: 'api_down' };
+  // #201: sin la tabla de equipos cargada NO se decide equipo (un "ato…" caería en la key general y quedaría
+  // fijado al equipo equivocado). Se intenta cargar; si no se puede, no se muda ahora.
+  if (!_teamsLoaded && _hooks.loadTeams) { try { await _hooks.loadTeams(); } catch (_) {} }
+  if (!_teamsLoaded && _hooks.loadTeams) return { touched: false, status: 'skip', reason: 'teams_not_loaded' };
 
   let user = await User.findOne({ id: userId }).select(ROUTE_FIELDS + ' isBlocked').lean();
   const why = _eligible(cfg, user, force);
@@ -658,7 +744,7 @@ async function migrateUser(userId, opts = {}) {
       const autoRetry = prev.reason === 'not_in_new' || prev.reason === 'cap' || prev.reason === 'team_no_key';
       if (!autoRetry || age < HELD_RETRY_MS) return { touched: false, status: 'held', reason: prev.reason };
     }
-    if (prev.status === 'failed' && !force && age < FAILED_RETRY_MS) return { touched: false, status: 'failed' };
+    if (prev.status === 'failed' && !force && age < _failedWaitMs(prev.attempts)) return { touched: false, status: 'failed' };
     if (prev.status === 'running' && prev.lockedAt && (Date.now() - new Date(prev.lockedAt).getTime()) < LOCK_STALE_MS) {
       return { touched: false, status: 'busy' };
     }
@@ -697,7 +783,8 @@ async function migrateUser(userId, opts = {}) {
 
     // 2) ¿Existe en la plataforma nueva?
     const lk = await girox.lookupPlayer(user.username);
-    if (lk.state === 'error') return await _failSoft(user, `jugaygana.io no respondió al buscar al jugador: ${girox.errToString(lk.error)}`);
+    if (lk.state === 'error') { _apiFail('jugaygana.io'); return await _failSoft(user, `jugaygana.io no respondió al buscar al jugador: ${girox.errToString(lk.error)}`); }
+    _apiOk();
     let newBalance = 0;
     if (lk.state === 'not_found') {
       if (!cfg.createMissing && !force) {
@@ -728,9 +815,18 @@ async function migrateUser(userId, opts = {}) {
 
     // 3) Saldo en la vieja.
     const bal = await jugayganaMovements.getUserBalanceWithRetry(user.username);
-    if (!bal || !bal.success) return await _failSoft(user, `JUGAYGANA no respondió al leer el saldo: ${jugaygana.errToString(bal && bal.error)}`);
+    if (!bal || !bal.success) { _apiFail('JUGAYGANA'); return await _failSoft(user, `JUGAYGANA no respondió al leer el saldo: ${jugaygana.errToString(bal && bal.error)}`); }
     const oldBalance = Number(bal.balance) || 0;
     const amount = _floor2(oldBalance);
+    // #201: el intento anterior terminó con la vieja "rechazando" el retiro. Si ahora el saldo bajó justo ese
+    // monto, ese retiro en realidad SE HIZO: no se muda "lo que queda" (se perdería lo retirado) → revisión.
+    if (prev && Number(prev.wdFailAmount) >= MIN_MOVE_ARS) {
+      if (oldBalance <= Number(prev.wdFailBalance) - Number(prev.wdFailAmount) + 1) {
+        await _mig(userId, { phase: 'withdrawing', oldBalance: Number(prev.wdFailBalance), amount: Number(prev.wdFailAmount), reference: `vip-mig-${userId}-r${prev.round || 1}`, wdFailBalance: 0, wdFailAmount: 0 });
+        return await _toReview(userId, `El retiro anterior de ${_money(prev.wdFailAmount)} figuraba rechazado pero el saldo de la vieja bajó de ${_money(prev.wdFailBalance)} a ${_money(oldBalance)}`);
+      }
+      await _mig(userId, { wdFailBalance: 0, wdFailAmount: 0 });
+    }
     if (amount > cfg.capARS && !force) {
       await _mig(userId, { oldBalance });
       return await _hold(user, 'cap', `Saldo ${_money(amount)} mayor al tope ${_money(cfg.capARS)}`,
@@ -746,15 +842,8 @@ async function migrateUser(userId, opts = {}) {
       await _mig(userId, { phase: 'withdrawing', oldBalance, amount, reference });
       const w = await jugaygana.withdrawFromUser(user.username, amount, 'Traslado de saldo a jugaygana.io', user.jugayganaUserId || null);
       if (!w || !w.success) {
-        if (w && w.ambiguous) {
-          await _mig(userId, { status: 'review', lastError: jugaygana.errToString(w.error).slice(0, 300) });
-          await _unlockUser(userId);
-          const txt = `🛑 MUDANZA de @${user.username} en REVISIÓN: JUGAYGANA no confirmó el retiro de ${_money(amount)} para trasladar el saldo. NO se cargó nada en jugaygana.io. Mirá en JUGAYGANA si el retiro se hizo y resolvelo en el panel → Mudanza.`;
-          await _alert(txt);
-          await _note(userId, user.username, txt);
-          return { touched: false, status: 'review' };
-        }
-        return await _failSoft(user, `JUGAYGANA rechazó el retiro: ${jugaygana.errToString(w && w.error)}`);
+        if (w && w.ambiguous) return await _toReview(userId, jugaygana.errToString(w.error));
+        return await _failSoft(user, `JUGAYGANA rechazó el retiro: ${jugaygana.errToString(w && w.error)}`, { wdFailBalance: oldBalance, wdFailAmount: amount });
       }
       await _mig(userId, { phase: 'withdrawn', withdrawnAt: new Date(), oldTransferId: String((w.data && (w.data.transfer_id || w.data.transferId)) || '') || null });
     } else {
@@ -767,9 +856,15 @@ async function migrateUser(userId, opts = {}) {
     logger.error(`[platform] migrateUser(${user && user.username}) excepción: ${e.message}`);
     // Qué hacer con el candado depende de hasta dónde llegó.
     const cur = await PlatformMigration.findOne({ userId }).lean().catch(() => null);
-    if (cur && cur.status === 'running') return _recoverStale(cur, e.message);
-    await _unlockUser(userId);
-    return { touched: false, status: 'failed', error: e.message };
+    if (cur && cur.status === 'running') {
+      try { return await _recoverStale(cur, e.message); }
+      catch (e2) { logger.error(`[platform] no se pudo recuperar la mudanza de ${user && user.username}: ${e2.message} — queda con candado, la retoma el tick`); return { touched: false, status: 'busy', error: e.message }; }
+    }
+    // #201: el candado SOLO se suelta si es seguro (no se movió plata). Con la plata en tránsito
+    // (deposit_pending / review) o sin poder leer el estado, el candado queda: lo resuelve el tick.
+    if (cur && (cur.status === 'failed' || cur.status === 'held')) await _unlockUser(userId);
+    else if (cur && cur.status !== 'deposit_pending' && cur.status !== 'review' && cur.phase === 'check') await _unlockUser(userId);
+    return { touched: false, status: cur ? cur.status : 'busy', error: e.message };
   }
 }
 
@@ -780,14 +875,7 @@ async function _recoverStale(m, detail) {
     await User.updateOne({ id: m.userId }, { $set: { platformMigrating: true, platformMigratingAt: new Date() } }).catch(() => {});
     return _finishDeposit(m.userId);
   }
-  if (m.phase === 'withdrawing') {
-    await _mig(m.userId, { status: 'review', lastError: detail || 'el proceso se interrumpió mientras retiraba en JUGAYGANA' });
-    await _unlockUser(m.userId);
-    const txt = `🛑 MUDANZA de @${m.username} en REVISIÓN: el proceso se interrumpió justo al retirar ${_money(m.amount)} en JUGAYGANA. No se sabe si el retiro se hizo. NO se cargó nada en jugaygana.io. Verificalo y resolvelo en el panel → Mudanza.`;
-    await _alert(txt);
-    await _note(m.userId, m.username, txt);
-    return { touched: false, status: 'review' };
-  }
+  if (m.phase === 'withdrawing') return _toReview(m.userId, detail || 'el proceso se interrumpió mientras retiraba en JUGAYGANA');
   await _mig(m.userId, { status: 'failed', phase: 'check', lastError: detail || 'mudanza interrumpida antes de mover plata' });
   await _unlockUser(m.userId);
   return { touched: false, status: 'failed' };
@@ -799,8 +887,13 @@ function migrateInBackground(userId, trigger = 'app_open') {
     if (!userId) return;
     const last = _appOpenSeen.get(userId) || 0;
     if (Date.now() - last < APP_OPEN_THROTTLE_MS) return;
+    if (_bgRunning >= BG_MAX_CONCURRENT) return; // cupo lleno: se muda en su próxima apertura / carga / toque del casino
     _appOpenSeen.set(userId, Date.now());
-    migrateUser(userId, { trigger }).catch((e) => logger.warn(`[platform] mudanza en segundo plano de ${userId} falló: ${e.message}`));
+    if (_appOpenSeen.size > 50000) _appOpenSeen.clear();
+    _bgRunning++;
+    migrateUser(userId, { trigger })
+      .catch((e) => logger.warn(`[platform] mudanza en segundo plano de ${userId} falló: ${e.message}`))
+      .finally(() => { _bgRunning = Math.max(0, _bgRunning - 1); });
   } catch (_) {}
 }
 
@@ -838,7 +931,10 @@ async function prepareCasino(userId) {
 function migrateThenSyncPassword(userId, plainPassword) {
   (async () => {
     try {
-      await migrateUser(userId, { trigger: 'app_open' });
+      if (_bgRunning < BG_MAX_CONCURRENT) {
+        _bgRunning++;
+        try { await migrateUser(userId, { trigger: 'app_open' }); } finally { _bgRunning = Math.max(0, _bgRunning - 1); }
+      }
       const u = await User.findOne({ id: userId }).select('id username platform partnerPasswordSynced').lean();
       if (u) await syncPartnerPasswordOnLogin(u, plainPassword);
     } catch (e) { logger.warn(`[platform] mudanza + clave en el login de ${userId}: ${e.message}`); }
@@ -855,13 +951,13 @@ async function resolveReview(userId, { withdrawn, by } = {}) {
   if (!m || m.status !== 'review') return { ok: false, error: 'Esa mudanza no está en revisión.' };
   if (withdrawn === true) {
     const claimed = await PlatformMigration.findOneAndUpdate({ userId, status: 'review' },
-      { $set: { status: 'deposit_pending', phase: 'withdrawn', by: by || null, withdrawnAt: new Date(), lockedAt: new Date() } }, { new: true });
+      { $set: { status: 'deposit_pending', phase: 'withdrawn', by: by || null, withdrawnAt: new Date(), lockedAt: new Date(), reviewAutoUntil: null } }, { new: true });
     if (!claimed) return { ok: false, error: 'Otro proceso ya la tomó.' };
     await User.updateOne({ id: userId }, { $set: { platformMigrating: true, platformMigratingAt: new Date() } });
     const r = await _finishDeposit(userId);
     return { ok: true, result: r };
   }
-  await PlatformMigration.updateOne({ userId, status: 'review' }, { $set: { status: 'failed', phase: 'check', by: by || null, lastError: 'Revisión: el retiro en JUGAYGANA NO se había hecho' } });
+  await PlatformMigration.updateOne({ userId, status: 'review' }, { $set: { status: 'failed', phase: 'check', by: by || null, reviewAutoUntil: null, lastError: 'Revisión: el retiro en JUGAYGANA NO se había hecho' } });
   await _unlockUser(userId);
   return { ok: true, result: { status: 'failed' } };
 }
@@ -873,34 +969,82 @@ async function migrationTick() {
   _tickRunning = true;
   try {
     const now = Date.now();
+    // #201: presupuesto de tiempo por vuelta. Con jugaygana.io caída cada carga pendiente puede tardar más de un
+    // minuto en fallar: sin tope, una vuelta duraba media hora y frenaba todo lo demás (colgadas, residuos, cierres).
+    const over = () => (Date.now() - now) > 45000;
+
+    // b0) Retiros DUDOSOS en ventana de verificación automática (usuario con candado): se mira el saldo de la vieja.
+    //     Saldo intacto = el retiro no se hizo → la mudanza se cancela sola y se reintenta en su próxima entrada.
+    //     Si cambió (o no se puede leer) hasta el final de la ventana → se suelta el candado y lo define una persona.
+    const rv = await PlatformMigration.find({ status: 'review', reviewAutoUntil: { $ne: null } }).sort({ lockedAt: 1 }).limit(20).lean();
+    for (const m of rv) {
+      if (over()) break;
+      const c = await PlatformMigration.findOneAndUpdate({ userId: m.userId, status: 'review', lockedAt: m.lockedAt || null }, { $set: { lockedAt: new Date() } });
+      if (!c) continue;
+      const b = await jugayganaMovements.getUserBalance(m.username).catch(() => null);
+      if (b && b.success && Math.abs(Number(b.balance) - Number(m.oldBalance)) <= 0.01) {
+        const done = await PlatformMigration.findOneAndUpdate({ userId: m.userId, status: 'review' },
+          { $set: { status: 'failed', phase: 'check', reviewAutoUntil: null, lastError: 'Verificado solo: el retiro en JUGAYGANA no se había hecho (saldo intacto). Se reintenta en su próxima entrada.' } });
+        if (done) { await _unlockUser(m.userId); logger.info(`[platform] retiro dudoso de ${m.username} verificado: NO se hizo → mudanza cancelada, se reintenta`); }
+      } else if (new Date(m.reviewAutoUntil).getTime() <= Date.now()) {
+        await _reviewToHuman(m);
+      }
+    }
     // a) Cargas pendientes en la nueva: reintento idempotente (claim por lockedAt para no pisarse).
-    const pend = await PlatformMigration.find({ status: 'deposit_pending', $or: [{ lockedAt: null }, { lockedAt: { $lt: new Date(now - 45000) } }] }).limit(5).lean();
+    const pend = await PlatformMigration.find({ status: 'deposit_pending', $or: [{ lockedAt: null }, { lockedAt: { $lt: new Date(now - 45000) } }] }).sort({ lockedAt: 1 }).limit(20).lean();
     for (const m of pend) {
+      if (over()) break;
       const c = await PlatformMigration.findOneAndUpdate(
         { userId: m.userId, status: 'deposit_pending', $or: [{ lockedAt: null }, { lockedAt: { $lt: new Date(now - 45000) } }] },
         { $set: { lockedAt: new Date() } });
       if (c) await _finishDeposit(m.userId).catch((e) => logger.warn(`[platform] reintento de carga de ${m.username}: ${e.message}`));
     }
     // b) Mudanzas colgadas.
-    const stale = await PlatformMigration.find({ status: 'running', lockedAt: { $lt: new Date(now - LOCK_STALE_MS) } }).limit(5).lean();
+    const stale = await PlatformMigration.find({ status: 'running', lockedAt: { $lt: new Date(now - LOCK_STALE_MS) } }).sort({ lockedAt: 1 }).limit(20).lean();
     for (const m of stale) {
+      if (over()) break;
       const c = await PlatformMigration.findOneAndUpdate({ userId: m.userId, status: 'running', lockedAt: m.lockedAt }, { $set: { lockedAt: new Date() } });
       if (c) await _recoverStale(m).catch(() => {});
     }
-    // c) Plata que aparece en la vieja después de mudarse (apuesta que pagó tarde).
-    const rc = await PlatformMigration.find({ status: 'done', oldRecheckAt: { $ne: null, $lte: new Date(now) } }).limit(2).lean();
+    // c) Plata que aparece en la vieja después de mudarse (apuesta que pagó tarde, carga que entró en el medio).
+    //    #201: 5 revisiones (10 min, 1 h, 1 día, 1 semana, 1 mes) y el traslado es AUTOMÁTICO (mismo cuidado que la mudanza);
+    //    por encima del tope queda para aprobar a mano.
+    const rc = await PlatformMigration.find({ status: 'done', oldRecheckAt: { $ne: null, $lte: new Date(now) } }).sort({ oldRecheckAt: 1 }).limit(10).lean();
     for (const m of rc) {
+      if (over()) break;
       const n = (m.oldRecheckCount || 0) + 1;
-      const next = n >= 2 ? null : new Date(now + 24 * 60 * 60 * 1000);
+      const next = n >= RECHECK_DELAYS_MS.length ? null : new Date(now + RECHECK_DELAYS_MS[n]);
       const c = await PlatformMigration.findOneAndUpdate({ userId: m.userId, oldRecheckAt: m.oldRecheckAt }, { $set: { oldRecheckAt: next, oldRecheckCount: n } });
       if (!c) continue;
       const b = await jugayganaMovements.getUserBalance(m.username).catch(() => null);
       if (b && b.success && Number(b.balance) >= MIN_MOVE_ARS) {
         await PlatformMigration.updateOne({ userId: m.userId }, { $set: { oldResidual: Number(b.balance) } });
-        await _alert(`💸 @${m.username} ya está en jugaygana.io pero le aparecieron ${_money(b.balance)} en la plataforma vieja (¿una apuesta que pagó después?). Pasáselos desde el panel → Mudanza.`);
+        const cfgR = await getMigrationConfig();
+        if (Number(b.balance) > cfgR.capARS) {
+          await _alert(`💸 @${m.username} ya está en jugaygana.io pero le aparecieron ${_money(b.balance)} en la plataforma vieja (más que el tope). Pasáselos desde el panel → Mudanza.`);
+        } else {
+          const mv = await moveOldResidual(m.userId, 'auto').catch((e) => ({ ok: false, error: e.message }));
+          if (mv.ok && mv.amount) logger.info(`[platform] residuo de ${m.username} trasladado solo: ${_money(mv.amount)}`);
+          else if (!mv.ok && !mv.ambiguous && !mv.pendingDeposit) await _alert(`💸 @${m.username} ya está en jugaygana.io y le aparecieron ${_money(b.balance)} en la plataforma vieja; no se pudieron pasar solos (${mv.error}). Pasáselos desde el panel → Mudanza.`);
+        }
       } else if (b && b.success && m.oldResidual) {
         await PlatformMigration.updateOne({ userId: m.userId }, { $set: { oldResidual: 0 } });
+      } else if ((!b || !b.success) && next === null) {
+        // La última revisión no pudo leer el saldo: se reprograma (no se da por revisado sin haber mirado).
+        await PlatformMigration.updateOne({ userId: m.userId }, { $set: { oldRecheckAt: new Date(now + 60 * 60 * 1000), oldRecheckCount: RECHECK_DELAYS_MS.length - 1 } });
       }
+    }
+    // c2) Residuos retirados de la vieja cuya carga en la nueva todavía no entró: reintento con la MISMA reference.
+    const rp = await PlatformMigration.find({ status: 'done', residualPhase: 'withdrawn', residualAt: { $lt: new Date(now - 45000) } }).limit(10).lean();
+    for (const m of rp) {
+      const c = await PlatformMigration.findOneAndUpdate({ userId: m.userId, residualPhase: 'withdrawn', residualAt: m.residualAt }, { $set: { residualAt: new Date() } });
+      if (c) await _finishResidual(m.userId).catch((e) => logger.warn(`[platform] reintento de residuo de ${m.username}: ${e.message}`));
+    }
+    // c3) Retiro de residuo colgado (el proceso murió mientras retiraba): no se sabe si se hizo → aviso, una vez.
+    const rs = await PlatformMigration.find({ status: 'done', residualPhase: 'withdrawing', residualAlertedAt: null, residualAt: { $lt: new Date(now - LOCK_STALE_MS) } }).limit(5).lean();
+    for (const m of rs) {
+      const c = await PlatformMigration.findOneAndUpdate({ userId: m.userId, residualPhase: 'withdrawing', residualAlertedAt: null }, { $set: { residualAlertedAt: new Date() } });
+      if (c) await _alert(`🛑 Residuo de @${m.username}: el traslado de ${_money(m.residualAmount)} desde la plataforma vieja quedó a medias (no se sabe si el retiro se hizo). NO se cargó nada en jugaygana.io. Verificá en JUGAYGANA; si el retiro SÍ se hizo, cargale ${_money(m.residualAmount)} en jugaygana.io con la referencia ${m.residualRef}.`);
     }
     // d) #198: cuentas viejas de usuarios ya mudados que todavía no se cerraron (incluye los mudados
     //    antes de existir esto, o con el interruptor apagado en su momento). El claim va en lockOldAccount.
@@ -910,7 +1054,7 @@ async function migrationTick() {
         status: 'done', oldLocked: { $ne: true }, oldLockAttempts: { $not: { $gte: OLD_LOCK_MAX_ATTEMPTS } },
         $or: [{ oldLockNextAt: null }, { oldLockNextAt: { $lte: new Date(now) } }]
       }).select('userId').limit(3).lean();
-      for (const m of toLock) await lockOldAccount(m.userId).catch((e) => logger.warn(`[platform] cierre de cuenta vieja: ${e.message}`));
+      for (const m of toLock) if (!over()) await lockOldAccount(m.userId).catch((e) => logger.warn(`[platform] cierre de cuenta vieja: ${e.message}`));
     }
   } catch (e) {
     logger.warn(`[platform] tick de mudanza: ${e.message}`);
@@ -926,26 +1070,65 @@ async function moveOldResidual(userId, by) {
   if (!user || user.platform !== 'partner') return { ok: false, error: 'El usuario no está mudado.' };
   const m = await PlatformMigration.findOne({ userId }).lean();
   if (!m || m.status !== 'done') return { ok: false, error: 'La mudanza de ese usuario no está terminada.' };
-  const bal = await jugayganaMovements.getUserBalanceWithRetry(user.username);
-  if (!bal || !bal.success) return { ok: false, error: 'JUGAYGANA no respondió al leer el saldo.' };
+  // Un traslado anterior quedó retirado y sin cargar: se termina ese (misma reference) antes de mover nada más.
+  if (m.residualPhase === 'withdrawn') return _finishResidual(userId);
+  if (m.residualPhase === 'claiming') { // todavía no se movió nada
+    if (Date.now() - new Date(m.residualAt || 0).getTime() < 3 * 60 * 1000) return { ok: false, error: 'Ya hay un traslado en curso para este usuario.' };
+    await PlatformMigration.updateOne({ userId, residualPhase: 'claiming', residualAt: m.residualAt }, { $set: { residualPhase: null, residualAt: null } });
+  }
+  if (m.residualPhase === 'withdrawing') {
+    if (Date.now() - new Date(m.residualAt || 0).getTime() < LOCK_STALE_MS) return { ok: false, error: 'Ya hay un traslado en curso para este usuario.' };
+    return { ok: false, ambiguous: true, error: `Un traslado anterior de ${_money(m.residualAmount)} quedó a medias (no se sabe si el retiro en JUGAYGANA se hizo). Verificá a mano; referencia ${m.residualRef}.` };
+  }
+  // Claim atómico ANTES de leer el saldo y de armar la reference (dos procesos a la vez —tick + botón del panel—
+  // no pueden calcular la misma reference con datos viejos: el segundo retiro se perdería como "duplicado").
+  const claim = await PlatformMigration.findOneAndUpdate(
+    { userId, status: 'done', residualPhase: null },
+    { $set: { residualPhase: 'claiming', residualAmount: 0, residualRef: null, residualAt: new Date(), residualAlertedAt: null, by: by || null } }, { new: true });
+  if (!claim) return { ok: false, error: 'Otro proceso ya está trasladando ese saldo.' };
+  const release = () => PlatformMigration.updateOne({ userId, residualPhase: 'claiming' }, { $set: { residualPhase: null, residualAt: null } }).catch(() => {});
+  let bal;
+  try { bal = await jugayganaMovements.getUserBalanceWithRetry(user.username); } catch (e) { bal = null; }
+  if (!bal || !bal.success) { await release(); return { ok: false, error: 'JUGAYGANA no respondió al leer el saldo.' }; }
   const amount = _floor2(bal.balance);
-  if (amount < MIN_MOVE_ARS) { await PlatformMigration.updateOne({ userId }, { $set: { oldResidual: 0 } }); return { ok: true, amount: 0 }; }
-  const round = (m.round || 1) + 1;
+  if (amount < MIN_MOVE_ARS) { await PlatformMigration.updateOne({ userId, residualPhase: 'claiming' }, { $set: { residualPhase: null, residualAt: null, oldResidual: 0 } }); return { ok: true, amount: 0 }; }
+  const round = (claim.round || 1) + 1; // del documento ya reclamado, no de una lectura anterior
   const reference = `vip-mig-${userId}-r${round}`;
-  const w = await jugaygana.withdrawFromUser(user.username, amount, 'Traslado de saldo residual a jugaygana.io', user.jugayganaUserId || null);
+  // Estado persistido ANTES de retirar (proceso que muere en el medio → revisión, nunca reintento a ciegas).
+  await PlatformMigration.updateOne({ userId, residualPhase: 'claiming' }, { $set: { residualPhase: 'withdrawing', residualAmount: amount, residualRef: reference, residualAt: new Date() } });
+  let w;
+  try { w = await jugaygana.withdrawFromUser(user.username, amount, 'Traslado de saldo residual a jugaygana.io', user.jugayganaUserId || null); }
+  catch (e) { w = { success: false, ambiguous: true, error: e.message }; } // excepción a mitad del retiro = no se sabe
   if (!w || !w.success) {
     if (w && w.ambiguous) {
-      await _alert(`🛑 Residuo de @${user.username}: JUGAYGANA no confirmó el retiro de ${_money(amount)}. NO se cargó nada en jugaygana.io. Verificar a mano.`);
+      await PlatformMigration.updateOne({ userId }, { $set: { residualAlertedAt: new Date() } });
+      await _alert(`🛑 Residuo de @${user.username}: JUGAYGANA no confirmó el retiro de ${_money(amount)}. NO se cargó nada en jugaygana.io. Verificá a mano; si el retiro SÍ se hizo, cargale ese monto en jugaygana.io con la referencia ${reference}.`);
       return { ok: false, ambiguous: true, error: 'JUGAYGANA no confirmó el retiro. Verificá a mano antes de repetir.' };
     }
+    await PlatformMigration.updateOne({ userId }, { $set: { residualPhase: null, residualAmount: 0, residualRef: null } });
     return { ok: false, error: `JUGAYGANA rechazó el retiro: ${jugaygana.errToString(w && w.error)}` };
   }
-  await PlatformMigration.updateOne({ userId }, { $set: { round, oldResidual: 0, by: by || null } });
-  const r = await girox.depositToUser(user.username, amount, 'Saldo residual trasladado desde la plataforma anterior', reference, { noBonus: true });
+  await PlatformMigration.updateOne({ userId }, { $set: { residualPhase: 'withdrawn', residualAt: new Date(), round, oldResidual: 0 } });
+  return _finishResidual(userId);
+}
+/** Carga en la nueva un residuo ya retirado de la vieja. Idempotente por `residualRef`. */
+async function _finishResidual(userId) {
+  const m = await PlatformMigration.findOne({ userId }).lean();
+  if (!m || m.residualPhase !== 'withdrawn') return { ok: false, error: 'No hay un residuo pendiente de cargar.' };
+  const amount = Number(m.residualAmount) || 0, reference = m.residualRef;
+  const r = await girox.depositToUser(m.username, amount, 'Saldo residual trasladado desde la plataforma anterior', reference, { noBonus: true });
   if (!r.success) {
-    await _alert(`⏳ Residuo de @${user.username}: se retiraron ${_money(amount)} de la vieja y la carga en jugaygana.io falló (${girox.errToString(r.error)}). Referencia para repetir sin duplicar: ${reference}`);
-    return { ok: false, pendingDeposit: true, reference, amount, error: `Se retiró de la vieja pero la carga en la nueva falló: ${girox.errToString(r.error)}. Reintentá: usa la misma referencia y no duplica.` };
+    const err = girox.errToString(r.error);
+    if (!m.residualAlertedAt) {
+      await PlatformMigration.updateOne({ userId }, { $set: { residualAlertedAt: new Date() } });
+      await _alert(`⏳ Residuo de @${m.username}: se retiraron ${_money(amount)} de la vieja y la carga en jugaygana.io todavía no entró (${err}). Se reintenta sola con la misma referencia (${reference}).`);
+    }
+    return { ok: false, pendingDeposit: true, reference, amount, error: `Se retiró de la vieja y la carga en la nueva todavía no entró (${err}). Se reintenta sola.` };
   }
+  // Solo se limpia si sigue siendo ESTE residuo (otro proceso pudo terminarlo: la plataforma devuelve duplicate).
+  const done = await PlatformMigration.findOneAndUpdate({ userId, residualPhase: 'withdrawn', residualRef: reference },
+    { $set: { residualPhase: null, residualAmount: 0, residualAt: null, residualAlertedAt: null }, $inc: { residualMoved: amount } });
+  if (done) logger.info(`[platform] residuo de ${m.username} cargado en jugaygana.io: ${_money(amount)} ref=${reference}`);
   return { ok: true, amount, reference };
 }
 /** Reintento de la carga de un residuo que quedó retirado y sin cargar (misma reference). */
@@ -954,7 +1137,25 @@ async function retryResidualDeposit(userId, amount, reference) {
   if (!user || user.platform !== 'partner') return { ok: false, error: 'El usuario no está mudado.' };
   if (!/^vip-mig-/.test(String(reference || '')) || !String(reference).includes(userId)) return { ok: false, error: 'Referencia inválida.' };
   const r = await girox.depositToUser(user.username, amount, 'Saldo residual trasladado desde la plataforma anterior', reference, { noBonus: true });
+  if (r.success) await PlatformMigration.updateOne({ userId, residualRef: reference }, { $set: { residualPhase: null, residualAmount: 0, residualAt: null, residualAlertedAt: null } }).catch(() => {});
   return r.success ? { ok: true, duplicate: !!r.duplicate } : { ok: false, error: girox.errToString(r.error) };
+}
+/**
+ * #201 Un traslado de residuo quedó a medias ('withdrawing': no se sabe si el retiro en la vieja se hizo).
+ * Lo resuelve una persona después de mirar JUGAYGANA: withdrawn=true → se carga en la nueva (misma reference);
+ * false → no se movió nada, se libera para poder repetirlo.
+ */
+async function resolveResidual(userId, { withdrawn, by } = {}) {
+  const m = await PlatformMigration.findOne({ userId }).lean();
+  if (!m || m.status !== 'done' || m.residualPhase !== 'withdrawing') return { ok: false, error: 'Ese usuario no tiene un traslado de residuo a medias.' };
+  if (withdrawn === true) {
+    const c = await PlatformMigration.findOneAndUpdate({ userId, residualPhase: 'withdrawing' },
+      { $set: { residualPhase: 'withdrawn', residualAt: new Date(), residualAlertedAt: null, oldResidual: 0, by: by || null }, $inc: { round: 1 } });
+    if (!c) return { ok: false, error: 'Otro proceso ya lo resolvió.' };
+    return _finishResidual(userId);
+  }
+  await PlatformMigration.updateOne({ userId, residualPhase: 'withdrawing' }, { $set: { residualPhase: null, residualAmount: 0, residualRef: null, residualAt: null, residualAlertedAt: null, by: by || null } });
+  return { ok: true, amount: 0, released: true };
 }
 
 // ------------------------------------------------------------
@@ -999,7 +1200,7 @@ module.exports = {
   // clave / casino
   changeUserPasswordAsAdmin, syncPartnerPasswordOnLogin, createCasinoSession,
   // mudanza
-  migrateUser, migrateInBackground, resolveReview, migrationTick, moveOldResidual, retryResidualDeposit, lockOldAccount,
+  migrateUser, migrateInBackground, resolveReview, migrationTick, moveOldResidual, retryResidualDeposit, resolveResidual, lockOldAccount,
   migrationStats, listMigrations,
   MIGRATING_MSG
 };

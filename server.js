@@ -2025,6 +2025,35 @@ function _comprobanteMatchesMovement(comprobante, movement, cfg) {
 // para que un nuevo comprobante pueda reintentar. Pasado el tope, lo deja en 'error'
 // (carga manual). El comprobante vuelve a 'pending' para no quedar consumido.
 const HGCASH_MAX_CHARGE_ATTEMPTS = 3;
+// #201: si la carga falló porque la cuenta del cliente SE ESTÁ MUDANDO (code 'migrating': no se movió nada),
+// no se gasta un intento: se reintenta cada 60 s hasta 3 h desde que llegó la transferencia (la mudanza
+// puede quedar esperando fichas del equipo). Después de eso, flujo común.
+const HGCASH_MIGRATING_RETRY_MS = 60 * 1000;
+const HGCASH_MIGRATING_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+async function hgcashHandleMigratingWait(movement, comprobante, user, retryArgs) {
+  const born = new Date(movement.createdAt || movement.receivedAt || Date.now()).getTime();
+  if (Date.now() - born > HGCASH_MIGRATING_MAX_AGE_MS) return false; // demasiado tiempo: que siga el flujo común
+  await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { matchStatus: 'pending', chargeError: 'La cuenta del cliente se está mudando a jugaygana.io: la carga entra sola apenas termine (si pasan unos minutos y sigue acá, asignala desde la bandeja).' } });
+  if (comprobante && comprobante.id) await Comprobante.updateOne({ id: comprobante.id }, { $set: { bankMatchStatus: 'pending' } });
+  _emitHgcashUpdate('esperando_mudanza', movement.movementId);
+  // Reintento DIRECTO de la misma carga (mismo movimiento + mismo comprobante/asignación): no depende de la
+  // ventana corta de matcheo. Claims atómicos → si otro proceso o un agente la tomó antes, no hace nada.
+  setTimeout(async () => {
+    try {
+      const fresh = await BankMovement.findOne({ movementId: movement.movementId }).lean();
+      if (!fresh || fresh.matchStatus !== 'pending') return;
+      const comp = (comprobante && comprobante.id) ? await Comprobante.findOne({ id: comprobante.id }).lean() : null;
+      if (comprobante && comprobante.id && !comp) return;
+      if (!comp && !(retryArgs && retryArgs.assign)) return hgcashMatchFromMovement(fresh);
+      await hgcashAutoCarga({ movement: fresh, comprobante: comp, mode: retryArgs && retryArgs.mode, assign: (retryArgs && retryArgs.assign) || null });
+    } catch (e) { logger.warn(`[hgcash] reintento tras mudanza mov=${movement.movementId}: ${e.message}`); }
+  }, HGCASH_MIGRATING_RETRY_MS).unref();
+  if (user && !movement.migWaitNoted) {
+    await _emitAdminOnlyChatNote(user.id, user.username, '🚚 Entró una transferencia mientras la cuenta de este cliente se muda a jugaygana.io. NO cargar a mano: la carga entra sola apenas termine la mudanza (se reintenta cada minuto).').catch(() => {});
+    await BankMovement.updateOne({ movementId: movement.movementId }, { $set: { migWaitNoted: true } }).catch(() => {});
+  }
+  return true;
+}
 async function hgcashHandleChargeFailure(movement, comprobante, errMsg, dataDesc, user) {
   let attempts = (movement.chargeAttempts || 0) + 1;
   try {
@@ -2796,6 +2825,10 @@ async function hgcashAutoCarga({ movement, comprobante, mode, assign = null }) {
     }
     if (!result.success) {
       if (chargeLocked) { try { await HgcashCharge.deleteOne({ chargeKey }); } catch (_) {} }
+      // #201: cuenta mudándose → no se movió nada; esperar a la mudanza sin gastar intentos.
+      if (result.code === 'migrating' && await hgcashHandleMigratingWait(movClaim || movement, comprobante, user, { mode, assign })) {
+        return { ok: false, reason: 'migrating', error: result.error };
+      }
       await hgcashHandleChargeFailure(movClaim || movement, comprobante, result.error || 'fallo deposit', dataDesc, user);
       return { ok: false, reason: 'deposit_failed', error: jugaygana.errToString(result.error || 'fallo deposit') };
     }
@@ -6205,7 +6238,9 @@ app.post('/api/admin/platform/migrations/:userId/residual', authMiddleware, admi
   if (!_platAdminOnly(req, res)) return;
   try {
     const b = req.body || {};
-    const r = (b.reference && b.amount)
+    const r = (typeof b.withdrawn === 'boolean')
+      ? await plat.resolveResidual(String(req.params.userId), { withdrawn: b.withdrawn, by: req.user.username }) // #201 residuo a medias
+      : (b.reference && b.amount)
       ? await plat.retryResidualDeposit(String(req.params.userId), Number(b.amount), String(b.reference))
       : await plat.moveOldResidual(String(req.params.userId), req.user.username);
     if (!r.ok) return res.status(400).json(Object.assign({ error: r.error }, r));
@@ -12811,6 +12846,10 @@ app.post('/api/withdrawal/request', authMiddleware, async (req, res) => {
         code: 'PLATFORM_SLOW'
       });
     }
+    // #201: cuenta mudándose → no es "saldo insuficiente": que pruebe en un minuto.
+    if (balanceResult.migrating) {
+      return res.status(503).json({ error: plat.MIGRATING_MSG, code: 'PLATFORM_SLOW' });
+    }
     // #197: con rollover en la plataforma nueva lo retirable es `available`, no `balance`.
     const available = Number(plat.withdrawable(balanceResult)) || 0;
     if (available < amountNum) {
@@ -18022,6 +18061,13 @@ async function _deductChipsAtConfirm(payout, agentUser) {
   //    igual que el resto de lecturas de saldo del server. Si aun así falla, el
   //    payout queda 'failed' (re-pagable desde el panel) y NO se descontó nada.
   const balRes = await plat.getUserBalanceWithRetry(payout.username);
+  // #201: cuenta MUDÁNDOSE → su plata está en tránsito entre plataformas: lo "disponible" da 0 y antes se
+  // cancelaba el retiro como "saldo insuficiente" (y se le cerraba el chat). No se descuenta ni se cancela: reintentar.
+  if (balRes && balRes.migrating) {
+    await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'failed', error: 'La cuenta del cliente se está mudando de plataforma: reintentar en un minuto' } });
+    await _emitAdminOnlyChatNote(payout.userId, payout.username, `🚚 La cuenta de este cliente se está mudando a jugaygana.io en este momento. NO se descontó ni se pagó nada. Reintentá el pago en un minuto.`);
+    return { ok: false, error: 'La cuenta del cliente se está mudando de plataforma. No se descontó ni se pagó nada. Reintentá en un minuto.' };
+  }
   // #197: `avail` = lo RETIRABLE (en la plataforma nueva, con rollover, puede ser menos que el
   // saldo); `balBefore` = saldo total, para comparar contra el saldo de después (anti-fantasma).
   const avail = (balRes && balRes.success) ? (Number(plat.withdrawable(balRes)) || 0) : null;
@@ -18247,8 +18293,8 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
       if (payout.debitConfirmed === true) {
         const user = await User.findOne({ id: payout.userId });
         const jgId = (user && user.jugayganaUserId) || null;
-        let ok = false, data = null;
-        try { const r = await plat.depositToUser(payout.username, W, 'Devolución de retiro rechazado', jgId, { reference: `vip-payoutref-${payout.id}`, noAutoMigrate: true }); if (r && r.success) { ok = true; data = r.data; } } catch (e) { logger.error(`[payout-cancel] devolución (deductAtPay) falló payout=${id}: ${e.message}`); }
+        let ok = false, data = null, _rfAmb = null, _rfMig = false;
+        try { const r = await plat.depositToUser(payout.username, W, 'Devolución de retiro rechazado', jgId, { reference: `vip-payoutref-${payout.id}`, noAutoMigrate: true }); if (r && r.success) { ok = true; data = r.data; } else if (r && r.ambiguous) _rfAmb = r.error || 'sin detalle'; else if (r && r.code === 'migrating') _rfMig = true; } catch (e) { logger.error(`[payout-cancel] devolución (deductAtPay) falló payout=${id}: ${e.message}`); }
         if (ok) {
           await PendingPayout.updateOne({ id }, { $set: { chipsReturned: true } });
           try {
@@ -18258,7 +18304,15 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
           await _emitAdminOnlyChatNote(payout.userId, payout.username, `↩️ Retiro RECHAZADO: se devolvió $${W.toLocaleString('es-AR')} en fichas (el pago había fallado tras descontar).`);
           return res.json({ success: true, chipsReturned: true });
         }
-        await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ Retiro rechazado: NO se pudo devolver $${W.toLocaleString('es-AR')} en fichas. Completalo a mano.`);
+        // #201: "completalo a mano" a ciegas duplicaba una devolución dudosa que sí había entrado.
+        if (_rfAmb) {
+          await _alertMoneyAmbiguous('Devolución de retiro rechazado', payout.userId, payout.username, W, _rfAmb);
+          await _emitAdminOnlyChatNote(payout.userId, payout.username, `🛑 Retiro rechazado: la devolución de $${W.toLocaleString('es-AR')} quedó DUDOSA (la plataforma no confirmó). NO la repitas a ciegas: mirá el saldo del cliente y devolvé a mano SOLO si no entró.`);
+        } else if (_rfMig) {
+          await _emitAdminOnlyChatNote(payout.userId, payout.username, `🚚 Retiro rechazado: la cuenta del cliente se está mudando a jugaygana.io y la devolución de $${W.toLocaleString('es-AR')} NO se hizo (no se movió nada). Devolvela a mano en un minuto, cuando termine la mudanza.`);
+        } else {
+          await _emitAdminOnlyChatNote(payout.userId, payout.username, `⚠️ Retiro rechazado: NO se pudo devolver $${W.toLocaleString('es-AR')} en fichas. Completalo a mano.`);
+        }
         return res.json({ success: true, chipsReturned: false });
       }
       // No se había descontado nada → nada que devolver.
@@ -18329,14 +18383,17 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
 
     let chipsOk = chipsPart <= 0; // sin parte de fichas → ya "ok"
     let bonusOk = bonusPart <= 0; // sin parte de bonus  → ya "ok"
+    let _rfAmb2 = null, _rfMig2 = false; // #201
     try {
       if (chipsPart > 0) {
         const r = await plat.depositToUser(payout.username, chipsPart, 'Devolución de retiro rechazado (fichas)', jgId, { reference: `vip-payoutref-${payout.id}-chips`, noAutoMigrate: true });
         if (r && r.success) { chipsOk = true; await mkRefundTx(chipsPart, 'chips', r.data); }
+        else if (r && r.ambiguous) _rfAmb2 = r.error || 'sin detalle'; else if (r && r.code === 'migrating') _rfMig2 = true;
       }
       if (bonusPart > 0) {
         const r = await plat.creditUserBalance(payout.username, bonusPart, jgId, { reference: `vip-payoutref-${payout.id}-bonus`, description: 'Devolución de retiro rechazado (bonus)', ignoreGlobalRollover: true });
         if (r && r.success) { bonusOk = true; await mkRefundTx(bonusPart, 'bonus', r.data); }
+        else if (r && r.ambiguous) _rfAmb2 = r.error || 'sin detalle'; else if (r && r.code === 'migrating') _rfMig2 = true;
       }
     } catch (e) {
       logger.error(`[payout-cancel] devolución falló payout=${id}: ${e.message}`);
@@ -18360,8 +18417,12 @@ app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, 
       const faltan = [];
       if (!chipsOk && chipsPart > 0) faltan.push(`$${chipsPart.toLocaleString('es-AR')} en fichas`);
       if (!bonusOk && bonusPart > 0) faltan.push(`$${bonusPart.toLocaleString('es-AR')} como bonus`);
-      await _emitAdminOnlyChatNote(payout.userId, payout.username,
-        `⚠️ Retiro rechazado: NO se pudo devolver ${faltan.join(' + ')} (de $${W.toLocaleString('es-AR')}). Completalo a mano.`);
+      if (_rfAmb2) await _alertMoneyAmbiguous('Devolución de retiro rechazado', payout.userId, payout.username, W, _rfAmb2).catch(() => {});
+      await _emitAdminOnlyChatNote(payout.userId, payout.username, _rfAmb2
+        ? `🛑 Retiro rechazado: la devolución de ${faltan.join(' + ')} (de $${W.toLocaleString('es-AR')}) quedó DUDOSA (la plataforma no confirmó). NO la repitas a ciegas: mirá el saldo del cliente y devolvé a mano SOLO lo que no entró.`
+        : _rfMig2
+        ? `🚚 Retiro rechazado: la cuenta del cliente se está mudando a jugaygana.io y NO se devolvió ${faltan.join(' + ')} (no se movió nada). Devolvelo a mano en un minuto, cuando termine la mudanza.`
+        : `⚠️ Retiro rechazado: NO se pudo devolver ${faltan.join(' + ')} (de $${W.toLocaleString('es-AR')}). Completalo a mano.`);
     }
     res.json({ success: true, chipsReturned: refunded });
   } catch (error) {

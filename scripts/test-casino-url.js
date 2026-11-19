@@ -31,7 +31,7 @@ t('con página en COMANDOS el botón abre esa', () => { env.set('https://jugayga
 t('solo el admin general la cambia', () => assert(/name === '\/sys_casino_url'\) \{\n\s*if \(req\.user\.role !== 'admin'\) return res\.status\(403\)/.test(src)));
 t('la PWA la pide y el botón la usa', () => {
   const ui = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'ui.js'), 'utf8');
-  assert(ui.includes("'/api/config/casino-url'") && ui.includes('window.open(VIP.ui._casinoUrl ||'));
+  assert(ui.includes("'/api/config/casino-url'") && ui.includes('var plain = VIP.ui._casinoUrl ||') && ui.includes("window.open(plain, '_blank')")) // desde #197 la página pasa por `plain`; con sesión decide /api/platform/session (#200);
   assert(src.includes("app.get('/api/config/casino-url'"));
 });
 console.log(`\n✅ ${n} pruebas OK`);

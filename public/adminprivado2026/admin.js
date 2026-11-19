@@ -15334,6 +15334,8 @@ async function mudLoadList() {
                 let act = '';
                 if (m.status === 'review') act = `<button class="btn" onclick="mudResolve('${uid}','${un}',true)">El retiro SÍ se hizo</button> <button class="btn" onclick="mudResolve('${uid}','${un}',false)">NO se hizo</button>`;
                 else if (m.status === 'held' || m.status === 'failed') act = `<button class="btn" onclick="mudForce('${un}')">${m.reason === 'cap' ? 'Aprobar y mudar' : 'Mudar ahora'}</button>`;
+                else if (m.status === 'done' && m.residualPhase === 'withdrawing') act = `<button class="btn" onclick="mudResidualResolve('${uid}','${un}',true)">Residuo: el retiro SÍ se hizo</button> <button class="btn" onclick="mudResidualResolve('${uid}','${un}',false)">NO se hizo</button>`; // #201
+                else if (m.status === 'done' && m.residualPhase === 'withdrawn') act = `<button class="btn" onclick="mudResidual('${uid}','${un}')">Reintentar carga de ${_mudMoney(m.residualAmount)}</button>`;
                 else if (m.status === 'done' && m.oldResidual > 0) act = `<button class="btn" onclick="mudResidual('${uid}','${un}')">Pasar ${_mudMoney(m.oldResidual)} que le quedaron</button>`;
                 // #198: estado de la cuenta vieja (clave al azar en JUGAYGANA)
                 let oldTxt = '';
@@ -15344,6 +15346,11 @@ async function mudLoadList() {
                         act += ` <button class="btn" onclick="mudLockOld('${uid}','${un}')">Cerrar cuenta vieja</button>`;
                     }
                 }
+                if (m.status === 'review' && m.reviewAutoUntil) oldTxt += ' 🔎 Verificando solo si el retiro se hizo (unos minutos); si no se puede saber, te avisa.';
+                if (m.status === 'failed' && m.attempts >= 3) oldTxt += ' (' + m.attempts + ' intentos fallidos; reintenta cada vez más espaciado)';
+                if (m.status === 'done' && m.residualPhase === 'withdrawing') oldTxt += ' 🛑 Residuo de ' + _mudMoney(m.residualAmount) + ' a medias: verificar en JUGAYGANA';
+                else if (m.status === 'done' && m.residualPhase === 'withdrawn') oldTxt += ' ⏳ Residuo de ' + _mudMoney(m.residualAmount) + ' retirado, cargándose en la nueva';
+                else if (m.status === 'done' && m.residualMoved > 0) oldTxt += ' (+' + _mudMoney(m.residualMoved) + ' de residuos ya trasladados)';
                 const det = (m.status === 'held' ? (_MUD_REASON[m.reason] || m.reason || '') : '') + (m.lastError && m.status !== 'done' ? ' ' + m.lastError : '') + (oldTxt ? ' ' + oldTxt : '');
                 return `<tr style="border-top:1px solid #333;"><td style="padding:6px;"><b>${un}</b></td><td>${escapeHtml(m.team ? _mudTeamName(m.team) : '')}</td><td>${escapeHtml(_MUD_STATUS[m.status] || m.status)}</td><td>${_mudMoney(m.status === 'held' ? m.oldBalance : m.amount)}</td><td style="max-width:320px;">${escapeHtml(det.trim())}</td><td>${m.updatedAt ? new Date(m.updatedAt).toLocaleString('es-AR') : ''}</td><td style="white-space:nowrap;">${act}</td></tr>`;
             }).join('') + '</tbody></table>';
@@ -15430,6 +15437,17 @@ async function mudResidual(userId, username) {
         showToast(j.amount ? '✅ Se trasladaron ' + _mudMoney(j.amount) : 'No tenía saldo en la vieja', 'success'); loadMudanzaSection();
     } catch (e) { showToast(e.message, 'error'); }
 }
+// #201: un traslado de residuo quedó a medias (no se sabe si el retiro en la vieja se hizo): lo define una persona.
+async function mudResidualResolve(userId, username, withdrawn) {
+    if (!confirm(withdrawn
+        ? 'Confirmás que en JUGAYGANA el retiro del residuo de ' + username + ' SÍ se hizo. Se le va a cargar ese monto en jugaygana.io.'
+        : 'Confirmás que en JUGAYGANA el retiro del residuo de ' + username + ' NO se hizo. No se carga nada; queda libre para repetirlo.')) return;
+    try {
+        const j = await _mudPost('/api/admin/platform/migrations/' + encodeURIComponent(userId) + '/residual', { withdrawn: !!withdrawn });
+        showToast(j.amount ? '✅ Se cargaron ' + _mudMoney(j.amount) + ' en jugaygana.io' : '✅ Liberado', 'success'); loadMudanzaSection();
+    } catch (e) { showToast(e.message, 'error'); }
+}
+window.mudResidualResolve = mudResidualResolve;
 // #198: cambia YA la clave de la cuenta vieja (JUGAYGANA) por una al azar que no se guarda.
 async function mudLockOld(userId, username) {
     if (!confirm('¿Cerrar la cuenta VIEJA de ' + username + ' en JUGAYGANA? Se le pone una clave al azar que no se guarda: nadie puede volver a entrar ahí. Su cuenta en jugaygana.io no se toca.')) return;

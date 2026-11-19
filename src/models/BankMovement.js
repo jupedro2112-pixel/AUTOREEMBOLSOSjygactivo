@@ -87,6 +87,7 @@ const bankMovementSchema = new mongoose.Schema({
   chargeAttempts: { type: Number, default: 0 }, // intentos de auto-carga fallidos
   chargedAt: { type: Date, default: null },
 
+  migWaitNoted: { type: Boolean, default: false }, // #201: ya se avisó al agente que la carga espera la mudanza del cliente
   createdAt: { type: Date, default: Date.now, index: true }
 }, {
   timestamps: true

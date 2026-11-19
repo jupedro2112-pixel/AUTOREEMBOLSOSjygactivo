@@ -8,6 +8,21 @@
 
 ## Sesión 2026-11-19
 
+### 200. 🐛 El botón del casino abría la página VIEJA mientras la mudanza terminaba por detrás — ahora decide el servidor en el toque — SW v78 / ui.js?v=78
+- **Incidente (owner, azai033, modo "Solo esta lista"):** abrió la app → tocó PÁGINA CASINO → se abrió jugaygana44.bet; la mudanza terminó
+  igual (quedó 🚚 MUDADO con $0 en la vieja) pero el jugador ya estaba en la página vieja. "No tiene que haber ninguna chance de que entre al viejo".
+- **Causa:** `/api/platform/info` leía al usuario con `select('id role platform')` — **sin `username`** → `_eligible` en modo `list`
+  comparaba `undefined` contra la lista → "no le toca" → `sso:false` → la PWA abría la página vieja directo sin pasar por
+  `/api/platform/session` (que sí espera la mudanza). Además la PWA caía a la página vieja ante cualquier error/fallo de red.
+- **Fix:** (1) info lee `username platformMigrating partnerTeam` y `sso` también es true si ya se está mudando. (2) **`VIP.ui.goToPlatform`
+  con sesión pasa SIEMPRE por `/api/platform/session`** y abre SOLO la `url` que devuelve; sin respuesta / sin url / pending → cierra la
+  pestaña y avisa (nunca la página vieja "por las dudas"). (3) `/session`: error de base o excepción → `{error}` sin url; `prepareCasino`
+  devuelve `error:true` si no puede leer al usuario. Solo devuelve la página vieja si el usuario sigue en la vieja de verdad (no le toca o
+  quedó frenado con su saldo allá).
+- **Capas que quedan contra "entrar al viejo":** el botón (esto) + el cierre de la cuenta vieja con clave al azar (#198) para quien tenga
+  la página vieja guardada o entre escribiendo la dirección. Revisar textos de COMANDOS que linkeen jugaygana44.bet a mano.
+- `node --check`, `check-tdz`, `test-platform-migration.js` OK. La PWA nueva llega en la próxima carga (SW v78 + `?v=78`).
+
 ### 199. 🚚 Recuadro MUDADO en el panel (cabecera del chat + tabla de Usuarios) — admin-sw v71
 - **Owner:** "¿después de mudado, la próxima carga entra sí o sí en la nueva o puede entrar en la vieja? Agregá un recuadro MUDADO".
 - **Respuesta (revisado en el código):** sí o sí en la nueva. Toda la plata pasa por `plat.*`, que lee `User.platform` de la base en

@@ -1066,33 +1066,35 @@ VIP.ui._loadCasinoUrl();
 
 VIP.ui.goToPlatform = function() {
   var plain = VIP.ui._casinoUrl || 'https://www.jugaygana44.bet';
-  if (!VIP.ui._casinoSso || !VIP.state || !VIP.state.currentToken) {
+  // Sin sesión no hay usuario que mudar: la página general.
+  if (!VIP.state || !VIP.state.currentToken) {
     window.open(plain, '_blank');
     VIP.ui.closePlatformModal();
     return;
   }
-  // La pestaña se abre YA, dentro del toque (si se espera al servidor, el bloqueador de
-  // pop-ups la frena); después se la manda al link de entrada directa.
-  var fallback = VIP.ui._casinoSsoUrl || plain; // sin link directo: la página que le corresponde hoy a esta cuenta
+  // #200: con sesión decide SIEMPRE el servidor en el momento del toque (ya no un dato pedido antes, que podía
+  // estar viejo: ahí se abría la página vieja mientras la mudanza terminaba por detrás). Solo se abre la `url`
+  // que devuelve; si no hay respuesta o no trae url, no se abre NADA (nunca la página vieja "por las dudas").
+  // La pestaña se abre YA, dentro del toque (si se espera al servidor, el bloqueador de pop-ups la frena).
   var w = null;
   try { w = window.open('about:blank', '_blank'); } catch (_) {}
   var go = function (url) {
     try { if (w && !w.closed) { w.location.href = url; return; } } catch (_) {}
     window.location.href = url;
   };
+  var abort = function (msg) {
+    try { if (w && !w.closed) w.close(); } catch (_) {}
+    VIP.ui.showToast(msg || 'No pudimos abrir el casino. Probá de nuevo en unos segundos.', 'info');
+  };
   fetch(VIP.config.API_URL + '/api/platform/session', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + VIP.state.currentToken }, body: '{}' })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) {
       // La cuenta todavía se está actualizando: no se abre nada (ni la página vieja).
-      if (j && j.pending === true) {
-        try { if (w && !w.closed) w.close(); } catch (_) {}
-        VIP.ui.showToast(j.message || 'Estamos actualizando tu cuenta. Probá de nuevo en un minuto.', 'info');
-        return;
-      }
-      if (j && j.success === true) VIP.ui._casinoSso = true;
-      go((j && typeof j.url === 'string' && /^https?:\/\//i.test(j.url)) ? j.url : fallback);
+      if (j && j.pending === true) { abort(j.message || 'Estamos actualizando tu cuenta. Probá de nuevo en un minuto.'); return; }
+      if (j && typeof j.url === 'string' && /^https?:\/\//i.test(j.url)) { if (j.success === true) VIP.ui._casinoSso = true; go(j.url); return; }
+      abort(j && j.error);
     })
-    .catch(function () { go(fallback); });
+    .catch(function () { abort(); });
   VIP.ui.closePlatformModal();
 };
 

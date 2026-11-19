@@ -5980,21 +5980,26 @@ async function _newUsersOnPartner() {
 // Lo que necesita la PWA para el botón del casino: si este usuario ya entra con link directo.
 app.get('/api/platform/info', authMiddleware, async (req, res) => {
   try {
-    const u = await User.findOne({ id: req.user.userId }).select('id role platform').lean();
+    // #200: username/partnerTeam/platformMigrating hacen falta para decidir (antes faltaba username → en modo "lista" daba
+    // siempre "no le toca" y la PWA abría la página vieja mientras la mudanza corría por detrás).
+    const u = await User.findOne({ id: req.user.userId }).select('id username role platform platformMigrating partnerTeam').lean();
     if (u && u.role === 'user') plat.migrateInBackground(u.id, 'app_open');
     const partner = !!(u && u.platform === 'partner');
     // `sso` también es true si a este usuario le toca mudarse: así el botón del casino pasa por
     // /api/platform/session, que espera a que la mudanza termine antes de abrir nada.
-    const soon = !partner && !!u && u.role === 'user' && await plat.wouldMigrate(u);
+    const soon = !partner && !!u && u.role === 'user' && (u.platformMigrating === true || await plat.wouldMigrate(u));
     res.json({ success: true, sso: partner || soon, url: partner ? girox.getPlayUrl() : getCasinoPlayUrl() });
   } catch (e) { res.json({ success: true, sso: false, url: getCasinoPlayUrl() }); }
 });
-// Entrada directa al casino (link de un solo uso, 60 s). Solo usuarios ya mudados.
+// Botón del casino (#200: la PWA pasa SIEMPRE por acá y abre solo lo que devuelve esto; sin `url` no abre nada).
+// Mudado → entrada directa a jugaygana.io (o su página). Mudándose → pending. Sigue en la vieja (no le toca o
+// quedó frenado con su saldo allá) → página vieja. Ante cualquier duda → error, NUNCA la página vieja.
 app.post('/api/platform/session', authMiddleware, async (req, res) => {
   try {
     // Si le toca mudarse, se muda ACÁ y se espera: nunca se le abre la plataforma vieja con el saldo ya retirado.
     const prep = await plat.prepareCasino(req.user.userId);
     if (prep.pending) return res.json({ success: false, pending: true, message: plat.MIGRATING_MSG });
+    if (prep.error) return res.json({ success: false, error: 'No pudimos abrir el casino. Probá de nuevo en unos segundos.' });
     if (!prep.partner) return res.json({ success: false, url: getCasinoPlayUrl() });
     const r = await plat.createCasinoSession(req.user.username);
     if (r.success) return res.json({ success: true, url: r.redirectUrl });
@@ -6003,7 +6008,7 @@ app.post('/api/platform/session', authMiddleware, async (req, res) => {
     res.json({ success: false, url: r.playUrl || girox.getPlayUrl(), error: 'No se pudo abrir la sesión directa' });
   } catch (e) {
     logger.error(`[partner] /api/platform/session: ${e.message}`);
-    res.json({ success: false, url: getCasinoPlayUrl() });
+    res.json({ success: false, error: 'No pudimos abrir el casino. Probá de nuevo en unos segundos.' }); // #200: sin url → la PWA no abre nada
   }
 });
 

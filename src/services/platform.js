@@ -817,12 +817,19 @@ const _sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function prepareCasino(userId) {
   try { await migrateUser(userId, { trigger: 'casino' }); } catch (e) { logger.warn(`[platform] mudanza al abrir el casino falló: ${e.message}`); }
   let u = null;
-  for (let i = 0; i < 12; i++) {
-    u = await User.findOne({ id: userId }).select(ROUTE_FIELDS).lean();
-    if (!u || u.platform === 'partner' || u.platformMigrating !== true) break;
-    await _sleep(1500);
+  try {
+    for (let i = 0; i < 12; i++) {
+      u = await User.findOne({ id: userId }).select(ROUTE_FIELDS).lean();
+      if (!u || u.platform === 'partner' || u.platformMigrating !== true) break;
+      await _sleep(1500);
+    }
+  } catch (e) {
+    // #200: sin poder leer la base no se sabe en qué plataforma está → no se abre ninguna.
+    logger.warn(`[platform] prepareCasino de ${userId}: ${e.message}`);
+    return { partner: false, pending: false, error: true };
   }
-  return { partner: !!(u && u.platform === 'partner'), pending: !!(u && u.platform !== 'partner' && u.platformMigrating === true) };
+  if (!u) return { partner: false, pending: false, error: true };
+  return { partner: u.platform === 'partner', pending: u.platform !== 'partner' && u.platformMigrating === true };
 }
 /**
  * Login: muda al usuario si le toca y, ya mudado, replica su clave real en jugaygana.io

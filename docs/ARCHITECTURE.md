@@ -817,6 +817,9 @@ cuentas viejas. Para mudar ya: "Mudar a un usuario ahora" (`…/migrate-user`, f
 
 - Jugador: `GET /api/platform/info` → `{ sso, url }` (`sso` también si le toca mudarse); `POST /api/platform/session` → muda si
   hace falta, espera (`plat.prepareCasino`, ~20 s) y devuelve `{ url }` (link de un solo uso) o `{ pending:true }`.
+  ⚠️ **#200:** la PWA con sesión SIEMPRE pasa por `/session` y abre solo su `url`; sin url (error/pending) no abre nada. `/session`
+  devuelve la página vieja solo si el usuario sigue de verdad en la vieja; ante error, `{error}` sin url. `info` ya no decide el botón
+  (solo arranca la mudanza en segundo plano al abrir el modal); si se le agrega lógica, el select tiene que traer `username` (`_eligible`).
 - Equipos (admin general): `POST /api/admin/platform/teams` (alta/edición, prueba la key), `DELETE …/teams/:id`, `POST …/teams/:id/resume`.
 - Admin general: `GET /api/admin/platform/status`; `POST …/partner`, `…/partner/test`, `…/migration/config`, `…/migrate-user`,
   `…/migrations/:userId/resolve`, `…/migrations/:userId/residual`, `…/migrations/:userId/lock-old` (#198), `…/rollover`; `GET …/migrations`.

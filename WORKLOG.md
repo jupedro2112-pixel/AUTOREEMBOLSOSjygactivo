@@ -8,6 +8,11 @@
 
 ## Sesión 2026-11-19
 
+### 211. 🕒 Panel: las últimas fechas que usaban el reloj de la PC → hora Argentina, y horas en 24 hs
+- Owner: "que el horario que tome sea horario Argentina, no el de Tails". Quedaban 6 `new Date(x).toLocaleString('es-AR')` sin zona
+  (config privada, aprendizaje, auditoría) → `fmtFechaHoraAR`. Además los helpers de hora pasan a `hourCycle:'h23'`: el navegador de Tails
+  mostraba "06:59 p. m." y en la tabla de Mudanza eso se leyó como madrugada (#206). SW v79. Regla #188 sigue: nunca `toLocale*` sin `timeZone`.
+
 ### 210. 🔁 Rotación: "Entró hoy" de Finpro contaba de menos
 - Owner: entraron $7.100 por Finpro y la tabla decía $3.000. `_rotUsage` solo sumaba movimientos con `accountKey` = la cuenta; un movimiento
   de Finpro puede quedar con `accountKey:null` (la cuenta no se pudo resolver al ingresarlo). Ahora también suma los sin cuenta que

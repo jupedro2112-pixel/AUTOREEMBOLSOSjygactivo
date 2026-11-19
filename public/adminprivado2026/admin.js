@@ -4795,7 +4795,7 @@ function fmtFechaHoraAR(date) {
     if (!date) return '';
     const d = new Date(date);
     if (isNaN(d.getTime())) return '';
-    const t = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+    const t = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' });
     return fmtFechaAR(d) + ' ' + t;
 }
 window.fmtFechaAR = fmtFechaAR;
@@ -4814,7 +4814,7 @@ function formatTime(date) {
 
     if (diff < 60000) return 'Ahora';
     if (diff < 3600000) return Math.floor(diff / 60000) + 'm';
-    if (diff < 86400000) return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+    if (diff < 86400000) return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' });
     return fmtFechaAR(d);
 }
 
@@ -4830,7 +4830,7 @@ function formatDateTime(date) {
     const todayStr = today.toLocaleDateString('es-AR', dateOpts);
     const yesterdayStr = yesterday.toLocaleDateString('es-AR', dateOpts);
 
-    const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+    const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' });
 
     if (dStr === todayStr) return `Hoy ${time}`;
     if (dStr === yesterdayStr) return `Ayer ${time}`;
@@ -4857,7 +4857,7 @@ function formatChatTime(date) {
     const todayStr = today.toLocaleDateString('es-AR', dateOpts);
     const yesterdayStr = yesterday.toLocaleDateString('es-AR', dateOpts);
 
-    const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+    const time = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' });
 
     if (dStr === todayStr) return `Hoy ${time}`;
     if (dStr === yesterdayStr) return `Ayer ${time}`;
@@ -5330,7 +5330,7 @@ function renderPrivateAiConfig(ai) {
         st.innerHTML =
             `<b>En uso ahora:</b> ${e.enabled ? '🟢 IA activa' : '⚪ IA apagada o sin key'} · modelo <code>${escapeHtml(e.model || '?')}</code> (${escapeHtml(e.modelSource || '')})` +
             ` · esfuerzo <code>${escapeHtml(e.effort || '')}</code> · key: ${escapeHtml(e.apiKeySource || '')}${e.apiKeyHint ? ' ' + escapeHtml(e.apiKeyHint) : ''}` +
-            (ai.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(ai.updatedBy)} · ${ai.updatedAt ? new Date(ai.updatedAt).toLocaleString('es-AR') : ''}</span>` : '');
+            (ai.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(ai.updatedBy)} · ${ai.updatedAt ? fmtFechaHoraAR(ai.updatedAt) : ''}</span>` : '');
     }
 }
 
@@ -5355,7 +5355,7 @@ async function savePrivateAiConfig() {
         const j = await _pcReadJson(r);
         if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); _pcStatus('pcAiSaveStatus', '❌ ' + (j.error || 'Error al guardar'), false); return; }
         showToast('Config de IA guardada', 'success');
-        _pcStatus('pcAiSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }), true);
+        _pcStatus('pcAiSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' }), true);
         renderPrivateAiConfig(j.ai || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAiSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
@@ -5382,7 +5382,7 @@ function renderPrivateAuditConfig(a) {
     const st = document.getElementById('pcAuditStatus');
     const e = a.effective || {};
     if (st) st.innerHTML = `<b>En uso ahora:</b> IA ${e.audit && e.audit.enabled ? '🟢' : '⚪'} <code>${escapeHtml((e.audit || {}).model || '')}</code> · Telegram ${e.telegram && e.telegram.enabled ? '🟢 conectado (chat ' + escapeHtml(e.telegram.chatId || '') + ')' : '⚪ sin configurar'} · proyecto <code>${escapeHtml(a.projectLabel || '')}</code>` +
-        (a.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(a.updatedBy)} · ${a.updatedAt ? new Date(a.updatedAt).toLocaleString('es-AR') : ''}</span>` : '');
+        (a.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(a.updatedBy)} · ${a.updatedAt ? fmtFechaHoraAR(a.updatedAt) : ''}</span>` : '');
 }
 async function savePrivateAuditConfig() {
     if (!_pcPassword) { showToast('Primero desbloqueá el sector', 'error'); return; }
@@ -5407,7 +5407,7 @@ async function savePrivateAuditConfig() {
         const j = await _pcReadJson(r);
         if (!r.ok) { showToast(j.error || 'Error al guardar', 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (j.error || 'Error al guardar'), false); return; }
         showToast('Auditoría guardada', 'success');
-        _pcStatus('pcAuditSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }), true);
+        _pcStatus('pcAuditSaveStatus', '✅ Guardado ' + new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' }), true);
         renderPrivateAuditConfig(j.audit || {});
     } catch (e) { showToast('Error: ' + (e.message || 'conexión'), 'error'); _pcStatus('pcAuditSaveStatus', '❌ ' + (e.message || 'Error de conexión'), false); }
 }
@@ -5415,7 +5415,7 @@ async function savePrivateAuditConfig() {
 function renderPrivateRefundsConfig(r) {
     const sel = document.getElementById('pcRefundsFormat'); if (sel) sel.value = r.revenueDateFormat || '';
     const st = document.getElementById('pcRefundsStatus');
-    if (st) st.innerHTML = `<b>En uso ahora:</b> <code>${escapeHtml(r.active || 'iso')}</code> (panel: ${escapeHtml(r.revenueDateFormat || '—')} · SSM: ${escapeHtml(r.env || '—')})` + (r.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(r.updatedBy)} · ${r.updatedAt ? new Date(r.updatedAt).toLocaleString('es-AR') : ''}</span>` : '');
+    if (st) st.innerHTML = `<b>En uso ahora:</b> <code>${escapeHtml(r.active || 'iso')}</code> (panel: ${escapeHtml(r.revenueDateFormat || '—')} · SSM: ${escapeHtml(r.env || '—')})` + (r.updatedBy ? `<br><span style="color:#777;">Último cambio: ${escapeHtml(r.updatedBy)} · ${r.updatedAt ? fmtFechaHoraAR(r.updatedAt) : ''}</span>` : '');
     const d = document.getElementById('pcRefDiagDate');
     if (d && !d.value) { const y = new Date(Date.now() - 86400000); d.value = y.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }); }
 }
@@ -5461,7 +5461,7 @@ async function loadLearnedContext() {
         const doc = document.getElementById('pcLearnedDoc'); if (doc) doc.value = j.doc || '';
         const facts = document.getElementById('pcLearnFacts'); if (facts) facts.textContent = j.facts || '(sin datos)';
         const last = (j.lastRuns || [])[0];
-        _pcStatus('pcLearnStatus', last ? `Último análisis (${last.dayKey || ''}): ${new Date(last.at).toLocaleString('es-AR')} · ${last.sampled} chats · ${last.proposals} propuestas · ${last.questions} dudas — ${last.summary || ''}` : 'Todavía no corrió ningún análisis.', true);
+        _pcStatus('pcLearnStatus', last ? `Último análisis (${last.dayKey || ''}): ${fmtFechaHoraAR(last.at)} · ${last.sampled} chats · ${last.proposals} propuestas · ${last.questions} dudas — ${last.summary || ''}` : 'Todavía no corrió ningún análisis.', true);
         const pending = j.pending || [];
         if (!box) return;
         if (!pending.length) { box.innerHTML = '<div style="font-size:12.5px;color:#888;">Nada pendiente de confirmar. 🎉</div>'; return; }
@@ -5632,7 +5632,7 @@ async function loadAuditRatings() {
         if (!items.length) { box.innerHTML = '<div style="color:#888;font-size:12.5px;">Sin calificaciones negativas en el período. 🎉</div>'; return; }
         box.innerHTML = items.map(it => `<div style="border:1px solid rgba(255,80,80,.35);border-radius:10px;padding:10px;background:rgba(255,80,80,.06);${it.reviewed ? 'opacity:.6;' : ''}">
             <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
-                <div><b>👎 @${escapeHtml(it.username || it.userId)}</b> <span style="color:#888;font-size:11px;">${new Date(it.createdAt).toLocaleString('es-AR')}</span> ${it.agents && it.agents.length ? `<span style="font-size:11px;color:#aaa;">· atendió: ${escapeHtml(it.agents.join(', '))}</span>` : ''}</div>
+                <div><b>👎 @${escapeHtml(it.username || it.userId)}</b> <span style="color:#888;font-size:11px;">${fmtFechaHoraAR(it.createdAt)}</span> ${it.agents && it.agents.length ? `<span style="font-size:11px;color:#aaa;">· atendió: ${escapeHtml(it.agents.join(', '))}</span>` : ''}</div>
                 <div style="display:flex;gap:6px;">
                     <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="selectConversation('${escapeHtml(it.userId)}','${escapeHtml(it.username || '')}');switchSection('chats')">Abrir chat</button>
                     ${it.reviewed ? `<span style="font-size:11px;color:#25d366;">✓ visto por ${escapeHtml(it.reviewedBy || '')}</span>` : `<button class="btn-primary" style="font-size:11px;padding:3px 8px;" onclick="reviewAuditRating('${escapeHtml(it.id)}')">Marcar visto</button>`}
@@ -5661,7 +5661,7 @@ async function loadAuditList(page) {
         if (!items.length) { box.innerHTML = '<div style="color:#888;font-size:12.5px;">Nada para mostrar con este filtro.</div>'; if (pag) pag.innerHTML = ''; return; }
         box.innerHTML = items.map(it => `<div style="border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px;background:rgba(255,255,255,.02);${it.reviewed ? 'opacity:.6;' : ''}">
             <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
-                <div>${_scoreBadge(it.score)} <b>@${escapeHtml(it.username || it.userId)}</b> <span style="color:#888;font-size:11px;">${new Date(it.createdAt).toLocaleString('es-AR')} · ${it.source === 'ai' ? 'IA' : 'regla'}${it.alerted ? ' · 📨' : ''}</span>
+                <div>${_scoreBadge(it.score)} <b>@${escapeHtml(it.username || it.userId)}</b> <span style="color:#888;font-size:11px;">${fmtFechaHoraAR(it.createdAt)} · ${it.source === 'ai' ? 'IA' : 'regla'}${it.alerted ? ' · 📨' : ''}</span>
                     ${it.agents && it.agents.length ? `<span style="font-size:11px;color:#aaa;">· ${escapeHtml(it.agents.join(', '))}${it.responsibleAgent ? ' (resp: ' + escapeHtml(it.responsibleAgent) + ')' : ''}</span>` : '<span style="font-size:11px;color:#ff5050;">· sin agente</span>'}</div>
                 <div style="display:flex;gap:6px;">
                     <button class="btn-secondary" style="font-size:11px;padding:3px 8px;" onclick="selectConversation('${escapeHtml(it.userId)}','${escapeHtml(it.username || '')}');switchSection('chats')">Abrir chat</button>

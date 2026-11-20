@@ -948,3 +948,9 @@ bandeja traen `hgAccount {key,label,active,bank}` también para Finpro; `GET /ap
 - El HTML del panel NO debe repetir ids (el bloque de hgcash estuvo duplicado entre COMANDOS y Bancos — Configuración: #202 lo sacó).
 - Tests: `node scripts/test-finpro-accounts.js` (corre los bloques reales de server.js recortados por marcadores de texto: si se renombra
   `const FINPRO_DEFAULTS`, `async function _banksPayload` o `const _finproLastProcessByCvu`, actualizar el test) y `node scripts/test-finpro-webhook.js`.
+
+### Cuenta en uso: cambio manual y registro (#218)
+Cualquier rol del panel menos `comunidad` cambia la cuenta que ve el cliente con el botón fijo "🏦" (`bankQuickChip`, `admin.js`) →
+`POST /api/admin/bank-in-use` (`_bankCanSwitch`). Todo cambio MANUAL (ese botón, la barra, o "USAR ESTA" en las cards de hgcash/Finpro)
+queda en `Config['bankSwitchLog']` vía `_bankSwitchLog` (quién, rol, hora, de cuál a cuál); se lee con `GET /api/admin/bank-in-use/log`.
+Un camino nuevo que cambie la cuenta en uso a mano tiene que llamar a `_bankSwitchLog`.

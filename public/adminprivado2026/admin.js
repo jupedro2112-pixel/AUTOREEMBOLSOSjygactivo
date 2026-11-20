@@ -16117,3 +16117,88 @@ window.loadMudanzaSection = loadMudanzaSection; window.mudLoadList = mudLoadList
 window.mudTestPartner = mudTestPartner; window.mudSaveConfig = mudSaveConfig; window.mudTogglePause = mudTogglePause;
 window.mudSaveRollover = mudSaveRollover; window.mudForce = mudForce; window.mudMigrateOne = mudMigrateOne;
 window.mudResolve = mudResolve; window.mudResidual = mudResidual; window.mudLockOld = mudLockOld;
+
+
+// ============================================================
+// #218 🏦 CUENTA EN USO — botón fijo para TODOS los roles del panel (menos comunidad)
+// Cambia la cuenta que ve el cliente desde cualquier pantalla y muestra el REGISTRO de cambios
+// manuales (quién, rol, hora). No depende de ninguna sección: se dibuja solo si el server lo permite.
+// ============================================================
+(function () {
+    const ROLE = { admin: 'Admin general', depositor: 'Cargas', withdrawer: 'Retiros', cajero: 'Cajero' };
+    const fmt = (iso) => { try { return new Date(iso).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hourCycle: 'h23', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } };
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    let last = null;
+    function build() {
+        if (document.getElementById('bankQuickChip')) return;
+        const chip = document.createElement('button');
+        chip.id = 'bankQuickChip'; chip.type = 'button';
+        chip.style.cssText = 'display:none;position:fixed;left:10px;bottom:10px;z-index:9000;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#10202c;color:#cfefff;border:1px solid rgba(79,195,247,0.6);border-radius:18px;padding:6px 11px;font-size:11.5px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
+        chip.onclick = function () { bankQuickToggle(); };
+        const box = document.createElement('div');
+        box.id = 'bankQuickBox';
+        box.style.cssText = 'display:none;position:fixed;left:10px;bottom:46px;z-index:9001;width:340px;max-width:calc(100vw - 20px);max-height:70vh;overflow:auto;background:#0f1a22;color:#eee;border:1px solid rgba(79,195,247,0.6);border-radius:12px;padding:12px;font-size:12.5px;box-shadow:0 6px 24px rgba(0,0,0,0.6);';
+        box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b>🏦 Cuenta en uso</b><button type="button" onclick="bankQuickToggle(false)" style="background:none;border:none;color:#aaa;font-size:16px;cursor:pointer;">✕</button></div>'
+            + '<div style="margin-bottom:8px;">👁️ El cliente transfiere a: <b id="bankQuickActive" style="color:#66ff99;">…</b></div>'
+            + '<select id="bankQuickSel" style="width:100%;background:rgba(0,0,0,0.4);border:1px solid rgba(79,195,247,0.45);color:#fff;padding:7px 8px;border-radius:6px;font-size:12.5px;margin-bottom:8px;"></select>'
+            + '<button type="button" id="bankQuickBtn" onclick="bankQuickUse()" style="width:100%;background:#1e88e5;color:#fff;border:none;border-radius:6px;padding:8px;font-size:13px;font-weight:700;cursor:pointer;">🔁 USAR ESTA</button>'
+            + '<div style="color:#aaa;font-size:11.5px;margin-top:6px;">Retiros salen por <b id="bankQuickPayouts">…</b></div>'
+            + '<div id="bankQuickMsg" style="font-size:11.5px;color:#aaa;margin-top:6px;"></div>'
+            + '<div style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.12);padding-top:8px;"><b style="font-size:12px;">🧾 Cambios manuales (quién y cuándo)</b><div id="bankQuickLog" style="margin-top:6px;font-size:11.5px;color:#ccc;">…</div></div>';
+        document.body.appendChild(chip); document.body.appendChild(box);
+    }
+    function render(j) {
+        last = j; build();
+        const chip = document.getElementById('bankQuickChip'), slots = (j && j.slots) || [];
+        if (slots.length < 2) { chip.style.display = 'none'; document.getElementById('bankQuickBox').style.display = 'none'; return; }
+        const cur = slots.find((s) => s.inUse);
+        const name = cur ? cur.label + ' (' + cur.bank + ')' : (j.shown === 'manual' ? 'cargada a mano' : '—');
+        chip.style.display = 'block'; chip.textContent = '🏦 ' + name; chip.title = 'Cuenta que ve el cliente: ' + name + ' — tocá para cambiarla';
+        document.getElementById('bankQuickActive').textContent = name;
+        document.getElementById('bankQuickPayouts').textContent = j.payoutsLabel || '';
+        const sel = document.getElementById('bankQuickSel');
+        if (document.activeElement !== sel) sel.innerHTML = slots.map((s) => '<option value="' + esc(s.id) + '"' + (s.inUse ? ' selected' : '') + '>' + esc(s.bank + ' · ' + s.label + (s.inUse ? ' (en uso)' : '') + (s.blocked ? ' — ' + s.blocked : '')) + '</option>').join('');
+    }
+    async function loadLog() {
+        const el = document.getElementById('bankQuickLog'); if (!el) return;
+        try {
+            const r = await authFetch('/api/admin/bank-in-use/log'); if (!r.ok) { el.textContent = 'No disponible.'; return; }
+            const j = await r.json(); const log = j.log || [];
+            el.innerHTML = log.length ? log.map((e) => '<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06);"><b>' + esc(fmt(e.at)) + '</b> · ' + esc(e.by) + ' <span style="color:#8fd3ff;">(' + esc(ROLE[e.role] || e.role) + ')</span><br>→ ' + esc(e.bank + ' · ' + e.account) + (e.from ? ' <span style="color:#999;">(antes: ' + esc(e.from) + ')</span>' : '') + (e.via ? ' <span style="color:#777;">· ' + esc(e.via) + '</span>' : '') + '</div>').join('') : 'Todavía no hubo cambios manuales.';
+        } catch (_) { el.textContent = 'No disponible.'; }
+    }
+    async function load() {
+        try {
+            if (typeof currentAdmin === 'undefined' || !currentAdmin || currentAdmin.role === 'comunidad') { const c = document.getElementById('bankQuickChip'); if (c) c.style.display = 'none'; return; }
+            const r = await authFetch('/api/admin/bank-in-use'); if (!r.ok) return;
+            render(await r.json());
+        } catch (_) {}
+    }
+    window.bankQuickToggle = function (open) {
+        build(); const box = document.getElementById('bankQuickBox');
+        const show = open === undefined ? box.style.display === 'none' : !!open;
+        box.style.display = show ? 'block' : 'none';
+        if (show) { load(); loadLog(); }
+    };
+    window.bankQuickUse = async function () {
+        const sel = document.getElementById('bankQuickSel'), msg = document.getElementById('bankQuickMsg'), btn = document.getElementById('bankQuickBtn');
+        if (!sel || !sel.value) return;
+        const cur = ((last && last.slots) || []).find((s) => s.inUse);
+        if (cur && cur.id === sel.value) { msg.style.color = '#aaa'; msg.textContent = 'Esa ya es la cuenta en uso.'; return; }
+        try {
+            btn.disabled = true; msg.style.color = '#aaa'; msg.textContent = 'Cambiando…';
+            const r = await authFetch('/api/admin/bank-in-use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: sel.value }) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(j.error || 'No se pudo cambiar');
+            render(j); loadLog();
+            const w = j.warnings || [];
+            msg.style.color = w.length ? '#ffcc66' : '#66ff99'; msg.textContent = '✅ Listo: el cliente ya ve esa cuenta.' + (w.length ? ' ⚠️ ' + w.join(' ') : '');
+            try { if (typeof showToast === 'function') showToast('✅ Cuenta en uso cambiada', 'success'); } catch (_) {}
+            try { if (typeof loadBankInUse === 'function') loadBankInUse(); } catch (_) {}
+        } catch (e) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + e.message; }
+        finally { btn.disabled = false; }
+    };
+    window.bankQuickLoad = load;
+    setInterval(load, 60000);
+    setTimeout(load, 4000); setTimeout(load, 15000);
+})();

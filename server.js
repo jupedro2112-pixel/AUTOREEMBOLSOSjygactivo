@@ -18087,14 +18087,14 @@ async function _bankInUsePayload() {
 }
 app.get('/api/admin/bank-in-use', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    if (!_bankCanSwitch(req)) return res.status(403).json({ error: 'Sin permiso' });
     await _loadFinproCredentials();
     res.json(Object.assign({ success: true }, await _bankInUsePayload()));
   } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 app.post('/api/admin/bank-in-use', authMiddleware, adminMiddleware, async (req, res) => {
   try {
-    if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
+    if (!_bankCanSwitch(req)) return res.status(403).json({ error: 'Sin permiso' });
     await _loadHgcashCredentials(); await _loadFinproCredentials();
     const id = String((req.body && req.body.id) || '');
     const slot = _rotSlots().find((s) => s.id === id);
@@ -18106,14 +18106,39 @@ app.post('/api/admin/bank-in-use', authMiddleware, adminMiddleware, async (req, 
     else if (why) return res.status(400).json({ error: `No se puede usar "${slot.label}": ${why}.` });
     const by = req.user.username;
     if (prevShown !== slot.provider) await Config.set('bankShown', slot.provider, by);
+    let _swPrev = null; try { _swPrev = await _rotCurrent(); } catch (_) {} // #218
     const act = slot.provider === 'hgcash' ? await _hgActivateAccount(slot.key, by) : await _fpActivateAccount(slot.key, by);
     warnings.push(...(act.warnings || []));
     const provider = await getBankProvider();
     if (provider !== slot.provider) warnings.push(`Los retiros siguen saliendo por ${_bankLabel(provider)} (se cambia en Bancos configuración → Bancos automáticos).`);
+    try { await _bankSwitchLog(req.user, slot, _swPrev, 'barra'); } catch (_) {} // #218
     logger.warn(`[bank-in-use] ${by}: el cliente ve "${slot.label}" (${_bankLabel(slot.provider)})`);
     try { _emitHgcashUpdate('rotacion', null); } catch (_) {}
     res.json(Object.assign({ success: true, warnings }, await _bankInUsePayload()));
   } catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'Error del servidor' }); }
+});
+// #218 REGISTRO de cambios MANUALES de la cuenta en uso: quién, con qué rol, a qué hora, de cuál a cuál y desde dónde.
+// Config['bankSwitchLog'] = [{ at, by, role, bank, account, from, via }] (últimos 200). La rotación AUTOMÁTICA no entra acá
+// (tiene su propio "Últimos cambios" en Config['bankRotation'].log). Nunca frena el cambio si falla el guardado.
+function _bankCanSwitch(req) { const r = req.user && req.user.role; return _bankCanView(req) || (!!r && !['user', 'comunidad', 'publisher_admin'].includes(r)); }
+async function _bankSwitchLog(user, slot, prev, via) {
+  try {
+    if (!slot) return;
+    const cur = await getConfig('bankSwitchLog', null);
+    const list = Array.isArray(cur) ? cur : [];
+    list.unshift({ at: new Date().toISOString(), by: String((user && user.username) || '?'), role: String((user && user.role) || '?'),
+      bank: _bankLabel(slot.provider), account: String(slot.label || slot.key || ''),
+      from: prev && prev.id !== slot.id ? `${_bankLabel(prev.provider)} · ${prev.label}` : (prev ? 'la misma cuenta' : ''), via: String(via || '') });
+    await Config.set('bankSwitchLog', list.slice(0, 200), (user && user.username) || 'sistema');
+  } catch (e) { try { logger.warn('[bank-switch-log] no se pudo guardar: ' + (e && e.message)); } catch (_) {} }
+}
+function _rotSlotByKey(provider, key) { try { return _rotSlots().find((x) => x.provider === provider && x.key === key) || null; } catch (_) { return null; } }
+app.get('/api/admin/bank-in-use/log', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    if (!_bankCanSwitch(req)) return res.status(403).json({ error: 'Sin permiso' });
+    const cur = await getConfig('bankSwitchLog', null);
+    res.json({ success: true, log: (Array.isArray(cur) ? cur : []).slice(0, 60) });
+  } catch (e) { res.status(500).json({ error: 'Error del servidor' }); }
 });
 async function _banksPayload() {
   const [hg, fp, provider, shown, cbu] = await Promise.all([getHgcashConfig(), getFinproConfig(), getBankProvider(), getBankShown(), getConfig('cbu', null)]);
@@ -18401,7 +18426,9 @@ app.post('/api/admin/finpro/accounts/:key/activate', authMiddleware, adminMiddle
   try {
     if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
     const key = String(req.params.key || '');
+    let _swPrev = null; try { _swPrev = await _rotCurrent(); } catch (_) {} // #218
     const r = await _fpActivateAccount(key, req.user.username);
+    try { await _bankSwitchLog(req.user, _rotSlotByKey('finpro', key), _swPrev, 'cuentas Finpro'); } catch (_) {} // #218
     if (!_fpHasCreds(r.account)) r.warnings.push('Esta cuenta no tiene credenciales válidas: no puede pagar retiros ni verificar cargas hasta recargarlas.');
     else if (!_fpReadyPayouts(r.account) && (await getBankProvider()) === 'finpro') r.warnings.push('Los retiros salen por Finpro y esta cuenta NO tiene nuestro CVU de origen: no va a poder pagar hasta cargarlo.');
     if (r.account && r.account.incomingEnabled === false) r.warnings.push('Esta cuenta tiene las cargas automáticas PAUSADAS: reanudalas si querés que cargue sola.');
@@ -18685,7 +18712,9 @@ app.post('/api/admin/hgcash/accounts/:key/activate', authMiddleware, adminMiddle
   try {
     if (!_bankCanView(req)) return res.status(403).json({ error: 'Sin permiso' });
     const key = String(req.params.key || '');
+    let _swPrev = null; try { _swPrev = await _rotCurrent(); } catch (_) {} // #218
     const r = await _hgActivateAccount(key, req.user.username);
+    try { await _bankSwitchLog(req.user, _rotSlotByKey('hgcash', key), _swPrev, 'cuentas hgcash'); } catch (_) {} // #218
     if (!r.account.tokenEnc) r.warnings.push('Esta cuenta no tiene token de API: los retiros automáticos y el saldo no van a andar hasta cargarlo.');
     res.json(Object.assign({ success: true, warnings: r.warnings, label: _hgAccountLabel(r.account) }, _hgAccountsPayload(), { canEdit: req.user.role === 'admin' }));
   } catch (e) {

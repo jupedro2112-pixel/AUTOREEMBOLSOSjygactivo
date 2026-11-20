@@ -6,6 +6,16 @@
 >
 > **Última actualización: 2026-11-19**
 
+## Sesión 2026-11-20
+
+### 216. 🔁 Rotación en VUELTAS: cuando todas llegan al tope del día, arranca de nuevo desde la primera
+- Owner: "si todas llegan a su tope diario, que dé la vuelta y arranque de nuevo… en loop".
+- `bankRotation.loop` (default sí, tilde en la card) + `Config['bankRotationLap']` = `{ dayKey AR, n }`. En la vuelta N el tope del día de cada
+  cuenta vale N× (`_rotOverLimit`). Si la cuenta en uso llegó a su tope del día y TODAS las candidatas están descartadas por tope del día,
+  `_bankRotate` sube la vuelta y vuelve a buscar en el orden de siempre (desde la última, la siguiente es la primera). Se reinicia solo cada
+  día. El tope del MES no da vueltas (límite duro). El aviso de Telegram dice "empezó la VUELTA N". Test: `test-bank-rotation.js` (19). SW v83.
+- Ojo: la vuelta mide por total acumulado. Una cuenta que se pasó de su tope (p. ej. $2,3M de $2M) recibe en la vuelta 2 hasta completar $4M.
+
 ## Sesión 2026-11-19
 
 ### 215. 📚 Aprendizaje diario: la IA deja de PREGUNTAR (apagado por defecto) y no repite temas

@@ -6297,7 +6297,8 @@ async function saveFireMilestones() {
 // #207 Rotación automática de cuentas de banco
 function _bankRotRender(j) {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
-    set('bankRotEnabled', j.enabled); set('bankRotOnFailure', j.onFailure); set('bankRotOnLimit', j.onLimit); set('bankRotCrossBank', j.crossBank); set('bankRotMovePayouts', j.movePayouts);
+    set('bankRotEnabled', j.enabled); set('bankRotOnFailure', j.onFailure); set('bankRotOnLimit', j.onLimit); set('bankRotCrossBank', j.crossBank); set('bankRotMovePayouts', j.movePayouts); set('bankRotLoop', j.loop !== false);
+    const lapEl = document.getElementById('bankRotLap'); if (lapEl) lapEl.textContent = j.lap ? '· hoy va por la vuelta ' + (j.lap + 1) : '';
     const fc = document.getElementById('bankRotFailChecks'); if (fc) fc.value = String([2, 3, 5].includes(j.failChecks) ? j.failChecks : 3);
     const money = (n) => '$' + Number(n || 0).toLocaleString('es-AR');
     const inp = 'width:120px;padding:5px;border-radius:6px;border:1px solid #444;background:#111;color:#fff;';
@@ -6341,7 +6342,7 @@ async function saveBankRotation() {
         document.querySelectorAll('[data-rot-day]').forEach((el) => { const id = el.getAttribute('data-rot-day'); limits[id] = limits[id] || {}; limits[id].day = Number(el.value) || 0; });
         document.querySelectorAll('[data-rot-month]').forEach((el) => { const id = el.getAttribute('data-rot-month'); limits[id] = limits[id] || {}; limits[id].month = Number(el.value) || 0; });
         document.querySelectorAll('[data-rot-next]').forEach((el) => { const id = el.getAttribute('data-rot-next'); limits[id] = limits[id] || {}; limits[id].next = el.value || ''; });
-        const body = { enabled: ck('bankRotEnabled'), onFailure: ck('bankRotOnFailure'), onLimit: ck('bankRotOnLimit'), crossBank: ck('bankRotCrossBank'), movePayouts: ck('bankRotMovePayouts'),
+        const body = { enabled: ck('bankRotEnabled'), onFailure: ck('bankRotOnFailure'), onLimit: ck('bankRotOnLimit'), crossBank: ck('bankRotCrossBank'), movePayouts: ck('bankRotMovePayouts'), loop: ck('bankRotLoop'),
             failChecks: Number((document.getElementById('bankRotFailChecks') || {}).value) || 3, limits };
         const r = await authFetch('/api/admin/bank-rotation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const j = await r.json().catch(() => ({}));

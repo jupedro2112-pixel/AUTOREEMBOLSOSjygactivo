@@ -98,8 +98,8 @@ t('tope del mes y candidata también en su tope → se la saltea', async () => {
   assert.ok(r.ok); assert.strictEqual(S.shown, 'finpro'); assert.strictEqual(S._fpActiveKey, 'f1');
   assert.strictEqual(S.provider, 'hgcash', 'por tope NO se mueven los retiros');
 });
-t('sin permiso de pasar al otro banco: no rota y avisa una sola vez', async () => {
-  reset({ limits: { 'hgcash:a1': { day: 1, month: 0 }, 'hgcash:a2': { day: 1, month: 0 } } });
+t('sin permiso de pasar al otro banco (y sin vueltas): no rota y avisa una sola vez', async () => {
+  reset({ loop: false, limits: { 'hgcash:a1': { day: 1, month: 0 }, 'hgcash:a2': { day: 1, month: 0 } } });
   usage['hgcash:a1'] = { day: 5, month: 5 }; usage['hgcash:a2'] = { day: 5, month: 5 };
   const r = await tick(); await tick();
   assert.strictEqual(r.ok, false); assert.strictEqual(S._hgActiveKey, 'a1'); assert.strictEqual(S.shown, 'hgcash');
@@ -161,6 +161,32 @@ t('destino ELEGIDO: va a esa cuenta aunque sea del otro banco; si no está dispo
   r = await tick();
   assert.ok(r.ok); assert.strictEqual(S.shown, 'hgcash'); assert.strictEqual(S._hgActiveKey, 'a2');
   assert.deepStrictEqual(X._rotNorm({ limits: { 'hgcash:a1': { next: 'hgcash:a1' }, 'hgcash:a2': { next: 'finpro:f1' } } }).limits, { 'hgcash:a2': { day: 0, month: 0, next: 'finpro:f1' } });
+});
+t('VUELTAS: todas en su tope del día → nueva vuelta, vuelve a la primera y cada una recibe otro tope', async () => {
+  const lim = { 'hgcash:a1': { day: 100, month: 0 }, 'hgcash:a2': { day: 100, month: 0 }, 'finpro:f1': { day: 100, month: 0 } };
+  const free = () => cfgStore.set('bankrotationlock', { at: 0 });
+  reset({ crossBank: true, limits: lim }); S.shown = 'finpro'; // en uso: la última (f1)
+  usage['hgcash:a1'] = { day: 110, month: 110 }; usage['hgcash:a2'] = { day: 120, month: 120 }; usage['finpro:f1'] = { day: 105, month: 105 };
+  let r = await tick();
+  assert.ok(r.ok, JSON.stringify(r)); assert.strictEqual(S.shown, 'hgcash'); assert.strictEqual(S._hgActiveKey, 'a1', 'vuelve a la PRIMERA');
+  assert.strictEqual(cfgStore.get('bankrotationlap').n, 1); assert.ok(/VUELTA 2/.test(alerts[alerts.length - 1]));
+  free(); await tick(); assert.strictEqual(S._hgActiveKey, 'a1', 'en la vuelta 2 sigue hasta 2× su tope');
+  usage['hgcash:a1'] = { day: 200, month: 200 }; free(); await tick(); assert.strictEqual(S._hgActiveKey, 'a2');
+  usage['hgcash:a2'] = { day: 200, month: 200 }; free(); await tick(); assert.strictEqual(S.shown, 'finpro');
+  usage['finpro:f1'] = { day: 200, month: 200 }; free(); await tick();
+  assert.strictEqual(S.shown, 'hgcash'); assert.strictEqual(S._hgActiveKey, 'a1'); assert.strictEqual(cfgStore.get('bankrotationlap').n, 2, 'vuelta 3');
+});
+t('VUELTAS apagadas, o tope del MES: no hay vuelta nueva', async () => {
+  reset({ loop: false, limits: { 'hgcash:a1': { day: 100, month: 0 }, 'hgcash:a2': { day: 100, month: 0 } } });
+  usage['hgcash:a1'] = { day: 100, month: 100 }; usage['hgcash:a2'] = { day: 100, month: 100 };
+  let r = await tick(); assert.strictEqual(r.ok, false); assert.ok(!cfgStore.has('bankrotationlap'));
+  reset({ limits: { 'hgcash:a1': { day: 0, month: 100 }, 'hgcash:a2': { day: 0, month: 100 } } });
+  usage['hgcash:a1'] = { day: 100, month: 100 }; usage['hgcash:a2'] = { day: 100, month: 100 };
+  r = await tick(); assert.strictEqual(r.ok, false); assert.ok(!cfgStore.has('bankrotationlap'), 'el tope del mes es duro');
+});
+t('VUELTAS: la vuelta de ayer no cuenta hoy', async () => {
+  reset({ limits: { 'hgcash:a1': { day: 100, month: 0 } } }); cfgStore.set('bankrotationlap', { dayKey: '2020-01-01', n: 4 });
+  assert.strictEqual((await X.getBankRotation()).lap, 0);
 });
 t('día y mes en hora Argentina', async () => {
   const st = X._rotPeriodStarts(Date.UTC(2026, 11, 1, 2, 30)); // 30-nov 23:30 AR

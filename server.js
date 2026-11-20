@@ -17814,6 +17814,7 @@ function _rotNorm(raw) {
   const c = Object.assign({}, BANK_ROT_DEFAULTS, raw && typeof raw === 'object' ? raw : {});
   c.enabled = c.enabled === true; c.onFailure = c.onFailure !== false; c.onLimit = c.onLimit !== false;
   c.crossBank = c.crossBank === true; c.movePayouts = c.movePayouts === true;
+  c.loop = c.loop !== false; // #216 al agotarse TODOS los topes del día, empieza otra vuelta (default sí)
   c.failChecks = Math.min(10, Math.max(2, Math.round(Number(c.failChecks) || 3)));
   const lim = {};
   if (c.limits && typeof c.limits === 'object') {
@@ -17830,7 +17831,17 @@ function _rotNorm(raw) {
   c.log = Array.isArray(c.log) ? c.log.slice(0, 30) : [];
   return c;
 }
-async function getBankRotation() { return _rotNorm(await getConfig('bankRotation', null).catch(() => null)); }
+// #216 VUELTAS: cuando TODAS las cuentas llegaron a su tope del día, arranca otra vuelta: cada cuenta
+// puede recibir OTRO tope más (vuelta 2 = hasta 2× su tope, vuelta 3 = 3×…) y se vuelve a rotar en el
+// mismo orden. `Config['bankRotationLap']` = { dayKey (día AR), n } — se reinicia solo cada día.
+// El tope del MES no da vueltas: es un límite duro.
+function _rotDayKey(now = Date.now()) { return new Date(now - 3 * 3600 * 1000).toISOString().slice(0, 10); }
+async function getBankRotation() {
+  const c = _rotNorm(await getConfig('bankRotation', null).catch(() => null));
+  const lap = await getConfig('bankRotationLap', null).catch(() => null);
+  c.lap = c.loop && lap && lap.dayKey === _rotDayKey() ? Math.max(0, Math.round(Number(lap.n) || 0)) : 0;
+  return c;
+}
 // Todas las cuentas cargadas en el panel, en orden fijo: hgcash a1.. y después Finpro f1..
 function _rotSlots() {
   const out = [];
@@ -17877,7 +17888,8 @@ async function _rotUsage(slot) {
 function _rotOverLimit(cfg, slot, usage) {
   const l = cfg.limits[slot.id];
   if (!l) return null;
-  if (l.day > 0 && usage.day >= l.day) return `llegó al tope del DÍA ($${usage.day.toLocaleString('es-AR')} de $${l.day.toLocaleString('es-AR')})`;
+  const dayCap = l.day * ((cfg.lap || 0) + 1); // #216 en la vuelta N el tope del día vale N veces
+  if (l.day > 0 && usage.day >= dayCap) return `llegó al tope del DÍA ($${usage.day.toLocaleString('es-AR')} de $${dayCap.toLocaleString('es-AR')}${cfg.lap ? ', vuelta ' + (cfg.lap + 1) : ''})`;
   if (l.month > 0 && usage.month >= l.month) return `llegó al tope del MES ($${usage.month.toLocaleString('es-AR')} de $${l.month.toLocaleString('es-AR')})`;
   return null;
 }
@@ -17949,16 +17961,25 @@ async function _bankRotate(cfg, cur, reason, detail, by = 'rotación automática
   // Si ese destino no está disponible, sigue con el orden de siempre.
   const _pref = cfg.limits[cur.id] && cfg.limits[cur.id].next ? ordered.find((s) => s.id === cfg.limits[cur.id].next) : null;
   if (_pref) cands = [_pref].concat(cands.filter((s) => s.id !== _pref.id));
-  const skipped = [];
+  let skipped = [];
   let target = null;
-  for (const s of cands) {
-    const why = _rotSlotBlocked(s, hgCfg, fpCfg);
-    if (why) { skipped.push(`${s.label}: ${why}`); continue; }
-    const over = cfg.limits[s.id] ? _rotOverLimit(cfg, s, await _rotUsage(s)) : null; // sin tope cargado no se consulta la base
-    if (over) { skipped.push(`${s.label}: ${over}`); continue; }
-    const pr = await _rotProbe(s);
-    if (!pr.ok) { skipped.push(`${s.label}: no responde (${pr.error})`); continue; }
-    target = s; break;
+  let newLap = false;
+  for (let round = 0; round < 6 && !target; round++) {
+    skipped = []; let byDay = 0;
+    for (const s of cands) {
+      const why = _rotSlotBlocked(s, hgCfg, fpCfg);
+      if (why) { skipped.push(`${s.label}: ${why}`); continue; }
+      const over = cfg.limits[s.id] ? _rotOverLimit(cfg, s, await _rotUsage(s)) : null; // sin tope cargado no se consulta la base
+      if (over) { skipped.push(`${s.label}: ${over}`); if (/tope del DÍA/.test(over)) byDay++; continue; }
+      const pr = await _rotProbe(s);
+      if (!pr.ok) { skipped.push(`${s.label}: no responde (${pr.error})`); continue; }
+      target = s; break;
+    }
+    // #216: todas las demás están en su tope del DÍA y esta también → empieza otra vuelta y se vuelve a buscar.
+    if (target || !(cfg.loop && reason === 'limit' && /tope del DÍA/.test(detail) && byDay > 0)) break;
+    cfg.lap = (cfg.lap || 0) + 1; newLap = true;
+    await setConfig('bankRotationLap', { dayKey: _rotDayKey(), n: cfg.lap, at: new Date() });
+    logger.warn(`[bank-rotation] todas las cuentas llegaron a su tope del día → empieza la vuelta ${cfg.lap + 1}`);
   }
   const motivo = reason === 'limit' ? detail : `no responde (${detail})`;
   if (!target) {
@@ -17983,6 +18004,7 @@ async function _bankRotate(cfg, cur, reason, detail, by = 'rotación automática
     if (ready) { await Config.set('bankProvider', target.provider, by); payoutsMoved = true; }
     else warnings.push(`Los retiros siguen saliendo por ${_bankLabel(cur.provider)}: la cuenta nueva no está lista para pagar.`);
   }
+  if (newLap) warnings.push(`Todas las cuentas habían llegado a su tope del día: empezó la VUELTA ${cfg.lap + 1} (cada una puede recibir otro tope más).`);
   const entry = { at: new Date(), reason, from: cur.id, fromLabel: cur.label, to: target.id, toLabel: target.label, detail: String(motivo).slice(0, 300), payoutsMoved, by };
   try {
     const raw = (await getConfig('bankRotation', null)) || {};
@@ -18032,7 +18054,7 @@ async function _bankRotationPayload({ probe = false } = {}) {
     if (probe) { const p = await _rotProbe(s); row.probe = { ok: p.ok, unknown: !!p.unknown, error: p.error || null }; }
     slots.push(row);
   }
-  return { enabled: cfg.enabled, onFailure: cfg.onFailure, failChecks: cfg.failChecks, onLimit: cfg.onLimit, crossBank: cfg.crossBank, movePayouts: cfg.movePayouts,
+  return { enabled: cfg.enabled, onFailure: cfg.onFailure, failChecks: cfg.failChecks, onLimit: cfg.onLimit, crossBank: cfg.crossBank, movePayouts: cfg.movePayouts, loop: cfg.loop, lap: cfg.lap || 0,
     shown: await getBankShown(), slots, log: cfg.log };
 }
 app.get('/api/admin/bank-rotation', authMiddleware, adminMiddleware, async (req, res) => {
@@ -18048,7 +18070,7 @@ app.post('/api/admin/bank-rotation', authMiddleware, adminMiddleware, async (req
     const b = req.body || {};
     const prev = (await getConfig('bankRotation', null)) || {};
     const next = _rotNorm({ enabled: b.enabled === true, onFailure: b.onFailure !== false, failChecks: b.failChecks, onLimit: b.onLimit !== false,
-      crossBank: b.crossBank === true, movePayouts: b.movePayouts === true, limits: b.limits, log: prev.log });
+      crossBank: b.crossBank === true, movePayouts: b.movePayouts === true, loop: b.loop !== false, limits: b.limits, log: prev.log });
     await setConfig('bankRotation', Object.assign(next, { updatedBy: req.user.username, updatedAt: new Date() }));
     logger.info(`[bank-rotation] ${req.user.username}: ${next.enabled ? 'ENCENDIDA' : 'apagada'} · caída ${next.onFailure ? 'sí (' + next.failChecks + ')' : 'no'} · topes ${next.onLimit ? 'sí' : 'no'} · otro banco ${next.crossBank ? 'sí' : 'no'}`);
     res.json(Object.assign({ success: true }, await _bankRotationPayload()));

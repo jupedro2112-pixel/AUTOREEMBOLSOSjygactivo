@@ -20180,7 +20180,9 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     // se jugó las fichas (saldo insuficiente) o no se puede confirmar el descuento → NO
     // se paga. Solo si el descuento se confirma sigue el cash-out. (Pagos viejos ya tenían
     // las fichas descontadas al solicitar → no entran acá.)
-    if (claimed.deductAtPay === true) {
+    // Guard `debitConfirmed !== true`: si un intento anterior YA descontó las fichas y el pago falló
+    // (reintento con "Pagar nuevamente" / "Pagar con otro banco"), NO se vuelven a descontar.
+    if (claimed.deductAtPay === true && claimed.debitConfirmed !== true) {
       const ded = await _deductChipsAtConfirm(claimed, req.user);
       if (!ded.ok) {
         if (ded.insufficient) {

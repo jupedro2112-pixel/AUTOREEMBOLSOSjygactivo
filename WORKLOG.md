@@ -8,6 +8,12 @@
 
 ## Sesión 2026-11-20
 
+### 217. 💸 Reintentar un pago por hgcash ya no vuelve a descontar las fichas
+- `POST /api/admin/payouts/:id/pay` (camino hgcash) descontaba con `if (claimed.deductAtPay === true)` sin mirar `debitConfirmed`: si un
+  intento anterior YA había descontado y el banco falló (p. ej. sin saldo), "Pagar nuevamente" o "Pagar con otro banco" → hgcash volvía a
+  descontar (o cancelaba el retiro por "saldo insuficiente"). Ahora lleva el mismo guard `debitConfirmed !== true` que el camino Finpro.
+  Lo detectó la réplica de bancos a VIPCARGASANTINOagostonuevo; SANTINOGANAMOS ya lo tenía. Aplicarlo en cada réplica.
+
 ### 216. 🔁 Rotación en VUELTAS: cuando todas llegan al tope del día, arranca de nuevo desde la primera
 - Owner: "si todas llegan a su tope diario, que dé la vuelta y arranque de nuevo… en loop".
 - `bankRotation.loop` (default sí, tilde en la card) + `Config['bankRotationLap']` = `{ dayKey AR, n }`. En la vuelta N el tope del día de cada

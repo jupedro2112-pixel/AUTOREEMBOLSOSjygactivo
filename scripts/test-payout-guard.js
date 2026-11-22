@@ -29,10 +29,10 @@ const match = (m, q) => {
 const S = {
   BankMovement: { find: (q) => ({ sort() { return this; }, limit() { return this; }, lean: async () => movements.filter((m) => match(m, q)) }) },
   PendingPayout: { updateOne: async (q, u) => { updates.push({ q, u }); } },
-  _hgAccountByKey: (k) => ({ a1: { key: 'a1', label: 'GRMA' }, a2: { key: 'a2', label: 'VANTUM' } }[k] || null),
-  _fpAccountByKey: (k) => (k === 'f1' ? { key: 'f1', label: 'QUICKPAY' } : null),
+  _hgAccountByKey: (k) => ({ a1: { key: 'a1', label: 'CUENTA-A' }, a2: { key: 'a2', label: 'CUENTA-B' } }[k] || null),
+  _fpAccountByKey: (k) => (k === 'f1' ? { key: 'f1', label: 'CUENTA-F' } : null),
   _hgAccountLabel: (x) => x.label, _fpAccountLabel: (x) => x.label,
-  _hgAccountLabelFor: (m) => (m.accountKey ? { label: m.accountKey === 'a1' ? 'GRMA' : 'VANTUM' } : null),
+  _hgAccountLabelFor: (m) => (m.accountKey ? { label: m.accountKey === 'a1' ? 'CUENTA-A' : 'CUENTA-B' } : null),
   _bankLabel: (p) => (p === 'finpro' ? 'Finpro' : 'hgcash'),
   _digits: (x) => String(x || '').replace(/\D/g, ''),
   logger: { info() {}, warn() {}, error() {} },
@@ -41,9 +41,9 @@ const S = {
 new Function('S', 'with (S) {\n' + block + '\n__out = { _payoutVerifyLeft, _payoutVerifyBlock, PAYOUT_VERIFY_MS, _payoutResendGuard, _payoutNoteSend, _payoutNoteResult, PAYOUT_RESEND_COOLDOWN_MS }; }')(S);
 const X = S.__out;
 
-const CBU = '0000003100097335288307';
+const CBU = '0000000000000000012345';
 const ago = (ms) => new Date(Date.now() - ms);
-const P = (o) => Object.assign({ id: 'p1', amount: 999000, username: 'anto', sendLog: [] }, o || {});
+const P = (o) => Object.assign({ id: 'p1', amount: 999000, username: 'cliente1', sendLog: [] }, o || {});
 let fails = 0;
 const tests = [];
 const t = (name, fn) => tests.push([name, async () => { movements = []; updates.length = 0; await fn(); }]);
@@ -54,7 +54,7 @@ t('primer envío de un retiro: pasa', async () => {
 t('ya hay una SALIDA del banco con el id del retiro: no se paga otra vez (ni confirmando)', async () => {
   movements = [{ direction: 'Outbound', externalId: 'p1', payoutId: 'p1', amount: 999000, toCBU: CBU, status: 'done', accountKey: 'a1', createdAt: ago(40000) }];
   const g = await X._payoutResendGuard(P({ lastSendAt: ago(45000), lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'unknown' }), 'hgcash', 'a2', CBU, true);
-  assert.ok(g && g.http === 409 && g.body.alreadySent === true); assert.ok(/YA SALIÓ/.test(g.body.error) && /GRMA/.test(g.body.error));
+  assert.ok(g && g.http === 409 && g.body.alreadySent === true); assert.ok(/YA SALIÓ/.test(g.body.error) && /CUENTA-A/.test(g.body.error));
   // aunque sea el primer intento anotado (pedido viejo sin lastSendAt)
   const g2 = await X._payoutResendGuard(P(), 'finpro', 'f1', CBU, true);
   assert.ok(g2 && g2.body.alreadySent === true);
@@ -64,14 +64,14 @@ t('una salida con estado de error / reversada no cuenta como pagada', async () =
   const g = await X._payoutResendGuard(P({ lastSendAt: ago(600000), lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'rejected' }), 'hgcash', 'a2', CBU, false);
   assert.strictEqual(g, null);
 });
-t('incidente GRMA → VANTUM a los 46 s: se frena por la espera', async () => {
+t('incidente CUENTA-A → CUENTA-B a los 46 s: se frena por la espera', async () => {
   const g = await X._payoutResendGuard(P({ lastSendAt: ago(46000), lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'rejected' }), 'hgcash', 'a2', CBU, true);
   assert.ok(g && g.http === 409 && g.body.wait === true && g.body.retryInSec > 60 && g.body.retryInSec <= 75);
-  assert.ok(/GRMA/.test(g.body.error));
+  assert.ok(/CUENTA-A/.test(g.body.error));
 });
 t('incidente Finpro → hgcash a los 35 s: se frena por la espera', async () => {
   const g = await X._payoutResendGuard(P({ lastSendAt: ago(35000), lastSendBank: 'finpro', lastSendAccount: 'f1', lastSendResult: 'rejected' }), 'hgcash', 'a1', CBU, false);
-  assert.ok(g && g.body.wait === true && /Finpro · QUICKPAY/.test(g.body.error));
+  assert.ok(g && g.body.wait === true && /Finpro · CUENTA-F/.test(g.body.error));
 });
 t('reintento por la MISMA cuenta: no espera (ahí vale la idempotencia del banco)', async () => {
   const g = await X._payoutResendGuard(P({ lastSendAt: ago(5000), lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'unknown' }), 'hgcash', 'a1', CBU, false);
@@ -104,7 +104,7 @@ t('#220 incidente real: salió por FUERA de la app el mismo monto al mismo CBU �
   const p = P({ createdAt: ago(400000) });
   movements = [{ direction: 'Outbound', outKind: 'unknown', amount: 999000, toCBU: CBU, status: 'done', accountKey: 'a1', createdAt: ago(60000) }];
   const g = await X._payoutResendGuard(p, 'finpro', 'f1', CBU, false);
-  assert.ok(g && g.http === 409 && g.body.needsConfirm === true && /FUERA de la app/.test(g.body.error) && /GRMA/.test(g.body.error));
+  assert.ok(g && g.http === 409 && g.body.needsConfirm === true && /FUERA de la app/.test(g.body.error) && /CUENTA-A/.test(g.body.error));
   assert.strictEqual(await X._payoutResendGuard(p, 'finpro', 'f1', CBU, true), null); // confirmando, pasa
   // anterior al pedido, otro destino, ya ligada a un retiro o reversada → no frena
   for (const m of [{ createdAt: ago(900000) }, { toCBU: '1'.repeat(22) }, { payoutId: 'otro' }, { status: 'REVERSED' }, { outKind: 'payout' }]) {
@@ -116,7 +116,7 @@ t('#221 envío a hgcash SIN respuesta: el retiro queda VERIFICANDO y bloqueado d
   const v = { status: 'failed', hgSendUnknown: true, verifyUntil: new Date(Date.now() + 100000), lastSendBank: 'hgcash', lastSendAccount: 'a1' };
   const left = X._payoutVerifyLeft(v); assert.ok(left > 95 && left <= 100);
   const b = X._payoutVerifyBlock(v);
-  assert.ok(b && b.http === 409 && b.body.verifying === true && b.body.wait === true && /PUDO HABER SALIDO/.test(b.body.error) && /GRMA/.test(b.body.error));
+  assert.ok(b && b.http === 409 && b.body.verifying === true && b.body.wait === true && /PUDO HABER SALIDO/.test(b.body.error) && /CUENTA-A/.test(b.body.error));
   // ventana vencida, rechazo claro, otro estado o pedido viejo → no bloquea
   for (const o of [{ verifyUntil: ago(1000) }, { hgSendUnknown: false }, { status: 'paying' }, { status: 'pending_review' }, { verifyUntil: null }]) {
     assert.strictEqual(X._payoutVerifyBlock(Object.assign({}, v, o)), null, JSON.stringify(o));
@@ -125,11 +125,11 @@ t('#221 envío a hgcash SIN respuesta: el retiro queda VERIFICANDO y bloqueado d
   assert.strictEqual(X.PAYOUT_VERIFY_MS, 3 * 60 * 1000);
 });
 t('anotar el envío y su resultado deja el rastro en el retiro', async () => {
-  await X._payoutNoteSend('p1', 'hgcash', 'a1', 'PagosGabriel');
+  await X._payoutNoteSend('p1', 'hgcash', 'a1', 'operador1');
   await X._payoutNoteResult('p1', 'unknown', 'timeout');
   assert.strictEqual(updates.length, 2);
   const s0 = updates[0].u.$set; assert.strictEqual(s0.lastSendBank, 'hgcash'); assert.strictEqual(s0.lastSendAccount, 'a1'); assert.strictEqual(s0.lastSendResult, 'sending');
-  assert.strictEqual(updates[0].u.$push.sendLog.$each[0].label, 'hgcash · GRMA');
+  assert.strictEqual(updates[0].u.$push.sendLog.$each[0].label, 'hgcash · CUENTA-A');
   assert.strictEqual(updates[1].u.$set.lastSendResult, 'unknown');
 });
 

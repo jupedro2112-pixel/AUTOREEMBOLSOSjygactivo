@@ -38,7 +38,7 @@ const S = {
   logger: { info() {}, warn() {}, error() {} },
   __out: null
 };
-new Function('S', 'with (S) {\n' + block + '\n__out = { _payoutResendGuard, _payoutNoteSend, _payoutNoteResult, PAYOUT_RESEND_COOLDOWN_MS }; }')(S);
+new Function('S', 'with (S) {\n' + block + '\n__out = { _payoutVerifyLeft, _payoutVerifyBlock, PAYOUT_VERIFY_MS, _payoutResendGuard, _payoutNoteSend, _payoutNoteResult, PAYOUT_RESEND_COOLDOWN_MS }; }')(S);
 const X = S.__out;
 
 const CBU = '0000003100097335288307';
@@ -111,6 +111,18 @@ t('#220 incidente real: salió por FUERA de la app el mismo monto al mismo CBU �
     movements = [Object.assign({ direction: 'Outbound', outKind: 'unknown', amount: 999000, toCBU: CBU, status: 'done', createdAt: ago(60000) }, m)];
     assert.strictEqual(await X._payoutResendGuard(p, 'finpro', 'f1', CBU, false), null, JSON.stringify(m));
   }
+});
+t('#221 envío a hgcash SIN respuesta: el retiro queda VERIFICANDO y bloqueado durante la ventana', async () => {
+  const v = { status: 'failed', hgSendUnknown: true, verifyUntil: new Date(Date.now() + 100000), lastSendBank: 'hgcash', lastSendAccount: 'a1' };
+  const left = X._payoutVerifyLeft(v); assert.ok(left > 95 && left <= 100);
+  const b = X._payoutVerifyBlock(v);
+  assert.ok(b && b.http === 409 && b.body.verifying === true && b.body.wait === true && /PUDO HABER SALIDO/.test(b.body.error) && /GRMA/.test(b.body.error));
+  // ventana vencida, rechazo claro, otro estado o pedido viejo → no bloquea
+  for (const o of [{ verifyUntil: ago(1000) }, { hgSendUnknown: false }, { status: 'paying' }, { status: 'pending_review' }, { verifyUntil: null }]) {
+    assert.strictEqual(X._payoutVerifyBlock(Object.assign({}, v, o)), null, JSON.stringify(o));
+  }
+  assert.strictEqual(X._payoutVerifyBlock(null), null);
+  assert.strictEqual(X.PAYOUT_VERIFY_MS, 3 * 60 * 1000);
 });
 t('anotar el envío y su resultado deja el rastro en el retiro', async () => {
   await X._payoutNoteSend('p1', 'hgcash', 'a1', 'PagosGabriel');

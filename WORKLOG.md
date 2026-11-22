@@ -8,6 +8,28 @@
 
 ## Sesión 2026-11-22
 
+### 221. 🛑 Retiro "VERIFICANDO" cuando el banco no responde + el cartel del chat muestra EN PROCESO / FALLADO — admin-sw v86
+Pedido del owner: "a veces un pago da error y en realidad sí salió; ¿cómo evitar que viendo ese error lo paguen de nuevo?".
+- **Hallazgo:** el cartel del retiro en el chat solo pedía `pending_review`. Apenas un pago fallaba (o quedaba en proceso) el cartel
+  DESAPARECÍA: el operador se quedaba con un toast de error y sin botón → el único camino era pagarlo a mano en el banco, sin poder ni
+  marcarlo. Y "rechazado" y "no se sabe si salió" se veían igual ("No se pudo iniciar el pago").
+- **Qué se hizo (hgcash; Finpro ya consultaba su lote y queda `paying`):**
+  - Envío sin respuesta clara (red / 5xx / 408 / 429) → `failed` + `hgSendUnknown` + **`verifyUntil` = ahora + 3 min** (`PAYOUT_VERIFY_MS`),
+    y se anota `paidVia:'hgcash'` + `hgAccountKey`. Respuesta 409 `{verifying, wait}` con cartel fijo. Un 4xx claro sigue siendo 400, ahora
+    con el texto "El banco RECHAZÓ el pago (no salió)".
+  - Mientras dura la ventana (`_payoutVerifyBlock`): `/pay` (los dos bancos), `/pay-other-bank`, `/cancel` y `/dismiss` devuelven 409.
+  - Si el banco avisa: webhook de estado con nuestro id (PENDING/PROCESSING → `paying`; DONE → pagado + aviso + comprobante) o la SALIDA
+    con nuestro `externalID` en el webhook de movimientos (→ DONE). Nota interna "✅ el pago que había dado ERROR SÍ SALIÓ". Un ERROR claro
+    libera la ventana ("confirmó que NO salió"). A los 3 min sin aviso: nota "⏱️ el banco no informó ninguna salida, ya se puede reintentar".
+  - Panel: el cartel pide `status=chat` (pendiente + en proceso/fallado con envío en las últimas 24 h) y tiene 4 caras: RETIRO PENDIENTE,
+    🛑 VERIFICANDO (sin botones, cuenta regresiva), ⏳ PAGO EN PROCESO (sin botones de pago, "🔄 Consultar estado"), PAGO FALLADO (rojo, dice
+    si fue rechazo claro o sin respuesta; botones de siempre). Se refresca solo (evento `payout_update` + cada 15 s). Los errores de pago
+    ahora son `alert` (un toast se perdía).
+- **Límite honesto:** hgcash no tiene (que sepamos) consulta por nuestro id sin el id del pedido: en la ventana solo se ESPERA su aviso. Pasados
+  los 3 min "no informó ninguna salida" no es prueba de que no salió; por eso reintentar por otra cuenta/banco sigue pidiendo confirmación (#219).
+- **Validado:** `node --check` (server, modelo, admin.js, admin-sw), `check-tdz`, `test-payout-guard` (12), rotation, finpro ×2, platform.
+  **NO probado** en navegador ni contra el banco: mirar el cartel en el primer pago real tras el deploy.
+
 ### 220. 🧾 Comprobante de los pagos por Finpro + 🛑 alerta de pagos salientes hechos por FUERA de la app
 Sigue al #219. Los logs de AWS y los chats mostraron que los 3 pagos dobles del 20/11 NO salieron dos veces por la app: el segundo fue una
 transferencia cargada directo en hgcash. En el chat de anto2394 el comprobante de ese segundo pago (GRMA 15:23) lo subió a mano PagosGabriel

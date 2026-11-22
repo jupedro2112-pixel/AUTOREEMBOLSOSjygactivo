@@ -52,6 +52,7 @@ const pendingPayoutSchema = new mongoose.Schema({
   lastSendAccount: { type: String, default: null },              // key del perfil (a1…/f1…/'env')
   lastSendResult: { type: String, default: null },               // 'sending' | 'accepted' | 'rejected' | 'unknown'
   sendLog: { type: [mongoose.Schema.Types.Mixed], default: [] }, // [{ at, bank, account, label, by, result, detail }] (últimos 20)
+  verifyUntil: { type: Date, default: null },                    // #221 hasta cuándo está "VERIFICANDO" (envío a hgcash sin respuesta clara): bloquea pagar / marcar pagado / rechazar
   resolvedCbu: { type: String, default: null },                  // CBU/CVU 22 díg. usado para pagar
   lookupName: { type: String, default: null },                   // titular real del CBU (alias-lookup)
 

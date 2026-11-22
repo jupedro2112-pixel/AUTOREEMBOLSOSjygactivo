@@ -961,6 +961,16 @@ Justo antes del POST al banco: **`_payoutNoteSend(id, banco, cuenta, quién)`**;
 El panel muestra `wait` / `alreadySent` con un cartel fijo y `needsConfirm` con la confirmación de siempre (`confirmOtherBank`).
 Test: `node scripts/test-payout-guard.js` (recorta el bloque entre `const PAYOUT_RESEND_COOLDOWN_MS` y `async function _payPayoutViaFinpro`).
 
+### Retiro "VERIFICANDO" y cartel del chat (#221)
+- **Estados que ve el operador** (cartel `loadPayoutBanner`, `GET /api/admin/payouts?status=chat`): `pending_review` → RETIRO PENDIENTE;
+  `failed` con `verifyLeftSec>0` → 🛑 VERIFICANDO (sin botones); `paying` → ⏳ EN PROCESO (solo "Consultar estado"); `failed` → PAGO FALLADO
+  (botones). `status=chat` solo trae `paying`/`failed` con `lastSendAt` de las últimas 24 h. El listado agrega `verifyLeftSec` y `sendLabel`.
+- **Ventana de verificación (solo hgcash):** `PendingPayout.verifyUntil` + `hgSendUnknown`; `_payoutVerifyLeft/_payoutVerifyBlock` (junto al
+  candado #219). La abre la rama de fallo de `/pay` cuando hgcash no responde claro; la cierran `handlePayoutStatusWebhook` (`_wasUnknown`:
+  el banco lo tiene → `paying`/pagado; ERROR → liberado) y el webhook de movimientos (salida `outKind:'payout'` done → DONE).
+  ⚠️ Trampa: toda ruta nueva que cambie el estado de un `PendingPayout` desde `failed` tiene que llamar a `_payoutVerifyBlock` antes.
+- **Evento de socket `payout_update`** `{ userId, id, status }` a la sala de admins: refresca el cartel.
+
 ### Pagos por fuera de la app y comprobante Finpro (#220)
 - **Saliente externo:** un `BankMovement` `Outbound` con `outKind:'unknown'` es una transferencia que la app no originó (alguien la cargó
   en el panel del banco). `_alertUnknownOutbound(movementId)` se dispara al registrarlo (webhook hgcash y `_finproIngestLedger`): espera

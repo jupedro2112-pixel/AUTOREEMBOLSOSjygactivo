@@ -138,6 +138,9 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `fpAccountKey`; `_hgMovementAutoOff(m)` ya cubre los dos bancos (seguir usándolo); un `BankMovement` sin `provider` es de hgcash; nunca se
   reenvía un lote de Finpro sin respuesta (se consulta con `_finproSyncPayout`); un texto nuevo sobre una carga usa `_bankLabel(m.provider)`.
   Las credenciales NO van en el repo. Tests: `node scripts/test-finpro-accounts.js` y `node scripts/test-finpro-webhook.js`.
+- **Retiro "VERIFICANDO" (#221):** un envío a hgcash sin respuesta clara deja el retiro `failed` + `hgSendUnknown` + `verifyUntil` (3 min):
+  el pago pudo haber salido. Toda ruta que pague, marque pagado, rechace o descarte un `PendingPayout` llama a `_payoutVerifyBlock(payout)`
+  primero. El cartel del chat (`?status=chat`) muestra también EN PROCESO y FALLADO: no volver a esconderlos.
 - **Salientes del banco SIEMPRE vinculados (#220):** una salida que el banco informa sin vínculo a un retiro o bajada (`outKind:'unknown'`)
   dispara `_alertUnknownOutbound` (Telegram + "POSIBLE PAGO DOBLE" en el chat). Todo flujo nuevo que saque plata del banco tiene que mandar
   su `externalID` / dejar `payoutId` o `sweepId`, o va a alertar en falso. Un pago confirmado por Finpro manda `maybeSendFinproReceipt`

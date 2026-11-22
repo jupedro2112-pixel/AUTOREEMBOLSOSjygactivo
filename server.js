@@ -2500,6 +2500,16 @@ async function handlePayoutStatusWebhook(p, provider) {
       payout.hgTxId = String(p.transactionId);
     }
 
+    // #221 El envío había quedado como "falló / sin respuesta" y el banco SÍ lo tiene.
+    const _wasUnknown = isHg && payout.status === 'failed' && payout.hgSendUnknown === true;
+    if (_wasUnknown && status !== 'ERROR' && status !== 'CANCELLED') {
+      await PendingPayout.updateOne({ id: payout.id }, { $set: Object.assign({ hgSendUnknown: false, verifyUntil: null, error: null, paidVia: 'hgcash' }, status === 'DONE' ? {} : { status: 'paying', hgStatus: status }) });
+      _payoutNoteResult(payout.id, 'accepted', `el banco informó ${status} después del error`).catch(() => {});
+      _emitAdminOnlyChatNote(payout.userId, payout.username, `✅ El pago de $${Number(payout.amount).toLocaleString('es-AR')} que había dado ERROR ${status === 'DONE' ? 'SÍ SALIÓ' : 'SÍ ENTRÓ al banco y está en proceso'} (${bank} lo acaba de informar). NO lo pagues de nuevo.`).catch(() => {});
+      logger.warn(`${tag} el envío que dio error SÍ entró: payout=${payout.id} status=${status}`);
+      try { notifyAdmins('payout_update', { userId: payout.userId, id: payout.id, status: status === 'DONE' ? 'paid' : 'paying' }); } catch (_) {}
+      if (status !== 'DONE') return;
+    }
     if (status === 'DONE') {
       if (payout.status === 'paid') return; // idempotente
       await PendingPayout.updateOne({ id: payout.id }, { $set: { status: 'paid', hgStatus: status, paidAt: new Date() } });
@@ -2507,10 +2517,18 @@ async function handlePayoutStatusWebhook(p, provider) {
       if (isHg) maybeSendPayoutReceipt(payout).catch(() => {}); // comprobante PDF automático (hgcash)
       else maybeSendFinproReceipt(payout, p.coelsaId).catch(() => {}); // #220 Finpro no da PDF: comprobante en texto con el COELSA
       logger.info(`${tag} PAGADO payout=${payout.id} user=${payout.username} $${payout.amount}${p.coelsaId ? ' coelsa=' + p.coelsaId : ''}`);
+      try { notifyAdmins('payout_update', { userId: payout.userId, id: payout.id, status: 'paid' }); } catch (_) {} // #221 refresca el cartel del chat
     } else if (status === 'ERROR' || status === 'CANCELLED') {
       const reason = p.errorCode || p.error || status;
       // #202 Solo un pago EN PROCESO puede pasar a fallado: un aviso tardío no revive uno ya
       // pagado/cancelado/fallado (un cancelado vuelto a 'failed' se podría reintentar sin descontar fichas).
+      if (_wasUnknown) { // #221 el banco dice con claridad que NO salió → se libera la verificación
+        await PendingPayout.updateOne({ id: payout.id, status: 'failed' }, { $set: { hgSendUnknown: false, verifyUntil: null, hgStatus: status, error: String(reason).slice(0, 300) } });
+        _payoutNoteResult(payout.id, 'rejected', `${bank} informó ${status}: ${reason}`).catch(() => {});
+        _emitAdminOnlyChatNote(payout.userId, payout.username, `ℹ️ ${bank} confirmó que el envío que había quedado sin respuesta NO salió (${reason}). Ya se puede reintentar.`).catch(() => {});
+        try { notifyAdmins('payout_update', { userId: payout.userId, id: payout.id, status: 'failed' }); } catch (_) {}
+        return;
+      }
       if (payout.status !== 'paying') { logger.info(`${tag} estado ${status} ignorado: el payout ${payout.id} ya está ${payout.status}`); return; }
       const _upd = await PendingPayout.updateOne({ id: payout.id, status: 'paying' }, { $set: { status: 'failed', hgStatus: status, error: String(reason).slice(0, 300) } });
       if (_upd && _upd.matchedCount === 0) return;
@@ -2521,6 +2539,7 @@ async function handlePayoutStatusWebhook(p, provider) {
         `💸 ⚠️ El PAGO automático FALLÓ en ${bank} (${reason}) — $${Number(payout.amount).toLocaleString('es-AR')} a ${payout.titular || payout.cbu}. ` +
         (yaDescontado ? 'Las fichas YA fueron descontadas: NO devuelvas. Pagá manual ("otro banco") o reintentá.' : 'Revisá y pagá manual.'));
       logger.warn(`${tag} FALLÓ payout=${payout.id} status=${status} reason=${reason}`);
+      try { notifyAdmins('payout_update', { userId: payout.userId, id: payout.id, status: 'failed' }); } catch (_) {}
     } else {
       // PENDING / AWAITING_REVIEW / PROCESSING → sólo actualizar hgStatus.
       await PendingPayout.updateOne({ id: payout.id }, { $set: { hgStatus: status } });
@@ -4891,6 +4910,12 @@ app.post('/api/hgcash/webhook', async (req, res) => {
 
     _emitHgcashUpdate(isNew ? 'movimiento' : 'estado', doc.movementId); // bandeja del banco en vivo (entrantes y salientes)
     if (isNew && doc.direction === 'Outbound' && doc.outKind === 'unknown') _alertUnknownOutbound(doc.movementId); // #220 pago hecho por fuera de la app
+    // #221 La SALIDA de un retiro cuyo envío había quedado "sin respuesta": el pago sí salió.
+    if (doc.direction === 'Outbound' && doc.outKind === 'payout' && doc.payoutId && /done|complet|success|acredit/i.test(String(doc.status || ''))) {
+      PendingPayout.exists({ id: doc.payoutId, status: 'failed', hgSendUnknown: true })
+        .then((x) => { if (x) return handlePayoutStatusWebhook({ externalID: doc.payoutId, transactionId: doc.movementId, status: 'DONE' }); })
+        .catch(() => {});
+    }
     if (isNew && doc.direction === 'Inbound') {
       BankMovement.findOne({ movementId: doc.movementId }).lean()
         .then(fresh => { if (fresh) return hgcashMatchFromMovement(fresh); })
@@ -19900,11 +19925,15 @@ app.get('/api/admin/payouts', authMiddleware, withdrawerMiddleware, async (req, 
   try {
     const q = {};
     if (req.query.userId) q.userId = String(req.query.userId);
-    q.status = req.query.status ? String(req.query.status) : { $in: ['pending_review', 'paying', 'failed'] };
+    // #221 status=chat → lo que el cartel del chat tiene que mostrar: el retiro a verificar + los que tuvieron
+    // un envío en las últimas 24 h y siguen en proceso / fallados (los viejos sin `lastSendAt` no resucitan).
+    if (String(req.query.status || '') === 'chat') q.$or = [{ status: 'pending_review' }, { status: { $in: ['paying', 'failed'] }, lastSendAt: { $gte: new Date(Date.now() - 24 * 3600 * 1000) } }];
+    else q.status = req.query.status ? String(req.query.status) : { $in: ['pending_review', 'paying', 'failed'] };
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
     const total = await PendingPayout.countDocuments(q);
     const payouts = await PendingPayout.find(q).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    for (const p of payouts) { p.verifyLeftSec = _payoutVerifyLeft(p); p.sendLabel = p.lastSendBank ? _payoutAcctLabel(p.lastSendBank, p.lastSendAccount) : null; delete p.sendLog; } // #221
     const _prov = await getBankProvider(); // #202: el botón Pagar depende del banco elegido
     const _fpAct = _fpActiveAccount() || _fpEnvAccount();
     res.json({ payouts, total, page, totalPages: total === 0 ? 0 : Math.ceil(total / limit), payEnabled: _prov === 'finpro' ? _fpReadyPayouts(_fpAct) : hgcashPay.isEnabled(), bankProvider: _prov,
@@ -20094,6 +20123,20 @@ async function _finproWaitPreviousProcess(cvu) {
 //      tiempo a que llegue el aviso de salida del banco) y, si aquel no fue un rechazo claro, lo
 //      confirma el agente. Reintentar por la MISMA cuenta no espera (ahí sí hay idempotencia).
 const PAYOUT_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
+// #221 "VERIFICANDO": el envío a hgcash quedó SIN respuesta clara (el pago pudo haber salido). Durante
+// esta ventana el retiro no se puede pagar, marcar pagado por fuera, rechazar ni descartar: se espera
+// el aviso del banco (que lo pasa solo a pagado / en proceso). Devuelve los segundos que faltan, o 0.
+const PAYOUT_VERIFY_MS = 3 * 60 * 1000;
+function _payoutVerifyLeft(p) {
+  if (!p || p.status !== 'failed' || p.hgSendUnknown !== true || !p.verifyUntil) return 0;
+  const left = new Date(p.verifyUntil).getTime() - Date.now();
+  return left > 0 ? Math.ceil(left / 1000) : 0;
+}
+function _payoutVerifyBlock(p) {
+  const left = _payoutVerifyLeft(p);
+  if (!left) return null;
+  return { http: 409, body: { verifying: true, wait: true, retryInSec: left, error: `🛑 VERIFICANDO: el envío de este retiro por ${_payoutAcctLabel(p.lastSendBank || 'hgcash', p.lastSendAccount)} quedó SIN respuesta del banco y el pago PUDO HABER SALIDO. NO lo pagues por otro lado. Se está esperando el aviso del banco; si en ${left} s no informa ninguna salida, se habilita de nuevo.` } };
+}
 function _payoutAcctLabel(bank, key) {
   const a = bank === 'finpro' ? _fpAccountByKey(key) : _hgAccountByKey(key);
   const l = a ? (bank === 'finpro' ? _fpAccountLabel(a) : _hgAccountLabel(a)) : '';
@@ -20180,6 +20223,7 @@ async function _payPayoutViaFinpro(req, res) {
     if (!['pending_review', 'failed'].includes(payout.status)) {
       return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
     }
+    { const _vb = _payoutVerifyBlock(payout); if (_vb) return res.status(_vb.http).json(_vb.body); } // #221
     // Destino: CBU/CVU de 22 dígitos, o alias resuelto por Finpro (accounts/information,
     // Coelsa) → se guarda el CVU y el titular REAL para que el agente lo vea.
     let resolvedCbu = String(payout.cbu || '').replace(/\D/g, '');
@@ -20413,6 +20457,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     if (!['pending_review', 'failed'].includes(payout.status)) {
       return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
     }
+    { const _vb = _payoutVerifyBlock(payout); if (_vb) return res.status(_vb.http).json(_vb.body); } // #221
 
     // #202 Intento anterior por FINPRO sin rechazo confirmado: se consulta con la cuenta que lo
     // mandó antes de pagarlo por hgcash (si Finpro lo pagó, no se paga otra vez).
@@ -20518,7 +20563,8 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       // #202 ¿hgcash lo RECHAZÓ (4xx) o no se sabe si entró (red / 5xx)? Lo segundo frena pagarlo por Finpro sin verificar.
       const _hs = Number(result.httpStatus) || 0;
       const _hgUnknown = !(_hs >= 400 && _hs < 500 && _hs !== 408 && _hs !== 429);
-      await PendingPayout.updateOne({ id }, { $set: { status: 'failed', hgSendUnknown: _hgUnknown, error: String(result.error).slice(0, 300) } });
+      await PendingPayout.updateOne({ id }, { $set: Object.assign({ status: 'failed', hgSendUnknown: _hgUnknown, error: String(result.error).slice(0, 300), verifyUntil: _hgUnknown ? new Date(Date.now() + PAYOUT_VERIFY_MS) : null },
+        _hgUnknown ? { paidVia: 'hgcash', hgAccountKey: _hgKeyPay || null } : {}) }); // #221 sin respuesta clara → VERIFICANDO (la cuenta queda anotada para el comprobante si el banco confirma)
       await _payoutNoteResult(id, _hgUnknown ? 'unknown' : 'rejected', `http=${_hs || '-'} ${result.error}`);
       // Flujo nuevo: las fichas YA se descontaron arriba. NO se devuelven; el agente
       // paga manual ("otro banco") o reintenta. Nota interna para que quede clarísimo.
@@ -20526,7 +20572,20 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
         await _emitAdminOnlyChatNote(claimed.userId, claimed.username,
           `💸 ⚠️ El PAGO en ${_payoutAcctLabel('hgcash', _hgKeyPay)} FALLÓ (${result.error}) — pero las fichas YA fueron descontadas correctamente: se le descontó $${Number(claimed.amount).toLocaleString('es-AR')} al cliente. NO devuelvas fichas. ${_hgUnknown ? '🛑 hgcash NO respondió con claridad: el pago PUDO HABER SALIDO. Miralo en hgcash antes de pagarlo por otro lado.' : 'Reintentá el pago (por otra cuenta u otro banco el sistema te hace esperar 2 minutos para confirmar que este no salió).'}`);
       }
-      return res.status(400).json({ error: 'No se pudo iniciar el pago en hgcash: ' + result.error });
+      if (_hgUnknown) {
+        // #221 Pasada la ventana sin aviso del banco: nota para que el operador sepa que ya puede decidir.
+        setTimeout(async () => {
+          try {
+            const cur = await PendingPayout.findOne({ id }).lean();
+            if (cur && cur.status === 'failed' && cur.hgSendUnknown === true) {
+              await _emitAdminOnlyChatNote(cur.userId, cur.username, `⏱️ Pasaron ${Math.round(PAYOUT_VERIFY_MS / 60000)} min y ${_payoutAcctLabel('hgcash', _hgKeyPay)} NO informó ninguna salida por el retiro de $${Number(cur.amount).toLocaleString('es-AR')}. Ya se puede reintentar. Igual, antes de pagarlo por otra cuenta u otro banco, miralo en hgcash.`);
+              notifyAdmins('payout_update', { userId: cur.userId, id: cur.id, status: cur.status });
+            }
+          } catch (_) {}
+        }, PAYOUT_VERIFY_MS + 2000);
+        return res.status(409).json(_payoutVerifyBlock({ status: 'failed', hgSendUnknown: true, verifyUntil: new Date(Date.now() + PAYOUT_VERIFY_MS), lastSendBank: 'hgcash', lastSendAccount: _hgKeyPay || 'env' }).body);
+      }
+      return res.status(400).json({ error: 'El banco RECHAZÓ el pago (no salió): ' + result.error });
     }
 
     const hgId = result.data && result.data.id;
@@ -20566,6 +20625,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
 app.post('/api/admin/payouts/:id/cancel', authMiddleware, withdrawerMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
+    { const _vb = _payoutVerifyBlock(await PendingPayout.findOne({ id }).lean()); if (_vb) return res.status(_vb.http).json(_vb.body); } // #221 no se devuelven fichas de un pago que pudo haber salido
     // Reclamo atómico: sólo procede uno (evita doble devolución si dos agentes tocan a la vez).
     const payout = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed'] } },
@@ -20733,6 +20793,7 @@ app.post('/api/admin/payouts/:id/pay-other-bank', authMiddleware, withdrawerMidd
     if (!['pending_review', 'failed'].includes(payout.status)) {
       return res.status(400).json({ error: `El pago ya está en estado "${payout.status}".` });
     }
+    { const _vb = _payoutVerifyBlock(payout); if (_vb) return res.status(_vb.http).json(_vb.body); } // #221
 
     // Flujo nuevo: si las fichas todavía NO se descontaron, descontarlas ahora (igual que /pay).
     // Si el cliente se jugó las fichas → no se paga (avisa + cierra chat).
@@ -20774,6 +20835,7 @@ app.post('/api/admin/payouts/:id/dismiss', authMiddleware, withdrawerMiddleware,
       return res.status(403).json({ error: 'Solo el admin general puede descartar pagos.' });
     }
     const { id } = req.params;
+    { const _vb = _payoutVerifyBlock(await PendingPayout.findOne({ id }).lean()); if (_vb) return res.status(_vb.http).json(_vb.body); } // #221
     const r = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed'] } },
       { $set: { status: 'cancelled', paidVia: 'dismissed', paidBy: req.user.username, chipsReturned: false, error: 'Descartado (pago viejo ya resuelto): sin devolución ni aviso' } },

@@ -2741,7 +2741,7 @@ async function loadPayoutBanner(userId) {
             : '';
         window._payoutBankInfo = { main: bankName + (j.bankAccount ? ' · ' + j.bankAccount : ''), other: otherName + (j.otherAccount ? ' · ' + j.otherAccount : '') }; // #219 para el cartel de confirmación
         const payBtn = j.payEnabled
-            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title=""Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
             : '<span style="color:#ffd;font-size:11px;">Pago automático por ' + bankName + ' no configurado (' + (j.bankProvider === 'finpro' ? 'faltan credenciales o nuestro CVU en la cuenta en uso' : 'falta token') + '). Pagá manual.</span>';
         // "Descartar": SOLO admin general. Limpia un pago viejo ya resuelto SIN devolver fichas ni avisar al cliente.
         const dismissBtn = (currentAdmin?.role === 'admin')

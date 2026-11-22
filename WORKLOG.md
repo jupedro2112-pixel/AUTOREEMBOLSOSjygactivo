@@ -13,14 +13,19 @@ Reportes de los encargados (capturas de Telegram del 20 al 22/11). Cuatro temas.
 
 **1) Tres retiros pagados DOS veces el 20/11 ($999.000 + $700.083 + $700.000 = $2,4M).** Uno salió por Finpro (QUICKPAY) y a los ~35 s por
 hgcash (GRMA); los otros dos por hgcash GRMA y a los ~50–60 s por hgcash VANTUM. El saldo del cliente bajó una sola vez.
-- ⚠️ **Causa exacta NO confirmada:** desde Tails no hay logs ni base. Lo que sí se sabe leyendo el código: (a) el único lugar que manda plata
-  es `POST /api/admin/payouts/:id/pay`, así que hubo DOS pasadas por ahí con el retiro en `pending_review`/`failed` → el primer envío quedó
-  como fallado (o sin respuesta) aunque el banco lo ejecutó; (b) el reintento salió por OTRA cuenta/banco, donde la idempotencia del banco
-  no sirve (el `externalID` de hgcash vale dentro de UNA cuenta; el `process_id` de Finpro, dentro de Finpro); (c) la cuenta que paga es la
-  "en uso", que desde #207/#216/#218 cambia sola o a mano varias veces por día; (d) hgcash → otra cuenta hgcash no tenía NINGÚN control
-  (el de #202 solo cubría hgcash ↔ Finpro y solo si el envío quedaba "sin respuesta"); (e) el token de hgcash era global: si la cuenta
-  rotaba mientras se descontaban las fichas (5–6 s), el envío salía con el token de la cuenta nueva y el `accountId` de la vieja.
-  Para cerrar la causa hacen falta, de esos 3 retiros: las notas internas del chat a esa hora y los logs `[hgcash-pay]` / `[finpro-pay]`.
+- ✅ **Causa vista en los logs de AWS (2 instancias de EB, bundle del 22/11): el segundo pago NO salió por la app.** Cada retiro pasó UNA
+  sola vez por `POST /api/admin/payouts/:id/pay` (status 200, sin error ni reintento): Reypaola893 10:43:52 UTC por hgcash (Pagoskath),
+  Royaljuan753 16:48:08 UTC por hgcash (Pagoskath), anto2394 18:22:44 UTC por Finpro (PagosGabriel). El segundo pago llegó como webhook de
+  un saliente de hgcash **sin `externalID`** que no es de ningún retiro ni bajada (`[hgcash-pay] webhook de pago sin payout local: ext=null`):
+  ids hgcash `bfae7951-e8f9-492c-be84-dc51433d5651`, `ba37b576-aca3-4e4d-8849-28dd60f4c2c6`, `4d7fb17d-9756-4090-8e04-002cb331dafb`.
+  La app SIEMPRE manda `externalID` (payout.id o `sweep-…`) → esos pagos se crearon por fuera: panel/app de hgcash u otro sistema con el
+  token. Quién, los logs no lo dicen (hay ~30 salientes así en 8 días, o sea que las cuentas se operan a mano seguido). Dato de contexto:
+  el aviso "pagado" + comprobante de hgcash tardó 100–130 s en esos dos retiros, y el pago externo salió a los 50–60 s.
+  Otros dos salientes externos a <1 min de un pago de la app, a revisar en hgcash (sin monto en el log): `23cff267…` (20/11 00:16 ART, tras
+  ArgenLuis532 $10.000 por Finpro) y `a38fc291…` (20/11 23:52 ART, tras AtoDavid509 $100.000 por Finpro).
+- **Consecuencia:** `_payoutResendGuard` tapa un agujero real del código (reintento por otra cuenta/banco) pero NO habría frenado estos
+  tres: un pago hecho por fuera de la app no pasa por ningún candado nuestro. Lo que falta (propuesto al owner, sin hacer): alerta inmediata
+  por Telegram cuando entra un saliente `outKind:'unknown'`, marcada como POSIBLE PAGO DOBLE si coincide monto + CBU con un retiro reciente.
 - **Qué se hizo (vale sea cual sea el disparador):** `_payoutResendGuard` (server.js, antes de `_payPayoutViaFinpro`), llamado por los DOS
   caminos antes de reclamar el retiro:
   1. Si ya hay una **salida del banco con el id de ese retiro** (`BankMovement` Outbound) → no se paga otra vez, ni confirmando.
@@ -56,7 +61,7 @@ se elige nunca como destino y, si está en uso a mano, el motor no la cambia. Si
 
 - **Validado:** `node --check`, `check-tdz`, `test-payout-guard` (10), `test-bank-rotation` (21), `test-finpro-accounts` (43),
   `test-finpro-webhook` (17), `test-platform-migration`. **NO probado** contra los bancos, la IA real ni en navegador.
-- **Pendiente:** confirmar la causa del pago doble con los logs; ver si la IA lee bien el COELSA en los comprobantes reales (el aviso
+- **Pendiente:** saber QUIÉN hizo los 3 pagos externos (historial de hgcash: usuario/origen de esos ids); ver si la IA lee bien el COELSA en los comprobantes reales (el aviso
   interno ahora muestra "COELSA …" cuando lo leyó); replicar en los gemelos con bancos múltiples.
 
 ## Sesión 2026-11-20

@@ -30,6 +30,9 @@ const comprobanteSchema = new mongoose.Schema({
   operationLabel: { type: String, default: null, trim: true },
   // N° de operación que la IA devolvió pero se DESCARTÓ por parecer CBU/CUIT/alias (#126, auditoría)
   operationNumberRejected: { type: String, default: null, trim: true },
+  // #219 Código COELSA impreso en el comprobante (22 letras+números). Identifica la transferencia en
+  // el banco: es el dato más fuerte para matchear con el movimiento y para preguntarle a Finpro.
+  coelsaCode: { type: String, default: null, trim: true, index: true },
   amount: { type: Number, default: null },
   originHolder: { type: String, default: null, trim: true }, // titular / origen
   originCbu: { type: String, default: null, trim: true },    // CBU/CVU/alias origen

@@ -2701,8 +2701,9 @@ async function loadPayoutBanner(userId) {
         const otherBtn = j.otherReady
             ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\', false, \'' + j.otherBank + '\')" title="Paga este retiro por ' + otherName + (j.otherAccount ? ' · cuenta ' + escapeHtml(j.otherAccount) : '') + ' (los demás siguen por ' + bankName + ')" style="background:#0b6b6b;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-weight:700;font-size:11.5px;cursor:pointer;">🏦 Pagar con otro banco</button>'
             : '';
+        window._payoutBankInfo = { main: bankName + (j.bankAccount ? ' · ' + j.bankAccount : ''), other: otherName + (j.otherAccount ? ' · ' + j.otherAccount : '') }; // #219 para el cartel de confirmación
         const payBtn = j.payEnabled
-            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title=""Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
             : '<span style="color:#ffd;font-size:11px;">Pago automático por ' + bankName + ' no configurado (' + (j.bankProvider === 'finpro' ? 'faltan credenciales o nuestro CVU en la cuenta en uso' : 'falta token') + '). Pagá manual.</span>';
         // "Descartar": SOLO admin general. Limpia un pago viejo ya resuelto SIN devolver fichas ni avisar al cliente.
         const dismissBtn = (currentAdmin?.role === 'admin')
@@ -2725,7 +2726,10 @@ async function loadPayoutBanner(userId) {
 
 async function payPayout(id, confirmOtherBank, provider) {
     // #213 `provider` = pagar ESTE retiro por ese banco (aunque los retiros estén configurados por el otro).
-    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (provider ? ' con el OTRO banco (' + (provider === 'finpro' ? 'Finpro' : 'hgcash') + ')' : '') + '? Se va a transferir al CBU del cliente. Verificá que los datos sean correctos.')) return;
+    // #219 el cartel dice POR DÓNDE sale (el botón ya no nombra el banco, #214).
+    const _bi = window._payoutBankInfo || {};
+    const _por = provider ? (_bi.other || (provider === 'finpro' ? 'Finpro' : 'hgcash')) : (_bi.main || '');
+    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (_por ? '\n\nSALE POR: ' + _por + (provider ? ' (el OTRO banco)' : '') : '') + '\n\nSe va a transferir al CBU del cliente. Verificá que los datos sean correctos.\nUna vez que confirmes NO lo pagues por otro lado: esperá el aviso del sistema.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
         const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST', body: JSON.stringify(Object.assign(confirmOtherBank ? { confirmOtherBank: true } : {}, provider ? { provider } : {})) });
@@ -2742,6 +2746,9 @@ async function payPayout(id, confirmOtherBank, provider) {
             // El cliente se jugó las fichas: no se descontó ni se pagó. Se avisó y se cerró el chat.
             showToast(j.message || 'Saldo insuficiente: no se pagó. Se avisó al cliente.', 'error');
             if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+        } else if (r.status === 409 && (j.wait || j.alreadySent)) {
+            // #219 anti pago doble: hay que esperar, o el retiro ya salió del banco. Cartel fijo (un toast se pierde).
+            alert(j.error || 'No se puede pagar todavía.');
         } else {
             showToast(j.error || 'Error al pagar', 'error');
         }
@@ -6306,11 +6313,13 @@ function _bankRotRender(j) {
     if (body) {
         body.innerHTML = (j.slots || []).length ? j.slots.map((s) => {
             let st = s.inUse ? '<b style="color:#66ff99;">EN USO</b>' : 'respaldo';
+            if (s.limit.skip) st += ' · <span style="color:#ffb74d;">FUERA de la rotación' + (s.inUse ? ' (está en uso a mano: el automático no la cambia)' : '') + '</span>';
             if (s.blocked) st += ' · <span style="color:#ffb74d;">no rota acá: ' + escapeHtml(s.blocked) + '</span>';
             if (s.over) st += ' · <span style="color:#ff8080;">' + escapeHtml(s.over) + '</span>';
             if (s.probe) st += s.probe.ok ? (s.probe.unknown ? ' · <span style="color:#aaa;">sin número de cuenta: no se puede controlar</span>' : ' · <span style="color:#66ff99;">responde ✔</span>') : ' · <span style="color:#ff8080;">NO responde: ' + escapeHtml(s.probe.error || '') + '</span>';
             else if (s.fails) st += ' · <span style="color:#ff8080;">' + s.fails + ' control(es) sin respuesta</span>';
-            return '<tr style="border-top:1px solid rgba(255,255,255,0.07);"><td style="padding:6px 5px;"><b>' + escapeHtml(s.label) + '</b> <span style="color:' + (s.provider === 'finpro' ? '#b388ff' : '#d4af37') + ';font-size:11px;">' + escapeHtml(s.bank) + '</span></td>'
+            return '<tr style="border-top:1px solid rgba(255,255,255,0.07);"><td style="padding:6px 5px;"><b>' + escapeHtml(s.label) + '</b> <span style="color:' + (s.provider === 'finpro' ? '#b388ff' : '#d4af37') + ';font-size:11px;">' + escapeHtml(s.bank) + '</span>'
+                + '<br><label title="Destildá para sacar esta cuenta de la rotación automática: no se elige nunca como destino y, si la ponés en uso a mano, el automático no la cambia. Sigue recibiendo cargas." style="font-size:11px;color:#ccc;cursor:pointer;white-space:nowrap;"><input type="checkbox" data-rot-in="' + escapeHtml(s.id) + '"' + (s.limit.skip ? '' : ' checked') + '> entra en la rotación</label></td>'
                 + '<td>' + st + '</td><td>' + money(s.usage.day) + '</td>'
                 + '<td><input type="number" min="0" step="1000" data-rot-day="' + escapeHtml(s.id) + '" value="' + (s.limit.day || 0) + '" style="' + inp + '"></td>'
                 + '<td>' + money(s.usage.month) + '</td>'
@@ -6342,6 +6351,7 @@ async function saveBankRotation() {
         document.querySelectorAll('[data-rot-day]').forEach((el) => { const id = el.getAttribute('data-rot-day'); limits[id] = limits[id] || {}; limits[id].day = Number(el.value) || 0; });
         document.querySelectorAll('[data-rot-month]').forEach((el) => { const id = el.getAttribute('data-rot-month'); limits[id] = limits[id] || {}; limits[id].month = Number(el.value) || 0; });
         document.querySelectorAll('[data-rot-next]').forEach((el) => { const id = el.getAttribute('data-rot-next'); limits[id] = limits[id] || {}; limits[id].next = el.value || ''; });
+        document.querySelectorAll('[data-rot-in]').forEach((el) => { const id = el.getAttribute('data-rot-in'); limits[id] = limits[id] || {}; limits[id].skip = !el.checked; }); // #219
         const body = { enabled: ck('bankRotEnabled'), onFailure: ck('bankRotOnFailure'), onLimit: ck('bankRotOnLimit'), crossBank: ck('bankRotCrossBank'), movePayouts: ck('bankRotMovePayouts'), loop: ck('bankRotLoop'),
             failChecks: Number((document.getElementById('bankRotFailChecks') || {}).value) || 3, limits };
         const r = await authFetch('/api/admin/bank-rotation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

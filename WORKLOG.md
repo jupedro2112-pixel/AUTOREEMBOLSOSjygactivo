@@ -4,7 +4,60 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-11-19**
+> **Última actualización: 2026-11-22**
+
+## Sesión 2026-11-22
+
+### 219. 🛑 Candado anti PAGO DOBLE entre cuentas/bancos + la IA lee el código COELSA + Finpro ya no deja comprobantes sin cargar + sacar una cuenta de la rotación — admin-sw v85
+Reportes de los encargados (capturas de Telegram del 20 al 22/11). Cuatro temas.
+
+**1) Tres retiros pagados DOS veces el 20/11 ($999.000 + $700.083 + $700.000 = $2,4M).** Uno salió por Finpro (QUICKPAY) y a los ~35 s por
+hgcash (GRMA); los otros dos por hgcash GRMA y a los ~50–60 s por hgcash VANTUM. El saldo del cliente bajó una sola vez.
+- ⚠️ **Causa exacta NO confirmada:** desde Tails no hay logs ni base. Lo que sí se sabe leyendo el código: (a) el único lugar que manda plata
+  es `POST /api/admin/payouts/:id/pay`, así que hubo DOS pasadas por ahí con el retiro en `pending_review`/`failed` → el primer envío quedó
+  como fallado (o sin respuesta) aunque el banco lo ejecutó; (b) el reintento salió por OTRA cuenta/banco, donde la idempotencia del banco
+  no sirve (el `externalID` de hgcash vale dentro de UNA cuenta; el `process_id` de Finpro, dentro de Finpro); (c) la cuenta que paga es la
+  "en uso", que desde #207/#216/#218 cambia sola o a mano varias veces por día; (d) hgcash → otra cuenta hgcash no tenía NINGÚN control
+  (el de #202 solo cubría hgcash ↔ Finpro y solo si el envío quedaba "sin respuesta"); (e) el token de hgcash era global: si la cuenta
+  rotaba mientras se descontaban las fichas (5–6 s), el envío salía con el token de la cuenta nueva y el `accountId` de la vieja.
+  Para cerrar la causa hacen falta, de esos 3 retiros: las notas internas del chat a esa hora y los logs `[hgcash-pay]` / `[finpro-pay]`.
+- **Qué se hizo (vale sea cual sea el disparador):** `_payoutResendGuard` (server.js, antes de `_payPayoutViaFinpro`), llamado por los DOS
+  caminos antes de reclamar el retiro:
+  1. Si ya hay una **salida del banco con el id de ese retiro** (`BankMovement` Outbound) → no se paga otra vez, ni confirmando.
+  2. Si después del envío anterior **salió el mismo monto al mismo CBU/CVU** sin estar ligado a otro retiro → pide confirmación.
+  3. Reintento por **otra cuenta u otro banco**: espera **2 minutos** desde el envío anterior (`PAYOUT_RESEND_COOLDOWN_MS`, para que llegue
+     el aviso de salida del banco) y, si aquel no fue un rechazo claro, pide confirmación. Por la MISMA cuenta no espera.
+  Cada envío se anota ANTES de mandarlo (`PendingPayout.lastSendAt/Bank/Account/Result` + `sendLog`, últimos 20) → la próxima vez se puede
+  reconstruir qué pasó sin logs. Un ERROR informado por el banco deja `lastSendResult:'rejected'`.
+- **hgcash:** la cuenta que paga queda FIJA para todo el pedido (perfil + token + `accountId`): `createCashOut({ token })`,
+  `resolveHgcashAccountId({ acct })`. Si un token ve varias cuentas, se usa la del CBU (o id) de ESE perfil, no "la primera de la lista".
+- **Operador:** nota interna "💸 Retiro ENVIADO por <banco · cuenta>" al mandarlo (antes Finpro "no avisaba"); el cartel de confirmación dice
+  **SALE POR: <banco · cuenta>** (el botón no nombra el banco desde #214); la nota de fallo aclara si el pago PUDO haber salido.
+- **Costo operativo:** si un pago falla y se quiere reintentar por otra cuenta/banco, hay que esperar hasta 2 minutos.
+- Test nuevo: `node scripts/test-payout-guard.js` (10, incluye los dos escenarios del incidente).
+
+**2) Finpro "no detecta el COELSA" y "carga muy pocos".** Dos causas reales:
+- La IA solo extraía `numero_operacion`. Un comprobante de Mercado Pago trae "N.º de operación" (12 dígitos) Y "Código de identificación"
+  (el COELSA, 22 letras+números): se quedaba con el primero y a Finpro se le preguntaba por MONTO → "hay 3 transferencias compatibles".
+  Ahora la IA devuelve además `codigo_coelsa` (`Comprobante.coelsaCode`, validado: 22 alfanuméricos con letras y números). Lo usan
+  `_finproVerifyInputFor` (consulta por código = respuesta exacta) y `_comprobanteMatchesMovement` (regla 1b). Si por código no aparece
+  (mal leído), se prueba también por monto.
+- **El bug de fondo:** una búsqueda por monto ambigua dejaba el comprobante en `needs_review`, y el aviso del banco que llegaba segundos
+  después ya no lo podía matchear → no cargaba sola. Ahora una búsqueda por MONTO inconclusa no saca al comprobante del matcheo (la nota
+  interna lo dice: "todavía no se cargó; si llega el aviso del banco se carga sola").
+
+**3) "Carga automático comprobantes sin datos".** No es un error de plata: la carga automática sale del MOVIMIENTO real del banco (monto +
+titular de origen, o código), no de la foto. Lo confuso era el texto "✅ Comprobante verificado — no es duplicado": ahora dice
+"Comprobante NO repetido… que la plata ENTRÓ lo confirma el aviso CARGA AUTOMÁTICA o el banco", y si no tiene ni N° ni COELSA lo avisa.
+(El caso MONI $2.000: la carga de $5.000 de la captura era de OTRO comprobante anterior del mismo cliente.)
+
+**4) Sacar una cuenta de la rotación automática.** Tilde "entra en la rotación" por cuenta (`bankRotation.limits[id].skip`): destildada no
+se elige nunca como destino y, si está en uso a mano, el motor no la cambia. Sigue recibiendo cargas. Test: `test-bank-rotation.js` (21).
+
+- **Validado:** `node --check`, `check-tdz`, `test-payout-guard` (10), `test-bank-rotation` (21), `test-finpro-accounts` (43),
+  `test-finpro-webhook` (17), `test-platform-migration`. **NO probado** contra los bancos, la IA real ni en navegador.
+- **Pendiente:** confirmar la causa del pago doble con los logs; ver si la IA lee bien el COELSA en los comprobantes reales (el aviso
+  interno ahora muestra "COELSA …" cuando lo leyó); replicar en los gemelos con bancos múltiples.
 
 ## Sesión 2026-11-20
 

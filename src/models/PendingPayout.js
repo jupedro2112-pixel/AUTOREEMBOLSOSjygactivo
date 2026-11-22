@@ -45,6 +45,13 @@ const pendingPayoutSchema = new mongoose.Schema({
   fpAccepted: { type: Boolean, default: null },                  // true = Finpro aceptó el lote (0201); false = rechazado; null = sin respuesta / no enviado
   hgSendUnknown: { type: Boolean, default: false }, // #202 el envío a hgcash quedó SIN respuesta (no se sabe si salió): frena pagarlo por el otro banco sin confirmar
   fpAccountKey: { type: String, default: null },                 // perfil de cuenta Finpro que pagó (sus credenciales consultan el estado aunque se rote)
+  // #219 Último ENVÍO que llegó a salir hacia un banco (se anota ANTES del POST) + historial. Lo usa
+  // `_payoutResendGuard`: un reintento por OTRA cuenta/banco espera y verifica que el anterior no salió.
+  lastSendAt: { type: Date, default: null },
+  lastSendBank: { type: String, default: null },                 // 'hgcash' | 'finpro'
+  lastSendAccount: { type: String, default: null },              // key del perfil (a1…/f1…/'env')
+  lastSendResult: { type: String, default: null },               // 'sending' | 'accepted' | 'rejected' | 'unknown'
+  sendLog: { type: [mongoose.Schema.Types.Mixed], default: [] }, // [{ at, bank, account, label, by, result, detail }] (últimos 20)
   resolvedCbu: { type: String, default: null },                  // CBU/CVU 22 díg. usado para pagar
   lookupName: { type: String, default: null },                   // titular real del CBU (alias-lookup)
 

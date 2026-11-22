@@ -192,6 +192,20 @@ t('día y mes en hora Argentina', async () => {
   const st = X._rotPeriodStarts(Date.UTC(2026, 11, 1, 2, 30)); // 30-nov 23:30 AR
   assert.strictEqual(st.day.toISOString(), '2026-11-30T03:00:00.000Z'); assert.strictEqual(st.month.toISOString(), '2026-11-01T03:00:00.000Z');
 });
+t('#219 cuenta FUERA de la rotación: no se elige como destino', async () => {
+  reset({ crossBank: true, limits: { 'hgcash:a1': { day: 100, month: 0 }, 'hgcash:a2': { skip: true } } });
+  usage['hgcash:a1'] = { day: 100, month: 100 };
+  const r = await tick();
+  assert.ok(r.ok); assert.strictEqual(S._hgActiveKey, 'a1', 'a2 está excluida: no pasa a ser la hgcash en uso');
+  assert.strictEqual(S.shown, 'finpro'); assert.strictEqual(S._fpActiveKey, 'f1');
+});
+t('#219 cuenta FUERA de la rotación y en uso a mano: el automático no la cambia', async () => {
+  reset({ limits: { 'hgcash:a1': { day: 100, month: 0, skip: true } } });
+  usage['hgcash:a1'] = { day: 5000, month: 5000 }; down.add('hgcash:a1');
+  for (let i = 0; i < 5; i++) await tick();
+  assert.strictEqual(S._hgActiveKey, 'a1'); assert.strictEqual(alerts.length, 0);
+  assert.deepStrictEqual((await X.getBankRotation()).limits['hgcash:a1'], { day: 100, month: 0, next: '', skip: true });
+});
 t('config: topes inválidos se descartan', async () => {
   const c = X._rotNorm({ enabled: 'si', failChecks: 99, limits: { 'hgcash:a1': { day: -5, month: 'x' }, 'otro:a1': { day: 5 }, 'finpro:f1': { day: 10.4 } } });
   assert.strictEqual(c.enabled, false); assert.strictEqual(c.failChecks, 10); assert.deepStrictEqual(c.limits, { 'finpro:f1': { day: 10, month: 0, next: '' } });

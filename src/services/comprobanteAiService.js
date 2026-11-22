@@ -117,6 +117,15 @@ const SYSTEM = [
   '  transferencia", "Identificador". Suele tener entre 6 y 20 caracteres, puede mezclar letras',
   '  y números. Si el único número "de referencia" que ves es un CBU, CUIT o alias, o no hay',
   '  etiqueta clara, devolvé null (NO reemplaces con otro número).',
+  '- CÓDIGO COELSA (ID de la transferencia en la red interbancaria): es OTRO dato, distinto del',
+  '  número de operación, y muchos comprobantes traen LOS DOS. Son 22 caracteres que MEZCLAN',
+  '  letras mayúsculas y números, todo junto (ej. "LOEJWV9JXE856Q18NQMD0G", "XJ8G7V957G41YMXDNEMPYR").',
+  '  Aparece con etiquetas como "Código de identificación", "ID COELSA", "Coelsa ID", "ID de',
+  '  transferencia", "Código de transacción", "Identificador de la operación", "N° de',
+  '  transacción", o a veces sin etiqueta al pie. NO es un CBU/CVU (esos son 22 dígitos SIN',
+  '  letras). Copialo carácter por carácter, sin espacios; cuidá O/0, I/1, S/5, B/8. Si el',
+  '  comprobante trae un número de operación corto Y este código, van cada uno en su campo.',
+  '  Si no hay un código así, null.',
   '',
   'ORIGEN vs DESTINO: el ORIGEN es quien ENVÍA/PAGA ("De:", "Cuenta origen", "Desde",',
   '"Pagador", "Ordenante"); el DESTINO es quien RECIBE ("Para:", "Destinatario",',
@@ -143,6 +152,7 @@ const USER_TEXT = [
   '- numero_operacion: el número de operación según las reglas (o null).',
   '- numero_operacion_etiqueta: el texto EXACTO de la etiqueta que acompaña a ese número en',
   '  la imagen (ej. "Número de operación", "Referencia", "ID de transacción"); null si no hay.',
+  '- codigo_coelsa: el código COELSA de 22 letras y números según las reglas (o null).',
   '- monto: número, o null.',
   '- titular_origen: nombre de quien ENVÍA el dinero, o null.',
   '- cbu_origen: CBU/CVU o alias de la cuenta ORIGEN, o null.',
@@ -161,6 +171,7 @@ const OUTPUT_SCHEMA = {
     confianza: { type: 'number' },
     numero_operacion: nullable('string'),
     numero_operacion_etiqueta: nullable('string'),
+    codigo_coelsa: nullable('string'),
     monto: nullable('number'),
     titular_origen: nullable('string'),
     cbu_origen: nullable('string'),
@@ -170,7 +181,7 @@ const OUTPUT_SCHEMA = {
     fecha: nullable('string'),
     hora: nullable('string')
   },
-  required: ['es_comprobante', 'confianza', 'numero_operacion', 'numero_operacion_etiqueta',
+  required: ['es_comprobante', 'confianza', 'numero_operacion', 'numero_operacion_etiqueta', 'codigo_coelsa',
     'monto', 'titular_origen', 'cbu_origen', 'titular_destino', 'cbu_destino', 'banco', 'fecha', 'hora'],
   additionalProperties: false
 };
@@ -188,6 +199,13 @@ function parseJsonLoose(text) {
     try { return JSON.parse(t.slice(start, end + 1)); } catch (_) { /* nada */ }
   }
   return null;
+}
+
+// #219 Código COELSA: 22 alfanuméricos con letras Y números (un CBU son 22 dígitos sin letras).
+// Cualquier otra cosa → null (no se usa un código dudoso para buscar una transferencia).
+function _normCoelsa(v) {
+  const c = String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return (c.length === 22 && /[A-Z]/.test(c) && /\d/.test(c)) ? c : null;
 }
 
 function _str(v) { return (v === null || v === undefined || v === '') ? null : String(v).trim() || null; }
@@ -218,7 +236,7 @@ async function _post(body, { withFallback }) {
 /**
  * Analiza el content de un mensaje de imagen.
  * @returns {Promise<object>} { ok, isComprobante, confidence, operationNumber,
- *   operationLabel, amount, originHolder, originCbu, destHolder, destCbu, bank,
+ *   operationLabel, coelsaCode, amount, originHolder, originCbu, destHolder, destCbu, bank,
  *   paymentDate, paymentTime, rawText, model } o { ok:false, error } si no se pudo analizar.
  */
 async function analyzeComprobante(content) {
@@ -290,6 +308,7 @@ async function analyzeComprobante(content) {
       confidence: typeof parsed.confianza === 'number' ? parsed.confianza : 0,
       operationNumber: _str(parsed.numero_operacion),
       operationLabel: _str(parsed.numero_operacion_etiqueta),
+      coelsaCode: _normCoelsa(parsed.codigo_coelsa), // #219
       amount: _parseAmount(parsed.monto),
       originHolder: _str(parsed.titular_origen),
       originCbu: _str(parsed.cbu_origen),
@@ -310,4 +329,4 @@ async function analyzeComprobante(content) {
   }
 }
 
-module.exports = { isEnabled, analyzeComprobante, getModel, getEffort, applyConfig, getEffectiveConfig, DEFAULT_MODEL, EFFORTS };
+module.exports = { isEnabled, analyzeComprobante, normCoelsa: _normCoelsa, getModel, getEffort, applyConfig, getEffectiveConfig, DEFAULT_MODEL, EFFORTS };

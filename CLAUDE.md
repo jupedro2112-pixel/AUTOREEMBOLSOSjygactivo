@@ -138,6 +138,11 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `fpAccountKey`; `_hgMovementAutoOff(m)` ya cubre los dos bancos (seguir usándolo); un `BankMovement` sin `provider` es de hgcash; nunca se
   reenvía un lote de Finpro sin respuesta (se consulta con `_finproSyncPayout`); un texto nuevo sobre una carga usa `_bankLabel(m.provider)`.
   Las credenciales NO van en el repo. Tests: `node scripts/test-finpro-accounts.js` y `node scripts/test-finpro-webhook.js`.
+- **Pagos de retiros: candado anti pago doble (#219, incidente 2026-11-20 de $2,4M):** la idempotencia del banco solo vale dentro de UNA
+  cuenta. Todo camino que mande un retiro llama a `_payoutResendGuard(...)` antes de reclamarlo, `_payoutNoteSend(...)` justo antes del POST
+  al banco y `_payoutNoteResult(...)` con la respuesta. En hgcash el token va EXPLÍCITO (`createCashOut({ token })`, cuenta fijada al empezar
+  el pedido), nunca el global de "la cuenta en uso". No aflojar la espera de 2 minutos ni dar por "rechazado" un envío sin respuesta clara.
+  Test: `node scripts/test-payout-guard.js`.
 - **Rotación automática de cuentas (#207):** `_bankRotationTick` puede cambiar SOLA la cuenta en uso (y, entre bancos, `bankShown` /
   `bankProvider`). Nada debe asumir que la cuenta en uso es la misma que hace un rato: seguir usando `hgAccountKey` / `fpAccountKey` del pago.
   Un banco o cuenta nuevos se suman a `_rotSlots()` / `_rotProbe` / `_rotSlotBlocked`. Test: `node scripts/test-bank-rotation.js`.

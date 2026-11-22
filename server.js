@@ -1605,10 +1605,14 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
       dedupeKey = _normComprobanteKey(`${result.amount}|${result.originHolder || ''}|${result.originCbu || ''}|${result.paymentDate}|${result.paymentTime || ''}`);
     }
 
+    // #219 Código COELSA: el campo propio de la IA, o el "N° de operación" cuando ESE es el código
+    // (hay billeteras que solo imprimen el COELSA).
+    const _coelsa = result.coelsaCode || comprobanteAi.normCoelsa(result.operationNumber) || null;
     const base = {
       id: uuidv4(), userId, username, messageId,
       isComprobante: true, aiConfidence: result.confidence || 0,
       operationNumber: result.operationNumber || null,
+      coelsaCode: _coelsa,
       operationLabel: result.operationLabel || null,
       operationNumberRejected: opRejected || null,
       amount: result.amount, originHolder: result.originHolder || null,
@@ -1621,7 +1625,7 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     };
 
     const montoStr = result.amount ? `$${Number(result.amount).toLocaleString('es-AR')}` : 's/monto';
-    const opStr = result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación';
+    const opStr = (result.operationNumber ? `op. N°${result.operationNumber}` : 's/N° operación') + (_coelsa && _coelsa !== String(result.operationNumber || '').toUpperCase() ? ` · COELSA ${_coelsa}` : '');
     const dataDesc = `${opStr} · ${montoStr}${result.paymentDate ? ' · ' + result.paymentDate : ''}`;
 
     // Buscar un comprobante ANTERIOR duplicado: por IMAGEN idéntica (imageHash) O por
@@ -1694,8 +1698,11 @@ async function analyzeComprobanteFromMessage({ userId, username, content, messag
     const status = dedupeKey ? 'unique' : 'no_key';
     try { await Comprobante.create({ ...base, status }); } catch (_) {}
     if (hasDedup) {
-      await _emitAdminOnlyChatNote(userId, username,
-        `✅ Comprobante verificado — no es duplicado (${dataDesc}).`);
+      // #219 Este aviso es SOLO el control de repetidos: antes decía "verificado" y se leía como
+      // "la plata entró". Sin N° ni COELSA lo único comparado es la imagen.
+      await _emitAdminOnlyChatNote(userId, username, (result.operationNumber || _coelsa)
+        ? `✅ Comprobante NO repetido (${dataDesc}). Ojo: esto solo dice que no lo mandaron antes; que la plata ENTRÓ lo confirma el aviso "🏦 CARGA AUTOMÁTICA" o el banco.`
+        : `🧾 Comprobante SIN número de operación ni código COELSA (${dataDesc}). No lo mandaron antes como imagen, pero no hay dato para identificar la transferencia: si no aparece el aviso "🏦 CARGA AUTOMÁTICA", verificá en el banco antes de cargar.`);
     } else {
       await _emitAdminOnlyChatNote(userId, username,
         `🧾 Comprobante recibido (${dataDesc}). ⚠️ No se pudieron extraer datos para chequear duplicado — verificá a mano.`);
@@ -2037,6 +2044,9 @@ function _comprobanteMatchesMovement(comprobante, movement, cfg) {
     if (coelsa && coelsa === opKey) return true;
     if (ext && opKey.length >= 8 && ext.includes(opKey)) return true;
   }
+  // (1b) #219 Código COELSA leído del comprobante == coelsa del movimiento: mismo valor que (1).
+  const cKey = _normComprobanteKey(comprobante.coelsaCode);
+  if (cKey && cKey.length >= 18 && cKey === _normComprobanteKey(movement.coelsaCode)) return true;
 
   // (2) Fallback por nombre de origen + destino consistente.
   if (comprobante.originHolder && movement.fromName &&
@@ -2392,6 +2402,7 @@ async function handlePayoutStatusWebhook(p, provider) {
       if (payout.status !== 'paying') { logger.info(`${tag} estado ${status} ignorado: el payout ${payout.id} ya está ${payout.status}`); return; }
       const _upd = await PendingPayout.updateOne({ id: payout.id, status: 'paying' }, { $set: { status: 'failed', hgStatus: status, error: String(reason).slice(0, 300) } });
       if (_upd && _upd.matchedCount === 0) return;
+      _payoutNoteResult(payout.id, 'rejected', `${bank} informó ${status}: ${reason}`).catch(() => {}); // #219 el banco dijo que NO salió
       // Si las fichas ya se descontaron (flujo nuevo confirmado), aclararlo: NO devolver.
       const yaDescontado = (payout.deductAtPay === true && payout.debitConfirmed === true);
       await _emitAdminOnlyChatNote(payout.userId, payout.username,
@@ -4341,7 +4352,7 @@ async function _finproVerifyComprobante(comprobante, opts) {
     // esa plata entra por hgcash → no se le pregunta a Finpro (con los dos bancos activos, una
     // búsqueda por monto podría encontrar la transferencia de OTRO cliente).
     if (await _comprobanteDestIsHgcashOnly(comprobante)) return { skipped: 'destino hgcash' };
-    const input = _finproVerifyInputFor(comprobante);
+    let input = _finproVerifyInputFor(comprobante);
     if (!input) {
       await _finproRecordVerify(comprobante.id, { at: new Date(), source, kind: 'none', error: 'sin coelsa ni monto' }, 'gave_up');
       return { skipped: 'sin datos' };
@@ -4374,7 +4385,19 @@ async function _finproVerifyComprobante(comprobante, opts) {
         return { skipped: 'movimiento ya ' + known.matchStatus };
       }
     }
-    const r = await _finproVerifyAcross(input, accts);
+    let r = await _finproVerifyAcross(input, accts);
+    // #219 El código puede estar mal leído (O/0, I/1): si por código no aparece, se prueba también
+    // por monto + fecha. Solo se adopta esa respuesta si CONFIRMA una única transferencia.
+    if (input.kind === 'coelsa_id' && !(r.ok && r.status === 'confirmed') && Number(comprobante.amount) > 0) {
+      const alt = { amount: Number(comprobante.amount), occurredAt: comprobante.createdAt ? new Date(comprobante.createdAt) : new Date(), windowMinutes: FINPRO_VERIFY_WINDOW_MIN, kind: 'amount_date' };
+      let r2 = null;
+      try { r2 = await _finproVerifyAcross(alt, accts); } catch (_) {}
+      if (r2 && r2.ok && r2.status === 'confirmed') { r = r2; input = alt; }
+    }
+    // #219 Una búsqueda por MONTO que no alcanza para decidir NO saca al comprobante del matcheo: el
+    // aviso del banco (webhook) llega unos segundos después con el titular y ahí se carga solo. Antes
+    // quedaba 'needs_review' y esa carga ya no entraba sola (por eso Finpro "cargaba muy pocos").
+    const byAmount = input.kind === 'amount_date';
     const acct = (r.notification && _fpAccountForCvu(r.notification.toCvu)) || r.acct || null;
     const attempt = {
       at: new Date(), source, kind: input.kind, httpStatus: r.httpStatus, status: r.status || null, matchedBy: r.matchedBy || null,
@@ -4409,8 +4432,10 @@ async function _finproVerifyComprobante(comprobante, opts) {
           : (!amountOk ? `el monto acreditado ($${Number(n.amount).toLocaleString('es-AR')}) no es el del comprobante ($${Number(comprobante.amount).toLocaleString('es-AR')})`
             : (!nameOk ? `el titular que informa Finpro ("${String(n.fromName).slice(0, 60)}") no es el del comprobante ("${String(comprobante.originHolder).slice(0, 60)}")` : `confianza "${conf}"`));
         await _finproRecordVerify(comprobante.id, Object.assign(attempt, { note: why }), 'ambiguous');
-        await Comprobante.updateOne({ id: comprobante.id, autoCharged: { $ne: true }, bankMatchStatus: { $in: ['none', 'pending'] } }, { $set: { bankMatchStatus: 'needs_review' } });
-        await _emitAdminOnlyChatNote(uid, uname, `🟣 Finpro: coincidencia AMBIGUA — la transferencia figura acreditada pero ${why}. NO se cargó sola: verificá en Finpro y cargá a mano.`);
+        if (!byAmount) await Comprobante.updateOne({ id: comprobante.id, autoCharged: { $ne: true }, bankMatchStatus: { $in: ['none', 'pending'] } }, { $set: { bankMatchStatus: 'needs_review' } });
+        await _emitAdminOnlyChatNote(uid, uname, byAmount
+          ? `🟣 Finpro: hay una transferencia de ese monto pero no alcanza para asegurar que es la de este comprobante (${why}). Todavía NO se cargó: si llega el aviso del banco con el titular del comprobante se carga sola. Si en unos minutos no aparece "🏦 CARGA AUTOMÁTICA", verificá en Finpro y cargá a mano.`
+          : `🟣 Finpro: coincidencia AMBIGUA — la transferencia figura acreditada pero ${why}. NO se cargó sola: verificá en Finpro y cargá a mano.`);
         logger.warn(`[finpro] verify confirmed pero no concluyente (${why}) — comprobante ${comprobante.id} a revisión`);
         return { ambiguous: true };
       }
@@ -4441,8 +4466,8 @@ async function _finproVerifyComprobante(comprobante, opts) {
     if (r.status === 'ambiguous') {
       const cnt = Array.isArray(r.matches) ? r.matches.length : 0;
       await _finproRecordVerify(comprobante.id, attempt, 'ambiguous');
-      await Comprobante.updateOne({ id: comprobante.id, autoCharged: { $ne: true }, bankMatchStatus: { $in: ['none', 'pending'] } }, { $set: { bankMatchStatus: 'needs_review' } });
-      await _emitAdminOnlyChatNote(uid, uname, `🟣 Finpro: coincidencia AMBIGUA — hay ${cnt || 'varias'} transferencias acreditadas compatibles (mismo monto en la ventana${r.crossAccounts ? ', entre nuestras cuentas de Finpro' : ''}) y el comprobante no trae el código COELSA para distinguirlas. NO se cargó sola: pedile al cliente el comprobante con el código, verificá en Finpro y cargá a mano.`);
+      // #219 no se marca 'needs_review': el comprobante sigue disponible para el aviso del banco.
+      await _emitAdminOnlyChatNote(uid, uname, `🟣 Finpro: hay ${cnt || 'varias'} transferencias de ese mismo monto en la ventana${r.crossAccounts ? ' (entre nuestras cuentas de Finpro)' : ''} y ${comprobante.coelsaCode ? 'el código COELSA leído (' + comprobante.coelsaCode + ') no figura todavía' : 'en este comprobante no se pudo leer un código COELSA'} para elegir una. Todavía NO se cargó: si llega el aviso del banco con el titular del comprobante se carga sola. Si en unos minutos no aparece "🏦 CARGA AUTOMÁTICA", verificá en Finpro y cargá a mano.`);
       return { ambiguous: true };
     }
     // not_found_yet (o estado desconocido): todavía no acreditó → el cron reintenta.
@@ -17824,7 +17849,8 @@ function _rotNorm(raw) {
       const month = Math.max(0, Math.round(Number(c.limits[k] && c.limits[k].month) || 0));
       const nx = String((c.limits[k] && c.limits[k].next) || '');
       const next = /^(hgcash|finpro):[A-Za-z0-9_-]{1,20}$/.test(nx) && nx !== k ? nx : ''; // #213 a qué cuenta pasa ('' = la siguiente)
-      if (day || month || next) lim[k] = { day, month, next };
+      const skip = !!(c.limits[k] && c.limits[k].skip === true); // #219 cuenta FUERA de la rotación automática
+      if (day || month || next || skip) lim[k] = skip ? { day, month, next, skip: true } : { day, month, next };
     }
   }
   c.limits = lim;
@@ -17967,6 +17993,7 @@ async function _bankRotate(cfg, cur, reason, detail, by = 'rotación automática
   for (let round = 0; round < 6 && !target; round++) {
     skipped = []; let byDay = 0;
     for (const s of cands) {
+      if (cfg.limits[s.id] && cfg.limits[s.id].skip) { skipped.push(`${s.label}: está fuera de la rotación (panel)`); continue; } // #219
       const why = _rotSlotBlocked(s, hgCfg, fpCfg);
       if (why) { skipped.push(`${s.label}: ${why}`); continue; }
       const over = cfg.limits[s.id] ? _rotOverLimit(cfg, s, await _rotUsage(s)) : null; // sin tope cargado no se consulta la base
@@ -18025,6 +18052,8 @@ async function _bankRotationTick() {
     if (!cfg.enabled) return null;
     const cur = await _rotCurrent();
     if (!cur) return null;
+    // #219 La cuenta en uso está FUERA de la rotación (la pusieron a mano): el motor no la toca.
+    if (cfg.limits[cur.id] && cfg.limits[cur.id].skip) return null;
     if (cfg.onLimit) {
       const over = cfg.limits[cur.id] ? _rotOverLimit(cfg, cur, await _rotUsage(cur)) : null;
       if (over) return await _bankRotate(cfg, cur, 'limit', over);
@@ -18050,7 +18079,7 @@ async function _bankRotationPayload({ probe = false } = {}) {
   for (const s of _rotSlots()) {
     const usage = await _rotUsage(s).catch(() => ({ day: 0, month: 0 }));
     const row = { id: s.id, provider: s.provider, key: s.key, label: s.label, bank: _bankLabel(s.provider), inUse: !!cur && cur.id === s.id,
-      limit: cfg.limits[s.id] || { day: 0, month: 0, next: '' }, usage, blocked: _rotSlotBlocked(s, hgCfg, fpCfg), over: _rotOverLimit(cfg, s, usage), fails: _rotFails.get(s.id) || 0 };
+      limit: cfg.limits[s.id] || { day: 0, month: 0, next: '', skip: false }, usage, blocked: _rotSlotBlocked(s, hgCfg, fpCfg), over: _rotOverLimit(cfg, s, usage), fails: _rotFails.get(s.id) || 0 };
     if (probe) { const p = await _rotProbe(s); row.probe = { ok: p.ok, unknown: !!p.unknown, error: p.error || null }; }
     slots.push(row);
   }
@@ -19696,28 +19725,38 @@ app.get('/api/admin/referrals/:userId/netwin', authMiddleware, adminMiddleware, 
 // actualiza solo y no salta el 403 "No tienes acceso a esta cuenta" por usar uno viejo.
 // `force:true` ignora el cache y vuelve a preguntar a la API (para reintentar tras un 403).
 // Fallbacks si la API no responde: el accountId cacheado en config, o el último movimiento.
-async function resolveHgcashAccountId({ force = false } = {}) {
+async function resolveHgcashAccountId({ force = false, acct = null } = {}) {
   try {
     const cfg = await getHgcashConfig();
+    // #219 `acct` = perfil FIJADO por quien llama (el pago): se usa SU token y SU perfil, no "el que esté
+    // en uso en este instante" (puede rotar en el medio).
+    const _prof = acct || _hgActiveAccount();
+    const _isActiveProf = !_prof || _prof.key === _hgActiveKey;
     // 1) API = qué cuenta puede operar este token (fuente de verdad).
     try {
-      const acc = await hgcashPay.getAccounts();
+      const acc = await hgcashPay.getAccounts(_prof && _prof.token ? _prof.token : undefined);
       if (acc.ok && Array.isArray(acc.data) && acc.data.length) {
         const wantCur = String(cfg.currency || 'ARS').toUpperCase();
         const isOper = a => /operativa|operative|active/i.test(String(a.status || ''));
         const curOk = a => String(a.currency || '').toUpperCase() === wantCur;
-        const pick = acc.data.find(a => curOk(a) && isOper(a))
+        // #219 Si el token ve MÁS de una cuenta, la de ESTE perfil es la de su CBU (o su id guardado),
+        // no "la primera de la lista".
+        const _pCbu = _prof ? _digits(_prof.cbu) : '';
+        const byCbu = (_pCbu.length === 22 && acc.data.length > 1) ? acc.data.find(a => a && [a.cbu, a.cvu, a.CBU, a.CVU, a.accountNumber].some(v => _digits(v) === _pCbu)) : null;
+        const byId = (_prof && _prof.accountId && acc.data.length > 1) ? acc.data.find(a => a && String(a.id) === String(_prof.accountId)) : null;
+        const pick = byCbu || byId
+                  || acc.data.find(a => curOk(a) && isOper(a))
                   || acc.data.find(a => curOk(a))
                   || acc.data.find(a => isOper(a))
                   || acc.data[0];
         if (pick && pick.id) {
           // Cachear si cambió (o si veníamos de un accountId viejo).
-          if (String(cfg.accountId || '') !== String(pick.id)) {
+          if (_isActiveProf && String(cfg.accountId || '') !== String(pick.id)) {
             await setConfig('hgcash', Object.assign({}, cfg, { accountId: String(pick.id) }));
             logger.info(`[hgcash] accountId resuelto vía API: ${pick.id} (${pick.currency || '?'}/${pick.status || '?'})`);
           }
           // #194 también en el perfil activo (así los movimientos se etiquetan con su cuenta).
-          const _act = _hgActiveAccount();
+          const _act = _prof;
           if (_act && String(_act.accountId || '') !== String(pick.id)) {
             const _k = _act.key;
             _hgSaveAccountsConfig((n) => { const x = n.accounts.find(z => z.key === _k); if (x) x.accountId = String(pick.id); }, 'api').catch(() => {});
@@ -19727,9 +19766,9 @@ async function resolveHgcashAccountId({ force = false } = {}) {
       }
     } catch (_) {}
     // 2) Fallback: lo cacheado en el perfil activo (#194) o en la config (salvo refresh forzado tras 403).
-    const _actAcc = _hgActiveAccount();
+    const _actAcc = _prof;
     if (!force && _actAcc && _actAcc.accountId) return _actAcc.accountId;
-    if (!force && cfg.accountId) return cfg.accountId;
+    if (!force && _isActiveProf && cfg.accountId) return cfg.accountId;
     // 3) Fallback: último movimiento conocido.
     const mov = await BankMovement.findOne({ accountId: { $ne: null } }).sort({ createdAt: -1 }).select('accountId').lean();
     return mov ? mov.accountId : null;
@@ -19921,6 +19960,78 @@ async function _finproWaitPreviousProcess(cvu) {
     await new Promise((r) => setTimeout(r, 3000));
   }
 }
+// ── #219 ANTI PAGO DOBLE entre cuentas / bancos ───────────────────────────────────────────────
+// Incidente 2026-11-20: tres retiros salieron DOS veces (hgcash GRMA + hgcash VANTUM, y Finpro +
+// hgcash). La idempotencia de cada banco (externalID de hgcash, process_id de Finpro) solo vale
+// DENTRO de una cuenta: un reintento que sale por OTRA cuenta u OTRO banco no tiene red. Y la cuenta
+// en uso cambia sola (rotación #207) o a mano (#218) entre el primer intento y el reintento.
+// Reglas (valen para los dos caminos de pago, antes del reclamo del payout):
+//   1) Si ya hay una SALIDA del banco ligada a este retiro (BankMovement Outbound con su id) → no se
+//      paga otra vez, nunca.
+//   2) Si hubo un envío anterior y desde entonces salió del banco el MISMO monto al MISMO CBU/CVU sin
+//      estar ligado a otro retiro → lo confirma el agente (puede ser ese envío).
+//   3) Reintento por OTRA cuenta/banco que el envío anterior: espera `PAYOUT_RESEND_COOLDOWN_MS` (da
+//      tiempo a que llegue el aviso de salida del banco) y, si aquel no fue un rechazo claro, lo
+//      confirma el agente. Reintentar por la MISMA cuenta no espera (ahí sí hay idempotencia).
+const PAYOUT_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
+function _payoutAcctLabel(bank, key) {
+  const a = bank === 'finpro' ? _fpAccountByKey(key) : _hgAccountByKey(key);
+  const l = a ? (bank === 'finpro' ? _fpAccountLabel(a) : _hgAccountLabel(a)) : '';
+  return _bankLabel(bank) + (l ? ' · ' + l : '');
+}
+// Se llama JUSTO ANTES de mandar el pedido al banco.
+async function _payoutNoteSend(id, bank, account, by) {
+  const entry = { at: new Date(), bank, account: account || null, label: _payoutAcctLabel(bank, account), by: by || null, result: 'sending' };
+  try {
+    await PendingPayout.updateOne({ id }, { $set: { lastSendAt: entry.at, lastSendBank: bank, lastSendAccount: account || null, lastSendResult: 'sending' }, $push: { sendLog: { $each: [entry], $slice: -20 } } });
+  } catch (e) { logger.warn(`[payout] no se pudo anotar el envío de ${id}: ${e.message}`); }
+}
+// result: 'accepted' | 'rejected' (el banco dijo que NO, con respuesta clara) | 'unknown' (no se sabe si entró).
+async function _payoutNoteResult(id, result, detail) {
+  try {
+    await PendingPayout.updateOne({ id }, { $set: { lastSendResult: result }, $push: { sendLog: { $each: [{ at: new Date(), result, detail: detail ? String(detail).slice(0, 200) : null }], $slice: -20 } } });
+  } catch (_) {}
+}
+function _payoutHMS(d) { return new Date(d).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'America/Argentina/Buenos_Aires' }); }
+// null = se puede mandar. Si no, { http, body } para responderle al panel tal cual.
+async function _payoutResendGuard(payout, bank, account, destCbu, confirmed) {
+  const amt = Number(payout.amount);
+  const money = '$' + amt.toLocaleString('es-AR');
+  const notOut = (m) => /error|fail|cancel|reject|rechaz|revers|devuel/i.test(String(m.status || ''));
+  const movLabel = (m) => (m.provider === 'finpro' ? 'Finpro' : 'hgcash') + (_hgAccountLabelFor(m) && m.provider !== 'finpro' ? ' · ' + _hgAccountLabelFor(m).label : '');
+  // 1) Salida ya registrada con el id de ESTE retiro.
+  const linked = await BankMovement.find({ direction: 'Outbound', $or: [{ payoutId: payout.id }, { externalId: payout.id }] }).sort({ createdAt: -1 }).limit(5).lean();
+  const out = linked.find((m) => !notOut(m));
+  if (out) {
+    return { http: 409, body: { alreadySent: true, error: `🛑 Este retiro de ${money} YA SALIÓ del banco (${movLabel(out)}, ${_payoutHMS(out.createdAt)} hs${out.toName ? ', a ' + out.toName : ''}). NO se paga otra vez. Si el pedido quedó sin cerrar, tocá "✅ Ya lo pagué por fuera".` } };
+  }
+  const prevAt = payout.lastSendAt ? new Date(payout.lastSendAt).getTime() : 0;
+  if (!prevAt) return null; // primer envío de este retiro
+  // 2) Desde el primer envío salió el mismo monto al mismo destino, sin ligar a otro retiro.
+  const dest = _digits(destCbu);
+  if (dest.length === 22 && !confirmed) {
+    const first = (Array.isArray(payout.sendLog) && payout.sendLog[0] && payout.sendLog[0].at) ? new Date(payout.sendLog[0].at).getTime() : prevAt;
+    const cands = await BankMovement.find({ direction: 'Outbound', createdAt: { $gte: new Date(first - 60 * 1000) }, amount: { $gte: amt - 1, $lte: amt + 1 } }).sort({ createdAt: -1 }).limit(30).lean();
+    const hit = cands.find((m) => !notOut(m) && _digits(m.toCBU) === dest && (!m.payoutId || m.payoutId === payout.id) && m.outKind !== 'sweep');
+    if (hit) {
+      return { http: 409, body: { needsConfirm: true, error: `Después del envío anterior de este retiro SALIÓ del banco una transferencia de ${money} a este mismo CBU/CVU (${movLabel(hit)}, ${_payoutHMS(hit.createdAt)} hs). Casi seguro es ESTE pago y ya está hecho: revisalo en el banco antes de mandar otro.` } };
+    }
+  }
+  // 3) Reintento por otra cuenta / otro banco.
+  const sameRoute = payout.lastSendBank === bank && String(payout.lastSendAccount || '') === String(account || '');
+  if (!payout.lastSendBank || sameRoute) return null;
+  const prevLabel = _payoutAcctLabel(payout.lastSendBank, payout.lastSendAccount);
+  const age = Date.now() - prevAt;
+  if (age < PAYOUT_RESEND_COOLDOWN_MS) {
+    const left = Math.ceil((PAYOUT_RESEND_COOLDOWN_MS - age) / 1000);
+    return { http: 409, body: { wait: true, retryInSec: left, error: `⏳ Este retiro tuvo un envío por ${prevLabel} hace ${Math.round(age / 1000)} s. Por seguridad no se manda por OTRA cuenta u otro banco hasta dentro de ${left} s: se espera el aviso del banco para saber si aquel salió. Reintentá en ese momento (o mirá en ${prevLabel} si ya salió).` } };
+  }
+  if (payout.lastSendResult !== 'rejected' && !confirmed) {
+    return { http: 409, body: { needsConfirm: true, error: `Este retiro tuvo un envío anterior por ${prevLabel} (${_payoutHMS(prevAt)} hs) que NO quedó rechazado con claridad: no se sabe si salió. Antes de pagarlo por ${_payoutAcctLabel(bank, account)}, entrá a ${prevLabel} y verificá que esa transferencia de ${money} NO haya salido.` } };
+  }
+  return null;
+}
+
 async function _payPayoutViaFinpro(req, res) {
   try {
     const { id } = req.params;
@@ -19978,6 +20089,10 @@ async function _payPayoutViaFinpro(req, res) {
       }
     }
 
+    // #219 anti pago doble entre cuentas/bancos (salida ya registrada, espera y confirmación).
+    const _g = await _payoutResendGuard(payout, 'finpro', acctKey, resolvedCbu, !!(req.body && req.body.confirmOtherBank === true));
+    if (_g) return res.status(_g.http).json(_g.body);
+
     // Reclamo atómico: solo procede el que pase pending_review/failed → paying.
     const claimed = await PendingPayout.findOneAndUpdate(
       { id, status: { $in: ['pending_review', 'failed'] } },
@@ -20014,6 +20129,7 @@ async function _payPayoutViaFinpro(req, res) {
       return res.json({ success: true, status: 'paying', fpProcessId: processId, lookupName, message: 'Finpro ya tenía este pago aceptado: se consulta su estado (no se manda dos veces).' });
     }
 
+    await _payoutNoteSend(id, 'finpro', acctKey, req.user.username); // #219
     _finproInFlight.add(processId);
     let result;
     try {
@@ -20050,6 +20166,8 @@ async function _payPayoutViaFinpro(req, res) {
         try { if (telegramAlert.isEnabled()) await telegramAlert.send(telegramAlert.esc(msg)); } catch (_) {}
         return res.status(409).json({ error: msg });
       }
+      await _payoutNoteResult(id, 'accepted', 'lote ' + processId);
+      _emitAdminOnlyChatNote(claimed.userId, claimed.username, `💸 Retiro de $${Number(claimed.amount).toLocaleString('es-AR')} ENVIADO por ${_payoutAcctLabel('finpro', acctKey)} (${req.user.username}). No lo pagues por otro lado: se confirma solo.`).catch(() => {});
       setTimeout(function () { _pollPayingPayouts(); }, 7000);
       logger.info(`[finpro-pay] lote ACEPTADO payout=${id} user=${payout.username} $${payout.amount} process=${processId} tx=${transactionId} cuenta="${_fpAccountLabel(acct)}" → ${resolvedCbu.slice(-6)} (${lookupName || payout.titular || '?'}) por ${req.user.username}`);
       return res.json({ success: true, status: 'paying', fpProcessId: processId, lookupName });
@@ -20064,6 +20182,7 @@ async function _payPayoutViaFinpro(req, res) {
     const unknown = !definite;
     if (unknown) {
       await PendingPayout.updateOne(mine, { $set: { fpAccepted: null, hgStatus: 'sin_respuesta', paidVia: 'finpro' } });
+      await _payoutNoteResult(id, 'unknown', `http=${http || '-'} code=${result.code || '-'} ${result.error || result.description || ''}`);
       setTimeout(function () { _pollPayingPayouts(); }, 10000);
       logger.warn(`[finpro-pay] SIN RESPUESTA payout=${id} process=${processId}: http=${http || '-'} code=${result.code || '-'} ${result.error || result.description || ''} — se consulta antes de reintentar`);
       return res.json({ success: true, status: 'paying', fpProcessId: processId, message: `Finpro no dio una respuesta clara (${result.error || result.description || 'HTTP ' + http}). Se consulta el estado del pedido antes de reintentar: no se manda dos veces.` });
@@ -20071,6 +20190,7 @@ async function _payPayoutViaFinpro(req, res) {
     // Rechazado en el acto: el lote NO entró → failed, reintentable con process_id nuevo.
     const msg = finpro.describeCode(result.code, result.description || result.error);
     await PendingPayout.updateOne(mine, { $set: { status: 'failed', paidVia: 'finpro', hgStatus: 'rechazado', fpAccepted: false, error: String(msg).slice(0, 300) } });
+    await _payoutNoteResult(id, 'rejected', `http=${http || '-'} code=${result.code || '-'} ${msg}`);
     if (claimed.deductAtPay === true) {
       await _emitAdminOnlyChatNote(claimed.userId, claimed.username,
         `💸 ⚠️ El PAGO en Finpro FALLÓ (${msg}) — pero las fichas YA fueron descontadas correctamente: se le descontó $${Number(claimed.amount).toLocaleString('es-AR')}. NO devuelvas: pagá manual ("otro banco") o reintentá.`);
@@ -20180,14 +20300,19 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     }
     await _loadHgcashCredentials(); // #194 cuenta ACTIVA fresca (el cambio desde otra instancia aplica al instante)
     const _hgKeyPay = _hgActiveKey;
-    let accountId = await resolveHgcashAccountId();
+    // #219 La cuenta que paga queda FIJA para todo este pedido (perfil + token + accountId). Antes el
+    // token era el global "de la cuenta en uso": si la cuenta rotaba mientras se descontaban las fichas,
+    // el envío salía con el token de la cuenta nueva y el accountId de la vieja.
+    const _hgAcctPay = _hgActiveAccount();
+    const _hgTokPay = (_hgAcctPay && _hgAcctPay.token) || undefined;
+    let accountId = await resolveHgcashAccountId({ acct: _hgAcctPay });
     if (!accountId) return res.status(400).json({ error: 'No se pudo determinar la cuenta hgcash a debitar (accountId).' });
 
     // Resolver el CBU/CVU de 22 dígitos. Si vino un alias, lo buscamos.
     let resolvedCbu = String(payout.cbu || '').replace(/\D/g, '');
     let lookupName = null;
     if (resolvedCbu.length !== 22) {
-      const lk = await hgcashPay.lookupAlias(payout.alias || payout.cbu);
+      const lk = await hgcashPay.lookupAlias(payout.alias || payout.cbu, _hgTokPay);
       if (lk.ok && lk.data && lk.data.cvu) {
         resolvedCbu = String(lk.data.cvu).replace(/\D/g, '');
         lookupName = lk.data.nombre || null;
@@ -20196,6 +20321,9 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     if (resolvedCbu.length !== 22) {
       return res.status(400).json({ error: 'No se pudo resolver el CBU/CVU destino (revisá el alias/CBU del cliente).' });
     }
+    // #219 anti pago doble entre cuentas/bancos (salida ya registrada, espera y confirmación).
+    const _g = await _payoutResendGuard(payout, 'hgcash', _hgKeyPay || 'env', resolvedCbu, !!(req.body && req.body.confirmOtherBank === true));
+    if (_g) return res.status(_g.http).json(_g.body);
 
     // Reclamo atómico: solo procede el que pase pending_review/failed → paying.
     const claimed = await PendingPayout.findOneAndUpdate(
@@ -20231,9 +20359,11 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       toCBU: resolvedCbu,
       toName: payout.titular || lookupName || undefined,
       concept: `Retiro Sala de Juegos - ${payout.username}`,
-      externalID: payout.id, // idempotencia (mismo externalID = no duplica)
-      webhookUrl
+      externalID: payout.id, // idempotencia (mismo externalID = no duplica) — OJO: solo dentro de la MISMA cuenta hgcash
+      webhookUrl,
+      token: _hgTokPay // #219 siempre el token de la cuenta fijada arriba
     });
+    await _payoutNoteSend(id, 'hgcash', _hgKeyPay || 'env', req.user.username); // #219
     let result = await buildCashOut(accountId);
 
     // Auto-recuperación: si hgcash rechaza por NO tener acceso a esa cuenta (403),
@@ -20241,7 +20371,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     // la API y reintentamos UNA vez con la cuenta correcta. El externalID es el mismo,
     // así que aunque el primer intento hubiera entrado, no se paga dos veces.
     if (!result.ok && result.httpStatus === 403) {
-      const fresh = await resolveHgcashAccountId({ force: true });
+      const fresh = await resolveHgcashAccountId({ force: true, acct: _hgAcctPay });
       if (fresh && String(fresh) !== String(accountId)) {
         logger.warn(`[hgcash-pay] 403 con accountId=${accountId}; reintentando con accountId=${fresh}`);
         accountId = fresh;
@@ -20253,17 +20383,19 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       // 409 Duplicate External ID = ya se había mandado este pago → no es error real.
       if (result.httpStatus === 409 && /duplicate/i.test(String(result.error))) {
         await PendingPayout.updateOne({ id }, { $set: { status: 'paying' } });
+        await _payoutNoteResult(id, 'accepted', '409 duplicate: ya estaba mandado por esta cuenta');
         return res.json({ success: true, message: 'El pago ya estaba en curso (idempotencia).', status: 'paying' });
       }
       // #202 ¿hgcash lo RECHAZÓ (4xx) o no se sabe si entró (red / 5xx)? Lo segundo frena pagarlo por Finpro sin verificar.
       const _hs = Number(result.httpStatus) || 0;
       const _hgUnknown = !(_hs >= 400 && _hs < 500 && _hs !== 408 && _hs !== 429);
       await PendingPayout.updateOne({ id }, { $set: { status: 'failed', hgSendUnknown: _hgUnknown, error: String(result.error).slice(0, 300) } });
+      await _payoutNoteResult(id, _hgUnknown ? 'unknown' : 'rejected', `http=${_hs || '-'} ${result.error}`);
       // Flujo nuevo: las fichas YA se descontaron arriba. NO se devuelven; el agente
       // paga manual ("otro banco") o reintenta. Nota interna para que quede clarísimo.
       if (claimed.deductAtPay === true) {
         await _emitAdminOnlyChatNote(claimed.userId, claimed.username,
-          `💸 ⚠️ El PAGO en hgcash FALLÓ (${result.error}) — pero las fichas YA fueron descontadas correctamente: se le descontó $${Number(claimed.amount).toLocaleString('es-AR')} al cliente. NO devuelvas fichas. Pagá manual ("🏦 Pagar con otro banco") o reintentá el pago.`);
+          `💸 ⚠️ El PAGO en ${_payoutAcctLabel('hgcash', _hgKeyPay)} FALLÓ (${result.error}) — pero las fichas YA fueron descontadas correctamente: se le descontó $${Number(claimed.amount).toLocaleString('es-AR')} al cliente. NO devuelvas fichas. ${_hgUnknown ? '🛑 hgcash NO respondió con claridad: el pago PUDO HABER SALIDO. Miralo en hgcash antes de pagarlo por otro lado.' : 'Reintentá el pago (por otra cuenta u otro banco el sistema te hace esperar 2 minutos para confirmar que este no salió).'}`);
       }
       return res.status(400).json({ error: 'No se pudo iniciar el pago en hgcash: ' + result.error });
     }
@@ -20285,6 +20417,8 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     // Si hgcash confirmó el pago en el acto (DONE), avisamos al cliente ya mismo
     // (el aviso por webhook DONE es idempotente, no duplica). Si quedó 'paying',
     // el aviso lo dispara el webhook al confirmarse.
+    await _payoutNoteResult(id, 'accepted', 'hgId=' + (hgId || '-') + ' ' + hgStatus);
+    _emitAdminOnlyChatNote(claimed.userId, claimed.username, `💸 Retiro de $${Number(claimed.amount).toLocaleString('es-AR')} ENVIADO por ${_payoutAcctLabel('hgcash', _hgKeyPay)} (${req.user.username}). No lo pagues por otro lado: se confirma solo.`).catch(() => {});
     if (isDone) { await notifyPayoutPaid(claimed); maybeSendPayoutReceipt(claimed).catch(() => {}); }
     // Si quedó 'paying', re-chequear el estado a los ~7s (por si el webhook no llega):
     // confirma el pago casi al instante sin esperar el poller de 45s.

@@ -949,6 +949,27 @@ bandeja traen `hgAccount {key,label,active,bank}` también para Finpro; `GET /ap
 - Tests: `node scripts/test-finpro-accounts.js` (corre los bloques reales de server.js recortados por marcadores de texto: si se renombra
   `const FINPRO_DEFAULTS`, `async function _banksPayload` o `const _finproLastProcessByCvu`, actualizar el test) y `node scripts/test-finpro-webhook.js`.
 
+### Candado anti pago doble entre cuentas / bancos (#219)
+La idempotencia de cada banco solo vale DENTRO de una cuenta (hgcash: `externalID`; Finpro: `process_id`). Todo camino que mande un retiro
+llama, antes de reclamar el `PendingPayout`, a **`_payoutResendGuard(payout, banco, cuenta, cbuDestino, confirmado)`** (devuelve `null` o
+`{ http, body }` para responder tal cual): (1) salida del banco ya registrada con el id del retiro → `alreadySent`, nunca se paga otra vez;
+(2) desde el primer envío salió el mismo monto al mismo CBU/CVU sin ligar a otro retiro → `needsConfirm`; (3) reintento por otra cuenta u otro
+banco → `wait` durante `PAYOUT_RESEND_COOLDOWN_MS` (2 min) y después `needsConfirm` si el envío anterior no quedó `rejected`.
+Justo antes del POST al banco: **`_payoutNoteSend(id, banco, cuenta, quién)`**; con la respuesta: **`_payoutNoteResult(id, 'accepted' |
+'rejected' | 'unknown', detalle)`** (`PendingPayout.lastSend*` + `sendLog`). En hgcash la cuenta que paga se fija al empezar el pedido
+(`_hgAcctPay` / `_hgTokPay`) y el token viaja explícito (`createCashOut({ token })`, `resolveHgcashAccountId({ acct })`): nunca el global.
+El panel muestra `wait` / `alreadySent` con un cartel fijo y `needsConfirm` con la confirmación de siempre (`confirmOtherBank`).
+Test: `node scripts/test-payout-guard.js` (recorta el bloque entre `const PAYOUT_RESEND_COOLDOWN_MS` y `async function _payPayoutViaFinpro`).
+
+### Código COELSA del comprobante (#219)
+La IA devuelve `codigo_coelsa` además de `numero_operacion` (`comprobanteAiService`, `normCoelsa`: 22 alfanuméricos con letras y números) →
+`Comprobante.coelsaCode`. Lo usan `_comprobanteMatchesMovement` (regla 1b: == `BankMovement.coelsaCode`) y `_finproVerifyInputFor` (consulta
+por código; si no confirma, se prueba por monto + fecha y solo se adopta si confirma una única transferencia). Una verificación por MONTO que
+no alcanza para decidir NO pone el comprobante en `needs_review`: sigue matcheable para el aviso del banco que llega después.
+
+### Rotación: cuenta fuera de la rotación (#219)
+`bankRotation.limits[id].skip === true` → nunca es destino de `_bankRotate` y, si está en uso, `_bankRotationTick` no hace nada con ella.
+
 ### Cuenta en uso: cambio manual y registro (#218)
 Cualquier rol del panel menos `comunidad` cambia la cuenta que ve el cliente con el botón fijo "🏦" (`bankQuickChip`, `admin.js`) →
 `POST /api/admin/bank-in-use` (`_bankCanSwitch`). Todo cambio MANUAL (ese botón, la barra, o "USAR ESTA" en las cards de hgcash/Finpro)

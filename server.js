@@ -20110,7 +20110,7 @@ async function _finproWaitPreviousProcess(cvu) {
   }
 }
 // ── #219 ANTI PAGO DOBLE entre cuentas / bancos ───────────────────────────────────────────────
-// Incidente 2026-11-20: tres retiros salieron DOS veces (hgcash GRMA + hgcash VANTUM, y Finpro +
+// Incidente 2026-11-20: tres retiros salieron DOS veces (dos cuentas hgcash distintas, y Finpro +
 // hgcash). La idempotencia de cada banco (externalID de hgcash, process_id de Finpro) solo vale
 // DENTRO de una cuenta: un reintento que sale por OTRA cuenta u OTRO banco no tiene red. Y la cuenta
 // en uso cambia sola (rotación #207) o a mano (#218) entre el primer intento y el reintento.

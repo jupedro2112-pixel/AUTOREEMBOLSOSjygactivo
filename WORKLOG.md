@@ -32,7 +32,7 @@ Pedido del owner: "a veces un pago da error y en realidad sí salió; ¿cómo ev
 
 ### 220. 🧾 Comprobante de los pagos por Finpro + 🛑 alerta de pagos salientes hechos por FUERA de la app
 Sigue al #219. Los logs de AWS y los chats mostraron que los 3 pagos dobles del 20/11 NO salieron dos veces por la app: el segundo fue una
-transferencia cargada directo en hgcash. En el chat de anto2394 el comprobante de ese segundo pago (GRMA 15:23) lo subió a mano PagosGabriel
+transferencia cargada directo en hgcash. En el chat de cliente C el comprobante de ese segundo pago (15:23) lo subió a mano operador 2
 a las 15:25. Hipótesis del motivo (sin confirmar): cuando paga Finpro el cliente recibía solo texto, sin comprobante, y con hgcash el
 comprobante tardó 100–130 s → el operador no ve comprobante y paga a mano. El owner pidió: "que no haya dudas de si un pago salió o no".
 - **Comprobante Finpro** (`maybeSendFinproReceipt`, server.js): al confirmarse un pago por Finpro (rama DONE de `handlePayoutStatusWebhook`)
@@ -54,18 +54,18 @@ comprobante tardó 100–130 s → el operador no ve comprobante y paga a mano. 
 ### 219. 🛑 Candado anti PAGO DOBLE entre cuentas/bancos + la IA lee el código COELSA + Finpro ya no deja comprobantes sin cargar + sacar una cuenta de la rotación — admin-sw v85
 Reportes de los encargados (capturas de Telegram del 20 al 22/11). Cuatro temas.
 
-**1) Tres retiros pagados DOS veces el 20/11 ($999.000 + $700.083 + $700.000 = $2,4M).** Uno salió por Finpro (QUICKPAY) y a los ~35 s por
-hgcash (GRMA); los otros dos por hgcash GRMA y a los ~50–60 s por hgcash VANTUM. El saldo del cliente bajó una sola vez.
+**1) Tres retiros pagados DOS veces el 20/11 ($999.000 + $700.083 + $700.000 = $2,4M).** Uno salió por Finpro y a los ~35 s por
+hgcash; los otros dos por una cuenta hgcash y a los ~50–60 s por otra cuenta hgcash. El saldo del cliente bajó una sola vez.
 - ✅ **Causa vista en los logs de AWS (2 instancias de EB, bundle del 22/11): el segundo pago NO salió por la app.** Cada retiro pasó UNA
-  sola vez por `POST /api/admin/payouts/:id/pay` (status 200, sin error ni reintento): Reypaola893 10:43:52 UTC por hgcash (Pagoskath),
-  Royaljuan753 16:48:08 UTC por hgcash (Pagoskath), anto2394 18:22:44 UTC por Finpro (PagosGabriel). El segundo pago llegó como webhook de
+  sola vez por `POST /api/admin/payouts/:id/pay` (status 200, sin error ni reintento): cliente A 10:43:52 UTC por hgcash (operador 1),
+  cliente B 16:48:08 UTC por hgcash (operador 1), cliente C 18:22:44 UTC por Finpro (operador 2). El segundo pago llegó como webhook de
   un saliente de hgcash **sin `externalID`** que no es de ningún retiro ni bajada (`[hgcash-pay] webhook de pago sin payout local: ext=null`):
   ids hgcash `bfae7951-e8f9-492c-be84-dc51433d5651`, `ba37b576-aca3-4e4d-8849-28dd60f4c2c6`, `4d7fb17d-9756-4090-8e04-002cb331dafb`.
   La app SIEMPRE manda `externalID` (payout.id o `sweep-…`) → esos pagos se crearon por fuera: panel/app de hgcash u otro sistema con el
   token. Quién, los logs no lo dicen (hay ~30 salientes así en 8 días, o sea que las cuentas se operan a mano seguido). Dato de contexto:
   el aviso "pagado" + comprobante de hgcash tardó 100–130 s en esos dos retiros, y el pago externo salió a los 50–60 s.
   Otros dos salientes externos a <1 min de un pago de la app, a revisar en hgcash (sin monto en el log): `23cff267…` (20/11 00:16 ART, tras
-  ArgenLuis532 $10.000 por Finpro) y `a38fc291…` (20/11 23:52 ART, tras AtoDavid509 $100.000 por Finpro).
+  cliente D $10.000 por Finpro) y `a38fc291…` (20/11 23:52 ART, tras cliente E $100.000 por Finpro).
 - **Consecuencia:** `_payoutResendGuard` tapa un agujero real del código (reintento por otra cuenta/banco) pero NO habría frenado estos
   tres: un pago hecho por fuera de la app no pasa por ningún candado nuestro. Hecho en #220: alerta inmediata
   por Telegram cuando entra un saliente `outKind:'unknown'`, marcada como POSIBLE PAGO DOBLE si coincide monto + CBU con un retiro reciente.

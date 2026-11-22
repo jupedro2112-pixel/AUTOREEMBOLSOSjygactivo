@@ -20,6 +20,7 @@ let movements = [];
 const updates = [];
 const match = (m, q) => {
   if (q.direction && m.direction !== q.direction) return false;
+  if (q.outKind && m.outKind !== q.outKind) return false;
   if (q.$or && !q.$or.some((c) => Object.keys(c).every((k) => m[k] === c[k]))) return false;
   if (q.createdAt && !(new Date(m.createdAt) >= q.createdAt.$gte)) return false;
   if (q.amount && !(m.amount >= q.amount.$gte && m.amount <= q.amount.$lte)) return false;
@@ -97,6 +98,18 @@ t('después del envío salió el mismo monto al mismo CBU sin ligar (Finpro no t
   for (const m of [{ toCBU: '1'.repeat(22) }, { amount: 5000 }, { payoutId: 'otro' }, { outKind: 'sweep' }, { createdAt: ago(900000) }]) {
     movements = [Object.assign({ provider: 'finpro', direction: 'Outbound', amount: 999000, toCBU: CBU, status: 'done', outKind: 'unknown', createdAt: ago(200000) }, m)];
     assert.strictEqual(await X._payoutResendGuard(p, 'hgcash', 'a1', CBU, false), null, JSON.stringify(m));
+  }
+});
+t('#220 incidente real: salió por FUERA de la app el mismo monto al mismo CBU → el primer pago por la app pide confirmación', async () => {
+  const p = P({ createdAt: ago(400000) });
+  movements = [{ direction: 'Outbound', outKind: 'unknown', amount: 999000, toCBU: CBU, status: 'done', accountKey: 'a1', createdAt: ago(60000) }];
+  const g = await X._payoutResendGuard(p, 'finpro', 'f1', CBU, false);
+  assert.ok(g && g.http === 409 && g.body.needsConfirm === true && /FUERA de la app/.test(g.body.error) && /GRMA/.test(g.body.error));
+  assert.strictEqual(await X._payoutResendGuard(p, 'finpro', 'f1', CBU, true), null); // confirmando, pasa
+  // anterior al pedido, otro destino, ya ligada a un retiro o reversada → no frena
+  for (const m of [{ createdAt: ago(900000) }, { toCBU: '1'.repeat(22) }, { payoutId: 'otro' }, { status: 'REVERSED' }, { outKind: 'payout' }]) {
+    movements = [Object.assign({ direction: 'Outbound', outKind: 'unknown', amount: 999000, toCBU: CBU, status: 'done', createdAt: ago(60000) }, m)];
+    assert.strictEqual(await X._payoutResendGuard(p, 'finpro', 'f1', CBU, false), null, JSON.stringify(m));
   }
 });
 t('anotar el envío y su resultado deja el rastro en el retiro', async () => {

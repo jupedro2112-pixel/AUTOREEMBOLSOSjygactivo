@@ -138,6 +138,10 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
   `fpAccountKey`; `_hgMovementAutoOff(m)` ya cubre los dos bancos (seguir usándolo); un `BankMovement` sin `provider` es de hgcash; nunca se
   reenvía un lote de Finpro sin respuesta (se consulta con `_finproSyncPayout`); un texto nuevo sobre una carga usa `_bankLabel(m.provider)`.
   Las credenciales NO van en el repo. Tests: `node scripts/test-finpro-accounts.js` y `node scripts/test-finpro-webhook.js`.
+- **Salientes del banco SIEMPRE vinculados (#220):** una salida que el banco informa sin vínculo a un retiro o bajada (`outKind:'unknown'`)
+  dispara `_alertUnknownOutbound` (Telegram + "POSIBLE PAGO DOBLE" en el chat). Todo flujo nuevo que saque plata del banco tiene que mandar
+  su `externalID` / dejar `payoutId` o `sweepId`, o va a alertar en falso. Un pago confirmado por Finpro manda `maybeSendFinproReceipt`
+  (comprobante en texto con COELSA, `/sys_payout_receipt_finpro`).
 - **Pagos de retiros: candado anti pago doble (#219, incidente 2026-11-20 de $2,4M):** la idempotencia del banco solo vale dentro de UNA
   cuenta. Todo camino que mande un retiro llama a `_payoutResendGuard(...)` antes de reclamarlo, `_payoutNoteSend(...)` justo antes del POST
   al banco y `_payoutNoteResult(...)` con la respuesta. En hgcash el token va EXPLÍCITO (`createCashOut({ token })`, cuenta fijada al empezar

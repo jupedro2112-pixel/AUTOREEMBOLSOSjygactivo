@@ -8,6 +8,27 @@
 
 ## Sesión 2026-11-22
 
+### 220. 🧾 Comprobante de los pagos por Finpro + 🛑 alerta de pagos salientes hechos por FUERA de la app
+Sigue al #219. Los logs de AWS y los chats mostraron que los 3 pagos dobles del 20/11 NO salieron dos veces por la app: el segundo fue una
+transferencia cargada directo en hgcash. En el chat de anto2394 el comprobante de ese segundo pago (GRMA 15:23) lo subió a mano PagosGabriel
+a las 15:25. Hipótesis del motivo (sin confirmar): cuando paga Finpro el cliente recibía solo texto, sin comprobante, y con hgcash el
+comprobante tardó 100–130 s → el operador no ve comprobante y paga a mano. El owner pidió: "que no haya dudas de si un pago salió o no".
+- **Comprobante Finpro** (`maybeSendFinproReceipt`, server.js): al confirmarse un pago por Finpro (rama DONE de `handlePayoutStatusWebhook`)
+  el cliente recibe un comprobante en TEXTO: monto, fecha, titular de la cuenta que pagó, destino, CBU y **código COELSA**. Finpro no da PDF.
+  Editable en COMANDOS: `/sys_payout_receipt_finpro` (vacío = no se envía). Idempotente por `receiptSentAt` (mismo campo que hgcash).
+- **Alerta de saliente externo** (`_alertUnknownOutbound`): cuando el banco (hgcash o Finpro) informa una salida `outKind:'unknown'` (no es
+  de un retiro ni de una bajada) → Telegram SIEMPRE; si coincide en monto + CBU con un retiro de las últimas 48 h, además nota interna roja
+  en el chat: "🛑 POSIBLE PAGO DOBLE" (el retiro está pagado / pagándose por la app) o "⚠️ RETIRO PAGADO POR FUERA DE LA APP" (pendiente o
+  fallado: no pagarlo de nuevo). Espera 20 s (y reintenta a 60 s / 120 s) antes de decidir, porque el vínculo con un pago nuestro puede
+  llegar después (`hgTxId`, coelsa). Una alerta por movimiento (`raw._extAlertAt`). Log: `[bank-out-externo]`.
+- **Candado** (`_payoutResendGuard`, paso 1b): si desde que se pidió el retiro ya salió por fuera de la app el mismo monto al mismo CBU, el
+  botón de pagar pide confirmación ANTES del primer envío (antes solo miraba reintentos).
+- **Límite:** la app avisa, no impide. Impedir un pago hecho en el panel del banco depende de quién tiene acceso para transferir ahí.
+- **Validado:** `node --check`, `check-tdz`, `test-payout-guard` (11), `test-bank-rotation`, `test-finpro-accounts`, `test-finpro-webhook`.
+  **NO probado** contra los bancos ni Telegram real; la alerta y el comprobante Finpro no tienen test en frío.
+- **Pendiente:** ver en el historial de hgcash quién creó los ids del #219; confirmar con un pago real que el comprobante Finpro llega y que
+  la alerta no salta con pagos propios (si saltara: el movimiento de hgcash no trae nuestro `externalID` y tarda en resolverse el `hgTxId`).
+
 ### 219. 🛑 Candado anti PAGO DOBLE entre cuentas/bancos + la IA lee el código COELSA + Finpro ya no deja comprobantes sin cargar + sacar una cuenta de la rotación — admin-sw v85
 Reportes de los encargados (capturas de Telegram del 20 al 22/11). Cuatro temas.
 
@@ -24,7 +45,7 @@ hgcash (GRMA); los otros dos por hgcash GRMA y a los ~50–60 s por hgcash VANTU
   Otros dos salientes externos a <1 min de un pago de la app, a revisar en hgcash (sin monto en el log): `23cff267…` (20/11 00:16 ART, tras
   ArgenLuis532 $10.000 por Finpro) y `a38fc291…` (20/11 23:52 ART, tras AtoDavid509 $100.000 por Finpro).
 - **Consecuencia:** `_payoutResendGuard` tapa un agujero real del código (reintento por otra cuenta/banco) pero NO habría frenado estos
-  tres: un pago hecho por fuera de la app no pasa por ningún candado nuestro. Lo que falta (propuesto al owner, sin hacer): alerta inmediata
+  tres: un pago hecho por fuera de la app no pasa por ningún candado nuestro. Hecho en #220: alerta inmediata
   por Telegram cuando entra un saliente `outKind:'unknown'`, marcada como POSIBLE PAGO DOBLE si coincide monto + CBU con un retiro reciente.
 - **Qué se hizo (vale sea cual sea el disparador):** `_payoutResendGuard` (server.js, antes de `_payPayoutViaFinpro`), llamado por los DOS
   caminos antes de reclamar el retiro:

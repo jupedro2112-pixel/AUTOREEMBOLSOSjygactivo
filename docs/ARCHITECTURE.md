@@ -961,6 +961,17 @@ Justo antes del POST al banco: **`_payoutNoteSend(id, banco, cuenta, quién)`**;
 El panel muestra `wait` / `alreadySent` con un cartel fijo y `needsConfirm` con la confirmación de siempre (`confirmOtherBank`).
 Test: `node scripts/test-payout-guard.js` (recorta el bloque entre `const PAYOUT_RESEND_COOLDOWN_MS` y `async function _payPayoutViaFinpro`).
 
+### Pagos por fuera de la app y comprobante Finpro (#220)
+- **Saliente externo:** un `BankMovement` `Outbound` con `outKind:'unknown'` es una transferencia que la app no originó (alguien la cargó
+  en el panel del banco). `_alertUnknownOutbound(movementId)` se dispara al registrarlo (webhook hgcash y `_finproIngestLedger`): espera
+  20/60/120 s por si se vincula a un pago nuestro (`hgTxId`/`hgTransactionId`, `fpCoelsaId`, `BankSweep`), reclama `raw._extAlertAt` (una
+  alerta por movimiento) y avisa por Telegram; si hay un `PendingPayout` de 48 h con mismo monto (±1) y CBU, nota adminOnly en el chat
+  (POSIBLE PAGO DOBLE si está `paying`/`paid`; PAGADO POR FUERA si `pending_review`/`failed`). `_payoutResendGuard` paso 1b usa lo mismo
+  para pedir confirmación antes del primer envío. ⚠️ Trampa: todo saliente NUEVO que origine la app tiene que quedar vinculado
+  (externalID / payoutId / sweepId) o va a disparar esta alerta.
+- **Comprobante Finpro:** `maybeSendFinproReceipt(payout, coelsaId)` en la rama DONE de `handlePayoutStatusWebhook` (hgcash sigue con
+  `maybeSendPayoutReceipt`, PDF + foto). Texto por `renderSystemCommand('/sys_payout_receipt_finpro')`, idempotente por `receiptSentAt`.
+
 ### Código COELSA del comprobante (#219)
 La IA devuelve `codigo_coelsa` además de `numero_operacion` (`comprobanteAiService`, `normCoelsa`: 22 alfanuméricos con letras y números) →
 `Comprobante.coelsaCode`. Lo usan `_comprobanteMatchesMovement` (regla 1b: == `BankMovement.coelsaCode`) y `_finproVerifyInputFor` (consulta

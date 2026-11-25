@@ -123,6 +123,9 @@ const LIST = [
   S._hgAccounts[1].secret = null; X._paySlotInfoCache.clear();
   r = await X._payoutPickSource({}, 500); assert.strictEqual(r.key, 'a1'); ok('una cuenta SIN secreto de webhook no entra en la elección automática');
   S._hgAccounts[1].secret = 's';
+  S._hgAccounts[0].secret = null; S._hgAccounts[1].secret = null; X._paySlotInfoCache.clear();
+  r = await X._payoutPickSource({}, 500); assert.strictEqual(r.key, 'a2'); assert.strictEqual(r.why, 'richest'); ok('… pero si NINGÚN perfil tiene secreto (avisos por el de AWS), todas participan');
+  S._hgAccounts[0].secret = 's'; S._hgAccounts[1].secret = 's';
 
   console.log('3) Cableado en server.js');
   assert.ok(/const _hgKeyPay = \(req\._paySrc && req\._paySrc\.key\) \|\| _hgActiveKey;/.test(src)); ok('el pago por hgcash usa la cuenta elegida');
@@ -134,6 +137,7 @@ const LIST = [
   assert.ok(/if \(acct\) return null;\s*\n\s*const mov = await BankMovement\.findOne/.test(src)); ok('un pago nunca usa "la cuenta del último movimiento" como respaldo');
   assert.ok(/_payoutResendGuard\(payout, 'hgcash', _hgKeyPay \|\| 'env', resolvedCbu, [^;]+, accountId\);/.test(src) && /_payoutNoteSend\(id, 'hgcash', _hgKeyPay \|\| 'env', req\.user\.username, accountId\)/.test(src)); ok('el candado y el registro del envío reciben la cuenta REAL');
   assert.ok(/!hgcashPay\.isEnabled\(\) && !\(_src\.key && _hgTokenFor\(_src\.key\)\)/.test(src)); ok('alcanza con que la cuenta elegida tenga token');
+  assert.ok(/accountId = fresh;\s*\n\s*await PendingPayout\.updateOne\(\{ id \}, \{ \$set: \{ lastSendAccountId: String\(accountId\) \} \}\)/.test(src)); ok('el reintento por 403 actualiza la cuenta REAL anotada');
   const dupFns = (src.match(/^(?:async )?function [A-Za-z0-9_$]+/gm) || []).map((x) => x.split(' ').pop()).filter((x, i, arr) => arr.indexOf(x) !== i);
   assert.deepStrictEqual(dupFns, []); ok('no hay NINGUNA función declarada dos veces en server.js');
   const iAuth = src.indexOf('const withdrawerMiddleware'), iRoute = src.indexOf("app.get('/api/admin/payout-sources'");

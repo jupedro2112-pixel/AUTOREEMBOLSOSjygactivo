@@ -18834,7 +18834,7 @@ async function _hgValidateCreds(b) {
   if (token) {
     const t = await hgcashPay.getAccounts(token);
     if (!t.ok) return { error: 'hgcash rechazó ese token: ' + String(t.error || '').slice(0, 160) };
-    accounts = (t.data || []).filter(Boolean).map((a) => ({ id: a.id, currency: a.currency, status: a.status, name: a.name || a.holderName || a.alias || null, cbu: a.cbu || a.CBU || null, cvu: a.cvu || a.CVU || null, accountNumber: a.accountNumber || null })); // #223c con CBU: sirve para identificar la cuenta
+    accounts = (t.data || []).filter(Boolean).map((a) => ({ id: a.id, currency: a.currency, status: a.status, name: a.name || a.holderName || a.alias || null, holderName: a.holderName || null, alias: a.alias || null, cbu: a.cbu || a.CBU || null, cvu: a.cvu || a.CVU || null, accountNumber: a.accountNumber || null })); // #223c con CBU: sirve para identificar la cuenta
     const isOper = a => /operativa|operative|active/i.test(String(a.status || ''));
     const pick = accounts.find(a => String(a.currency || '').toUpperCase() === 'ARS' && isOper(a)) || accounts.find(a => String(a.currency || '').toUpperCase() === 'ARS') || accounts.find(isOper) || accounts[0];
     if (pick) { apiAccountId = pick.id ? String(pick.id) : null; apiName = pick.name || null; }
@@ -20073,7 +20073,9 @@ function _paySlots() {
   for (const a of _fpList()) if (_fpReadyPayouts(a)) out.push({ id: 'finpro:' + (a.key || 'env'), provider: 'finpro', key: a.key || 'env', label: _fpAccountLabel(a), acc: a });
   return out;
 }
-function _paySlotNoWebhook(s) { return !!(s && s.provider === 'hgcash' && s.acc && !s.acc.secret); }
+// Un perfil sin secreto propio solo queda "ciego" si OTRO perfil tiene secreto (ahí el de AWS/SSM deja de valer, #182).
+// Si ningún perfil tiene secreto, los avisos entran con el de SSM y todas avisan sus salidas.
+function _paySlotNoWebhook(s) { return !!(s && s.provider === 'hgcash' && s.acc && !s.acc.secret && _hgAccounts.some(a => a.secret)); }
 const _paySlotInfoCache = new Map(); // id → { at, info }
 // Saldo y cuenta REAL de una cuenta que paga. Nunca tira. { ok, balance, realName, how, many, apiAccounts, error }
 async function _paySlotInfo(slot, maxAgeMs = 20000) {
@@ -20132,7 +20134,7 @@ async function _payoutPickSource(body, amount, prev) {
     const infos = await Promise.all(slots.map(s => _paySlotInfo(s, 8000)));
     // B3: una cuenta de hgcash SIN secreto de webhook no avisa sus salidas (el candado queda ciego): no entra en la elección automática.
     const withBal = slots.map((s, i) => ({ s, bal: infos[i] && infos[i].ok ? infos[i].balance : null })).filter(x => typeof x.bal === 'number' && !_paySlotNoWebhook(x.s)).sort((a, b) => b.bal - a.bal);
-    if (!withBal.length) { logger.warn('[payout-source] "la de más saldo": no se pudo leer el saldo de ninguna cuenta: se usa la cuenta en uso'); return active('richest-unknown'); }
+    if (!withBal.length) { logger.warn('[payout-source] "la de más saldo": ninguna cuenta con saldo legible que avise sus salidas: se usa la cuenta en uso'); return active('richest-unknown'); }
     const top = withBal[0];
     if (Number(amount) > 0 && top.bal < Number(amount)) return { error: `Ninguna cuenta tiene saldo para este retiro: la que más tiene es ${lab(top.s)} con $${top.bal.toLocaleString('es-AR')}. Cargá saldo, o elegí la cuenta a mano con "🏦 Elegir cuenta".` };
     return { provider: top.s.provider, key: top.s.key, label: lab(top.s), why: 'richest', balance: top.bal };
@@ -20849,6 +20851,7 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
       if (fresh && String(fresh) !== String(accountId)) {
         logger.warn(`[hgcash-pay] 403 con accountId=${accountId}; reintentando con accountId=${fresh}`);
         accountId = fresh;
+        await PendingPayout.updateOne({ id }, { $set: { lastSendAccountId: String(accountId) } }).catch(() => {}); // #223c la cuenta REAL de este segundo envío
         result = await buildCashOut(accountId);
       }
     }

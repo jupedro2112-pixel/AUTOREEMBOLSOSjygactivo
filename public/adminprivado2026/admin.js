@@ -2782,7 +2782,7 @@ async function payPayout(id, confirmOtherBank, provider, source, sourceLabel) {
             return;
         }
         if (r.ok && j.success) {
-            showToast((j.status === 'paid' ? 'Pago realizado ✅' : 'Pago iniciado ⏳') + (j.paidFrom ? ' · SALIÓ POR ' + j.paidFrom : '') + (j.lookupName ? ' · a ' + j.lookupName : '') + (j.message ? ' · ' + j.message : ''), 'success');
+            showToast((j.status === 'paid' ? 'Pago realizado ✅' : 'Pago iniciado ⏳') + (j.paidFrom ? ' · SALIÓ POR ' + escapeHtml(j.paidFrom) : '') + (j.lookupName ? ' · a ' + j.lookupName : '') + (j.message ? ' · ' + j.message : ''), 'success');
             if (typeof selectedUserId !== 'undefined' && selectedUserId) loadPayoutBanner(selectedUserId); // #221 queda "EN PROCESO" a la vista hasta que el banco confirma
         } else if (r.ok && j.insufficient) {
             // El cliente se jugó las fichas: no se descontó ni se pagó. Se avisó y se cerró el chat.

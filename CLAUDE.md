@@ -160,7 +160,7 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
 - **De qué cuenta sale un retiro (#223):** lo decide `_payoutPickSource` (elegida para ese retiro > `Config['payoutSource']`:
   en uso / fija / la de más saldo) y queda en `req._paySrc`; los dos caminos de pago usan ESA cuenta, no "la que está en uso".
   Un token de hgcash puede ver varias cuentas: la de un perfil la resuelve `_hgPickApiAccount` (fijada a mano > CBU > titular);
-  nunca volver a tomar "la primera de la lista". Detalle en `docs/ARCHITECTURE.md` §11.4b. Test: `node scripts/test-payout-source.js`.
+  nunca volver a tomar "la primera de la lista". Todo envío pasa la cuenta REAL del banco a `_payoutNoteSend` / `_payoutResendGuard` (`lastSendAccountId`, #223c). Detalle en `docs/ARCHITECTURE.md` §11.4b. Test: `node scripts/test-payout-source.js`.
 - **Rotación automática de cuentas (#207):** `_bankRotationTick` puede cambiar SOLA la cuenta en uso (y, entre bancos, `bankShown` /
   `bankProvider`). Nada debe asumir que la cuenta en uso es la misma que hace un rato: seguir usando `hgAccountKey` / `fpAccountKey` del pago.
   Un banco o cuenta nuevos se suman a `_rotSlots()` / `_rotProbe` / `_rotSlotBlocked`. Test: `node scripts/test-bank-rotation.js`.

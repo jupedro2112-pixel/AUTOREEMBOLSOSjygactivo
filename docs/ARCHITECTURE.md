@@ -951,6 +951,10 @@ consulta. `handlePayoutStatusWebhook` ignora avisos de un banco distinto a `payo
 saldos por `_paySlotInfo`, caché 20 s). La ruta `/pay` lo deja en `req._paySrc` y los dos caminos pagan con esa cuenta.
 En hgcash, la cuenta REAL que debita un perfil la decide `_hgPickApiAccount` (fijada a mano `payAccountId` > CBU > titular >
 id guardado > adivinar): un token puede ver varias cuentas. `_hgLastApiPick` recuerda lo último resuelto (para la nota interna).
+**Candado por cuenta REAL (#223c):** el envío guarda `lastSendAccountId` (id de la cuenta del banco) y `_payoutResendGuard(…, realAccountId)`
+trata como "otra ruta" al mismo perfil con otra cuenta real. `resolveHgcashAccountId({ acct })` (pago) no usa el respaldo "último
+movimiento". `richest` en un reintento no rechazado vuelve por la misma cuenta; una cuenta hgcash sin secreto de webhook no se elige sola.
+Titulares: `_hgNameKey` (compacto, igualdad) y `_hgNameContains` (palabras enteras); `_normName` es OTRA cosa (identidad bancaria #152).
 **Trampas:** la rotación #207 y "USAR ESTA" no cambian de dónde salen los retiros si el modo es `fixed` / `richest`; las bajadas
 siguen por la cuenta en uso; un flujo nuevo que pague no debe leer `_hgActiveKey` / `_fpActiveAccount()` directo si corre
 dentro de `/pay` (usar `req._paySrc`). Test: `node scripts/test-payout-source.js`.

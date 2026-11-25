@@ -52,6 +52,25 @@ recalcula el `fromKey` de los movimientos de esos días; `test-payout-source.js`
 declaraciones repetidas; y antes de replicar a otros repos, auditoría independiente del cambio. También (`79c397d`): si la
 cuenta elegida para pagar dejó de existir, el pago se frena en vez de caer en silencio a la cuenta en uso.
 
+**#223c — correcciones de la AUDITORÍA independiente del #223 (2026-11-25, admin-sw v89):**
+- *Titulares:* igualdad exacta primero ("S.A." = "SA"); "contiene" solo por PALABRAS ENTERAS y nunca por la etiqueta del perfil
+  (antes "JUANA" matcheaba "JUAN ALVAREZ", y un titular exacto perdía si otra cuenta lo contenía).
+- *Alta de perfil:* la lista validada conserva el CBU, así un token que ve varias cuentas se identifica por CBU al cargarlo
+  (`_hgIdForNewToken`); la ruta vieja `/api/admin/hgcash/credentials` tampoco toma ya "la primera".
+- *Pago doble (lo más importante):* (1) un pago con perfil fijado ya NO usa "la cuenta del último movimiento" como respaldo si
+  hgcash no responde (podía ser otra cuenta; el `externalID` no deduplica entre cuentas) → sin cuenta cierta, no sale;
+  (2) el envío anota la cuenta REAL (`PendingPayout.lastSendAccountId`) y `_payoutResendGuard` solo considera "misma ruta" si
+  también coincide esa cuenta → mismo perfil con otra cuenta real = espera de 2 min + confirmación; (3) en modo "la de más
+  saldo", un REINTENTO con envío anterior no rechazado vuelve por la MISMA cuenta (`why:'retry-same'`); cambiar de cuenta en un
+  reintento solo lo hace una persona con "🏦 Elegir cuenta"; (4) una cuenta de hgcash sin secreto de webhook (no avisa sus
+  salidas) no entra en la elección automática y el panel lo marca.
+- *Otros:* alcanza con que la cuenta ELEGIDA tenga token (antes exigía el de la cuenta en uso); la respuesta del pago dice
+  `paidFrom` y el aviso muestra "SALIÓ POR …"; el selector de cuenta a fijar muestra moneda y estado.
+- **Queda SIN hacer (anotado por la auditoría):** no hay alarma de "posible pago doble" entre dos cuentas del MISMO banco (solo
+  entre bancos); un retiro fallado ANTES de este deploy no tiene `lastSendAccountId` (mirarlo en el banco antes de reintentar);
+  los perfiles con id guardado de antes que no matcheen por CBU/titular siguen con ese id → revisarlos una vez en el panel.
+- Tests: `test-payout-source.js` 45 casos (incluye "ninguna función declarada dos veces"), `test-payout-guard.js` 14.
+
 **Validación:** `node --check`, `check-tdz`, los 8 `scripts/test-*.js` (nuevo: `test-payout-source.js`, 29 casos).
 **NO probado:** contra hgcash ni Finpro reales, ni el panel en un navegador. No se conoce la forma exacta de `GET /accounts`
 cuando el token ve varias cuentas (se asume que trae `name`): lo primero a mirar tras el deploy es el bloque nuevo del panel,

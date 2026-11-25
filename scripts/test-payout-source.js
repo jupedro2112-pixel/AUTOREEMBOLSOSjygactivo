@@ -35,7 +35,7 @@ const S = {
   logger: { info() {}, warn() {}, error() {} },
   __out: null
 };
-new Function('S', 'with (S) {\n' + block + '\n__out = { _hgPickApiAccount, _paySlots, _paySlotInfo, _payoutPickSource, getPayoutSource, _paySlotInfoCache }; }')(S);
+new Function('S', 'with (S) {\n' + block + '\n__out = { _hgIdForNewToken, _hgNameContains, _hgPickApiAccount, _paySlots, _paySlotInfo, _payoutPickSource, getPayoutSource, _paySlotInfoCache }; }')(S);
 const X = S.__out;
 
 let n = 0;
@@ -65,8 +65,22 @@ const LIST = [
   r = X._hgPickApiAccount({ key: 'a9', titular: 'SA' }, LIST, 'ARS');
   assert.strictEqual(r.how, 'guess'); ok('un titular de 2 letras no matchea nada');
 
+  // Casos de la auditoría (#223c)
+  const L2 = [{ id: 'x1', name: 'JOSE MARIA GOMEZ', currency: 'ARS' }, { id: 'x2', name: 'MARIA GOMEZ', currency: 'ARS' }];
+  r = X._hgPickApiAccount({ key: 'b1', titular: 'MARIA GOMEZ' }, L2, 'ARS');
+  assert.strictEqual(r.pick.id, 'x2'); assert.strictEqual(r.how, 'name'); ok('titular EXACTO gana aunque otra cuenta lo contenga');
+  r = X._hgPickApiAccount({ key: 'b2', titular: 'JUANA' }, [{ id: 'y1', name: 'JUAN ALVAREZ' }, { id: 'y2', name: 'OTRA SA' }], 'ARS');
+  assert.strictEqual(r.how, 'guess'); ok('no matchea por pedazos de palabra ("JUANA" no es "JUAN ALVAREZ")');
+  r = X._hgPickApiAccount({ key: 'b3', label: 'Cuenta SRL', accountId: 'z2' }, [{ id: 'z1', name: 'OTRA CUENTA SRL' }, { id: 'z2', name: 'LA BUENA SA' }], 'ARS');
+  assert.strictEqual(r.pick.id, 'z2'); assert.strictEqual(r.how, 'id'); ok('la ETIQUETA del perfil no pisa un id guardado por parecerse a otra cuenta');
+  assert.strictEqual(X._hgNameContains('Distribuidora Dos', 'DISTRIBUIDORA DOS S.A.'), true); assert.strictEqual(X._hgNameContains('JUANA', 'JUAN ALVAREZ'), false); ok('"contiene" va por palabras enteras');
+  const V = { apiAccountId: 'id-1', accounts: LIST.map((a) => ({ id: a.id, name: a.name, currency: a.currency, status: a.status, cvu: a.cvu || null })) };
+  assert.strictEqual(X._hgIdForNewToken({ titular: 'NADA QUE VER', cbu: CBU_B }, V), 'id-3'); ok('alta de perfil con token que ve varias: identifica por CBU');
+  assert.strictEqual(X._hgIdForNewToken({ titular: 'NADA QUE VER' }, V), null); ok('… y sin pistas NO toma "la primera" (queda sin cuenta, con aviso)');
+  assert.strictEqual(X._hgIdForNewToken({ titular: 'X' }, { apiAccountId: 'id-9', accounts: [{ id: 'id-9' }] }), 'id-9'); ok('… con una sola cuenta, esa');
+
   console.log('2) De dónde sale un retiro');
-  S._hgAccounts.push({ key: 'a1', label: 'CUENTA-A', token: 'tA', titular: 'EMPRESA UNO SA' }, { key: 'a2', label: 'CUENTA-B', token: 'tB', titular: 'Distribuidora Dos' }, { key: 'a3', label: 'SIN-TOKEN' });
+  S._hgAccounts.push({ key: 'a1', label: 'CUENTA-A', token: 'tA', secret: 's', titular: 'EMPRESA UNO SA' }, { key: 'a2', label: 'CUENTA-B', token: 'tB', secret: 's', titular: 'Distribuidora Dos' }, { key: 'a3', label: 'SIN-TOKEN' });
   S.__fp = [{ key: 'f1', label: 'CUENTA-F', ready: true, account: 'acc-f1' }, { key: 'f2', label: 'F-NO-LISTA', ready: false }];
   apiByToken = { tA: { ok: true, data: LIST }, tB: { ok: true, data: LIST } };
   fpBalances = { 'acc-f1': { ok: true, available: 20000 } };
@@ -98,6 +112,18 @@ const LIST = [
   X._paySlotInfoCache.clear(); apiByToken = { tA: { ok: true, data: LIST } };
   r = await X._payoutPickSource({}, 500); assert.strictEqual(r.key, 'a1'); ok('una cuenta que no responde no participa');
 
+  // #223c un REINTENTO en modo automático vuelve por la misma cuenta; y una cuenta sin webhook no se elige sola
+  X._paySlotInfoCache.clear(); apiByToken = { tA: { ok: true, data: LIST }, tB: { ok: true, data: LIST } }; fpBalances = {};
+  r = await X._payoutPickSource({}, 500, { lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'unknown' });
+  assert.strictEqual(r.key, 'a1'); assert.strictEqual(r.why, 'retry-same'); ok('reintento con envío dudoso → MISMA cuenta (aunque otra tenga más saldo)');
+  r = await X._payoutPickSource({}, 500, { lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'rejected' });
+  assert.strictEqual(r.key, 'a2'); ok('reintento tras un RECHAZO claro → puede ir a la de más saldo');
+  r = await X._payoutPickSource({ source: 'hgcash:a2' }, 500, { lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendResult: 'unknown' });
+  assert.strictEqual(r.key, 'a2'); ok('… y la elegida a mano sigue mandando (el candado pide esperar y confirmar)');
+  S._hgAccounts[1].secret = null; X._paySlotInfoCache.clear();
+  r = await X._payoutPickSource({}, 500); assert.strictEqual(r.key, 'a1'); ok('una cuenta SIN secreto de webhook no entra en la elección automática');
+  S._hgAccounts[1].secret = 's';
+
   console.log('3) Cableado en server.js');
   assert.ok(/const _hgKeyPay = \(req\._paySrc && req\._paySrc\.key\) \|\| _hgActiveKey;/.test(src)); ok('el pago por hgcash usa la cuenta elegida');
   assert.ok(/const _hgAcctPay = _hgAccountByKey\(_hgKeyPay\) \|\| _hgActiveAccount\(\);/.test(src)); ok('… con SU token y SU perfil');
@@ -105,6 +131,11 @@ const LIST = [
   assert.ok(/_payoutResendGuard\(payout, 'hgcash', _hgKeyPay \|\| 'env'/.test(src)); ok('el candado anti pago doble recibe la cuenta REAL que paga');
   assert.ok(/hgAccountKey: _hgKeyPay \|\| null/.test(src)); ok('el pago recuerda la cuenta que lo mandó');
   assert.ok(/!\(_pk\.how === 'guess' && acc\.data\.length > 1\)/.test(src)); ok('una cuenta adivinada no se guarda como propia del perfil');
+  assert.ok(/if \(acct\) return null;\s*\n\s*const mov = await BankMovement\.findOne/.test(src)); ok('un pago nunca usa "la cuenta del último movimiento" como respaldo');
+  assert.ok(/_payoutResendGuard\(payout, 'hgcash', _hgKeyPay \|\| 'env', resolvedCbu, [^;]+, accountId\);/.test(src) && /_payoutNoteSend\(id, 'hgcash', _hgKeyPay \|\| 'env', req\.user\.username, accountId\)/.test(src)); ok('el candado y el registro del envío reciben la cuenta REAL');
+  assert.ok(/!hgcashPay\.isEnabled\(\) && !\(_src\.key && _hgTokenFor\(_src\.key\)\)/.test(src)); ok('alcanza con que la cuenta elegida tenga token');
+  const dupFns = (src.match(/^(?:async )?function [A-Za-z0-9_$]+/gm) || []).map((x) => x.split(' ').pop()).filter((x, i, arr) => arr.indexOf(x) !== i);
+  assert.deepStrictEqual(dupFns, []); ok('no hay NINGUNA función declarada dos veces en server.js');
   const iAuth = src.indexOf('const withdrawerMiddleware'), iRoute = src.indexOf("app.get('/api/admin/payout-sources'");
   assert.ok(iAuth > 0 && iRoute > iAuth); ok('las rutas nuevas están después de los middlewares (TDZ)');
 

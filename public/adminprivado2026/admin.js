@@ -2782,7 +2782,7 @@ async function payPayout(id, confirmOtherBank, provider, source, sourceLabel) {
             return;
         }
         if (r.ok && j.success) {
-            showToast((j.status === 'paid' ? 'Pago realizado ✅' : 'Pago iniciado ⏳') + (j.lookupName ? ' · a ' + j.lookupName : '') + (j.message ? ' · ' + j.message : ''), 'success');
+            showToast((j.status === 'paid' ? 'Pago realizado ✅' : 'Pago iniciado ⏳') + (j.paidFrom ? ' · SALIÓ POR ' + j.paidFrom : '') + (j.lookupName ? ' · a ' + j.lookupName : '') + (j.message ? ' · ' + j.message : ''), 'success');
             if (typeof selectedUserId !== 'undefined' && selectedUserId) loadPayoutBanner(selectedUserId); // #221 queda "EN PROCESO" a la vista hasta que el banco confirma
         } else if (r.ok && j.insufficient) {
             // El cliente se jugó las fichas: no se descontó ni se pagó. Se avisó y se cerró el chat.
@@ -2806,7 +2806,8 @@ function _psSlotLine(s) {
     const bal = s.ok ? (_psMoney(s.balance) ? '<b style="color:#66ff99;">' + _psMoney(s.balance) + '</b>' : '<span style="color:#aaa;">saldo no informado</span>') : '<span style="color:#ff8080;">no se pudo leer el saldo' + (s.error ? ' (' + escapeHtml(String(s.error).slice(0, 80)) + ')' : '') + '</span>';
     const real = s.realName ? ' <span style="color:#aaa;">→ debita de «' + escapeHtml(s.realName) + '»</span>' : '';
     const warn = (s.provider === 'hgcash' && s.many > 1 && s.how === 'guess') ? ' <span style="color:#ffb74d;">⚠️ el token ve ' + s.many + ' cuentas y no se sabe cuál es la de este perfil: elegila</span>' : '';
-    return bank + ' · ' + escapeHtml(s.label || '') + (s.inUse ? ' <span style="color:#7fd1ff;">(en uso)</span>' : '') + ' — ' + bal + real + warn;
+    const nowh = s.noWebhook ? ' <span style="color:#ffb74d;">⚠️ sin secreto de webhook: no avisa sus salidas (no entra en el modo automático)</span>' : '';
+    return bank + ' · ' + escapeHtml(s.label || '') + (s.inUse ? ' <span style="color:#7fd1ff;">(en uso)</span>' : '') + ' — ' + bal + real + warn + nowh;
 }
 // Lista de cuentas para pagar ESTE retiro, con el saldo de cada una.
 async function choosePayoutAccount(id) {
@@ -2847,7 +2848,7 @@ function _renderPayoutSources(j) {
         if (j.canEdit && s.provider === 'hgcash' && s.key && (s.apiAccounts || []).length > 1) {
             pin = '<div style="margin:3px 0 6px 14px;font-size:11.5px;color:#ccc;">El token de este perfil ve ' + s.apiAccounts.length + ' cuentas de hgcash. Debitar de: <select onchange="pinHgPayAccount(\'' + escapeHtml(s.key) + '\', this.value)" style="width:auto;padding:3px 6px;font-size:11.5px;">' +
                 '<option value="">Automático (por CBU / titular)</option>' +
-                s.apiAccounts.map(function (a) { return '<option value="' + escapeHtml(a.id) + '"' + (s.pinned && a.id === s.apiAccountId ? ' selected' : '') + '>' + escapeHtml(a.name || a.id) + (_psMoney(a.balance) ? ' — ' + _psMoney(a.balance) : '') + '</option>'; }).join('') + '</select></div>';
+                s.apiAccounts.map(function (a) { return '<option value="' + escapeHtml(a.id) + '"' + (s.pinned && a.id === s.apiAccountId ? ' selected' : '') + '>' + escapeHtml(a.name || a.id) + (a.currency ? ' · ' + escapeHtml(a.currency) : '') + (a.status ? ' · ' + escapeHtml(a.status) : '') + (_psMoney(a.balance) ? ' — ' + _psMoney(a.balance) : '') + '</option>'; }).join('') + '</select></div>';
         }
         return '<div style="margin:3px 0;">' + (s.id === j.nowId ? '👉 ' : '· ') + _psSlotLine(s) + '</div>' + pin;
     }).join('') || '<span style="color:#ff8080;">No hay cuentas listas para pagar retiros.</span>';

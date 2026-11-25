@@ -132,6 +132,24 @@ t('anotar el envío y su resultado deja el rastro en el retiro', async () => {
   assert.strictEqual(updates[0].u.$push.sendLog.$each[0].label, 'hgcash · CUENTA-A');
   assert.strictEqual(updates[1].u.$set.lastSendResult, 'unknown');
 });
+t('#223c mismo perfil pero OTRA cuenta real del banco → NO es la misma ruta (espera y confirmación)', async () => {
+  movements = [];
+  const base = { id: 'pX', amount: 5000, createdAt: ago(20 * 60 * 1000), lastSendBank: 'hgcash', lastSendAccount: 'a1', lastSendAccountId: 'real-1', lastSendResult: 'unknown', sendLog: [{ at: ago(10 * 60 * 1000) }] };
+  let g = await X._payoutResendGuard(Object.assign({ lastSendAt: ago(10 * 60 * 1000) }, base), 'hgcash', 'a1', CBU, false, 'real-1');
+  assert.strictEqual(g, null); // misma cuenta real: el banco deduplica por externalID
+  g = await X._payoutResendGuard(Object.assign({ lastSendAt: ago(10 * 60 * 1000) }, base), 'hgcash', 'a1', CBU, false, 'real-2');
+  assert.ok(g && g.http === 409 && g.body.needsConfirm === true);
+  g = await X._payoutResendGuard(Object.assign({ lastSendAt: ago(20 * 1000) }, base), 'hgcash', 'a1', CBU, true, 'real-2');
+  assert.ok(g && g.body.wait === true); // dentro de los 2 minutos ni confirmando
+  g = await X._payoutResendGuard(Object.assign({ lastSendAt: ago(10 * 60 * 1000) }, base, { lastSendAccountId: null }), 'hgcash', 'a1', CBU, false, 'real-2');
+  assert.strictEqual(g, null); // envío viejo sin cuenta real anotada: se comporta como antes
+});
+t('#223c el envío anota la cuenta REAL que debita', async () => {
+  updates.length = 0;
+  await X._payoutNoteSend('p2', 'hgcash', 'a1', 'operador1', 'real-7');
+  assert.strictEqual(updates[0].u.$set.lastSendAccountId, 'real-7');
+  assert.strictEqual(updates[0].u.$push.sendLog.$each[0].accountId, 'real-7');
+});
 
 (async () => {
   for (const [name, fn] of tests) {

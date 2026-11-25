@@ -43,6 +43,15 @@ usuario de hgcash terminaban debitando de la misma cuenta. La nota interna decí
 identifica por titular antes que por el id guardado. "La de más saldo": si ninguna cuenta alcanza, el pago se frena ANTES de
 descontar fichas; si no se puede leer ningún saldo, usa la cuenta en uso (no frena los pagos).
 
+**#223b — error propio corregido el mismo día (commit `f6caf49`):** el #223 declaraba una segunda `function _normName` (sin
+espacios) que, por hoisting, PISABA a la existente (con espacios) que usan `_nameMatch` y `_bankFromKey` (identidad bancaria /
+anti-multicuenta #152). Mientras estuvo desplegado, los `BankMovement.fromKey` nuevos se guardaron sin espacios y no coincidían
+con los anteriores. Lo encontró el subagente que replicaba en otro repo. Arreglo: la nueva se llama `_hgNameKey`; al arrancar se
+recalcula el `fromKey` de los movimientos de esos días; `test-payout-source.js` falla si `_normName` vuelve a estar duplicada.
+**Lección:** `node --check` y los tests no avisan de una `function` duplicada → antes de cerrar un cambio en `server.js`, buscar
+declaraciones repetidas; y antes de replicar a otros repos, auditoría independiente del cambio. También (`79c397d`): si la
+cuenta elegida para pagar dejó de existir, el pago se frena en vez de caer en silencio a la cuenta en uso.
+
 **Validación:** `node --check`, `check-tdz`, los 8 `scripts/test-*.js` (nuevo: `test-payout-source.js`, 29 casos).
 **NO probado:** contra hgcash ni Finpro reales, ni el panel en un navegador. No se conoce la forma exacta de `GET /accounts`
 cuando el token ve varias cuentas (se asume que trae `name`): lo primero a mirar tras el deploy es el bloque nuevo del panel,

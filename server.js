@@ -20457,6 +20457,7 @@ async function _payPayoutViaFinpro(req, res) {
     await _loadFinproCredentials(); // cuenta EN USO fresca (la rotación desde otra instancia aplica al instante)
     const _srcKey = req._paySrc && req._paySrc.key; // #223 cuenta elegida para este pago (null = la que está en uso)
     const acct = (_srcKey ? (_srcKey === 'env' ? _fpEnvAccount() : _fpAccountByKey(_srcKey)) : null) || _fpActiveAccount() || _fpEnvAccount();
+    if (_srcKey && (!acct || (acct.key || 'env') !== _srcKey)) return res.status(400).json({ error: 'La cuenta de Finpro elegida para este pago ya no está disponible. Actualizá y elegí otra.' }); // #223 nunca cae en silencio a otra cuenta
     if (!acct || !_fpHasCreds(acct)) {
       return res.status(400).json({ error: 'Finpro no está configurado (faltan API Key y Secret: Bancos — Configuración → Finpro). Pagá manual.' });
     }
@@ -20732,6 +20733,8 @@ app.post('/api/admin/payouts/:id/pay', authMiddleware, withdrawerMiddleware, asy
     // el envío salía con el token de la cuenta nueva y el accountId de la vieja.
     const _hgAcctPay = _hgAccountByKey(_hgKeyPay) || _hgActiveAccount();
     const _hgTokPay = (_hgAcctPay && _hgAcctPay.token) || undefined;
+    // #223 nunca cae en silencio a otra cuenta: si la elegida dejó de existir, se frena antes de reclamar el retiro.
+    if (req._paySrc && req._paySrc.key && (!_hgAcctPay || _hgAcctPay.key !== req._paySrc.key)) return res.status(400).json({ error: 'La cuenta de hgcash elegida para este pago ya no está disponible. Actualizá y elegí otra.' });
     let accountId = await resolveHgcashAccountId({ acct: _hgAcctPay });
     if (!accountId) return res.status(400).json({ error: 'No se pudo determinar la cuenta hgcash a debitar (accountId).' });
 

@@ -867,6 +867,19 @@
                                     <small style="color:#aaa;font-size:11px;display:block;margin-top:6px;">Al tocar <b>USAR ESTA</b> en una cuenta del banco elegido, el CBU/alias que ve el cliente cambia solo.</small>
                                 </div>
                             </div>
+                            <div id="payoutSrcBox" style="display:none;margin:12px 0 4px;padding:12px;background:rgba(15,138,47,0.08);border:1px solid rgba(15,138,47,0.35);border-radius:10px;">
+                                <div style="font-weight:bold;font-size:13px;margin-bottom:6px;">💸 ¿De qué CUENTA salen los retiros?</div>
+                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="payoutSrcMode" value="active" style="width:auto;"> La cuenta <b>EN USO</b> del banco elegido arriba (como hasta ahora)</label>
+                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;flex-wrap:wrap;"><input type="radio" name="payoutSrcMode" value="fixed" style="width:auto;"> <b>Siempre de esta cuenta:</b> <select id="payoutSrcFixed" style="width:auto;padding:4px 8px;font-size:12.5px;"></select></label>
+                                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="payoutSrcMode" value="richest" style="width:auto;"> <b>Automático:</b> la cuenta que MÁS SALDO tenga en el momento (de cualquiera de los dos bancos)</label>
+                                <small style="color:#aaa;font-size:11px;display:block;margin:6px 0;">En cada retiro, el botón <b>🏦 Elegir cuenta</b> deja pagar ESE retiro desde otra cuenta (por ejemplo si la elegida falla o no tiene saldo). Con una cuenta fija o automática, cambiar la cuenta EN USO ya no cambia de dónde salen los retiros.</small>
+                                <div id="payoutSrcList" style="font-size:12px;color:#ddd;line-height:1.7;margin:8px 0;"></div>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                                    <button type="button" class="btn-primary ps-save" onclick="savePayoutSource()">💾 Guardar de dónde salen</button>
+                                    <button type="button" class="ps-refresh" onclick="loadPayoutSources(true)" style="background:rgba(255,255,255,0.12);color:#fff;border:none;border-radius:8px;padding:8px 12px;cursor:pointer;">🔄 Actualizar saldos</button>
+                                    <span id="payoutSrcMsg" style="font-size:12px;"></span>
+                                </div>
+                            </div>
                             <div id="banksSummary" style="font-size:12px;color:#ccc;line-height:1.7;margin:10px 0;"></div>
                             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                                 <button type="button" class="btn-primary" onclick="saveBanks()">💾 Guardar bancos</button>

@@ -2736,12 +2736,15 @@ async function loadPayoutBanner(userId) {
         const bankName = j.bankProvider === 'finpro' ? 'Finpro' : 'hgcash'; // #202 banco elegido para los retiros
         // #213 pagar ESTE retiro por el otro banco con API (p. ej. si el elegido no tiene saldo)
         const otherName = j.otherBank === 'finpro' ? 'Finpro' : 'hgcash';
-        const otherBtn = j.otherReady
+        // #223 con más de una cuenta para pagar, un solo botón abre la lista (con el saldo de cada una)
+        const otherBtn = (j.paySources > 1)
+            ? '<button onclick="choosePayoutAccount(\'' + escapeHtml(p.id) + '\')" title="Elegí de qué cuenta sale ESTE retiro (muestra el saldo de cada una)" style="background:#0b6b6b;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-weight:700;font-size:11.5px;cursor:pointer;">🏦 Elegir cuenta</button>'
+            : j.otherReady
             ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\', false, \'' + j.otherBank + '\')" title="Paga este retiro por ' + otherName + (j.otherAccount ? ' · cuenta ' + escapeHtml(j.otherAccount) : '') + ' (los demás siguen por ' + bankName + ')" style="background:#0b6b6b;color:#fff;border:none;border-radius:7px;padding:7px 11px;font-weight:700;font-size:11.5px;cursor:pointer;">🏦 Pagar con otro banco</button>'
             : '';
-        window._payoutBankInfo = { main: bankName + (j.bankAccount ? ' · ' + j.bankAccount : ''), other: otherName + (j.otherAccount ? ' · ' + j.otherAccount : '') }; // #219 para el cartel de confirmación
-        const payBtn = j.payEnabled
-            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + bankName + (j.bankAccount ? ' · cuenta ' + escapeHtml(j.bankAccount) : '') + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
+        window._payoutBankInfo = { main: j.payFrom || (bankName + (j.bankAccount ? ' · ' + j.bankAccount : '')), other: otherName + (j.otherAccount ? ' · ' + j.otherAccount : '') }; // #219 para el cartel de confirmación
+        const payBtn = (j.payEnabled || j.payFromReady)
+            ? '<button onclick="payPayout(\'' + escapeHtml(p.id) + '\')" title="Sale por ' + escapeHtml(j.payFrom || (bankName + (j.bankAccount ? ' · cuenta ' + j.bankAccount : ''))) + '" style="background:#0f8a2f;color:#fff;border:none;border-radius:7px;padding:7px 13px;font-weight:800;font-size:12px;cursor:pointer;">' + (p.status === 'failed' ? '🔁 Pagar nuevamente ' : '💸 Pagar ') + monto + '</button>' // #214 sin nombre de banco en el botón (está en el título al pasar el mouse)
             : '<span style="color:#ffd;font-size:11px;">Pago automático por ' + bankName + ' no configurado (' + (j.bankProvider === 'finpro' ? 'faltan credenciales o nuestro CVU en la cuenta en uso' : 'falta token') + '). Pagá manual.</span>';
         // "Descartar": SOLO admin general. Limpia un pago viejo ya resuelto SIN devolver fichas ni avisar al cliente.
         const dismissBtn = (currentAdmin?.role === 'admin')
@@ -2762,19 +2765,20 @@ async function loadPayoutBanner(userId) {
     }
 }
 
-async function payPayout(id, confirmOtherBank, provider) {
+async function payPayout(id, confirmOtherBank, provider, source, sourceLabel) {
+    // #223 `source` = pagar ESTE retiro desde esa cuenta puntual ('hgcash:a2' / 'finpro:f1').
     // #213 `provider` = pagar ESTE retiro por ese banco (aunque los retiros estén configurados por el otro).
     // #219 el cartel dice POR DÓNDE sale (el botón ya no nombra el banco, #214).
     const _bi = window._payoutBankInfo || {};
-    const _por = provider ? (_bi.other || (provider === 'finpro' ? 'Finpro' : 'hgcash')) : (_bi.main || '');
-    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (_por ? '\n\nSALE POR: ' + _por + (provider ? ' (el OTRO banco)' : '') : '') + '\n\nSe va a transferir al CBU del cliente. Verificá que los datos sean correctos.\nUna vez que confirmes NO lo pagues por otro lado: esperá el aviso del sistema.')) return;
+    const _por = source ? (sourceLabel || source) : (provider ? (_bi.other || (provider === 'finpro' ? 'Finpro' : 'hgcash')) : (_bi.main || ''));
+    if (!confirmOtherBank && !confirm('¿Confirmás el PAGO automático de este retiro' + (_por ? '\n\nSALE POR: ' + _por + (source ? ' (cuenta elegida a mano)' : (provider ? ' (el OTRO banco)' : '')) : '') + '\n\nSe va a transferir al CBU del cliente. Verificá que los datos sean correctos.\nUna vez que confirmes NO lo pagues por otro lado: esperá el aviso del sistema.')) return;
     const el = document.getElementById('chatPayoutBanner');
     try {
-        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST', body: JSON.stringify(Object.assign(confirmOtherBank ? { confirmOtherBank: true } : {}, provider ? { provider } : {})) });
+        const r = await authFetch('/api/admin/payouts/' + encodeURIComponent(id) + '/pay', { method: 'POST', body: JSON.stringify(Object.assign(confirmOtherBank ? { confirmOtherBank: true } : {}, provider ? { provider } : {}, source ? { source } : {})) });
         const j = await r.json();
         // #202 Hubo un intento anterior por el OTRO banco que no se sabe si salió: lo confirma el agente.
         if (r.status === 409 && j.needsConfirm && !confirmOtherBank) {
-            if (confirm('⚠️ ' + (j.error || 'Hubo un intento anterior por el otro banco.') + '\n\n¿YA VERIFICASTE que NO salió y querés pagarlo ahora?\n(Si no estás seguro, cancelá: pagar igual puede ser pagar DOS veces.)')) return payPayout(id, true, provider);
+            if (confirm('⚠️ ' + (j.error || 'Hubo un intento anterior por el otro banco.') + '\n\n¿YA VERIFICASTE que NO salió y querés pagarlo ahora?\n(Si no estás seguro, cancelá: pagar igual puede ser pagar DOS veces.)')) return payPayout(id, true, provider, source, sourceLabel);
             return;
         }
         if (r.ok && j.success) {
@@ -2794,6 +2798,99 @@ async function payPayout(id, confirmOtherBank, provider) {
         }
     } catch (e) { showToast('Error de conexión', 'error'); }
 }
+
+// ── #223 De qué cuenta salen los retiros ──────────────────────────────────────────────
+function _psMoney(n) { return (typeof n === 'number' && isFinite(n)) ? '$' + n.toLocaleString('es-AR', { maximumFractionDigits: 2 }) : null; }
+function _psSlotLine(s) {
+    const bank = s.provider === 'finpro' ? '<b style="color:#b388ff;">Finpro</b>' : '<b style="color:#d4af37;">hgcash</b>';
+    const bal = s.ok ? (_psMoney(s.balance) ? '<b style="color:#66ff99;">' + _psMoney(s.balance) + '</b>' : '<span style="color:#aaa;">saldo no informado</span>') : '<span style="color:#ff8080;">no se pudo leer el saldo' + (s.error ? ' (' + escapeHtml(String(s.error).slice(0, 80)) + ')' : '') + '</span>';
+    const real = s.realName ? ' <span style="color:#aaa;">→ debita de «' + escapeHtml(s.realName) + '»</span>' : '';
+    const warn = (s.provider === 'hgcash' && s.many > 1 && s.how === 'guess') ? ' <span style="color:#ffb74d;">⚠️ el token ve ' + s.many + ' cuentas y no se sabe cuál es la de este perfil: elegila</span>' : '';
+    return bank + ' · ' + escapeHtml(s.label || '') + (s.inUse ? ' <span style="color:#7fd1ff;">(en uso)</span>' : '') + ' — ' + bal + real + warn;
+}
+// Lista de cuentas para pagar ESTE retiro, con el saldo de cada una.
+async function choosePayoutAccount(id) {
+    let j = null;
+    try { const r = await authFetch('/api/admin/payout-sources?fresh=1'); j = await r.json(); if (!r.ok) throw new Error(j.error || 'error'); }
+    catch (e) { alert('No se pudieron leer las cuentas: ' + e.message); return; }
+    const old = document.getElementById('payoutSrcModal'); if (old) old.remove();
+    const m = document.createElement('div');
+    m.id = 'payoutSrcModal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;';
+    window._payoutSrcPick = function (sid) {
+        const s = (j.slots || []).find(function (x) { return x.id === sid; }); if (!s) return;
+        m.remove();
+        payPayout(id, false, null, s.id, (s.provider === 'finpro' ? 'Finpro' : 'hgcash') + ' · ' + s.label + (s.realName ? ' («' + s.realName + '»)' : '') + (_psMoney(s.balance) ? ' — saldo ' + _psMoney(s.balance) : ''));
+    };
+    const rows = (j.slots || []).map(function (s) {
+        return '<button onclick="_payoutSrcPick(\'' + escapeHtml(s.id) + '\')" style="display:block;width:100%;text-align:left;margin:6px 0;padding:11px 12px;border-radius:9px;border:1px solid ' + (s.id === j.nowId ? '#0f8a2f' : 'rgba(255,255,255,0.18)') + ';background:rgba(255,255,255,0.05);color:#fff;font-size:13px;cursor:pointer;line-height:1.5;">' +
+            _psSlotLine(s) + (s.id === j.nowId ? '<br><span style="font-size:11px;color:#66ff99;">← por acá sale el botón Pagar (' + escapeHtml(j.nowWhy || '') + ')</span>' : '') + '</button>';
+    }).join('');
+    m.innerHTML = '<div style="background:#1a1d2e;border-radius:14px;padding:18px;max-width:560px;width:100%;max-height:86vh;overflow:auto;color:#fff;">' +
+        '<div style="font-weight:800;font-size:15px;margin-bottom:4px;">🏦 ¿De qué cuenta sale ESTE retiro?</div>' +
+        '<div style="font-size:11.5px;color:#aaa;margin-bottom:8px;">Vale solo para este pago. Si ya hubo un intento por otra cuenta, el sistema te va a pedir que verifiques que no salió.</div>' +
+        (rows || '<div style="color:#ff8080;">No hay cuentas listas para pagar.</div>') +
+        '<div style="text-align:right;margin-top:8px;"><button onclick="document.getElementById(\'payoutSrcModal\').remove()" style="background:rgba(255,255,255,0.15);color:#fff;border:none;border-radius:7px;padding:7px 14px;cursor:pointer;">Cancelar</button></div></div>';
+    m.addEventListener('click', function (ev) { if (ev.target === m) m.remove(); });
+    document.body.appendChild(m);
+}
+let _payoutSrcState = null;
+function _renderPayoutSources(j) {
+    _payoutSrcState = j;
+    const box = document.getElementById('payoutSrcBox'); if (!box) return;
+    const r = document.querySelector('input[name="payoutSrcMode"][value="' + j.mode + '"]'); if (r) r.checked = true;
+    const sel = document.getElementById('payoutSrcFixed');
+    if (sel) sel.innerHTML = (j.slots || []).map(function (s) { return '<option value="' + escapeHtml(s.id) + '"' + (s.id === j.fixed ? ' selected' : '') + '>' + (s.provider === 'finpro' ? 'Finpro' : 'hgcash') + ' · ' + escapeHtml(s.label || '') + (_psMoney(s.balance) ? ' — ' + _psMoney(s.balance) : '') + '</option>'; }).join('');
+    const list = document.getElementById('payoutSrcList');
+    if (list) list.innerHTML = (j.slots || []).map(function (s) {
+        let pin = '';
+        if (j.canEdit && s.provider === 'hgcash' && s.key && (s.apiAccounts || []).length > 1) {
+            pin = '<div style="margin:3px 0 6px 14px;font-size:11.5px;color:#ccc;">El token de este perfil ve ' + s.apiAccounts.length + ' cuentas de hgcash. Debitar de: <select onchange="pinHgPayAccount(\'' + escapeHtml(s.key) + '\', this.value)" style="width:auto;padding:3px 6px;font-size:11.5px;">' +
+                '<option value="">Automático (por CBU / titular)</option>' +
+                s.apiAccounts.map(function (a) { return '<option value="' + escapeHtml(a.id) + '"' + (s.pinned && a.id === s.apiAccountId ? ' selected' : '') + '>' + escapeHtml(a.name || a.id) + (_psMoney(a.balance) ? ' — ' + _psMoney(a.balance) : '') + '</option>'; }).join('') + '</select></div>';
+        }
+        return '<div style="margin:3px 0;">' + (s.id === j.nowId ? '👉 ' : '· ') + _psSlotLine(s) + '</div>' + pin;
+    }).join('') || '<span style="color:#ff8080;">No hay cuentas listas para pagar retiros.</span>';
+    const now = (j.slots || []).find(function (s) { return s.id === j.nowId; });
+    const line = document.getElementById('banksPayLine');
+    if (line) line.innerHTML = '💸 Retiros: HOY salen de <b>' + (now ? (now.provider === 'finpro' ? 'Finpro' : 'hgcash') + ' · cuenta "' + escapeHtml(now.label || '') + '"' + (now.realName ? ' («' + escapeHtml(now.realName) + '»)' : '') + (_psMoney(now.balance) ? ' — saldo ' + _psMoney(now.balance) : '') : '(ninguna cuenta lista)') + '</b> <span style="color:#aaa;">(' + escapeHtml(j.nowWhy || '') + ')</span>';
+    box.querySelectorAll('input,select,button.ps-save').forEach(function (el) { if (!j.canEdit && !el.classList.contains('ps-refresh')) el.disabled = true; });
+}
+async function loadPayoutSources(fresh) {
+    const box = document.getElementById('payoutSrcBox'); if (!box) return;
+    const list = document.getElementById('payoutSrcList');
+    if (fresh && list) list.innerHTML = '⏳ Consultando saldos…';
+    try {
+        const r = await authFetch('/api/admin/payout-sources' + (fresh ? '?fresh=1' : ''));
+        if (!r.ok) { box.style.display = 'none'; return; }
+        box.style.display = '';
+        _renderPayoutSources(await r.json());
+    } catch (_) { if (list) list.innerHTML = '<span style="color:#ff8080;">No se pudieron leer las cuentas.</span>'; }
+}
+async function savePayoutSource() {
+    const r0 = document.querySelector('input[name="payoutSrcMode"]:checked'); if (!r0) return;
+    const sel = document.getElementById('payoutSrcFixed');
+    const txt = { active: 'la cuenta EN USO del banco elegido para los retiros (como hasta ahora)', fixed: 'SIEMPRE la cuenta: ' + (sel && sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : ''), richest: 'AUTOMÁTICO: la cuenta que más saldo tenga en el momento (de cualquiera de los dos bancos)' }[r0.value];
+    if (!confirm('Los retiros van a salir de:\n\n' + txt + '\n\n¿Guardar?')) { if (_payoutSrcState) _renderPayoutSources(_payoutSrcState); return; }
+    const msg = document.getElementById('payoutSrcMsg');
+    try {
+        const r = await authFetch('/api/admin/payout-sources', { method: 'POST', body: JSON.stringify({ mode: r0.value, fixed: sel ? sel.value : null }) });
+        const j = await r.json().catch(function () { return {}; });
+        if (!r.ok) { if (msg) { msg.style.color = '#ff8080'; msg.textContent = '❌ ' + (j.error || 'No se pudo guardar'); } if (_payoutSrcState) _renderPayoutSources(_payoutSrcState); return; }
+        _renderPayoutSources(j);
+        if (msg) { msg.style.color = '#66ff99'; msg.textContent = '✅ Guardado'; }
+    } catch (_) { if (msg) { msg.style.color = '#ff8080'; msg.textContent = '❌ Error de conexión'; } }
+}
+async function pinHgPayAccount(key, accountId) {
+    if (!confirm(accountId ? 'Este perfil va a debitar SIEMPRE de la cuenta de hgcash elegida. ¿Confirmás?' : '¿Volver a que el sistema detecte la cuenta sola (por CBU / titular)?')) { if (_payoutSrcState) _renderPayoutSources(_payoutSrcState); return; }
+    try {
+        const r = await authFetch('/api/admin/hgcash/accounts/' + encodeURIComponent(key) + '/pay-account', { method: 'POST', body: JSON.stringify({ accountId: accountId }) });
+        const j = await r.json().catch(function () { return {}; });
+        if (!r.ok) { alert(j.error || 'No se pudo guardar'); if (_payoutSrcState) _renderPayoutSources(_payoutSrcState); return; }
+        _renderPayoutSources(j); showToast('Cuenta a debitar guardada', 'success');
+    } catch (_) { alert('Error de conexión'); }
+}
+window.choosePayoutAccount = choosePayoutAccount; window.loadPayoutSources = loadPayoutSources; window.savePayoutSource = savePayoutSource; window.pinHgPayAccount = pinHgPayAccount;
 
 async function cancelPayout(id) {
     if (!confirm('¿Rechazar este pago? NO se paga. Como las fichas se descuentan recién al pagar, acá no hay nada que devolver: solo se cancela la solicitud.')) return;
@@ -6756,7 +6853,7 @@ function _renderBanks(j) {
         const notReady = (j.payouts === 'finpro' && !(j.finpro && j.finpro.readyPayouts)) || (j.payouts === 'hgcash' && j.hgcash && j.hgcash.token === 'none');
         const c = j.cbu;
         sum.innerHTML = _bankStatusTxt('hgcash', j.hgcash) + '<br>' + _bankStatusTxt('finpro', j.finpro) +
-            '<br>💸 Retiros: salen por <b>' + (j.payouts === 'finpro' ? 'Finpro' : 'hgcash') + (payAcc ? ' · cuenta "' + escapeHtml(payAcc) + '"' : '') + '</b>' +
+            '<br><span id="banksPayLine">💸 Retiros: salen por <b>' + (j.payouts === 'finpro' ? 'Finpro' : 'hgcash') + (payAcc ? ' · cuenta "' + escapeHtml(payAcc) + '"' : '') + '</b></span>' +
             (notReady ? ' <span style="color:#ff8080;">(ese banco no está listo para pagar: el botón Pagar va a fallar)</span>' : '') +
             '<br>👁️ El cliente ve: <b>' + (j.shown === 'finpro' ? 'la cuenta Finpro en uso' : (j.shown === 'manual' ? 'lo cargado a mano' : 'la cuenta hgcash en uso')) + '</b>' +
             (c && (c.number || c.alias) ? ' → ' + escapeHtml(c.titular || '(sin titular)') + (c.number ? ' · ' + escapeHtml(c.number) : '') + (c.alias ? ' · alias ' + escapeHtml(c.alias) : '') : ' <span style="color:#ff8080;">(hoy no hay CBU/alias cargado)</span>');
@@ -6773,6 +6870,7 @@ async function loadBanks() {
         if (form) form.style.display = '';
         if (header) header.style.display = '';
         _renderBanks(await r.json());
+        loadPayoutSources(false); // #223 de qué cuenta salen los retiros + saldos
     } catch (_) { if (form) form.style.display = 'none'; if (header) header.style.display = 'none'; }
 }
 async function saveBanks() {
@@ -6795,7 +6893,7 @@ async function saveBanks() {
         const r = await authFetch('/api/admin/banks', { method: 'POST', body: JSON.stringify({ incoming: inc.value, payouts: pay.value, shown: shw.value }) });
         const j = await r.json().catch(function () { return {}; });
         if (!r.ok) { if (m) { m.style.color = '#ff8080'; m.textContent = '❌ ' + (j.error || 'No se pudo guardar'); } if (_banksState) _renderBanks(_banksState); return; }
-        _renderBanks(j);
+        _renderBanks(j); loadPayoutSources(false);
         if (m) { m.style.color = j.warning ? '#ffb74d' : '#66ff99'; m.textContent = j.warning ? '⚠️ Guardado. ' + j.warning : '✅ Guardado'; }
         showToast('Bancos guardados', 'success');
         if (j.warning) showToast(j.warning, 'warning');

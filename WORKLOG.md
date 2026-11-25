@@ -8,6 +8,46 @@
 
 ## Sesión 2026-11-25
 
+### 223. 💸 ¿De qué CUENTA salen los retiros? — en uso / fija / la de más saldo, saldos a la vista y "🏦 Elegir cuenta" en cada retiro — admin-sw v88
+
+**Reporte del owner (2026-11-25):** se puso una cuenta de hgcash EN USO para que pague y el retiro salió de OTRA cuenta
+(el comprobante mostraba un titular distinto al de la nota interna). Pidió: elegir de qué cuenta paga, o que pague sola la
+que más plata tenga, poder elegir otra si una falla, y ver el saldo de cada cuenta.
+
+**Causa (leída en el código, NO confirmada con logs ni contra hgcash):** un token de hgcash puede ver VARIAS cuentas
+(`GET /accounts`). Al cargar un perfil se guardaba como suya "la primera en pesos" (`_hgValidateCreds` → `apiAccountId`), y al
+pagar, `resolveHgcashAccountId` buscaba por CBU y, si no coincidía, por ese id guardado → varios perfiles con el mismo
+usuario de hgcash terminaban debitando de la misma cuenta. La nota interna decía el nombre del PERFIL, no la cuenta real.
+
+**Qué se hizo**
+- `_hgPickApiAccount(perfil, lista)`: la cuenta de un perfil es, en orden: la **fijada a mano** (`payAccountId`, nuevo) → la de
+  su **CBU** → la de su **titular** (nombre normalizado, una sola coincidencia) → el id guardado → recién ahí adivina
+  (`how:'guess'`). Una cuenta adivinada ya NO se guarda como propia del perfil. Al cargar un token que ve varias cuentas
+  tampoco se toma "la primera".
+- **`Config['payoutSource'] = { mode, fixed }`** (`getPayoutSource`): `active` (default, lo de siempre: la cuenta EN USO del
+  banco de retiros) · `fixed` (siempre esa cuenta, `hgcash:a2` / `finpro:f1`) · `richest` (la que más saldo tenga en el
+  momento, entre las cuentas de los DOS bancos que pueden pagar).
+- `_payoutPickSource(body, monto)` decide de dónde sale cada pago: `body.source` (elegida a mano para ESE retiro) > `body.provider`
+  (#213, panel viejo) > el modo. `/api/admin/payouts/:id/pay` deja el resultado en `req._paySrc`; el camino de hgcash y
+  `_payPayoutViaFinpro` pagan con ESA cuenta (perfil + token/credenciales), y el candado #219, `hgAccountKey` / `fpAccountKey`
+  y el recibo siguen igual porque ya trabajaban por cuenta.
+- Saldos: `_paySlotInfo` (hgcash `netBalance`/`balance` de `GET /accounts`; Finpro `accounts/balance`), caché 20 s.
+- Panel (🏛️ Bancos — Configuración → 🏦 Bancos automáticos): bloque **"💸 ¿De qué CUENTA salen los retiros?"** con los tres
+  modos, la lista de cuentas con su saldo y la cuenta REAL que debita cada perfil; si el token ve varias, un selector para
+  fijarla. En el cartel del retiro, **"🏦 Elegir cuenta"** abre la lista con saldos (reemplaza "Pagar con otro banco" cuando hay
+  más de una cuenta). La nota interna agrega `— debitó de "X"` cuando la cuenta real no se llama como el perfil.
+- Endpoints: `GET/POST /api/admin/payout-sources` (ver: quien paga retiros; guardar: admin general) y
+  `POST /api/admin/hgcash/accounts/:key/pay-account`.
+
+**Comportamiento que NO cambia:** con el modo por defecto todo sale como antes, salvo que ahora la cuenta de hgcash se
+identifica por titular antes que por el id guardado. "La de más saldo": si ninguna cuenta alcanza, el pago se frena ANTES de
+descontar fichas; si no se puede leer ningún saldo, usa la cuenta en uso (no frena los pagos).
+
+**Validación:** `node --check`, `check-tdz`, los 8 `scripts/test-*.js` (nuevo: `test-payout-source.js`, 29 casos).
+**NO probado:** contra hgcash ni Finpro reales, ni el panel en un navegador. No se conoce la forma exacta de `GET /accounts`
+cuando el token ve varias cuentas (se asume que trae `name`): lo primero a mirar tras el deploy es el bloque nuevo del panel,
+que muestra qué cuenta real debita cada perfil. Las bajadas (sweeps) siguen saliendo de la cuenta en uso.
+
 ### 222. 🔗 Regalo con rollover a un jugador de jugaygana.io que ya tiene un bono activo → se UNIFICA (ya no figura como "Carga") + descripción detallada de todo lo que se acredita — admin-sw v87
 **Réplica de #236–#239 de CARGASGIROXactivo**, adaptada a las dos plataformas. **Solo toca a los usuarios `partner` (jugaygana.io)**: para un
 usuario de la JUGAYGANA vieja no cambia ni un monto, ni un texto, ni un camino (la vieja no recibe `opts.description` ni tiene rollover).

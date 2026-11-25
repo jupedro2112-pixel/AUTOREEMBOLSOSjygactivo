@@ -944,6 +944,17 @@ pone la cuenta EN USO como estado global de `finproService` (`setOverrides`). Si
 `POST /api/finpro/callback`: decide desde el payload solo si la firma es válida Y habla del `fpProcessId` vigente; si no, es una pista y se
 consulta. `handlePayoutStatusWebhook` ignora avisos de un banco distinto a `payout.paidVia`.
 
+### 11.4b De qué cuenta sale cada retiro (#223)
+`_payoutPickSource(body, monto)` → `{ provider, key }` (key `null` = la cuenta en uso de ese banco). Prioridad: `body.source`
+(cuenta elegida para ESE retiro, botón "🏦 Elegir cuenta") > `body.provider` (#213) > `Config['payoutSource'].mode`:
+`active` (default) · `fixed` · `richest` (mayor saldo entre `_paySlots()`, las cuentas de los dos bancos que pueden pagar;
+saldos por `_paySlotInfo`, caché 20 s). La ruta `/pay` lo deja en `req._paySrc` y los dos caminos pagan con esa cuenta.
+En hgcash, la cuenta REAL que debita un perfil la decide `_hgPickApiAccount` (fijada a mano `payAccountId` > CBU > titular >
+id guardado > adivinar): un token puede ver varias cuentas. `_hgLastApiPick` recuerda lo último resuelto (para la nota interna).
+**Trampas:** la rotación #207 y "USAR ESTA" no cambian de dónde salen los retiros si el modo es `fixed` / `richest`; las bajadas
+siguen por la cuenta en uso; un flujo nuevo que pague no debe leer `_hgActiveKey` / `_fpActiveAccount()` directo si corre
+dentro de `/pay` (usar `req._paySrc`). Test: `node scripts/test-payout-source.js`.
+
 ### 11.5 Endpoints (después de `authMiddleware`; credenciales = solo admin general)
 `GET/POST /api/admin/banks` · `GET/POST /api/admin/bank-provider` · `GET/POST /api/admin/finpro/config` (modo) ·
 `GET/POST /api/admin/finpro/accounts` · `DELETE /api/admin/finpro/accounts/:key` · `POST …/:key/activate` · `POST …/:key/incoming` ·

@@ -108,5 +108,6 @@ const LIST = [
   const iAuth = src.indexOf('const withdrawerMiddleware'), iRoute = src.indexOf("app.get('/api/admin/payout-sources'");
   assert.ok(iAuth > 0 && iRoute > iAuth); ok('las rutas nuevas están después de los middlewares (TDZ)');
 
+  assert.strictEqual((src.match(/^function _normName\(/gm) || []).length, 1); assert.ok(/replace\(\/\[\^A-Z0-9 \]\/g, ' '\)/.test(src.slice(src.indexOf('function _normName('), src.indexOf('function _normName(') + 300))); ok('`_normName` (identidad bancaria, CON espacios) no quedó pisada por una función duplicada');
   console.log(`\n✅ ${n} pruebas OK`);
 })().catch((e) => { console.error('❌', e); process.exit(1); });

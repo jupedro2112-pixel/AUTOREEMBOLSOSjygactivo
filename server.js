@@ -13555,6 +13555,21 @@ async function initializeData() {
     logger.error(`[startup] backfill de fromKey falló (el candado multicuenta sólo verá movimientos nuevos): ${e.message}`);
   }
 
+  // #223b Reparación: entre el deploy del #223 y su corrección, una función duplicada (`_normName`) dejó la
+  // clave bancaria `fromKey` SIN espacios. Se recalcula la de los movimientos de esos días. Idempotente.
+  try {
+    const cur2 = BankMovement.find({ createdAt: { $gte: new Date('2026-11-25T00:00:00Z'), $lt: new Date('2026-12-05T00:00:00Z') }, fromKey: { $ne: null }, fromName: { $nin: [null, ''] } }).select('_id fromName fromKey').lean().cursor();
+    let ops2 = [], fixed2 = 0;
+    for await (const m of cur2) {
+      const key = _bankFromKey(m.fromName);
+      if (!key || key === m.fromKey) continue;
+      ops2.push({ updateOne: { filter: { _id: m._id }, update: { $set: { fromKey: key } } } });
+      if (ops2.length >= 500) { await BankMovement.bulkWrite(ops2, { ordered: false }); fixed2 += ops2.length; ops2 = []; }
+    }
+    if (ops2.length) { await BankMovement.bulkWrite(ops2, { ordered: false }); fixed2 += ops2.length; }
+    if (fixed2 > 0) logger.warn(`[startup] BankMovement.fromKey reparado en ${fixed2} movimientos (#223b)`);
+  } catch (e) { logger.error(`[startup] reparación de fromKey falló: ${e.message}`); }
+
   // One-shot: backfill de phoneKey (clave normalizada) en los usuarios con teléfono YA
   // verificado, para que el chequeo de unicidad por phoneKey funcione contra los existentes.
   try {
@@ -20003,7 +20018,7 @@ async function resolveHgcashAccountId({ force = false, acct = null } = {}) {
 // Un token de hgcash puede ver VARIAS cuentas. Antes, sin CBU que matcheara, se debitaba "la primera"
 // → un perfil recién puesto EN USO pagaba desde otra cuenta. Ahora: fijada a mano > CBU > titular > id.
 const _hgLastApiPick = new Map(); // key del perfil → { at, id, name, how, many, balance } (lo último que resolvió la API)
-function _normName(v) { return String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function _hgNameKey(v) { return String(v || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 function _hgApiName(a) { return a ? (a.name || a.holderName || a.alias || null) : null; }
 function _hgApiBalance(a) { if (!a) return null; const n = Number(a.netBalance != null ? a.netBalance : a.balance); return Number.isFinite(n) ? n : null; }
 function _hgPickApiAccount(prof, list, wantCur) {
@@ -20014,8 +20029,8 @@ function _hgPickApiAccount(prof, list, wantCur) {
   const pCbu = prof ? _digits(prof.cbu) : '';
   if (pCbu.length === 22) { const f = list.find(a => [a.cbu, a.cvu, a.CBU, a.CVU, a.accountNumber].some(v => _digits(v) === pCbu)); if (f) return { pick: f, how: 'cbu' }; }
   if (prof) {
-    const mine = [prof.titular, prof.accountName, prof.label].map(_normName).filter(n => n.length >= 5);
-    const hits = list.filter(a => [a.name, a.holderName, a.alias].map(_normName).filter(n => n.length >= 5).some(n => mine.some(m => m === n || m.includes(n) || n.includes(m))));
+    const mine = [prof.titular, prof.accountName, prof.label].map(_hgNameKey).filter(n => n.length >= 5);
+    const hits = list.filter(a => [a.name, a.holderName, a.alias].map(_hgNameKey).filter(n => n.length >= 5).some(n => mine.some(m => m === n || m.includes(n) || n.includes(m))));
     if (hits.length === 1) return { pick: hits[0], how: 'name' };
   }
   if (prof && prof.accountId) { const f = list.find(a => String(a.id) === String(prof.accountId)); if (f) return { pick: f, how: 'id' }; }
@@ -20378,8 +20393,8 @@ function _hgDebitNote(key) {
   const i = _hgLastApiPick.get(key || 'env');
   if (!i || !i.name) return '';
   const a = _hgAccountByKey(key);
-  const mine = a ? [a.titular, a.accountName, a.label].map(_normName).filter(Boolean) : [];
-  const n = _normName(i.name);
+  const mine = a ? [a.titular, a.accountName, a.label].map(_hgNameKey).filter(Boolean) : [];
+  const n = _hgNameKey(i.name);
   const same = mine.some(m => m === n || (m.length >= 5 && n.length >= 5 && (m.includes(n) || n.includes(m))));
   if (i.how === 'guess' && i.many > 1) return ` — ⚠️ DEBITÓ DE "${i.name}": el token de este perfil ve ${i.many} cuentas de hgcash y no se pudo saber cuál es la suya. Fijala en Bancos — Configuración → "De qué cuenta salen los retiros"`;
   return same ? '' : ` — debitó de "${i.name}"`;

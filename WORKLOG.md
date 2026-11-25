@@ -4,7 +4,53 @@
 > commit por commit está en `git log --oneline`. Esto captura decisiones, umbrales de
 > negocio y pendientes que NO se ven leyendo el código.
 >
-> **Última actualización: 2026-11-22**
+> **Última actualización: 2026-11-25**
+
+## Sesión 2026-11-25
+
+### 222. 🔗 Regalo con rollover a un jugador de jugaygana.io que ya tiene un bono activo → se UNIFICA (ya no figura como "Carga") + descripción detallada de todo lo que se acredita — admin-sw v87
+**Réplica de #236–#239 de CARGASGIROXactivo**, adaptada a las dos plataformas. **Solo toca a los usuarios `partner` (jugaygana.io)**: para un
+usuario de la JUGAYGANA vieja no cambia ni un monto, ni un texto, ni un camino (la vieja no recibe `opts.description` ni tiene rollover).
+- **El problema (confirmado con logs de producción del gemelo, no de acá):** un regalo CON rollover sale por `POST /players/{u}/bonus` con
+  multiplier > 0. Si el jugador ya tiene un bono activo, la plataforma "pisa" el anterior (le debita lo que le quedaba); para no
+  perjudicarlo, `giroxService.creditGift` lo mandaba como DEPÓSITO con rollover → en el panel de la plataforma figura como "Carga" y
+  descuadra el cierre. Acá pasa cuando el flujo tiene rollover > 0 (#205: `bonoAuto`/`bonoManual` siguen al global x3 por defecto; reembolsos,
+  fueguito y ruleta solo si el owner les prendió rollover en COMANDOS; lotes con `rolloverX`).
+- **Unificar (default):** bono bloqueado > $50 y nada "a reclamar" ⇒ UN bono nuevo por `bonus_locked + regalo` con el rollover del regalo y
+  la MISMA reference; la plataforma cancela el resto del viejo. El resultado trae `mergedOld`, `mergedTotal`, `giftAmount`. No se unifica
+  (va por depósito con rollover, marcado): bono cumplido sin reclamar, total sobre el máximo de bono, rechazo de la plataforma, monto fuera
+  de rango, no poder leer al jugador. Un error transitorio se devuelve tal cual (sigue siendo `ambiguous` para el caller).
+- **Control de plata:** con el saldo que devuelve `/bonus`, si subió bastante más que el regalo (no se debitó el bono viejo) →
+  `girox.setGiftMergeAnomalyHook`: el modo vuelve solo a `'deposit'`, log `[gift-merge]`, Telegram, y el panel muestra el aviso.
+- **Modo:** `Config['bonusRolloverGlobal'].fallback` = `'merge'` (default) | `'deposit'` (lo de antes) | `'bonus0'` (bono sin rollover).
+  Radios en **COMANDOS → 🔒 Rollover de regalos y bonos** (solo admin general; se guarda con el mismo botón, `POST /api/admin/gift-rollover`).
+  `POST /api/admin/platform/rollover` (panel Mudanza) ya no pisa ese campo.
+- **Transacciones:** `_giftMeta(result)` / `_giftMetaFields(result)` guardan `metadata.creditedAs:'deposit'` (+ `giftFallback`) o
+  `metadata.mergedBonus` en reembolsos, fueguito, botón Bonificación, bono de la carga, bono app, bono de lote y regalo de lote. Tarjetas
+  nuevas (solo si hay casos): "Regalos que jugaygana.io muestra como Carga" (`summary.giftsAsDeposit`, restar de las cargas de la
+  plataforma al cerrar) y "Bonos anteriores unificados" (`summary.mergedBonus`). El monto del regalo es SIEMPRE el pedido.
+- **Mensaje al cliente:** `_rollNote` avisa cuando se unificó ("ahora tenés un solo bono de $X con rollover xN").
+- **Descripciones hacia jugaygana.io** (no cambia la Transaction local ni lo que lee el cliente): empiezan con el TIPO —
+  `REEMBOLSO diario del … / semanal / mensual`, `REGALO — Fueguito…`, `REGALO — Premio de la ruleta diaria…`, `REGALO — Fichas de regalo
+  del lote…`, `BONO manual…`, `BONO de la carga…`, `BONO automático de la carga…`, `COMISIÓN de referidos…`, `DEVOLUCIÓN de retiro
+  rechazado…`. Si igual sale por depósito se antepone `BONO (contar como BONO, NO como carga): … — sale como depósito por una limitación
+  de la API de 1girox`.
+- **Diferencias con el origen:** (1) acá el rollover es por tipo de regalo, así que el bono unificado queda ENTERO con el rollover del
+  regalo nuevo aunque el anterior tuviera otro (más alto o más bajo); (2) un `duplicate` (reintento de una reference ya acreditada) no
+  informa unificación; (3) el control vive en la card de #205, no en una de "Rollover GLOBAL"; (4) la ruleta diaria no crea Transaction
+  en este repo → un premio de ruleta unificado o por depósito NO aparece en las tarjetas (queda solo en el log `[girox]`); (5) la
+  devolución de retiro y la comisión de referidos no llevan marca (igual que en el origen); (6) no existen acá reembolso en vivo,
+  rakeback, nivel VIP ni código de bienvenida.
+- **NO probado contra jugaygana.io real** (no hay node_modules ni credenciales): (a) que lo debitado al unificar sea exactamente
+  `bonus_locked`, (b) que la cancelación le devuelva esa plata al saldo del agente/cajero (si no, cada unificación cuesta el resto del bono
+  viejo), (c) cómo se ve en el panel de la plataforma y cuántos caracteres de la descripción muestra, (d) el panel admin en un navegador.
+  Entre leer el bono y otorgar el nuevo hay una ventana de milisegundos: si el jugador apuesta justo ahí la diferencia queda a favor o en
+  contra de él. **Mirar el primer caso real** (log `[girox] unificación de X: saldo A → B`).
+- Visto y NO tocado: `getGlobalBonusRollover` lee `pc.bonus.multipliers` pero `girox.getPlatformConfig()` devuelve `{ success, config }` →
+  la lista de multiplicadores permitidos nunca llega y el "ajuste al permitido más cercano" no corre (un x no permitido termina en depósito
+  con rollover). Las rutas de la ruleta leen `credit.transactionId` (no `credit.data.transfer_id`) → `creditTxId` queda vacío.
+- Validado: `node --check` (server.js, giroxService, referralPayoutService, admin.js, admin-sw.js), `check-tdz`, test nuevo
+  `scripts/test-gift-fallback.js` (17, Partner API simulada + estáticos) y los 6 tests que ya había (todos pasaban antes y siguen pasando).
 
 ## Sesión 2026-11-22
 

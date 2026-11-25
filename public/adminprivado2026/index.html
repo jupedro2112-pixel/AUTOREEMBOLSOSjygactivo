@@ -758,6 +758,14 @@
                         <div id="giftRolloverForm" style="display:none;">
                             <p style="color:#aaa;font-size:12px;margin:4px 0 10px;">Elegí, para cada cosa que se regala, si entra <b>libre</b> (se puede retirar al instante) o <b>con rollover</b> (hay que jugar el monto esa cantidad de veces antes de poder retirarlo). Solo aplica a los usuarios que ya están en jugaygana.io. Las devoluciones de retiros y las comisiones de referidos nunca llevan rollover. Los regalos de lote usan el rollover que se elige al crear cada lote.</p>
                             <div id="giftRolloverRows"></div>
+                            <!-- #222 (réplica #236/#237 de CARGASGIROXactivo): regalo con rollover a un jugador que ya tiene un bono activo -->
+                            <div style="margin-top:12px;padding:10px;border:1px solid rgba(255,255,255,0.1);border-radius:10px;">
+                                <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Si el jugador YA tiene un bono activo con rollover pendiente y le toca otro regalo con rollover</div>
+                                <div id="giftFallbackWarn" style="display:none;color:#ff8080;font-size:12px;margin:4px 0;"></div>
+                                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="giftFallback" value="merge" style="width:auto;margin-top:3px;"> <span><b>UNIFICAR</b> (recomendado) — se le da UN bono nuevo por <b>lo que le queda del bono anterior + el regalo</b>, con el rollover de este regalo y la barra desde cero. Todo queda con rollover y en jugaygana.io figura como <b>Bono</b> (más una "Cancelación de bono" por el anterior). Si la plataforma no devuelve el saldo esperado, se apaga sola y avisa.</span></label>
+                                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="giftFallback" value="bonus0" style="width:auto;margin-top:3px;"> <span>Darlo como <b>BONO sin rollover</b> — figura como Bono, pero ese regalo queda retirable sin apostar</span></label>
+                                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:13px;margin:4px 0;"><input type="radio" name="giftFallback" value="deposit" style="width:auto;margin-top:3px;"> <span>Darlo como <b>depósito con rollover</b> (lo de antes) — mantiene el rollover, pero en jugaygana.io figura como <b>Carga</b> (hay que restarlo en el cierre: tarjeta "Regalos que jugaygana.io muestra como Carga" en Transacciones)</span></label>
+                            </div>
                             <button class="btn-primary" style="margin-top:10px;" onclick="saveGiftRollover()">💾 Guardar rollover</button>
                             <div id="giftRolloverMsg" style="font-size:12px;margin-top:8px;color:#aaa;"></div>
                         </div>

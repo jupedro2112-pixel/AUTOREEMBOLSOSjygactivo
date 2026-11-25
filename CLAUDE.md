@@ -101,6 +101,13 @@ vipcargas para autoreembolsos.com; el hermano vive en `VIPCARGASANTINOactivo`, e
 - **Rollover por tipo de regalo (#205):** todo regalo/bono nuevo pasa `opts.rolloverFlow` (`refund`/`fire`/`roulette`/`bonoAuto`/`bonoManual`,
   o uno nuevo sumado a `GIFT_ROLLOVER_FLOWS` en server.js) a `plat.creditUserBalance/makeBonus`; el owner lo prende/apaga en COMANDOS.
   Sin flujo cae al rollover global. Plata del cliente (devolución, comisión) sigue con `ignoreGlobalRollover:true`.
+- **Regalo a un jugador con bono activo = UNIFICAR (#222, réplica #236–#239 de CARGASGIROXactivo; solo jugaygana.io):** con rollover > 0,
+  `girox.creditGift` otorga un bono por `bonus_locked + regalo` (`result.mergedOld` / `mergedTotal`); modo en
+  `Config['bonusRolloverGlobal'].fallback` (`merge` | `deposit` | `bonus0`, COMANDOS → Rollover de regalos y bonos). **Nunca usar
+  `mergedTotal` como monto del regalo** en la contabilidad local. Todo regalo nuevo guarda `..._giftMeta(result)` (o `_giftMetaFields`
+  dentro de su `metadata`) y manda `opts.description` empezando por el TIPO en mayúsculas (`REEMBOLSO…`, `REGALO — …`, `BONO…`,
+  `COMISIÓN…`, `DEVOLUCIÓN…`): ese texto solo viaja a jugaygana.io. Quien escriba `bonusRolloverGlobal` conserva `fallback`.
+  Detalle en `docs/ARCHITECTURE.md` §10.3e. Test: `node scripts/test-gift-fallback.js`.
 - **Corte fijo 1-ene-2027 (#204):** desde esa fecha un usuario mudado NO suma lo jugado en la JUGAYGANA vieja (reembolsos / referidos):
   `OLD_NETWIN_CUTOFF_MS` en `platform.js`, hardcodeado a pedido del owner ("irremovible"). No convertirlo en config ni moverlo sin que lo pida.
 - **JWT_SECRET y otros secrets** se cargan desde AWS SSM en el bootstrap async, NO al

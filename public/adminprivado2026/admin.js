@@ -5096,6 +5096,18 @@ function renderTransactionStats(summary) {
                 <span class="stat-number" style="color:#f97316">${formatMoney(summary.fireRewards || 0)}</span>
                 <span class="stat-label">Fueguito</span>
             </div>` : ''}
+            ${summary.giftsAsDeposit > 0 ? `
+            <div class="stat-card" style="border-color:#ef4444" title="Regalos (reembolsos, bonos, fueguito, lotes…) que en jugaygana.io quedaron anotados como CARGA porque salieron por depósito. Para el cierre: restá este monto del total de cargas que muestra jugaygana.io. Ya están contados en su tipo (bonificaciones, reembolsos, fueguito).">
+                <span style="font-size:1.2rem">⚠️</span>
+                <span class="stat-number" style="color:#ef4444">${formatMoney(summary.giftsAsDeposit || 0)}</span>
+                <span class="stat-label">Regalos que jugaygana.io muestra como Carga (${summary.giftsAsDepositCount || 0})</span>
+            </div>` : ''}
+            ${summary.mergedBonus > 0 ? `
+            <div class="stat-card" style="border-color:#38bdf8" title="Regalos que se UNIFICARON con un bono que el jugador ya tenía: en jugaygana.io el Bono figura por (bono anterior + regalo) y aparece una Cancelación de bono por el anterior. Para el cierre: los Bonos de jugaygana.io van a dar este monto DE MÁS respecto de los regalos de acá, compensado por las Cancelaciones de bono.">
+                <span style="font-size:1.2rem">🔗</span>
+                <span class="stat-number" style="color:#38bdf8">${formatMoney(summary.mergedBonus || 0)}</span>
+                <span class="stat-label">Bonos anteriores unificados (${summary.mergedBonusCount || 0})</span>
+            </div>` : ''}
             <div class="stat-card net-balance ${netBalanceClass}">
                 <span class="icon icon-balance"></span>
                 <span class="stat-number">${formatMoney(netBalance)}</span>
@@ -6247,6 +6259,14 @@ function _giftRolloverRender(j) {
             + '<span style="flex:1;min-width:230px;">' + escapeHtml(f.label) + '</span>'
             + '<select data-gift-roll="' + escapeHtml(f.key) + '" style="padding:7px;border-radius:8px;border:1px solid #444;background:#111;color:' + (f.x > 0 ? '#66ff99' : '#fff') + ';">' + opts + '</select>' + note + '</div>';
     }).join('');
+    // #222: qué hacer si el jugador ya tiene un bono activo (unificar / bono sin rollover / depósito)
+    const fb = (j.fallback === 'deposit' || j.fallback === 'bonus0') ? j.fallback : 'merge';
+    document.querySelectorAll('input[name="giftFallback"]').forEach(function (el) { el.checked = el.value === fb; });
+    const warn = document.getElementById('giftFallbackWarn');
+    if (warn) {
+        warn.style.display = j.mergeOffAt ? '' : 'none';
+        warn.textContent = j.mergeOffAt ? '🛑 "Unificar" se APAGÓ SOLA el ' + fmtFechaHoraAR(j.mergeOffAt) + ' hs: ' + (j.mergeOffWhy || 'la plataforma no devolvió el saldo esperado') + '. Revisá ese caso antes de volver a elegirla.' : '';
+    }
 }
 async function loadGiftRollover() {
     const form = document.getElementById('giftRolloverForm');
@@ -6264,7 +6284,7 @@ async function saveGiftRollover() {
     try {
         const flows = {};
         document.querySelectorAll('[data-gift-roll]').forEach((el) => { flows[el.getAttribute('data-gift-roll')] = Number(el.value); });
-        const r = await authFetch('/api/admin/gift-rollover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flows }) });
+        const r = await authFetch('/api/admin/gift-rollover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flows, fallback: ((document.querySelector('input[name="giftFallback"]:checked') || {}).value) || 'merge' }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(j.error || 'No se pudo guardar');
         _giftRolloverRender(j);

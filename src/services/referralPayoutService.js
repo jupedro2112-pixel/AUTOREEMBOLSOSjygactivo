@@ -303,7 +303,8 @@ async function executePayoutsForPeriod(periodKey, options = {}) {
       const creditResult = referrer.platform === 'partner'
         ? await require('./platform').creditUserBalance(referrer.username, totalAmount, null, {
             reference: `vip-refcom-${periodKey}-${refId}-p${payoutIndex}`,
-            description,
+            // #222 (réplica #239): descripción detallada SOLO hacia jugaygana.io; la vieja y el registro local usan `description`.
+            description: `COMISIÓN de referidos — ganancias por referidos de ${periodLabel}${isDeltaPayout ? ` (pago #${payoutIndex})` : ''} (plata ganada, no es un bono promocional)`,
             ignoreGlobalRollover: true
           })
         : await jugayganaService.bonus(

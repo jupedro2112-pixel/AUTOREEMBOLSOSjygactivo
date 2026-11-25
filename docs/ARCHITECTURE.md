@@ -844,6 +844,26 @@ mudados ni al motor de mudanza (que necesita la vieja para pasar saldos).
 (o `opts.rolloverX` explícito, que manda) a `plat.creditUserBalance/makeBonus` → `girox.creditGift`. Sin flujo → rollover global.
 Solo jugaygana.io; en la vieja no hay rollover.
 
+### 10.3e Regalo con rollover a un jugador que ya tiene un bono activo (#222, réplica #236–#239 de CARGASGIROXactivo)
+Otorgar un bono con rollover a quien ya tiene uno PISA el anterior. `girox.creditGift` (por donde pasa todo regalo de un `partner`) decide
+según `Config['bonusRolloverGlobal'].fallback` (`girox.setGiftFallbackResolver`; radios en COMANDOS → 🔒 Rollover de regalos y bonos,
+`GET/POST /api/admin/gift-rollover` devuelven/aceptan `fallback`):
+- `'merge'` (default) — **UNIFICAR:** `bonus_locked` > $50 y `claimable_total` = 0 ⇒ `/bonus` por `bonus_locked + regalo` con el rollover
+  del regalo y la misma reference. Resultado: `mergedOld`, `mergedTotal`, `giftAmount` (no en un `duplicate`). Control: si el saldo de la
+  respuesta subió más que `regalo + max(100, 50% del viejo)` → `girox.setGiftMergeAnomalyHook` (server.js) guarda `fallback:'deposit'` +
+  `mergeOffAt/mergeOffWhy`, alerta por Telegram y el panel lo muestra. Lo que no se puede unificar va por depósito con rollover.
+- `'deposit'` — depósito con multiplier (figura como **Carga** en la plataforma). `'bonus0'` — bono sin rollover (retirable).
+- Todo regalo que cae a `/deposit` viaja con `_giftAsDepositDesc` ("BONO (contar como BONO, NO como carga): …").
+- **Contabilidad local:** el monto es SIEMPRE el pedido, nunca `mergedTotal`. `_giftMeta(r)` (spread en la Transaction) o
+  `_giftMetaFields(r)` (dentro de un `metadata` existente) guardan `creditedAs:'deposit'` + `giftFallback`, o `mergedBonus`; con un
+  resultado de la vieja devuelven `{}`. `GET /api/admin/transactions` suma `summary.giftsAsDeposit(+Count)` y `summary.mergedBonus(+Count)`.
+- **Descripciones:** `opts.description` de `plat.creditUserBalance/makeBonus` solo viaja a jugaygana.io (la vieja no la recibe; en
+  `makeBonus` la vieja usa el argumento posicional). Formato: TIPO en mayúsculas + detalle (`REEMBOLSO …`, `REGALO — …`, `BONO …`,
+  `COMISIÓN de referidos — …`, `DEVOLUCIÓN …`).
+- Trampas: el bono unificado queda entero con el rollover del regalo NUEVO; la ruleta no crea Transaction (sus casos no salen en las
+  tarjetas); `POST /api/admin/platform/rollover` conserva `fallback` (todo el que escriba `bonusRolloverGlobal` tiene que conservarlo).
+  Test: `node scripts/test-gift-fallback.js`.
+
 ### 10.4 Endpoints
 
 - Jugador: `GET /api/platform/info` → `{ sso, url }` (`sso` también si le toca mudarse); `POST /api/platform/session` → muda si
